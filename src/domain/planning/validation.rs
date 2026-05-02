@@ -1,3 +1,12 @@
+/*
+ * 학습 주석: validation.rs는 planning 문서를 "실행 전에 사람이 고칠 수 있는 문제 목록"으로 바꾸는 검사 계층입니다.
+ * 이 파일은 오류를 바로 반환하지 않고 PlanningValidationReport에 누적합니다. 그 이유는 operator가 한 번에 하나의
+ * 오류만 보는 대신, directions/task authority 전체에서 고쳐야 할 항목을 한 화면이나 repair prompt에서 볼 수 있게 하기 위해서입니다.
+ *
+ * queue.rs와의 차이:
+ * - validation.rs: 넓게 검사하고 report에 여러 issue를 쌓습니다.
+ * - queue.rs: 실제 queue projection을 만들기 위해 반드시 필요한 전제를 빠르게 확인하고 Result로 실패합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::collections::{HashMap, HashSet};
 
@@ -32,6 +41,12 @@ impl PlanningSemanticValidationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         report: &mut PlanningValidationReport,
     ) {
+        /*
+         * 학습 주석: validate는 이 서비스의 orchestration 함수입니다.
+         * direction_catalog만 있어도 direction 문서 자체 검사는 가능하고, task_authority만 있어도 task 문서 자체 검사는 가능합니다.
+         * 두 문서가 모두 있을 때만 cross-reference 검사를 수행합니다. 이 분리는 초기화 중 일부 파일만 있는 상태에서도
+         * 가능한 문제를 최대한 보여주기 위한 설계입니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(direction_catalog) = direction_catalog {
             self.validate_direction_catalog(direction_catalog, report);
@@ -55,6 +70,11 @@ impl PlanningSemanticValidationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         report: &mut PlanningValidationReport,
     ) {
+        /*
+         * 학습 주석: direction catalog 검사는 상위 목표 문서의 최소 품질을 보장합니다.
+         * queue는 direction_id만으로 task를 묶지만, operator와 LLM worker가 방향을 이해하려면 title/summary/success_criteria가
+         * 비어 있으면 안 됩니다. 그래서 실행 알고리즘에는 직접 필요 없어 보여도 여기서 문서 품질을 검사합니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if direction_catalog.version != PLANNING_FORMAT_VERSION {
             report.push_error(
@@ -152,6 +172,11 @@ impl PlanningSemanticValidationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         report: &mut PlanningValidationReport,
     ) {
+        /*
+         * 학습 주석: task authority 검사는 실행 단위의 기본 형식과 감사 가능성을 확인합니다.
+         * 특히 created_by/last_updated_by가 LLM인 작업에는 relation note를 요구해, 자동 생성된 일이 어떤 direction을
+         * 만족시키려는지 나중에 추적할 수 있게 합니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if task_authority.version != PLANNING_FORMAT_VERSION {
             report.push_error(
@@ -251,6 +276,11 @@ impl PlanningSemanticValidationService {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn validate_task_links(&self, task: &TaskDefinition, report: &mut PlanningValidationReport) {
+        /*
+         * 학습 주석: validate_task_links는 한 task 내부의 depends_on/blocked_by 배열만 봅니다.
+         * 여기서는 참조 대상이 실제 존재하는지까지는 판단하지 않고, 빈 문자열/자기 자신/중복/동일 id가 dependency와 blocker에
+         * 동시에 들어간 모순처럼 "한 task만 봐도 알 수 있는 문제"를 잡습니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let task_id = task.id.trim();
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -376,6 +406,11 @@ impl PlanningSemanticValidationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         report: &mut PlanningValidationReport,
     ) {
+        /*
+         * 학습 주석: cross-reference 검사는 direction 문서와 task 문서를 함께 놓고 참조 그래프를 확인합니다.
+         * task.direction_id가 실제 direction에 있는지, dependency/blocker id가 실제 task에 있는지 확인한 뒤,
+         * 더 깊은 의미 규칙(validate_task_semantics)과 dependency cycle 검사를 이어서 실행합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let direction_ids = direction_catalog
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -462,6 +497,10 @@ impl PlanningSemanticValidationService {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn contains_dependency_cycle(&self, task_authority: &TaskAuthorityDocument) -> bool {
+        /*
+         * 학습 주석: dependency cycle은 "A가 B를 기다리고 B가 다시 A를 기다리는" 형태라 queue가 영원히 풀리지 않습니다.
+         * 이 함수는 task_authority를 adjacency map으로 바꾼 뒤 DFS용 detect_cycle에 넘겨 순환 참조 여부만 bool로 돌려줍니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let adjacency_map = task_authority
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -511,6 +550,11 @@ impl PlanningSemanticValidationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         permanent_marks: &mut HashSet<String>,
     ) -> bool {
+        /*
+         * 학습 주석: detect_cycle은 깊이 우선 탐색(DFS)의 전형적인 temporary/permanent mark 알고리즘입니다.
+         * temporary_marks에 이미 있는 노드를 다시 만나면 현재 재귀 경로 안에서 되돌아온 것이므로 cycle입니다.
+         * permanent_marks에 있는 노드는 이전 탐색에서 안전하다고 확인된 노드라 다시 검사하지 않습니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if permanent_marks.contains(task_id) {
             // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
@@ -556,6 +600,11 @@ impl PlanningSemanticValidationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         report: &mut PlanningValidationReport,
     ) {
+        /*
+         * 학습 주석: validate_task_semantics는 단순 형식 검사를 넘어 상태 조합의 의미를 검사합니다.
+         * 예를 들어 Done task가 아직 완료되지 않은 dependency를 가지고 있으면 history가 모순됩니다.
+         * 또한 InProgress task가 둘 이상이면 queue.rs의 우선순위 모델과 agent handoff가 "현재 진행 중인 일"을 하나로 좁힐 수 없습니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut in_progress_task_ids = Vec::new();
 

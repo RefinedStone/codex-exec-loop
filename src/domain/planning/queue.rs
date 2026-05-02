@@ -1,3 +1,13 @@
+/*
+ * 학습 주석: 이 파일은 planning authority 문서를 "실행 가능한 순서"로 바꾸는 도메인 알고리즘입니다.
+ * mod.rs의 TaskDefinition/DirectionDefinition은 원본 문서이고, 여기의 PriorityQueueService는 그 원본을 읽어
+ * PriorityQueueProjection이라는 화면/자동화 친화적인 뷰를 만듭니다.
+ *
+ * 중요한 연결점:
+ * - validation.rs는 문서가 의미적으로 말이 되는지 폭넓게 검사합니다.
+ * - queue.rs는 실행 시점에 필요한 더 엄격한 전제(unknown reference, updated_at 정렬 가능성, in_progress 단일성)를 다시 확인합니다.
+ * - application/service/planning/runtime 쪽은 projection.next_task를 보고 다음 main/sub session handoff를 만들지 결정합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::{collections::HashMap, fmt};
 
@@ -113,6 +123,11 @@ impl std::error::Error for PriorityQueueBuildError {}
 #[derive(Debug, Clone)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 struct QueueCandidate {
+    /*
+     * 학습 주석: QueueCandidate는 외부에 공개되는 DTO가 아니라 정렬을 위해 잠깐 쓰는 내부 구조체입니다.
+     * PriorityQueueTask만으로도 화면에 필요한 정보는 충분하지만, 정렬에는 readiness_rank와 timestamp처럼
+     * 화면에 그대로 노출하지 않는 보조 값이 필요해서 별도 구조체로 감쌉니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     readiness_rank: u8,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -138,6 +153,16 @@ impl PriorityQueueService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority: &TaskAuthorityDocument,
     ) -> Result<PriorityQueueProjection, PriorityQueueBuildError> {
+        /*
+         * 학습 주석: build_projection은 이 파일의 핵심 진입점입니다.
+         * 입력으로 받은 directions/task_authority를 직접 수정하지 않고, 다음 네 가지 결과 뷰를 계산합니다.
+         * - active_tasks: 지금 실행 가능한 작업들, rank가 붙어 있음
+         * - next_task: active_tasks의 첫 번째 항목, 자동 handoff가 실제로 집는 작업
+         * - proposed_tasks: LLM이 제안했지만 operator promotion 전이라 실행 큐와 분리된 작업
+         * - skipped_tasks: 왜 실행 후보가 아닌지 사람이 읽을 수 있는 reason이 붙은 작업
+         *
+         * 이 함수가 domain 계층에 있는 이유는 정렬/skip 규칙이 UI나 DB 형식이 아니라 Akra planning의 업무 규칙이기 때문입니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let direction_map = directions
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -171,6 +196,12 @@ impl PriorityQueueService {
 
         // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
         for task in &task_authority.tasks {
+            /*
+             * 학습 주석: 이 반복문은 task 하나를 세 갈래 중 하나로 분류합니다.
+             * 1. direction이 비활성/완료거나 dependency/blocker가 풀리지 않았으면 skipped_tasks.
+             * 2. Proposed 상태는 실행 큐가 아니라 proposed_candidates.
+             * 3. Ready/InProgress처럼 queue_readiness_rank가 있는 상태는 active candidates.
+             */
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let normalized_direction_id = task.direction_id.trim();
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -302,6 +333,11 @@ impl PriorityQueueService {
         }
 
         candidates.sort_by(|left, right| {
+            /*
+             * 학습 주석: active queue 정렬 규칙은 stable한 자동화를 위해 순서를 명확히 고정합니다.
+             * 먼저 InProgress를 Ready보다 우선하고, 그 안에서는 높은 combined_priority를 먼저 둡니다.
+             * 우선순위까지 같으면 오래된 updated_at을 먼저 처리하고, 마지막으로 task_id를 비교해 완전한 결정성을 확보합니다.
+             */
             left.readiness_rank
                 // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .cmp(&right.readiness_rank)
@@ -336,6 +372,10 @@ impl PriorityQueueService {
         let next_task = active_tasks.first().cloned();
 
         proposed_candidates.sort_by(|left, right| {
+            /*
+             * 학습 주석: proposed task는 아직 자동 실행하지 않으므로 readiness_rank를 쓰지 않습니다.
+             * 대신 operator가 검토할 때 가치가 큰 제안이 위로 오도록 priority, 오래된 제안, id 순서로 정렬합니다.
+             */
             right
                 // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .combined_priority
@@ -386,6 +426,11 @@ impl PriorityQueueService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_map: &HashMap<&'a str, &'a TaskDefinition>,
     ) -> Result<HashMap<&'a str, i64>, PriorityQueueBuildError> {
+        /*
+         * 학습 주석: validate_queue_inputs는 projection 계산 전에 "이후 expect/unreachable이 안전한가"를 확인하는 방어선입니다.
+         * validation.rs와 비슷해 보이지만 목적이 다릅니다. validation.rs는 사용자에게 누적 report를 보여주고,
+         * 이 함수는 queue 계산이 중간에 잘못된 참조로 패닉하지 않도록 즉시 Result error로 멈춥니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let in_progress_tasks = task_authority
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
