@@ -326,99 +326,114 @@ pub(super) fn load_shadow_documents(connection: &Connection) -> Result<BTreeMap<
     Ok(documents)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+commit된 active planning 문서 snapshot을 모두 읽어옵니다.
+
+`shadow_documents`가 파일시스템 mirror라면, `active_documents`는 authority DB가 현재 활성 workspace로
+간주하는 확정본입니다. repo-scoped flow에서는 draft를 staging한 뒤 commit하면 active snapshot이
+바뀌고, 이후 TUI나 service는 이 active snapshot을 기준으로 결과 출력 파일과 authority 문서를 봅니다.
+
+정렬과 `BTreeMap` 사용은 shadow load와 같은 이유입니다. 같은 DB 상태는 항상 같은 iteration 순서를
+만들어야 diff, 테스트, TUI rendering이 안정됩니다.
+*/
 pub(super) fn load_active_documents(connection: &Connection) -> Result<BTreeMap<String, String>> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare("SELECT relative_path, content FROM active_documents ORDER BY relative_path")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read active authority documents")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rows = statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate active authority documents")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut documents = BTreeMap::new();
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for row in rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (relative_path, content) = row.context("failed to decode active authority row")?;
         documents.insert(relative_path, content);
     }
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(documents)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+active authority document map을 그대로 노출하는 얇은 별칭입니다.
+
+이 함수는 현재 `load_active_documents`에 바로 위임하지만 이름을 따로 둡니다. 호출자 입장에서는
+"active workspace의 일반 문서 map"을 읽는지, "authority 문서 저장소"를 읽는지 의도가 다를 수 있기
+때문입니다. 같은 구현을 공유하더라도 adapter 내부 API 이름으로 경계 의미를 남깁니다.
+*/
 pub(super) fn load_active_authority_documents(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<BTreeMap<String, String>> {
     load_active_documents(connection)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+active documents에서 `PlanningWorkspaceLoadRecord`를 구성합니다.
+
+workspace port가 필요로 하는 load record는 전체 파일 map이 아니라 현재 결과 출력 markdown입니다.
+그래서 active snapshot 전체를 읽은 뒤 `RESULT_OUTPUT_FILE_PATH`만 골라 optional field에 넣습니다.
+파일이 없으면 `None`이 되며, 이는 아직 결과 문서가 생성되지 않은 정상 상태를 뜻합니다.
+*/
 pub(super) fn load_active_workspace_record(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<PlanningWorkspaceLoadRecord> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let documents = load_active_documents(connection)?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(PlanningWorkspaceLoadRecord {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: documents.get(RESULT_OUTPUT_FILE_PATH).cloned(),
     })
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction authority snapshot을 DB에서 복원합니다.
+
+snapshot은 direction catalog 본문과 planning revision metadata의 조합입니다. direction catalog가 없으면
+아직 direction authority가 초기화되지 않은 상태이므로 `Ok(None)`을 반환합니다. catalog는 있는데
+`planning_revision` metadata가 없으면 이전 schema나 초기 상태로 보고 0을 사용합니다.
+*/
 pub(super) fn load_direction_authority_snapshot_from_connection(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(directions) = load_direction_catalog_from_connection(connection)? else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(None);
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let planning_revision =
         read_metadata_i64_connection(connection, "planning_revision")?.unwrap_or(0);
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(Some(PlanningDirectionAuthoritySnapshot {
         planning_revision,
         directions,
     }))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction authority 테이블들을 domain의 `DirectionCatalogDocument`로 다시 조립합니다.
+
+저장 구조는 config row 하나와 direction row 여러 개로 나뉩니다. config row에는 catalog 전체에 적용되는
+format version과 queue idle 설정이 들어 있고, `planning_directions`에는 각 direction의 JSON 원문이
+순서와 함께 들어 있습니다. 이 함수는 그 둘을 합쳐 application 계층이 기대하는 catalog 문서 형태로
+복원합니다.
+
+`direction_authority_exists`를 먼저 확인하는 이유는 "authority가 없음"과 "authority는 있는데 direction이
+0개"를 구분하기 위해서입니다. 현재 schema에서는 config row 존재가 direction authority snapshot의
+존재 신호입니다.
+*/
 pub(super) fn load_direction_catalog_from_connection(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<Option<DirectionCatalogDocument>> {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !direction_authority_exists(connection)? {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(None);
     }
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let (version, queue_idle_policy, queue_idle_prompt_path) = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT version, queue_idle_policy, queue_idle_prompt_path
              FROM planning_direction_config
              WHERE config_key = 'default'",
             [],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |row| {
-                // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
                 Ok((
                     row.get::<_, i64>(0)? as u32,
                     row.get::<_, String>(1)?,
@@ -426,51 +441,47 @@ pub(super) fn load_direction_catalog_from_connection(
                 ))
             },
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read planning direction config")?
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .unwrap_or((PLANNING_FORMAT_VERSION, "stop".to_string(), String::new()));
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare(
             "SELECT direction_id, content_json
              FROM planning_directions
              ORDER BY direction_order ASC, direction_id ASC",
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read planning direction rows")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rows = statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate planning direction rows")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut directions = Vec::new();
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
+    /*
+    학습 주석:
+    row에는 `direction_id` column과 `content_json`이 함께 있지만, 복원 결과는 JSON 안의 domain 구조를
+    신뢰합니다. `direction_id`는 오류 메시지에 붙여 어느 행의 JSON decode가 실패했는지 보여주는
+    진단 정보로 사용됩니다.
+    */
     for row in rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (direction_id, content_json) =
             row.context("failed to decode planning direction row")?;
         directions.push(serde_json::from_str(&content_json).with_context(|| {
             format!("failed to deserialize planning direction row `{direction_id}`")
         })?);
     }
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+    학습 주석:
+    queue idle 설정은 DB column 두 개로 저장되어 있지만 domain 타입은 structured enum/record입니다.
+    작은 JSON value로 다시 감싼 뒤 serde가 domain 타입으로 decode하게 해서, 문자열 policy 해석 규칙을
+    이 store 함수 안에 중복 구현하지 않습니다.
+    */
     let queue_idle = serde_json::from_value(serde_json::json!({
         "policy": queue_idle_policy,
         "prompt_path": queue_idle_prompt_path,
     }))
-    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
     .context("failed to decode planning direction queue-idle config")?;
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(Some(DirectionCatalogDocument {
         version,
         queue_idle,
@@ -478,24 +489,25 @@ pub(super) fn load_direction_catalog_from_connection(
     }))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+active snapshot에서 특정 문서 하나만 읽습니다.
+
+대부분의 load 함수는 전체 map을 복원하지만, 일부 호출자는 상대 경로 하나의 본문만 필요합니다. 이
+helper는 `OptionalExtension`을 사용해 row 없음과 SQL 오류를 분리합니다. row가 없으면 정상적으로
+`Ok(None)`이고, DB 조회 자체가 실패하면 context가 붙은 error가 됩니다.
+*/
 pub(super) fn load_active_document(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     relative_path: &str,
 ) -> Result<Option<String>> {
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT content FROM active_documents WHERE relative_path = ?1",
             params![relative_path],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |row| row.get::<_, String>(0),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to read active authority document `{relative_path}`"))
 }
 
