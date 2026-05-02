@@ -1,190 +1,170 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: planning controller 하위 모듈의 공통 event, overlay step, key code, NativeTuiApp 타입을
+// 가져옵니다. 이 파일은 key router라 여러 UI state와 app effect entrypoint를 함께 다룹니다.
 use super::*;
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl NativeTuiApp {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub(crate) fn handle_planning_init_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+        // 학습 주석: planning init overlay는 작은 wizard입니다. 같은 키라도 현재 step에 따라
+        // queue overlay 이동, mode 선택, detail 선택, editor 입력으로 의미가 달라지므로 step을 먼저 나눕니다.
         match self.planning_init_overlay_ui_state.step() {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             PlanningInitOverlayStep::ExistingWorkspace => match key.code {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 기존 planning workspace가 이미 있으면 Enter는 새 init 대신 queue overlay로 이동합니다.
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     self.close_shell_overlay();
                     self.show_queue_overlay();
                 }
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: Q도 queue로 이동하는 빠른 경로입니다. Shift는 uppercase 입력을 위해 허용합니다.
                 KeyCode::Char('q') | KeyCode::Char('Q')
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.close_shell_overlay();
                     self.show_queue_overlay();
                 }
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: 기존 workspace에서도 direction catalog 관리는 별도 overlay로 열 수 있어야 합니다.
                 KeyCode::Char('d') | KeyCode::Char('D')
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.close_shell_overlay();
                     self.show_directions_maintenance_overlay();
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 나머지 키는 existing workspace 안내 화면에서 소비하지만 상태는 바꾸지 않습니다.
                 _ => {}
             },
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             PlanningInitOverlayStep::ModeSelection => match key.code {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 위/k는 simple/detail mode selection cursor를 위로 이동합니다.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                     self.planning_init_overlay_ui_state.move_mode_selection(-1)
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 아래/j는 mode selection cursor를 아래로 이동합니다.
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                     self.planning_init_overlay_ui_state.move_mode_selection(1)
                 }
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: A는 simple mode를 직접 선택합니다. 이 선택은 아직 draft 생성이 아니라 UI cursor 변경입니다.
                 KeyCode::Char('a') | KeyCode::Char('A')
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .select_mode(PlanningInitModeSelection::Simple)
                 }
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: B는 detail mode를 직접 선택합니다.
                 KeyCode::Char('b') | KeyCode::Char('B')
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .select_mode(PlanningInitModeSelection::Detail)
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: Enter는 선택된 mode를 실행합니다. simple은 바로 draft staging으로 가고,
+                // detail은 manual/LLM-assisted detail 선택 단계로 한 번 더 들어갑니다.
                 KeyCode::Enter if key.modifiers.is_empty() => {
-                    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
                     match self.planning_init_overlay_ui_state.selected_mode() {
-                        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                         PlanningInitModeSelection::Simple => {
                             self.stage_simple_mode_planning_init_draft()
                         }
-                        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                         PlanningInitModeSelection::Detail => {
                             self.planning_init_overlay_ui_state.open_detail_selection()
                         }
                     }
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 알 수 없는 키는 mode selection 화면 안에서 조용히 소비합니다.
                 _ => {}
             },
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             PlanningInitOverlayStep::DetailSelection => match key.code {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: Backspace/Left는 detail selection에서 mode selection으로 돌아가는 breadcrumb 역할입니다.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .planning_init_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .return_from_detail_selection(),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 위/k는 manual/LLM-assisted detail cursor를 위로 이동합니다.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .planning_init_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_detail_selection(-1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 아래/j는 detail cursor를 아래로 이동합니다.
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                     self.planning_init_overlay_ui_state.move_detail_selection(1)
                 }
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: A는 manual detail authoring을 선택합니다.
                 KeyCode::Char('a') | KeyCode::Char('A')
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .select_detail(PlanningInitDetailSelection::Manual)
                 }
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                // 학습 주석: B는 LLM-assisted detail을 선택하지만, 현재는 아직 실행 path가 막혀 있습니다.
                 KeyCode::Char('b') | KeyCode::Char('B')
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .select_detail(PlanningInitDetailSelection::LlmAssisted)
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: Enter는 detail selection을 실행합니다. manual은 editor를 열고, LLM-assisted는
+                // unsupported status를 conversation input 상태로 표시합니다.
                 KeyCode::Enter if key.modifiers.is_empty() => {
-                    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
                     match self.planning_init_overlay_ui_state.selected_detail() {
-                        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                         PlanningInitDetailSelection::Manual => self.open_planning_manual_editor(),
-                        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                         PlanningInitDetailSelection::LlmAssisted => {
+                            // 학습 주석: 미지원 경로도 overlay를 닫지 않고 status_text만 갱신해 사용자가
+                            // manual path로 다시 선택할 수 있게 합니다.
                             self.dispatch_conversation_input(
-                                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                 ConversationInputEvent::StatusMessageShown {
-                                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                     status_text:
                                         "planning llm-assisted detail mode is not supported yet"
-                                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                             .to_string(),
                                 },
                             );
                         }
                     }
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 나머지 키는 detail selection 안에서 소비합니다.
                 _ => {}
             },
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             PlanningInitOverlayStep::SimpleReview => {
-                // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+                // 학습 주석: SimpleReview는 생성된 simple draft를 승격하거나, detail/manual editor로 확장하거나,
+                // auto-follow limit을 편집하는 확인 단계입니다.
                 match key.code {
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                    // 학습 주석: Enter는 기본 action인 simple draft promote입니다.
                     KeyCode::Enter if key.modifiers.is_empty() => {
                         self.promote_simple_mode_planning_draft()
                     }
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: D는 simple review에서 detail selection으로 다시 열어 advanced draft authoring을 선택하게 합니다.
                     KeyCode::Char('d') | KeyCode::Char('D')
-                        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                         if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                     {
                         self.planning_init_overlay_ui_state.open_detail_selection();
-                        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
-                        status_text: "planning detail authoring: choose how the advanced draft should open".to_string(),
-                    });
+                        // 학습 주석: step 전환과 함께 status_text를 갱신해 footer/header가 현재 선택 맥락을 설명합니다.
+                        self.dispatch_conversation_input(
+                            ConversationInputEvent::StatusMessageShown {
+                                status_text:
+                                    "planning detail authoring: choose how the advanced draft should open"
+                                        .to_string(),
+                            },
+                        );
                     }
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                    // 학습 주석: Ctrl+L은 simple review 안의 max auto turns inline editor를 시작합니다.
                     KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
                         self.start_max_auto_turns_edit()
                     }
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                    // 학습 주석: Ctrl+E는 simple draft를 manual editor로 열어 사용자가 생성된 내용을 수정하게 합니다.
                     KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
                         self.open_simple_mode_planning_editor()
                     }
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                    // 학습 주석: Ctrl+P는 Enter와 같은 promote action을 명시적으로 실행하는 shortcut입니다.
                     KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
                         self.promote_simple_mode_planning_draft()
                     }
-                    // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                    // 학습 주석: 다른 키는 SimpleReview 화면에서 별도 effect 없이 소비합니다.
                     _ => {}
                 }
             }
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             PlanningInitOverlayStep::ManualEditor => {
-                // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+                // 학습 주석: manual editor는 닫기 확인 상태가 있을 수 있으므로, 일반 editor 입력보다
+                // close-confirmation key handling이 먼저 키를 가져가야 합니다.
                 if self.handle_planning_manual_editor_close_confirmation_key(key) {
-                    // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                     return true;
                 }
+                // 학습 주석: 그 외 key는 공통 draft editor handler로 넘깁니다. save/promote callback만
+                // planning init manual editor용 함수로 주입해 editor core를 재사용합니다.
                 self.handle_draft_editor_key(
                     key,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     Self::save_planning_manual_editor,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     Self::promote_planning_manual_editor,
                 );
             }
