@@ -1,44 +1,53 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: parallel worker는 별도 dispatch worker에서 conversation stream을 수집합니다.
+// `Sender`는 app-server adapter가 그 dispatch worker의 event loop로 stream event를 밀어 넣는 통로입니다.
 use std::sync::mpsc::Sender;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: isolated worker thread 시작은 app-server I/O와 worktree 실행 경계에 닿으므로 실패할 수 있습니다.
 use anyhow::Result;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: parallel worker도 일반 conversation stream과 같은 `ConversationStreamEvent` 계약을 씁니다.
+// 그래서 dispatch worker는 final assistant text, completion, failure를 기존 reducer vocabulary로 관찰할 수 있습니다.
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
-// 학습 주석: `trait`는 타입이 제공해야 하는 동작의 계약을 정의하며, 다른 구현체를 같은 방식으로 다루게 합니다.
+// 학습 주석: `ParallelAgentWorkerPort`는 parallel mode가 leased worktree에서 isolated Codex session을 시작하기 위해
+// outbound app-server adapter에 요구하는 최소 계약입니다. 일반 `InteractiveTurnRuntimePort`와 달리 기존 user thread에
+// 붙지 않고, slot별 작업을 새 thread로 분리해 실행합니다.
+//
+// 학습 주석: 이 port가 별도 trait인 이유는 parallel dispatch가 main conversation UI와 다른 lifecycle을 갖기 때문입니다.
+// dispatch worker는 stream을 수집해 slot result로 환원하고, PR/merge/delivery는 상위 distributor가 나중에 담당합니다.
 pub trait ParallelAgentWorkerPort: Send + Sync {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: leased worktree directory에서 isolated new thread를 시작합니다.
+    // 성공은 worker stream이 시작되었다는 뜻이고, 실제 결과는 event_sender로 들어오는 completion/failure events에서 결정됩니다.
     fn run_isolated_new_thread_stream(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: slot이 lease한 worktree root입니다. main workspace와 분리되어 worker 변경 범위를 제한합니다.
         cwd: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: distributor가 만든 handoff prompt입니다. worker는 이 한 작업 범위만 수행해야 합니다.
         prompt: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: dispatch worker가 소유한 stream receiver와 짝을 이루는 sender입니다.
+        // outbound adapter는 이 sender로 thread prepared, message completed, tool activity, terminal completion을 보냅니다.
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()>;
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Default)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+// 학습 주석: `NoopParallelAgentWorkerPort`는 테스트 fixture나 parallel worker capability가 비활성인 구성에서 쓰는 fallback입니다.
+// stream을 시작하지 않고 즉시 성공을 돌려주므로, caller는 별도 fake 없이 TUI shell runtime을 구성할 수 있습니다.
 pub struct NoopParallelAgentWorkerPort;
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelAgentWorkerPort for NoopParallelAgentWorkerPort {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: noop 구현은 실제 isolated worker를 만들지 않습니다.
+    // 인자를 모두 underscore로 받아 "계약은 만족하지만 사용하지 않는다"는 의도를 Rust 경고 없이 표현합니다.
     fn run_isolated_new_thread_stream(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: noop에서는 worktree root를 사용하지 않습니다.
         _cwd: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: noop에서는 handoff prompt를 실행하지 않습니다.
         _prompt: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: noop은 stream events를 보내지 않으므로 sender도 사용하지 않습니다.
         _event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+        // 학습 주석: 성공을 반환해 shell/runtime 구성 테스트가 parallel worker adapter 없이도 진행되게 합니다.
         Ok(())
     }
 }
