@@ -513,193 +513,239 @@ fn compare_shadow_documents(
     issues
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
+/*
+학습 주석:
+application의 `PlanningAuthorityPort`를 SQLite adapter에 연결합니다.
+
+이 trait은 app-server/parallel runtime 관점의 authority 작업을 표현합니다. 구현 대부분은 같은 파일이나
+`runtime_projection` 모듈에 있는 inherent method로 바로 위임합니다. 이렇게 얇은 위임을 두는 이유는
+application 계층이 구체 타입을 몰라도 port trait만으로 runtime claim, queue, lease, session projection을
+다룰 수 있게 하기 위해서입니다.
+*/
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    workspace 경로를 authority DB 위치 정보로 해석합니다.
+
+    이 port method는 외부 caller가 DB 파일 경로와 canonical repo root를 확인해야 할 때 쓰는 공개 경계입니다.
+    실제 path 정책은 `workspace_paths` 모듈의 shared helper에 둡니다.
+    */
     fn resolve_authority_location(&self, workspace_dir: &str) -> Result<PlanningAuthorityLocation> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::resolve_authority_location_from_workspace(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    shadow store inspection port를 내부 구현으로 연결합니다.
+
+    trait 표면에서는 inspection이라는 use case만 보이고, 내부 구현은 active authority document와 shadow table을
+    비교하고 필요 시 mirror를 갱신합니다.
+    */
     fn inspect_shadow_store(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityShadowStoreInspection> {
         self.inspect_shadow_store_impl(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    official refresh 작업의 단조 증가 order를 예약합니다.
+
+    runtime에서 여러 actor가 refresh를 시도할 수 있으므로, SQLite claim/projection 쪽에서 다음 순번을
+    발급하게 위임합니다.
+    */
     fn reserve_next_official_refresh_order(&self, workspace_dir: &str) -> Result<u64> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::reserve_next_official_refresh_order(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    특정 refresh order에 대한 official refresh claim을 획득합니다.
+
+    `owner_token`은 같은 process/worker가 자신이 잡은 claim을 식별하기 위한 값이고, stale claim 처리 규칙은
+    하위 runtime projection 함수가 DB의 `runtime_claims` table에서 판단합니다.
+    */
     fn acquire_official_refresh_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         refresh_order: u64,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         owner_token: &str,
     ) -> Result<PlanningAuthorityOfficialRefreshClaimStatus> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::acquire_official_refresh_claim(workspace_dir, refresh_order, owner_token)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    owner token이 보유한 official refresh claim을 해제합니다.
+
+    release도 DB의 현재 owner와 token을 맞춰 보아야 하므로, trait method는 단순히 하위 SQLite claim helper로
+    전달합니다.
+    */
     fn release_official_refresh_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         refresh_order: u64,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         owner_token: &str,
     ) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::release_official_refresh_claim(workspace_dir, refresh_order, owner_token)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    distributor queue item의 claim 획득을 시도합니다.
+
+    반환값은 획득 여부입니다. 이미 다른 owner가 같은 queue item을 처리 중이면 false가 될 수 있고, caller는
+    그 item을 건너뛰거나 나중에 다시 시도할 수 있습니다.
+    */
     fn try_acquire_distributor_queue_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         queue_item_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         owner_token: &str,
     ) -> Result<bool> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::try_acquire_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    distributor queue claim을 해제합니다.
+
+    queue item id와 owner token이 함께 들어가는 이유는 다른 worker가 잡은 claim을 실수로 지우지 않기
+    위해서입니다.
+    */
     fn release_distributor_queue_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         queue_item_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         owner_token: &str,
     ) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::release_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    runtime projection snapshot 전체를 로드합니다.
+
+    slot lease, invalid lease, session detail, distributor queue, runtime event projection을 한 번에 읽는 port
+    표면입니다. 구체적인 table join/JSON decode는 runtime projection 모듈이 담당합니다.
+    */
     fn load_runtime_projections(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::load_runtime_projections(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    slot lease projection을 upsert합니다.
+
+    parallel-mode slot 상태는 runtime projection table에 최신 snapshot으로 저장됩니다. port caller는 lease
+    구조만 넘기고, SQLite adapter가 직렬화와 timestamp 저장을 맡습니다.
+    */
     fn upsert_runtime_slot_lease(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         lease: &ParallelModeSlotLeaseSnapshot,
     ) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::upsert_runtime_slot_lease(workspace_dir, lease)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    slot lease projection을 제거합니다.
+
+    worker가 slot을 더 이상 소유하지 않거나 lease가 무효화되었을 때 runtime projection에서 해당 slot id를
+    제거하는 port 경계입니다.
+    */
     fn remove_runtime_slot_lease(&self, workspace_dir: &str, slot_id: &str) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::remove_runtime_slot_lease(workspace_dir, slot_id)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    agent session detail projection을 upsert합니다.
+
+    session detail은 slot보다 더 구체적인 agent 실행 상태입니다. app-server/TUI가 현재 session 상태를
+    조회할 수 있도록 SQLite runtime projection에 반영합니다.
+    */
     fn upsert_runtime_session_detail(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         detail: &ParallelModeAgentSessionDetailSnapshot,
     ) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::upsert_runtime_session_detail(workspace_dir, detail)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    distributor queue record projection을 upsert합니다.
+
+    distributor queue는 parallel mode에서 처리할 session/work item 흐름을 나타냅니다. 이 port method는
+    application이 만든 queue record를 DB projection으로 저장해 다른 process가 같은 queue 상태를 볼 수
+    있게 합니다.
+    */
     fn upsert_runtime_distributor_queue_record(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         record: &PlanningAuthorityDistributorQueueRecord,
     ) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::upsert_runtime_distributor_queue_record(workspace_dir, record)
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
+/*
+학습 주석:
+application의 `PlanningTaskRepositoryPort`를 같은 SQLite authority DB 구현에 연결합니다.
+
+이 trait은 planning task/direction authority 관점의 저장소 port입니다. 위의 `PlanningAuthorityPort`가
+runtime/claim/projection 중심이라면, 이 impl은 planning direction catalog와 task ledger snapshot을
+다룹니다. 실제 저장 로직은 같은 inherent helper를 공유하므로, 두 port가 동일한 DB와 planning revision
+규칙을 보게 됩니다.
+*/
 impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: direction authority 읽기 port를 SQLite snapshot load helper에 연결합니다.
     fn load_direction_authority_snapshot(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::load_direction_authority_snapshot(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: direction authority commit port를 optimistic revision 검사와 DB 교체 helper에 연결합니다.
     fn commit_direction_authority_snapshot(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         commit: PlanningDirectionAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::commit_direction_authority_snapshot(workspace_dir, commit)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: direction authority 제거 port를 DB clear와 task reconcile helper에 연결합니다.
     fn clear_direction_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::clear_direction_authority_snapshot(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: task authority 읽기 port를 task ledger와 queue projection 복원 helper에 연결합니다.
     fn load_task_authority_snapshot(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::load_task_authority_snapshot(workspace_dir)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: task authority commit port를 task row와 queue projection의 원자적 저장 helper에 연결합니다.
     fn commit_task_authority_snapshot(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::commit_task_authority_snapshot(workspace_dir, commit)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: task authority 제거 port를 task rows/edges/projection clear helper에 연결합니다.
     fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Self::clear_task_authority_snapshot(workspace_dir)
     }
 }
