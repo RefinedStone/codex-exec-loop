@@ -1,9 +1,11 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use serde::{Deserialize, Serialize};
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
+/*
+ * 학습 주석: ReadinessState는 parallel mode 전체의 gate verdict입니다.
+ * 개별 capability가 여러 개여도 사용자는 "지금 병렬 실행을 시작해도 되는가"를 먼저 보므로,
+ * domain은 Ready/Degraded/Blocked/Repairing 네 단계로 축약한 결론을 제공합니다.
+ */
 pub enum ParallelModeReadinessState {
     Ready,
     Degraded,
@@ -11,63 +13,48 @@ pub enum ParallelModeReadinessState {
     Repairing,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelModeReadinessState {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: label은 TUI copy와 로그가 같은 readiness vocabulary를 쓰도록 domain 쪽에 둡니다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Ready => "ready",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Degraded => "degraded",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Blocked => "blocked",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Repairing => "repairing",
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: degraded는 경고를 보여 주되 lane orchestration 자체는 허용하는 상태입니다.
     pub fn allows_parallel_mode(self) -> bool {
         matches!(self, Self::Ready | Self::Degraded)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: capability 목록에서 가장 보수적인 전체 verdict를 계산합니다.
     pub fn derive_from_capabilities(capabilities: &[ParallelModeCapabilitySnapshot]) -> Self {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: blocked는 즉시 중단할 조건이고, repair/degraded는 끝까지 훑은 뒤 degraded로 축약합니다.
         let mut degraded = false;
-        // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
         for capability in capabilities {
-            // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
             match capability.state {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 ParallelModeCapabilityState::Blocked => return Self::Blocked,
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 ParallelModeCapabilityState::Degraded | ParallelModeCapabilityState::Repairing => {
                     degraded = true;
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 ParallelModeCapabilityState::Ready => {}
             }
         }
 
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if degraded {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Self::Degraded
         } else {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Self::Ready
         }
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: capability key는 serialized snapshot에도 노출되므로 snake_case를 public contract로 고정합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
+// 학습 주석: 각 key는 parallel mode를 시작하기 전 반드시 확인해야 하는 독립 전제 조건입니다.
 pub enum ParallelModeCapabilityKey {
     GitRepository,
     GitWorktree,
@@ -79,37 +66,26 @@ pub enum ParallelModeCapabilityKey {
     AuthorityStore,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelModeCapabilityKey {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: label은 화면 폭이 좁은 TUI에서도 읽히도록 짧은 operational label로 유지합니다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::GitRepository => "git repo",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::GitWorktree => "git worktree",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::AkraBranch => "akra branch",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::PushRemote => "push",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::GhBinary => "gh binary",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::GhAuth => "gh auth",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Planning => "planning",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::AuthorityStore => "authority store",
         }
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: key와 마찬가지로 state도 persisted/transported snapshot의 값이라 snake_case를 유지합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
+// 학습 주석: capability state는 개별 전제 조건의 진단 결과이고, readiness state의 재료가 됩니다.
 pub enum ParallelModeCapabilityState {
     Ready,
     Degraded,
@@ -117,65 +93,50 @@ pub enum ParallelModeCapabilityState {
     Repairing,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelModeCapabilityState {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: summary 문자열과 TUI badge가 같은 state label을 쓰도록 변환을 한곳에 모읍니다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Ready => "ready",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Degraded => "degraded",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Blocked => "blocked",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Repairing => "repairing",
         }
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+// 학습 주석: CapabilitySnapshot은 readiness screen 한 줄과 machine-readable diagnostics를 동시에 담는 domain value입니다.
 pub struct ParallelModeCapabilitySnapshot {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: key는 capability row의 identity라 diffing, lookup, copy generation의 기준이 됩니다.
     pub key: ParallelModeCapabilityKey,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: state는 전체 readiness 계산과 badge 색상 결정을 모두 이끕니다.
     pub state: ParallelModeCapabilityState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: detail은 현재 감지된 사실을 설명하고, 사용자가 고칠 일을 단정하지 않습니다.
     pub detail: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: next_action은 조치가 필요한 경우에만 채워져 summary copy의 우선순위를 높입니다.
     pub next_action: Option<String>,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelModeCapabilitySnapshot {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn new(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         key: ParallelModeCapabilityKey,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         state: ParallelModeCapabilityState,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         detail: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         next_action: Option<String>,
     ) -> Self {
         Self {
             key,
             state,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 호출자는 borrowed/static copy를 넘겨도 되고, snapshot은 최종 표시 문구를 소유합니다.
             detail: detail.into(),
             next_action,
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: summary는 로그, status pane, 향후 API diagnostics가 같은 압축 형식을 쓰도록 한 줄로 유지합니다.
     pub fn summary(&self) -> String {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match &self.next_action {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Some(next_action) => format!(
                 "{}: {} / cause: {} / next action: {}",
                 self.key.label(),
@@ -183,7 +144,6 @@ impl ParallelModeCapabilitySnapshot {
                 self.detail,
                 next_action
             ),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             None => format!(
                 "{}: {} / detail: {}",
                 self.key.label(),
@@ -194,35 +154,28 @@ impl ParallelModeCapabilitySnapshot {
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+// 학습 주석: ReadinessSnapshot은 inbound presentation code에 넘기는 domain boundary object입니다.
 pub struct ParallelModeReadinessSnapshot {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: workspace_path는 capability 결과가 어떤 repository/worktree 검사에서 나온 것인지 묶어 줍니다.
     pub workspace_path: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: readiness는 미리 계산된 verdict라 adapter가 우선순위 규칙을 다시 구현하지 않습니다.
     pub readiness: ParallelModeReadinessState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: capabilities는 최상위 verdict 뒤에 있는 전체 진단 근거를 보존합니다.
     pub capabilities: Vec<ParallelModeCapabilitySnapshot>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: top_alert는 compact view에서 가장 우선해 보여 줄 사용자 메시지 자리입니다.
     pub top_alert: Option<String>,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl ParallelModeReadinessSnapshot {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn new(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_path: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         readiness: ParallelModeReadinessState,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         capabilities: Vec<ParallelModeCapabilitySnapshot>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         top_alert: Option<String>,
     ) -> Self {
         Self {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: presentation layer는 cwd에서 다시 계산하지 않고 표시용 context로 그대로 사용합니다.
             workspace_path: workspace_path.into(),
             readiness,
             capabilities,
@@ -230,26 +183,21 @@ impl ParallelModeReadinessSnapshot {
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn readiness_label(&self) -> &'static str {
         self.readiness.label()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn allows_parallel_mode(&self) -> bool {
         self.readiness.allows_parallel_mode()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: targeted lookup은 presentation code가 안정 계약이 아닌 row 순서에 기대지 않게 합니다.
     pub fn capability(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         key: ParallelModeCapabilityKey,
     ) -> Option<&ParallelModeCapabilitySnapshot> {
         self.capabilities
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .find(|capability| capability.key == key)
     }
 }
