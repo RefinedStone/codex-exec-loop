@@ -288,131 +288,164 @@ mod tests {
         assert_eq!(result.next_state, result.snapshot.poll_state());
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+    // 학습 주석: 이 테스트는 이미 cursor가 있는 일반 poll에서 service가 과거 activity를 버리고
+    // timestamp cursor 뒤의 event만 changes로 노출하는지 확인합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 이전 state가 `10:00` review를 마지막으로 기억할 때, `10:30`과 `11:00` event만
+    // 새 변화가 되어야 합니다. 이는 매 poll마다 같은 review 알림을 반복하지 않게 하는 핵심 규칙입니다.
     fn poll_returns_only_events_after_previous_cursor() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 테스트 target은 fake snapshot과 poll 호출에 같은 PR identity를 전달해
+        // service가 하나의 PR stream을 diff한다는 전제를 고정합니다.
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: snapshot에는 cursor 전, cursor 시점, cursor 이후 event를 모두 넣습니다. 이렇게
+        // 섞어 두어야 filter가 실제로 boundary를 기준으로 잘라내는지 볼 수 있습니다.
         let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: fixture snapshot은 시간 순서대로 넣어 diff 기대값을 사람이 읽기 쉽게 만듭니다.
+            // 정렬 책임은 다음 테스트에서 별도로 검증합니다.
             snapshot: snapshot(
                 target.clone(),
                 vec![
                     event(
                         100,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 이 issue comment는 cursor보다 오래된 activity입니다. changes에
+                        // 포함되면 오래된 GitHub 대화를 다시 알리는 회귀입니다.
                         GithubPullRequestActivityKind::IssueComment,
                         "2026-04-08T09:00:00Z",
                     ),
                     event(
                         101,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 이 review는 previous_state의 latest timestamp와 같은 event입니다.
+                        // identity set에 들어 있으므로 새 변화가 아니어야 합니다.
                         GithubPullRequestActivityKind::Review,
                         "2026-04-08T10:00:00Z",
                     ),
                     event(
                         201,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 이 review comment는 cursor 이후 첫 새 activity입니다. service가
+                        // 반환하는 changes의 첫 항목이 되어야 합니다.
                         GithubPullRequestActivityKind::ReviewComment,
                         "2026-04-08T10:30:00Z",
                     ),
                     event(
                         202,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 이 issue comment도 cursor 이후 activity입니다. kind가 달라도
+                        // timestamp가 뒤라면 changes에 포함되어야 합니다.
                         GithubPullRequestActivityKind::IssueComment,
                         "2026-04-08T11:00:00Z",
                     ),
                 ],
             ),
         }));
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: previous_state는 직전 poll이 `10:00` review까지 봤다는 cursor를 표현합니다.
+        // latest timestamp와 그 timestamp 안의 seen identity를 같이 저장하는 구조가 diff의 기준입니다.
         let previous_state = GithubPullRequestPollState {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: latest timestamp는 "이 시간보다 뒤는 새 event 후보"라는 큰 경계입니다.
             latest_submitted_at: Some("2026-04-08T10:00:00Z".to_string()),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 같은 timestamp 안에서는 identity set으로 이미 본 event를 제외합니다.
             seen_events_at_latest_timestamp: vec![
                 event(
                     101,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: 이 identity가 들어 있기 때문에 현재 snapshot의 id 101 review는
+                    // cursor와 timestamp가 같아도 changes에서 빠져야 합니다.
                     GithubPullRequestActivityKind::Review,
                     "2026-04-08T10:00:00Z",
                 )
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+                // 학습 주석: `identity()`는 event fixture에서 diff key만 뽑아 state에 저장합니다.
+                // state가 전체 event body를 들지 않아도 중복 판정이 가능해지는 지점입니다.
                 .identity(),
             ],
         };
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 이전 state를 넘겨 poll하면 service는 first-poll baseline branch가 아니라
+        // cursor diff branch를 실행합니다.
         let result = service
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: `Some(&previous_state)`는 state ownership을 넘기지 않고 읽기 전용 cursor만
+            // 빌려 줍니다. caller는 poll 이후에도 이전 state를 비교나 logging에 사용할 수 있습니다.
             .poll(&target, Some(&previous_state))
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: 이 테스트는 fake port가 성공하도록 만든 happy path이므로 실패하면 service
+            // orchestration이나 fixture 구성 자체가 깨진 것입니다.
             .expect("poll should succeed");
 
+        // 학습 주석: changes에는 cursor 이후의 id 201, 202만 남아야 합니다. 길이와 순서를 함께
+        // 확인해 과거 event replay와 정렬 회귀를 동시에 잡습니다.
         assert_eq!(result.changes.len(), 2);
         assert_eq!(result.changes[0].id, 201);
         assert_eq!(result.changes[1].id, 202);
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+    // 학습 주석: 이 테스트는 outbound port가 event를 시간순으로 보장하지 않아도 service가 먼저
+    // snapshot을 정렬한 뒤 diff한다는 application 책임을 고정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: GitHub API나 adapter 구현이 순서를 바꿔 반환해도 UI에 전달되는 snapshot과 changes는
+    // 시간 오름차순이어야 사용자가 review 흐름을 자연스럽게 읽을 수 있습니다.
     fn poll_sorts_unsorted_port_responses_before_diffing() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 같은 PR target을 사용해 정렬 검증이 target routing 문제가 아니라 event ordering
+        // 문제에만 집중하게 합니다.
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: fake snapshot은 의도적으로 최신 event를 먼저 넣습니다. service가 정렬하지 않으면
+        // result.snapshot.events와 changes 순서 assertion이 실패합니다.
         let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: port boundary에서 들어온 원본 순서가 불안정할 수 있다는 현실을 fixture에
+            // 반영해 service의 방어 정렬을 검증합니다.
             snapshot: snapshot(
                 target.clone(),
                 vec![
                     event(
                         301,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 최신 review를 맨 앞에 놓아, 정렬이 없으면 snapshot 첫 항목이
+                        // 잘못된 최신 event로 남게 만듭니다.
                         GithubPullRequestActivityKind::Review,
                         "2026-04-08T12:00:00Z",
                     ),
                     event(
                         101,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 가장 오래된 issue comment가 cursor와 같은 event입니다. 정렬 후에는
+                        // snapshot 첫 항목이 되고, diff에서는 seen identity 때문에 제외됩니다.
                         GithubPullRequestActivityKind::IssueComment,
                         "2026-04-08T08:00:00Z",
                     ),
                     event(
                         201,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 중간 timestamp의 review comment는 정렬 후 changes의 첫 새 항목이
+                        // 되어야 합니다.
                         GithubPullRequestActivityKind::ReviewComment,
                         "2026-04-08T10:30:00Z",
                     ),
                 ],
             ),
         }));
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: previous_state는 가장 오래된 id 101 event를 이미 본 상태로 표시합니다.
+        // 따라서 정렬 후 diff는 그 뒤의 id 201, 301만 changes로 남겨야 합니다.
         let previous_state = GithubPullRequestPollState {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: cursor를 가장 오래된 timestamp에 두어, 정렬 결과와 changes 결과를 모두
+            // 한 테스트에서 관찰할 수 있게 합니다.
             latest_submitted_at: Some("2026-04-08T08:00:00Z".to_string()),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 같은 timestamp의 id 101은 이미 본 identity로 저장되어 changes에서 빠집니다.
             seen_events_at_latest_timestamp: vec![
                 event(
                     101,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: cursor timestamp의 event kind와 id가 identity에 포함되어 정확한
+                    // 중복 제거 기준이 됩니다.
                     GithubPullRequestActivityKind::IssueComment,
                     "2026-04-08T08:00:00Z",
                 )
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+                // 학습 주석: fixture event를 그대로 identity로 바꾸어 state와 snapshot의 key 생성
+                // 방식이 서로 어긋나지 않게 합니다.
                 .identity(),
             ],
         };
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: poll 결과는 fake port의 원본 순서가 아니라 service가 정규화한 순서를 담아야 합니다.
         let result = service
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: previous_state를 함께 넘겨 정렬과 diff가 같은 poll orchestration 안에서
+            // 순서대로 일어나는지 확인합니다.
             .poll(&target, Some(&previous_state))
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: 성공 결과를 풀어낸 뒤 snapshot 정렬과 changes 필터링을 각각 assertion합니다.
             .expect("poll should succeed");
 
+        // 학습 주석: snapshot assertion은 service가 port 응답을 시간 오름차순으로 정렬했는지 확인합니다.
+        // changes assertion은 정렬된 snapshot을 기준으로 cursor 뒤 id 201, 301만 새 변화로 남았는지
+        // 확인합니다.
         assert_eq!(result.snapshot.events[0].id, 101);
         assert_eq!(result.snapshot.events[1].id, 201);
         assert_eq!(result.snapshot.events[2].id, 301);
