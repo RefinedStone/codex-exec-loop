@@ -215,33 +215,35 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: distributor queue의 특정 item을 처리할 권한을 시도합니다.
+    // 공식 refresh처럼 전역 순번을 따르지 않고, queue_item_id 하나가 하나의 scope key가 되어 병렬 처리를 허용합니다.
     pub(crate) fn try_acquire_distributor_queue_claim(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: queue 상태를 담은 authority DB를 workspace 기준으로 찾습니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 처리할 distributor queue row의 식별자입니다.
+        // 같은 id에 대해서만 서로 경합하고, 다른 id들은 독립적으로 클레임될 수 있습니다.
         queue_item_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 현재 worker를 나타내는 토큰입니다. release 때 같은 토큰이어야 row를 지울 수 있습니다.
         owner_token: &str,
     ) -> Result<bool> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 모든 queue claim은 해당 workspace의 authority DB 안에서만 의미가 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: stale 정리와 새 클레임 삽입을 한 경합 구간으로 묶기 위해 트랜잭션을 엽니다.
         let mut connection = open_authority_connection(&location)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 이 트랜잭션 안에서만 "기존 클레임이 사라졌으니 내가 삽입한다"는 판단이 안전합니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open distributor queue claim transaction")?;
+        // 학습 주석: queue claim 시도도 runtime projection의 관찰 가능한 변화이므로 metadata heartbeat를 갱신합니다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: 이전 worker가 죽어 같은 queue item의 클레임이 오래 남았으면 먼저 삭제합니다.
+        // 삭제가 있었다면 곧바로 재시도할 수 있는 상태 변화이므로 metadata를 한 번 더 갱신합니다.
         if clear_stale_runtime_claim(&transaction, DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id)? {
             upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
         }
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: `INSERT OR IGNORE`는 runtime_claims의 고유키를 경합 제어로 사용합니다.
+        // 이미 같은 queue item 클레임이 있으면 0행 삽입이 되어 false를 반환하고, 새로 잡으면 true가 됩니다.
         let inserted_rows = transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "INSERT OR IGNORE INTO runtime_claims
                  (claim_kind, scope_key, owner_token, claim_value, claimed_at)
@@ -250,68 +252,67 @@ impl SqlitePlanningAuthorityAdapter {
                     DISTRIBUTOR_QUEUE_CLAIM_KIND,
                     queue_item_id,
                     owner_token,
+                    // 학습 주석: queue claim에서는 scope와 값이 모두 queue item id입니다.
+                    // scope는 중복 소유권 방지에 쓰이고, value는 snapshot/debug 출력에서 어떤 item인지 보여줍니다.
                     queue_item_id,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: stale claim 청소는 이 시각과 현재 UTC 시각의 차이를 기준으로 합니다.
                     Utc::now().to_rfc3339()
                 ],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to acquire distributor queue claim")?;
+        // 학습 주석: commit 전까지는 다른 worker가 방금 잡은 queue item을 볼 수 없습니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit distributor queue claim transaction")?;
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+        // 학습 주석: bool 반환은 caller가 "내가 처리해야 함"과 "다른 worker가 이미 처리 중"을 즉시 구분하게 합니다.
         Ok(inserted_rows > 0)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: queue item 처리가 끝났거나 포기할 때 현재 owner의 클레임만 해제합니다.
+    // owner_token 조건을 둬서 늦은 release가 다른 worker가 새로 잡은 같은 item을 지우지 못하게 합니다.
     pub(crate) fn release_distributor_queue_claim(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: claim row가 저장된 authority DB를 찾기 위한 workspace 경로입니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 해제할 queue item scope입니다.
         queue_item_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: acquire 때 저장한 소유자 토큰입니다. 일치하지 않으면 삭제 조건에 걸리지 않습니다.
         owner_token: &str,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: release는 acquire와 같은 위치 해석을 사용해야 같은 runtime_claims 테이블을 수정합니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 삭제와 heartbeat 갱신을 하나의 DB 작업 단위로 묶습니다.
         let mut connection = open_authority_connection(&location)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 트랜잭션이 성공해야 대기 worker가 "클레임이 풀렸다"는 상태를 일관되게 관찰합니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open distributor queue release transaction")?;
+        // 학습 주석: 삭제 결과가 0행이어도 release 시도 자체는 상태 확인자가 다시 볼 수 있는 시점입니다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        // 학습 주석: kind, scope, owner를 모두 맞춰 지웁니다.
+        // 공식 refresh와 달리 별도 순번 포인터가 없으므로 삭제만으로 queue item 소유권이 풀립니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "DELETE FROM runtime_claims
                  WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3",
                 params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id, owner_token],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to release distributor queue claim")?;
+        // 학습 주석: commit 후 다음 worker의 `INSERT OR IGNORE`가 같은 item을 다시 잡을 수 있습니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit distributor queue release transaction")?;
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: runtime projection 전체를 application port snapshot으로 읽는 얇은 진입점입니다.
+    // DB row를 도메인/application 타입으로 조립하는 실제 작업은 아래 free function에 위임합니다.
     pub(crate) fn load_runtime_projections(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 읽을 authority DB를 고르는 workspace 경로입니다.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: adapter 경계에서는 workspace만 알고 있으므로 먼저 DB 위치로 변환합니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: snapshot 로드는 읽기 전용이므로 트랜잭션 없이 열린 connection을 helper에 전달합니다.
         let connection = open_authority_connection(&location)?;
         load_runtime_projection_snapshot(&connection)
     }
