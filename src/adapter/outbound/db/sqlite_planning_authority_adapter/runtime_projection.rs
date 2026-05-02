@@ -580,123 +580,108 @@ impl SqlitePlanningAuthorityAdapter {
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: runtime projection 테이블들을 한 번씩 읽어 application port가 요구하는 snapshot 구조로 조립합니다.
+// 저장 함수들은 table별 current row를 유지하고, 이 함수는 그 row들을 domain/application 타입으로 되돌리는 반대편입니다.
 fn load_runtime_projection_snapshot(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 호출자가 이미 authority DB를 열어 전달합니다. 이 helper는 위치 해석을 모르고 row 조립에만 집중합니다.
     connection: &Connection,
 ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: slot lease는 slot_id로 바로 찾는 current map이 필요하므로 BTreeMap에 담습니다.
+    // BTreeMap은 key 정렬을 보장해 snapshot 출력과 테스트 결과가 안정적입니다.
     let mut slot_leases = BTreeMap::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: invalid slot은 중복 없는 id 집합이면 충분하고, BTreeSet은 정렬된 집합으로 직렬화/표시 순서를 고정합니다.
     let mut invalid_slot_leases = BTreeSet::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: session detail은 SQL의 updated_at DESC 순서를 유지해야 하므로 Vec에 push합니다.
     let mut session_details = Vec::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: distributor queue도 enqueued_at 순서가 의미 있으므로 Vec 순서를 그대로 snapshot 순서로 사용합니다.
     let mut distributor_queue_records = Vec::new();
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: slot lease 테이블에서 id와 JSON content만 읽습니다.
+    // updated_at은 저장 시각으로는 유용하지만 domain snapshot은 JSON content 안의 값을 기준으로 복원됩니다.
     let mut slot_statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare("SELECT slot_id, content FROM runtime_slot_leases ORDER BY slot_id")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read runtime slot leases")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: rusqlite의 `query_map`은 각 row를 Rust tuple로 바꾸는 iterator를 만듭니다.
+    // 여기서는 아직 JSON 파싱을 하지 않고 DB column decode 실패와 content parse 실패를 분리합니다.
     let slot_rows = slot_statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate runtime slot leases")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
+    // 학습 주석: 각 row의 content를 원래 저장했던 `ParallelModeSlotLeaseSnapshot`으로 복원해 slot_id map에 넣습니다.
+    // row의 slot_id를 key로 쓰면 content 내부 id가 잘못됐을 때도 어느 DB row가 문제인지 오류 context에 남길 수 있습니다.
     for row in slot_rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (slot_id, content) = row.context("failed to decode runtime slot lease row")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let lease = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&content)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to deserialize runtime slot lease `{slot_id}`"))?;
         slot_leases.insert(slot_id, lease);
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: invalid slot lease 테이블은 slot_id 자체가 payload입니다.
+    // 별도 JSON을 열 필요 없이 id 집합만 snapshot에 실어 현재 lease와 함께 해석하게 합니다.
     let mut invalid_slot_statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare("SELECT slot_id FROM runtime_invalid_slot_leases ORDER BY slot_id")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read invalid runtime slot leases")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: 단일 column row를 문자열 iterator로 바꾸고, 아래 loop에서 BTreeSet에 누적합니다.
     let invalid_slot_rows = invalid_slot_statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| row.get::<_, String>(0))
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate invalid runtime slot leases")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
+    // 학습 주석: BTreeSet 삽입은 중복을 자연스럽게 제거합니다.
+    // DB 스키마가 중복을 막더라도 snapshot 타입의 의미를 여기서 한 번 더 분명히 합니다.
     for row in invalid_slot_rows {
         invalid_slot_leases.insert(row.context("failed to decode invalid runtime slot row")?);
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: session detail은 최근 업데이트된 session을 먼저 보여주기 위해 updated_at 내림차순으로 읽습니다.
+    // 같은 시각이면 session_key 오름차순으로 tie-break해 화면/테스트 순서를 안정화합니다.
     let mut session_statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare(
             "SELECT session_key, content
              FROM runtime_session_details
              ORDER BY updated_at DESC, session_key ASC",
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read runtime session details")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: session_key와 content를 함께 읽어 JSON 파싱 실패 시 어떤 session row가 깨졌는지 알려줍니다.
     let session_rows = session_statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate runtime session details")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
+    // 학습 주석: SQL이 정한 순서대로 Vec에 push하므로 snapshot consumer는 별도 정렬 없이 그대로 표시할 수 있습니다.
     for row in session_rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (session_key, content) = row.context("failed to decode runtime session detail row")?;
         session_details.push(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 저장 시 JSON으로 보존한 전체 session snapshot을 domain 타입으로 되돌립니다.
             serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content).with_context(
-                // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
+                // 학습 주석: session_key를 캡처해 오류 메시지에 넣으면 깨진 row를 바로 찾을 수 있습니다.
                 || format!("failed to deserialize runtime session detail `{session_key}`"),
             )?,
         );
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: distributor queue는 오래 들어온 item부터 처리/표시해야 하므로 enqueued_at 오름차순으로 읽습니다.
+    // 같은 enqueue 시각이면 queue_item_id로 tie-break합니다.
     let mut queue_statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare(
             "SELECT queue_item_id, content
              FROM runtime_distributor_queue
              ORDER BY enqueued_at ASC, queue_item_id ASC",
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read runtime distributor queue records")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: queue_item_id와 content를 함께 읽어 decode와 deserialize 오류 위치를 분리합니다.
     let queue_rows = queue_statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate runtime distributor queue records")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
+    // 학습 주석: queue Vec의 순서는 SQL 처리 순서와 같습니다.
+    // worker나 UI가 이 snapshot을 읽으면 먼저 enqueue된 item을 앞에서 보게 됩니다.
     for row in queue_rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (queue_item_id, content) =
             row.context("failed to decode runtime distributor queue row")?;
         distributor_queue_records.push(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 저장된 JSON을 application port record로 복원해 DB schema 바깥에는 port 타입만 보이게 합니다.
             serde_json::from_str::<PlanningAuthorityDistributorQueueRecord>(&content)
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .with_context(|| {
                     format!(
                         "failed to deserialize runtime distributor queue record `{queue_item_id}`"
@@ -705,7 +690,7 @@ fn load_runtime_projection_snapshot(
         );
     }
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+    // 학습 주석: 네 projection 영역을 하나의 snapshot으로 묶어 application service가 DB를 몰라도 런타임 상태를 읽게 합니다.
     Ok(PlanningAuthorityRuntimeProjectionSnapshot {
         slot_leases,
         invalid_slot_leases,
