@@ -750,62 +750,67 @@ impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+authority DB connection을 열고, 모든 caller가 의존하는 기본 DB 상태를 보장합니다.
+
+이 함수는 단순한 `Connection::open` wrapper가 아닙니다. repo-scoped authority DB의 진입점으로서 다음
+순서를 항상 지킵니다.
+1. 예전 repo 내부 runtime 위치의 DB를 새 관리 디렉터리 위치로 복사할 수 있으면 migrate합니다.
+2. 새 authority DB의 parent directory를 만듭니다.
+3. SQLite connection을 엽니다.
+4. 기존 DB라면 schema version이 이 binary가 이해할 수 있는 범위인지 검사합니다.
+5. foreign key enforcement를 켭니다.
+6. 현재 schema가 필요로 하는 table/index를 보장합니다.
+
+이 순서가 중요합니다. schema를 만들기 전에 version gate를 통과해야 오래된/미래 schema를 잘못 덮어쓰지
+않고, foreign key pragma는 task edge/draft file 같은 자식 row 정합성을 DB 차원에서 지키게 합니다.
+*/
 fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Connection> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let authority_store_path = Path::new(&location.authority_store_path);
     migrate_legacy_authority_store_if_needed(location)?;
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if let Some(parent) = authority_store_path.parent() {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         fs::create_dir_all(parent)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let connection = Connection::open(authority_store_path)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to open {}", authority_store_path.display()))?;
     validate_authority_store_schema(&connection)?;
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute_batch("PRAGMA foreign_keys = ON;")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to enable authority-store foreign keys")?;
     ensure_schema(&connection)?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(connection)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+legacy 위치에 있던 authority DB를 현재 관리 디렉터리 위치로 복사합니다.
+
+이 프로젝트는 authority store 위치를 repo 내부 `.codex-exec-loop/runtime/...`에서 user-level
+`.akra/projects/<repo-hash>/runtime/...`로 옮긴 흐름이 있습니다. 새 위치에 DB가 이미 있으면 아무것도 하지
+않습니다. 새 위치가 비어 있고 legacy 파일이 있으면 복사해서 기존 사용자 데이터를 잃지 않게 합니다.
+
+복사만 하고 legacy 파일을 삭제하지 않는 것은 보수적인 migration 전략입니다. 문제가 생겨도 원본 DB가
+repo 안에 남아 있어 복구할 수 있습니다.
+*/
 fn migrate_legacy_authority_store_if_needed(location: &PlanningAuthorityLocation) -> Result<()> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let authority_store_path = Path::new(&location.authority_store_path);
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if authority_store_path.exists() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(());
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let legacy_store_path = Path::new(&location.canonical_repo_root)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .join(".codex-exec-loop/runtime/planning-authority.db");
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !legacy_store_path.is_file() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(());
     }
 
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if let Some(parent) = authority_store_path.parent() {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         fs::create_dir_all(parent)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     fs::copy(&legacy_store_path, authority_store_path).with_context(|| {
         format!(
             "failed to migrate legacy authority store from {} to {}",
@@ -813,122 +818,141 @@ fn migrate_legacy_authority_store_if_needed(location: &PlanningAuthorityLocation
             authority_store_path.display()
         )
     })?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+이미 존재하는 authority DB에서 schema version metadata를 읽습니다.
+
+새 DB는 아직 `authority_metadata` table이 없을 수 있으므로 이 함수는 table 존재 확인이 끝난 뒤에만
+호출됩니다. version은 문자열로 저장되지만, schema gate에서는 i64로 parse해 비교합니다.
+*/
 fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
             [],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |row| row.get::<_, String>(0),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read authority-store schema version")
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+기존 authority DB가 현재 binary가 지원하는 schema인지 검사합니다.
+
+metadata table이 없으면 새 DB 또는 아주 초기 DB로 보고 schema 생성 단계로 넘깁니다. metadata가 있으면
+`schema_version`을 읽어 현재 버전 또는 명시적으로 호환 허용한 이전 버전만 통과시킵니다. 여기서는 4와
+현재 `AUTHORITY_STORE_SCHEMA_VERSION`을 허용합니다.
+
+이 guard가 없으면 미래 버전의 DB를 구버전 binary가 열어 schema를 덮거나 잘못 해석할 수 있습니다.
+*/
 fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let metadata_exists = table_exists(connection, "authority_metadata")?;
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !metadata_exists {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(());
     }
 
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if let Some(schema_version) = load_schema_version(connection)?
         && !matches!(
             schema_version.parse::<i64>().ok(),
             Some(4) | Some(AUTHORITY_STORE_SCHEMA_VERSION)
         )
     {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Err(anyhow!(
             "unsupported authority-store schema version: {schema_version}"
         ));
     }
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+connection 기준으로 metadata string 값을 읽습니다.
+
+`authority_metadata`는 모든 projection이 공유하는 작은 key/value table입니다. 이 helper는 connection만
+있는 read path에서 사용되고, row가 없으면 `Ok(None)`을 반환합니다. SQL 오류는 key 이름을 포함한 context로
+올려 caller가 어떤 metadata read가 실패했는지 볼 수 있게 합니다.
+*/
 fn read_metadata_string_connection(connection: &Connection, key: &str) -> Result<Option<String>> {
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT value FROM authority_metadata WHERE key = ?1",
             params![key],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |row| row.get::<_, String>(0),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to read authority metadata `{key}`"))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+connection read path에서 metadata 값을 i64로 해석합니다.
+
+parse 실패를 error로 만들지 않고 `None`으로 접는 것은 이 metadata가 optional compatibility marker로도
+쓰이기 때문입니다. 값이 없거나 숫자가 아니면 caller는 기본값을 선택합니다.
+*/
 fn read_metadata_i64_connection(connection: &Connection, key: &str) -> Result<Option<i64>> {
     read_metadata_string_connection(connection, key)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+현재 transaction 안에서 planning revision을 1 증가시키고 새 값을 반환합니다.
+
+planning revision은 active documents, direction authority, task authority처럼 planning 상태를 바꾸는 commit이
+발생했음을 downstream runtime에 알리는 단조 증가 값입니다. 같은 transaction에서 metadata를 읽고 upsert하므로
+상태 변경과 revision 변경이 함께 commit됩니다.
+*/
 fn bump_planning_revision(transaction: &rusqlite::Transaction<'_>) -> Result<i64> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let next_revision = read_metadata_i64(transaction, "planning_revision")?.unwrap_or(0) + 1;
     upsert_metadata(transaction, "planning_revision", &next_revision.to_string())?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(next_revision)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+transaction 기준으로 metadata i64 값을 읽습니다.
+
+commit 함수들은 아직 commit되지 않은 metadata 변경과 같은 transaction 안에서 revision을 읽어야 하므로,
+connection용 helper와 별도로 transaction용 helper를 둡니다. optimistic concurrency check와 revision bump가
+같은 DB snapshot을 보게 하는 작은 경계입니다.
+*/
 fn read_metadata_i64(transaction: &rusqlite::Transaction<'_>, key: &str) -> Result<Option<i64>> {
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT value FROM authority_metadata WHERE key = ?1",
             params![key],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |row| row.get::<_, String>(0),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to read authority metadata `{key}`"))
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+SQLite schema catalog에서 특정 table 존재 여부를 확인합니다.
+
+schema validation과 backward-compatible load path에서 사용됩니다. table이 없다는 것은 오류가 아니라
+`false`이며, sqlite_master 조회 자체가 실패했을 때만 error로 올립니다.
+*/
 fn table_exists(connection: &Connection, table_name: &str) -> Result<bool> {
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
             params![table_name],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |_| Ok(()),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to inspect sqlite table `{table_name}`"))
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|value| value.is_some())
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: adapter 통합 성격의 DB 저장 테스트를 별도 파일로 분리해 production code 흐름을 작게 유지합니다.
 mod tests;
