@@ -1,6 +1,14 @@
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::*;
 
+/*
+학습 주석: distributor delivery의 첫 GitHub 단계는 slot agent branch를 원격에 push하는
+것입니다. PR 생성과 원격 리뷰 흐름은 push된 branch가 있어야 가능하므로, capability를 먼저
+검사하고 queue record를 Pushing으로 저장한 뒤 push를 시도합니다.
+
+push 실패나 remote 미준비는 block record로 전환합니다. 이때 session detail도 pushing으로
+기록해 supervisor가 "현재 통합 큐가 remote push 단계에서 멈췄다"는 사실을 보여 줍니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn distributor_push_source_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -88,6 +96,15 @@ pub(super) fn distributor_push_source_branch(
     ))
 }
 
+/*
+학습 주석: source branch가 원격에 올라간 뒤에는 integration branch를 대상으로 하는 PR을
+보장합니다. GitHub CLI/auth 준비 상태를 별도로 검사하는 이유는 push 가능성과 PR 조작 가능성이
+다른 capability이기 때문입니다. push는 되었지만 GitHub automation이 없으면 record를 blocked로
+남겨, 이후 auth가 복구되었을 때 retryable block으로 다시 queue에 올릴 수 있습니다.
+
+ensure_pull_request는 새 PR을 만들 수도 있고 기존 PR을 재사용할 수도 있습니다. 성공하면
+PR 번호와 URL을 queue record에 저장해 이후 readiness 검사와 closing 단계가 같은 PR을 추적합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn distributor_ensure_pull_request(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -194,6 +211,14 @@ pub(super) fn distributor_ensure_pull_request(
     ))
 }
 
+/*
+학습 주석: PR readiness 검사는 cherry-pick 전에 사람이 볼 수 있는 GitHub 상태가 기대와
+맞는지 확인하는 gate입니다. PR이 열려 있어야 하고, draft가 아니어야 하며, base branch가
+integration branch이고 head branch가 queue record의 source branch와 같아야 합니다.
+
+이 검사는 GitHub의 실제 merge 버튼을 누르기 위한 준비가 아니라, distributor가 로컬에서
+integration branch에 반영하기 전에 remote 협업 표면이 drift하지 않았는지 검증하는 단계입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn distributor_check_pull_request_merge_readiness(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -335,11 +360,21 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
     ))
 }
 
+/*
+학습 주석: PR 제목은 distributor가 만든 자동 PR임을 짧게 드러내고 task title을 중심에 둡니다.
+queue record의 task_id보다 title을 쓰는 이유는 GitHub PR 목록에서 사람이 어떤 작업 결과인지
+빠르게 구분해야 하기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn build_distributor_pull_request_title(record: &ParallelModeDistributorQueueRecord) -> String {
     format!("supersession: {}", record.task_title.trim())
 }
 
+/*
+학습 주석: PR body에는 distributor가 나중에 복구하거나 사람이 확인할 수 있는 provenance를
+넣습니다. agent, task id, branch, commit, validation, official refresh 결과를 남기면
+queue record 없이 GitHub 화면만 봐도 이 PR이 어떤 slot 결과를 대변하는지 추적할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueRecord) -> String {
     format!(

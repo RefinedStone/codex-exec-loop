@@ -1,6 +1,16 @@
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::*;
 
+/*
+학습 주석: integration worktree readiness는 cherry-pick 직전의 마지막 안전 게이트입니다.
+distributor는 source branch commit을 integration branch에 로컬 cherry-pick하므로, 현재 worktree가
+정확히 `DISTRIBUTOR_INTEGRATION_BRANCH`에 있어야 하고 staged/unstaged/rebase/cherry-pick
+메타데이터가 없어야 합니다.
+
+조건을 만족하지 않으면 queue record를 즉시 blocked로 바꿉니다. 그래야 오케스트레이터가
+같은 head를 계속 밀어붙이지 않고, supervisor가 operator에게 어떤 worktree 정리가 필요한지
+표시할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn ensure_distributor_integration_worktree_ready(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -73,6 +83,15 @@ pub(super) fn ensure_distributor_integration_worktree_ready(
     Ok(())
 }
 
+/*
+학습 주석: `git cherry`는 patch-id 기준으로 commit이 base branch에 이미 반영되었는지 확인할
+수 있습니다. source commit SHA가 직접 조상으로 들어간 것은 아니어도 같은 patch가 이미 적용된
+경우가 있으므로, distributor는 중복 cherry-pick 대신 "patch-equivalent already integrated"로
+기록할 수 있습니다.
+
+이 함수가 false를 반환한다고 해서 오류는 아닙니다. 단지 아직 patch-equivalent 증거가 없으니
+일반 cherry-pick 경로로 진행해야 한다는 뜻입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn commit_patch_equivalent_in_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -99,6 +118,12 @@ pub(super) fn commit_patch_equivalent_in_branch(
         .any(|line| line.trim_start().starts_with('-'))
 }
 
+/*
+학습 주석: cherry-pick이 충돌하면 Git은 conflicted file 목록을 index에 남깁니다. 이 함수는
+unmerged file만 수집해 queue record의 conflict_files에 저장할 짧은 목록으로 바꿉니다.
+그 목록은 supervisor orchestrator status와 blocked notice에서 사용자가 어디를 봐야 하는지
+알려 주는 복구 단서가 됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn collect_cherry_pick_conflict_files(repo_root: &str) -> Vec<String> {
     run_command(
@@ -120,6 +145,11 @@ pub(super) fn collect_cherry_pick_conflict_files(repo_root: &str) -> Vec<String>
     .collect::<Vec<_>>()
 }
 
+/*
+학습 주석: conflict suffix는 block message에 붙는 사람이 읽는 요약입니다. 충돌 파일이 없으면
+불필요한 빈 "conflicts" 문구를 붙이지 않고, 목록이 있으면 한 줄에 합쳐 TUI notice와 queue
+record history가 같은 형식으로 원인을 보여 주게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn format_conflict_file_suffix(conflict_files: &[String]) -> String {
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.

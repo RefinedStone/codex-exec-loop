@@ -3,6 +3,11 @@ use std::process::{Command, Stdio};
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: GitCommandStep은 cleanup/reconcile 같은 복합 git 작업의 한 단계를 이름과 인자로
+표현합니다. shell string이 아니라 args vector로 보관하므로 quoting에 덜 취약하고, 실패 시
+어떤 단계가 어떤 인자로 실행되었는지 report에 그대로 남길 수 있습니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct GitCommandStep {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -31,6 +36,11 @@ impl GitCommandStep {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: step report는 실제 git command 실행 결과를 손실 없이 담는 진단 구조입니다.
+exit code, stdout, stderr를 모두 저장해 상위 cleanup/reconcile 로직이 단순 true/false뿐 아니라
+사용자에게 보여 줄 실패 원인을 만들 수 있습니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct GitCommandStepReport {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -72,6 +82,11 @@ impl GitCommandStepReport {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: sequence report는 여러 git step을 하나의 논리 작업으로 묶은 결과입니다. 예를 들어
+slot cleanup은 checkout detach, hard reset, clean을 한 sequence로 실행합니다. 상위 코드는
+`succeeded`로 전체 성공을 확인하고, `failure_summary`로 처음 실패한 단계의 진단만 꺼낼 수 있습니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct GitCommandSequenceReport {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -99,6 +114,11 @@ impl GitCommandSequenceReport {
     }
 }
 
+/*
+학습 주석: git sequence 실행은 첫 실패에서 멈춥니다. reset/cleanup처럼 순서가 있는 작업에서는
+앞 단계가 실패했는데 뒤 단계가 실행되면 상태를 더 복잡하게 만들 수 있기 때문입니다. 이미 실행된
+step report는 모두 남기므로, 실패 후에도 어디까지 진행되었는지 추적할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn run_git_sequence(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -132,6 +152,11 @@ pub(super) fn run_git_sequence(
     }
 }
 
+/*
+학습 주석: 개별 git step은 `GIT_TERMINAL_PROMPT=0`과 null stdin으로 실행됩니다. 자동화 중에
+credential prompt나 interactive input이 뜨면 TUI/background workflow가 멈출 수 있으므로,
+실패는 stderr로 수집하고 호출자가 block/retry 정책을 결정하게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn run_git_step(step: GitCommandStep) -> GitCommandStepReport {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
