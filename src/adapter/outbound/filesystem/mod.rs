@@ -1,5 +1,7 @@
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: filesystem outbound adapter 영역은 planning workspace를 로컬 파일 시스템에 매핑하는
+// 구현을 담습니다. 이 선언이 `planning_workspace.rs`를 outward-facing adapter module로 연결합니다.
 pub mod planning_workspace;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: re-export를 두면 composition/wiring code가 파일명 세부 구조를 몰라도
+// `adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter`를 직접 사용할 수 있습니다.
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;

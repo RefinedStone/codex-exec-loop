@@ -1,5 +1,8 @@
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: DB outbound adapter 영역에는 planning authority를 SQLite에 저장하고 읽는 구현이
+// 들어 있습니다. 이 module declaration이 실제 adapter 파일을 `adapter::outbound::db` namespace에
+// 연결합니다.
 pub mod sqlite_planning_authority_adapter;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: `pub use`는 wiring code가 긴 하위 경로 대신
+// `adapter::outbound::db::SqlitePlanningAuthorityAdapter`로 adapter를 가져오게 하는 re-export입니다.
 pub use self::sqlite_planning_authority_adapter::SqlitePlanningAuthorityAdapter;
