@@ -1,38 +1,62 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+/*
+학습 주석:
+`store.rs`는 SQLite planning authority adapter의 중심 저장소 모듈입니다.
+
+이 파일은 "DB 파일을 열었을 때 어떤 schema를 보장하고, domain/application record를 어떤 조회 형태로
+다시 꺼낼 것인가"를 담당합니다. 이미 별도 모듈로 분리된 active document, draft, task authority row
+로직이 있지만, 이 파일은 여전히 전체 authority store의 공통 기반을 잡습니다.
+
+이번 구간의 초점은 저장소 기반 계약입니다.
+- `ensure_schema`는 모든 하위 projection이 의존하는 테이블과 인덱스를 만듭니다.
+- shadow document 함수들은 파일 기반 planning workspace에서 읽은 내용을 DB에 mirror합니다.
+- metadata 함수들은 schema/mode/root/timestamp처럼 DB snapshot 전체를 설명하는 값을 기록합니다.
+- shadow load는 이전 schema나 빈 DB에서도 안전하게 빈 map으로 돌아가는 호환성 경계를 제공합니다.
+*/
 use std::collections::{BTreeMap, BTreeSet};
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use anyhow::{Context, Result};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use chrono::Utc;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use rusqlite::{Connection, OptionalExtension, params};
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthoritySnapshot, PlanningTaskAuthoritySnapshot,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskAuthorityDocument,
 };
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{
     AUTHORITY_STORE_MODE, AUTHORITY_STORE_SCHEMA_VERSION, TASK_LEDGER_VERSION_METADATA_KEY,
     read_metadata_i64_connection, read_metadata_string_connection, replace_task_authority_tables,
     table_exists,
 };
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+authority store가 필요로 하는 전체 schema를 idempotent하게 보장합니다.
+
+이 함수는 `CREATE TABLE IF NOT EXISTS`와 `CREATE INDEX IF NOT EXISTS`만 사용하므로, 새 DB 파일뿐 아니라
+이미 존재하는 DB 파일에 여러 번 호출해도 같은 결과를 유지합니다. adapter의 다른 함수들은 자기 작업에
+필요한 테이블이 이미 있다고 가정하므로, DB connection을 만든 직후 이 schema 초기화가 먼저 실행되어야
+합니다.
+
+테이블 묶음별 의미는 다음과 같습니다.
+- `authority_metadata`: schema version, 저장 mode, canonical repo root, 최근 갱신 시각 같은 store 전체 정보입니다.
+- `shadow_documents`: 파일시스템 workspace에서 읽은 planning 파일의 mirror입니다.
+- `staged_drafts` / `staged_draft_files`: repo-scoped draft staging 영역입니다.
+- `active_documents`: commit된 planning workspace snapshot입니다.
+- `planning_direction_*`: direction authority 문서와 방향별 JSON 원문입니다.
+- `planning_tasks` / `planning_task_edges` / `planning_queue_projection`: task authority와 queue projection입니다.
+- `runtime_*`: app-server/parallel runtime에서 쓰는 lease, session, queue, event projection입니다.
+
+schema가 한 함수에 모여 있는 이유는 projection 모듈들이 서로 다른 테이블을 만져도 migration 기준은
+하나여야 하기 때문입니다. 분산된 `CREATE TABLE`은 버전 추적과 테스트 초기화를 어렵게 만듭니다.
+*/
 pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS authority_metadata (
@@ -171,62 +195,62 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             );
             "#,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to initialize authority-store schema")?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+파일시스템에서 읽은 planning 문서들을 `shadow_documents` 테이블에 전체 교체 방식으로 저장합니다.
+
+shadow store는 "현재 repo의 planning 파일들이 DB 관점에서 어떻게 보이는가"를 나타내는 mirror입니다.
+증분 patch를 시도하지 않고 먼저 테이블을 비우는 이유는 파일 삭제를 정확하게 반영하기 위해서입니다.
+입력 `documents`에 없는 파일이 DB에 남아 있으면 이후 authority snapshot 로더가 삭제된 파일을 여전히
+존재하는 것처럼 볼 수 있습니다.
+
+이 함수는 transaction 안에서 shadow rows와 metadata timestamp를 함께 갱신합니다. 따라서 mirror 내용은
+항상 `last_synced_at`과 같은 commit 시점의 상태로 해석할 수 있습니다.
+*/
 pub(super) fn store_shadow_documents(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &mut Connection,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     location: &PlanningAuthorityLocation,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     documents: &BTreeMap<String, String>,
 ) -> Result<()> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let transaction = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .transaction()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to open shadow-store transaction")?;
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute("DELETE FROM shadow_documents", [])
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to clear shadow documents")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for (relative_path, content) in documents {
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "INSERT INTO shadow_documents (relative_path, content) VALUES (?1, ?2)",
                 params![relative_path, content],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to mirror `{relative_path}` into the shadow store"))?;
     }
 
     upsert_authority_metadata(&transaction, location, "last_synced_at")?;
 
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .commit()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to commit shadow-store transaction")?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+authority DB 전체를 설명하는 공통 metadata를 upsert합니다.
+
+`timestamp_key`를 인자로 받는 이유는 호출 맥락마다 "무엇이 갱신되었는지"가 다르기 때문입니다.
+shadow sync는 `last_synced_at`, draft staging은 `last_draft_updated_at`처럼 다른 key를 넘깁니다.
+하지만 schema version, mode, canonical repo root, workspace root는 모든 갱신에서 함께 확인되어야 하는
+store identity 값입니다.
+*/
 pub(super) fn upsert_authority_metadata(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     location: &PlanningAuthorityLocation,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     timestamp_key: &str,
 ) -> Result<()> {
     upsert_metadata(
@@ -242,65 +266,63 @@ pub(super) fn upsert_authority_metadata(
     )?;
     upsert_metadata(transaction, "workspace_root", &location.workspace_root)?;
     upsert_metadata(transaction, timestamp_key, &Utc::now().to_rfc3339())?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+metadata key/value 하나를 insert-or-update합니다.
+
+metadata는 단순한 문자열 map이지만, 여러 저장 흐름에서 같은 key를 반복 갱신합니다. `ON CONFLICT(key)`
+절을 사용하면 caller가 "처음 쓰는 값인지, 기존 값을 갱신하는지"를 구분하지 않아도 됩니다. 이 함수는
+작은 helper지만 schema version, mode, ledger version처럼 store 해석에 필요한 기준값을 쓰는 공통
+입구입니다.
+*/
 pub(super) fn upsert_metadata(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     key: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     value: &str,
 ) -> Result<()> {
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute(
             "INSERT INTO authority_metadata (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .with_context(|| format!("failed to update authority metadata `{key}`"))?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+shadow store에 mirror된 planning 문서들을 deterministic map으로 읽어옵니다.
+
+`table_exists`를 먼저 확인하는 것은 이전 버전 DB나 아직 schema 초기화가 끝나지 않은 테스트 DB를
+읽을 때의 방어 장치입니다. shadow table이 없으면 "mirror가 없다"는 의미로 빈 map을 반환합니다.
+
+조회는 `ORDER BY relative_path`를 사용하고 결과 컨테이너도 `BTreeMap`입니다. 둘 다 출력 순서를
+안정화하기 위한 선택입니다. planning 문서는 사람이 diff로 검토하는 일이 많기 때문에, DB가 반환하는
+행 순서가 실행마다 달라지는 상황을 피해야 합니다.
+*/
 pub(super) fn load_shadow_documents(connection: &Connection) -> Result<BTreeMap<String, String>> {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !table_exists(connection, "shadow_documents")? {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(BTreeMap::new());
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare("SELECT relative_path, content FROM shadow_documents ORDER BY relative_path")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read shadow-store documents")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rows = statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate shadow-store documents")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut documents = BTreeMap::new();
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for row in rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (relative_path, content) = row.context("failed to decode shadow-store row")?;
         documents.insert(relative_path, content);
     }
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(documents)
 }
 
