@@ -1,209 +1,248 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::sync::Arc;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use anyhow::{Result, bail};
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::control::{
     PlanningControlResetOutcome, PlanningControlService, PlanningControlStatusSnapshot,
     PlanningControlSurface,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::{PlanningControlCommand, PlanningResetTarget};
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+/*
+ * Telegram 메시지 파서는 inbound adapter의 가장 얇은 명령 해석 경계다.
+ * 이 파일은 Telegram이 넘긴 원문 문자열을 application service가 이해하는
+ * PlanningControlCommand나 봇 로컬 명령으로만 바꾸고, 채팅방 허가 여부 확인,
+ * planning 실행, 응답 렌더링은 상위 runner가 맡는다. 그래서 파서 결과는
+ * "무시", "사용자에게 돌려줄 오류", "실행 가능한 명령" 세 갈래로 고정된다.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum TelegramInboundCommand {
+    /*
+     * `/whoami`는 planning workspace를 읽지 않는 Telegram adapter 전용 명령이다.
+     * runner는 이 값을 받으면 현재 chat_id와 allowlist 판정만 렌더링한다.
+     */
     WhoAmI,
+    /*
+     * 나머지 운영 명령은 application service의 planning control 언어로 넘긴다.
+     * adapter가 service 내부 모델을 다시 만들지 않도록 여기서 바로 감싼다.
+     */
     Planning(PlanningControlCommand),
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum TelegramParsedMessage {
+    /*
+     * 일반 대화나 빈 메시지는 봇이 끼어들면 안 되므로 완전히 무시한다.
+     * 특히 단체방에서는 slash command가 아닌 텍스트에 응답하지 않는 것이 중요하다.
+     */
     Ignore,
+    /*
+     * 문법은 Telegram adapter가 가장 잘 알고 있으므로 사용법 오류도 여기서 만든다.
+     * runner는 이 문자열을 그대로 답장해 실행 계층까지 잘못된 입력이 내려가지 않게 한다.
+     */
     Error(String),
+    /*
+     * 검증을 통과한 명령만 이 변형으로 나간다. 이후 단계는 authorization과
+     * planning service 실행에 집중할 수 있다.
+     */
     Command(TelegramInboundCommand),
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+     * Telegram update에는 text가 없거나 공백뿐인 메시지가 섞일 수 있다.
+     * 여기서 None/empty를 먼저 접어야 runner가 파일, 스티커, 일반 채팅에 답하지 않는다.
+     */
     let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return TelegramParsedMessage::Ignore;
     };
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+     * 첫 토큰만 명령어로 보고 나머지는 명령별 인자 파서로 넘긴다.
+     * 공백 기준 분리는 현재 지원 명령이 모두 짧은 키워드형 인자만 받기 때문에 충분하다.
+     */
     let mut parts = text.split_whitespace();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(raw_command) = parts.next() else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return TelegramParsedMessage::Ignore;
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let command = normalize_command(raw_command);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let arguments = parts.collect::<Vec<_>>();
 
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    /*
+     * 이 match가 Telegram 표면의 공개 명령표다. 여기서 application command로
+     * 바로 축소해 두면 mod.rs의 runner는 같은 명령을 CLI나 다른 adapter와 공유하는
+     * PlanningControlService 계약으로 실행할 수 있다.
+     */
     match command.as_str() {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * `/start`는 Telegram 사용자가 처음 봇을 열 때 자동으로 누르는 진입점이다.
+         * 내부적으로는 planning help와 같으므로 별도 service 명령을 만들지 않는다.
+         */
         "/start" | "/help" | "help" => parse_command_without_arguments(
             &arguments,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             TelegramInboundCommand::Planning(PlanningControlCommand::Help),
             "/help",
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * `/whoami`는 사용자가 현재 chat_id를 알아 allowlist 설정을 고칠 수 있게 한다.
+         * 보안상 planning 실행과 분리되며, 인자를 받지 않는다.
+         */
         "/whoami" => {
             parse_command_without_arguments(&arguments, TelegramInboundCommand::WhoAmI, "/whoami")
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * `status` 별칭은 slash command가 아닌 짧은 운영 입력도 받아준다.
+         * 단, 다른 일반 문장까지 해석하지 않도록 정확히 이 토큰일 때만 매칭한다.
+         */
         "/status" | "status" => parse_command_without_arguments(
             &arguments,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             TelegramInboundCommand::Planning(PlanningControlCommand::Status),
             "/status",
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * queue도 status와 같은 가벼운 조회 명령이다. 실행 권한 검사는 파서 뒤의
+         * runner에서 수행되므로 여기서는 모양 검증만 담당한다.
+         */
         "/queue" | "queue" => parse_command_without_arguments(
             &arguments,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             TelegramInboundCommand::Planning(PlanningControlCommand::Queue),
             "/queue",
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * `/plan`은 planning command namespace의 확장 지점이다. 지금은 status만 열어
+         * 두지만, 하위 명령이 늘어나면 parse_plan_arguments에만 분기를 추가하면 된다.
+         */
         "/plan" => parse_plan_arguments(&arguments),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * reset alias들은 target이 명령어 이름에 이미 들어 있으므로 추가 인자를 금지한다.
+         * 이 제한 덕분에 `/reset_all now` 같은 애매한 입력이 조용히 실행되지 않는다.
+         */
         "/reset_queue" => parse_command_without_arguments(
             &arguments,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 PlanningResetTarget::Queue,
             )),
             "/reset_queue",
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         "/reset_directions" => parse_command_without_arguments(
             &arguments,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 PlanningResetTarget::Directions,
             )),
             "/reset_directions",
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         "/reset_all" => parse_command_without_arguments(
             &arguments,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             TelegramInboundCommand::Planning(PlanningControlCommand::Reset(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 PlanningResetTarget::All,
             )),
             "/reset_all",
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * `/reset`은 안전을 위해 target을 명시해야 한다. destructive command는 기본값을
+         * 두지 않는 편이 낫기 때문에 빈 인자는 usage error로 돌린다.
+         */
         "/reset" => parse_reset_arguments(&arguments),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * slash로 시작하면 사용자가 봇 명령을 의도한 것이므로 침묵하지 않고 help를 붙인다.
+         * help_text를 만들기 위해 service를 쓰지만, 아래 Noop surface가 실제 I/O 실행을
+         * 막아 파서가 여전히 순수한 문자열 해석 경계로 남는다.
+         */
         token if token.starts_with('/') => TelegramParsedMessage::Error(format!(
             "지원하지 않는 명령어입니다: {token}\n{}",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningControlService::new(Arc::new(NoopPlanningControlSurface)).help_text()
         )),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * slash가 없는 나머지 텍스트는 일반 대화로 간주한다. 사용자가 그룹 채팅에서
+         * 봇을 호출하지 않았을 때 불필요한 답장을 만들지 않기 위한 마지막 방어선이다.
+         */
         _ => TelegramParsedMessage::Ignore,
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn parse_command_without_arguments(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     arguments: &[&str],
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     command: TelegramInboundCommand,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     usage: &'static str,
 ) -> TelegramParsedMessage {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    /*
+     * 인자를 받지 않는 명령들의 공통 문지기다. 같은 usage 형식을 쓰게 하여
+     * `/status now`, `/queue detail` 같은 오입력이 service까지 내려가지 않게 한다.
+     */
     if arguments.is_empty() {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         TelegramParsedMessage::Command(command)
     } else {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         TelegramParsedMessage::Error(format!("사용법: {usage}"))
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn parse_plan_arguments(arguments: &[&str]) -> TelegramParsedMessage {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    /*
+     * `/plan`은 Telegram에서 planning 영역을 열어 두는 namespace 역할을 한다.
+     * 빈 인자와 명시적 status를 같은 조회 명령으로 해석해 사용자의 짧은 입력을 허용한다.
+     */
     match arguments {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         [] | ["status"] => TelegramParsedMessage::Command(TelegramInboundCommand::Planning(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningControlCommand::Status,
         )),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        /*
+         * 아직 지원하지 않는 하위 명령은 service로 보내지 않는다. 이곳의 usage가
+         * 현재 Telegram 표면에서 노출된 planning 하위 명령의 단일 출처다.
+         */
         _ => TelegramParsedMessage::Error("사용법: /plan [status]".to_string()),
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn parse_reset_arguments(arguments: &[&str]) -> TelegramParsedMessage {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+     * reset은 workspace 상태를 지우는 명령이므로 반드시 하나의 target만 허용한다.
+     * target 누락과 여분 인자를 같은 usage error로 처리해 애매한 입력을 남기지 않는다.
+     */
     let [target] = arguments else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return TelegramParsedMessage::Error(
             "사용법: /reset queue | /reset directions | /reset all".to_string(),
         );
     };
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+     * Telegram의 짧은 단어 target을 application service의 reset enum으로 매핑한다.
+     * 이 변환을 adapter 안에 두면 service는 Telegram 명령어 표기법을 알 필요가 없다.
+     */
     let command = match *target {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         "queue" => PlanningControlCommand::Reset(PlanningResetTarget::Queue),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         "directions" => PlanningControlCommand::Reset(PlanningResetTarget::Directions),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         "all" => PlanningControlCommand::Reset(PlanningResetTarget::All),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         _ => {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return TelegramParsedMessage::Error(
                 "사용법: /reset queue | /reset directions | /reset all".to_string(),
             );
         }
     };
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn normalize_command(raw_command: &str) -> String {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+     * Telegram 단체방에서는 `/status@BotName`처럼 봇 이름이 붙은 command가 들어온다.
+     * 대소문자를 낮추고 mention 접미사를 잘라 같은 명령표로 처리한다.
+     */
     let lowered = raw_command.to_ascii_lowercase();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut parts = lowered.split('@');
     parts.next().unwrap_or_default().to_string()
 }
 
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+/*
+ * 이 surface는 unsupported slash command의 help text를 렌더링하기 위한 placeholder다.
+ * PlanningControlService::help_text는 상태 조회나 reset을 호출하지 않으므로 정상 경로에서는
+ * 아래 메서드들이 실행되지 않는다. 실행되면 파서가 자기 책임을 넘어섰다는 뜻이므로 즉시 실패한다.
+ */
 struct NoopPlanningControlSurface;
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningControlSurface for NoopPlanningControlSurface {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         bail!("noop control surface should not execute");
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn reset_workspace(&self, _target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
         bail!("noop control surface should not execute");
     }
