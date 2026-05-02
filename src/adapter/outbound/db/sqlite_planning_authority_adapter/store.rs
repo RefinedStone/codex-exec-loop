@@ -511,23 +511,30 @@ pub(super) fn load_active_document(
         .with_context(|| format!("failed to read active authority document `{relative_path}`"))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+task authority snapshot을 DB에서 복원합니다.
+
+task authority snapshot은 세 가지 조각의 조합입니다.
+1. `planning_tasks`에 저장된 `TaskAuthorityDocument`
+2. `planning_queue_projection`에 저장된 현재 queue 계산 결과
+3. `authority_metadata`에 저장된 `planning_revision`
+
+task 문서가 없으면 아직 task authority가 초기화되지 않은 상태이므로 `Ok(None)`입니다. 반대로 task
+문서는 있는데 queue projection이 없으면, 이전 schema나 부분 초기화 상태를 고려해 빈 projection을
+사용합니다. 이렇게 하면 application 계층은 snapshot을 받았을 때 queue field가 항상 존재한다고
+가정할 수 있습니다.
+*/
 pub(super) fn load_task_authority_snapshot_from_connection(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(task_authority) = load_task_authority_from_connection(connection)? else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(None);
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let queue_projection =
         load_queue_projection_from_connection(connection)?.unwrap_or_else(empty_queue_projection);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let planning_revision =
         read_metadata_i64_connection(connection, "planning_revision")?.unwrap_or(0);
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(Some(PlanningTaskAuthoritySnapshot {
         planning_revision,
         task_authority,
@@ -535,143 +542,126 @@ pub(super) fn load_task_authority_snapshot_from_connection(
     }))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+`planning_tasks` 행들을 domain의 `TaskAuthorityDocument`로 복원합니다.
+
+저장할 때 task row는 조회용 column들과 `content_json`을 함께 갖습니다. 복원에서는 JSON 원문을
+신뢰합니다. column들은 SQL 조회/정렬/인덱싱을 위한 projection이고, domain 객체의 전체 형태는
+`content_json`에 보존되어 있기 때문입니다. `task_id` column은 JSON decode 오류를 설명하는 context로
+사용합니다.
+
+version은 `authority_metadata`의 task ledger version에서 읽습니다. 값이 없으면 format 기본 버전을
+사용해 오래된 DB도 읽을 수 있게 합니다.
+*/
 pub(super) fn load_task_authority_from_connection(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<Option<TaskAuthorityDocument>> {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !task_authority_exists(connection)? {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(None);
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let version = read_metadata_i64_connection(connection, TASK_LEDGER_VERSION_METADATA_KEY)?
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .unwrap_or(i64::from(PLANNING_FORMAT_VERSION)) as u32;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare(
             "SELECT task_id, content_json
              FROM planning_tasks
              ORDER BY task_order ASC, task_id ASC",
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read planning task rows")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rows = statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate planning task rows")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut tasks = Vec::new();
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for row in rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (task_id, content_json) = row.context("failed to decode planning task row")?;
         tasks.push(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             serde_json::from_str(&content_json)
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .with_context(|| format!("failed to deserialize planning task row `{task_id}`"))?,
         );
     }
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(Some(TaskAuthorityDocument { version, tasks }))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+queue projection rows를 `PriorityQueueProjection` 구조로 복원합니다.
+
+`planning_queue_projection` 테이블은 active/proposed/skipped를 같은 schema에 담습니다. bucket과
+item_kind가 row 의미를 나누고, `content_json`은 각 bucket에 맞는 projection 타입으로 decode됩니다.
+이 함수는 bucket을 기준으로 세 Vec에 분배합니다.
+
+알 수 없는 bucket은 무시합니다. 이는 forward compatibility를 위한 느슨한 처리입니다. 새 bucket이
+추가된 DB를 오래된 binary가 읽을 때 전체 load를 실패시키기보다, 현재 binary가 이해하는 bucket만
+복원합니다.
+*/
 pub(super) fn load_queue_projection_from_connection(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: &Connection,
 ) -> Result<Option<PriorityQueueProjection>> {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !task_authority_exists(connection)? {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(None);
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut active_tasks = Vec::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut proposed_tasks = Vec::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut skipped_tasks = Vec::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut statement = connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .prepare(
             "SELECT bucket, task_id, content_json
              FROM planning_queue_projection
              ORDER BY bucket ASC, rank ASC, task_id ASC",
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to read planning queue projection")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rows = statement
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_map([], |row| {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
             ))
         })
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to iterate planning queue projection")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
+    /*
+    학습 주석:
+    row의 `task_id`는 projection JSON에도 들어 있지만 오류 메시지를 위해 column 값을 함께 읽습니다.
+    queue projection은 task authority 문서의 파생 결과라 JSON decode가 실패하면 DB snapshot 자체가
+    깨진 것이므로, 어느 bucket/task에서 실패했는지 최대한 좁혀 줍니다.
+    */
     for row in rows {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let (bucket, task_id, content_json) =
             row.context("failed to decode planning queue projection row")?;
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match bucket.as_str() {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             "active" => {
                 active_tasks.push(
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     serde_json::from_str::<PriorityQueueTask>(&content_json).with_context(
-                        // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
                         || format!("failed to deserialize active queue projection `{task_id}`"),
                     )?,
                 );
             }
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             "proposed" => {
                 proposed_tasks.push(
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     serde_json::from_str::<PriorityQueueTask>(&content_json).with_context(
-                        // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
                         || format!("failed to deserialize proposed queue projection `{task_id}`"),
                     )?,
                 );
             }
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             "skipped" => {
                 skipped_tasks.push(
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     serde_json::from_str::<PriorityQueueSkippedTask>(&content_json).with_context(
-                        // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
                         || format!("failed to deserialize skipped queue projection `{task_id}`"),
                     )?,
                 );
             }
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             _ => {}
         }
     }
 
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(Some(PriorityQueueProjection {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: active queue의 첫 항목이 TUI와 worker가 우선 볼 다음 task가 됩니다.
         next_task: active_tasks.first().cloned(),
         active_tasks,
         proposed_tasks,
@@ -679,64 +669,68 @@ pub(super) fn load_queue_projection_from_connection(
     }))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+DB에 task authority snapshot이 존재하는지 확인합니다.
+
+가장 명확한 신호는 `TASK_LEDGER_VERSION_METADATA_KEY` metadata입니다. 다만 이전 버전 DB나 partial write
+상황에서는 metadata 없이 `planning_tasks` row만 있을 수 있으므로, fallback으로 task row 존재도
+확인합니다. 이 함수는 load 계열에서 `None`과 실제 빈 document를 구분하는 gate 역할을 합니다.
+*/
 pub(super) fn task_authority_exists(connection: &Connection) -> Result<bool> {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if read_metadata_string_connection(connection, TASK_LEDGER_VERSION_METADATA_KEY)?.is_some() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(true);
     }
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row("SELECT 1 FROM planning_tasks LIMIT 1", [], |_| Ok(()))
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .optional()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to inspect planning task authority")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|value| value.is_some())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+queue projection이 없을 때 사용할 구조적으로 완전한 빈 projection을 만듭니다.
+
+`PriorityQueueProjection`은 option이 아니라 내부 Vec들을 가진 값이므로, caller가 매번 None 처리를
+반복하지 않게 이 helper에서 빈 active/proposed/skipped 목록과 `next_task: None`을 함께 제공합니다.
+*/
 pub(super) fn empty_queue_projection() -> PriorityQueueProjection {
     PriorityQueueProjection {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         next_task: None,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         active_tasks: Vec::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         proposed_tasks: Vec::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         skipped_tasks: Vec::new(),
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction catalog 변경 후 task authority가 가리키는 direction 참조를 정리합니다.
+
+task는 반드시 존재하는 direction에 속해야 합니다. direction authority가 교체되거나 지워지면 기존 task 중
+사라진 direction을 참조하는 것들이 생길 수 있습니다. 이 함수는 현재 task authority를 읽고, 유효한
+direction id 집합에 맞지 않는 task를 제거한 뒤, 남은 task의 depends_on/blocked_by에서도 제거된 task를
+참조하는 edge를 지웁니다.
+
+queue projection은 pruning 후 `empty_queue_projection`으로 초기화합니다. task 집합이 바뀌면 기존 rank와
+next task 계산은 더 이상 신뢰할 수 없으므로, 다음 계산 흐름이 새 projection을 만들게 하는 것이 안전합니다.
+*/
 pub(super) fn reconcile_task_authority_with_directions(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     directions: Option<&DirectionCatalogDocument>,
 ) -> Result<()> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(mut task_authority) = load_task_authority_from_connection(transaction)? else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(());
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let direction_ids = match directions {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         Some(directions) => direction_ids(directions),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         None => BTreeSet::new(),
     };
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !prune_task_authority_to_direction_ids(&mut task_authority, &direction_ids) {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok(());
     }
     replace_task_authority_tables(transaction, &task_authority, &empty_queue_projection())?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
