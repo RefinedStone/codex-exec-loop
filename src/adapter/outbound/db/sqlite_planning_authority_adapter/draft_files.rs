@@ -1,21 +1,20 @@
 /*
-학습 주석:
 이 모듈은 planning authority SQLite DB 안에서 "초안(draft)" 파일 묶음을 다루는
-저수준 저장소 로직입니다.
+저수준 저장소 로직이다.
 
 상위의 `RepoScopedPlanningWorkspacePort`는 파일시스템 workspace처럼 보이는 API를 제공하지만,
 git으로 묶인 workspace에서는 실제 초안 파일을 디스크의 `.codex/planning/drafts/...`에
-직접 쓰지 않고 authority DB의 `staged_drafts` / `staged_draft_files` 테이블에 저장합니다.
-그래서 이 파일의 함수들은 경계 변환을 담당합니다.
+직접 쓰지 않고 authority DB의 `staged_drafts` / `staged_draft_files` 테이블에 저장한다.
+그래서 이 파일의 함수들은 경계 변환을 담당한다.
 
-- 입력 쪽 이름은 여전히 `workspace_dir`, `draft_name`, `active_path`, `body`입니다.
-- 내부에서는 `workspace_dir`로 authority DB 위치를 찾습니다.
-- DB에는 초안 이름과 활성 planning 파일 경로별 본문을 저장합니다.
+- 입력 쪽 이름은 여전히 `workspace_dir`, `draft_name`, `active_path`, `body`다.
+- 내부에서는 `workspace_dir`로 authority DB 위치를 찾는다.
+- DB에는 초안 이름과 활성 planning 파일 경로별 본문을 저장한다.
 - 반환값에는 호출자가 기존 파일 기반 흐름과 같은 형태로 볼 수 있도록 표시용 draft 경로를
-  다시 만들어 담습니다.
+  다시 만들어 담는다.
 
 이 구조 덕분에 TUI와 application 계층은 "초안을 staging한다"는 유스케이스만 알면 되고,
-초안이 실제 파일인지 SQLite 행인지는 outbound adapter 내부의 구현 세부사항으로 남습니다.
+초안이 실제 파일인지 SQLite 행인지는 outbound adapter 내부의 구현 세부사항으로 남는다.
 */
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -32,23 +31,22 @@ use super::{SqlitePlanningAuthorityAdapter, open_authority_connection};
 
 impl SqlitePlanningAuthorityAdapter {
     /*
-    학습 주석:
-    여러 planning 파일을 하나의 초안 이름 아래에 새로 staging합니다.
+    여러 planning 파일을 하나의 초안 이름 아래에 새로 staging한다.
 
     이 함수의 핵심 계약은 "같은 `draft_name`의 기존 staged 파일 목록을 전부 지운 뒤,
-    전달받은 `files` 목록으로 초안을 통째로 교체한다"입니다. 그래서 DB 작업은 반드시
-    하나의 트랜잭션 안에서 실행됩니다. 중간에 한 파일만 insert되고 실패하면 초안이 반쯤
-    바뀐 상태가 되므로, `DELETE`와 모든 `INSERT`와 metadata 갱신이 함께 commit되어야 합니다.
+    전달받은 `files` 목록으로 초안을 통째로 교체한다"다. 그래서 DB 작업은 반드시
+    하나의 transaction 안에서 실행된다. 중간에 한 파일만 insert되고 실패하면 초안이 반쯤
+    바뀐 상태가 되므로, `DELETE`와 모든 `INSERT`와 metadata 갱신이 함께 commit되어야 한다.
 
     처리 흐름:
-    1. workspace 경로에서 repo-scoped authority DB 위치를 찾습니다.
-    2. `last_draft_updated_at` metadata와 `staged_drafts`의 초안 엔트리를 갱신합니다.
-    3. 같은 초안 이름의 기존 `staged_draft_files` 행을 비웁니다.
-    4. 전달받은 각 active planning 파일 본문을 DB에 저장합니다.
-    5. 호출자가 확인할 수 있도록 active path와 표시용 staged path를 반환합니다.
+    1. workspace 경로에서 repo-scoped authority DB 위치를 찾는다.
+    2. `last_draft_updated_at` metadata와 `staged_drafts`의 초안 entry를 갱신한다.
+    3. 같은 초안 이름의 기존 `staged_draft_files` 행을 비운다.
+    4. 전달받은 각 active planning 파일 본문을 DB에 저장한다.
+    5. 호출자가 확인할 수 있도록 active path와 표시용 staged path를 반환한다.
 
     여기서 반환하는 `staged_path`는 실제 디스크 파일을 보장하는 경로가 아니라,
-    기존 파일 기반 workspace API와 호환되도록 만들어진 "사용자에게 보여줄 위치"입니다.
+    기존 파일 기반 workspace API와 호환되도록 만들어진 "사용자에게 보여줄 위치"다.
     */
     pub(crate) fn stage_repo_scoped_draft_files(
         workspace_dir: &str,
@@ -70,10 +68,9 @@ impl SqlitePlanningAuthorityAdapter {
             .with_context(|| format!("failed to clear staged draft `{draft_name}`"))?;
 
         /*
-        학습 주석:
         `Vec::with_capacity(files.len())`는 결과 레코드 개수가 입력 파일 수와 같다는 점을
-        이용합니다. 작은 최적화지만 이 함수의 의미도 드러냅니다. 저장 대상 하나마다
-        반환할 `PlanningStagedFileRecord`도 하나씩 생깁니다.
+        이용한다. 작은 최적화지만 이 함수의 의미도 드러낸다. 저장 대상 하나마다
+        반환할 `PlanningStagedFileRecord`도 하나씩 생긴다.
         */
         let mut staged_files = Vec::with_capacity(files.len());
         for file in files {
@@ -107,16 +104,15 @@ impl SqlitePlanningAuthorityAdapter {
     }
 
     /*
-    학습 주석:
-    authority DB에 staging된 특정 초안을 다시 읽어 application 계층의 load record로 복원합니다.
+    authority DB에 staging된 특정 초안을 다시 읽어 application 계층의 load record로 복원한다.
 
     먼저 `staged_drafts`에서 초안 이름 자체가 존재하는지 확인하는 이유는, "초안은 존재하지만
-    파일이 0개인 상태"와 "초안 이름이 아예 없음"을 구분하기 위해서입니다. 아래 파일 목록 조회만
-    수행하면 두 경우가 모두 빈 목록처럼 보입니다. application 계층에는 존재하지 않는 초안 요청을
-    명확한 오류로 돌려주어야 하므로, 존재 확인을 별도로 둡니다.
+    파일이 0개인 상태"와 "초안 이름이 아예 없음"을 구분하기 위해서다. 아래 파일 목록 조회만
+    수행하면 두 경우가 모두 빈 목록처럼 보인다. application 계층에는 존재하지 않는 초안 요청을
+    명확한 오류로 돌려주어야 하므로, 존재 확인을 별도로 둔다.
 
-    파일 행은 `ORDER BY active_path`로 정렬합니다. DB는 별도 정렬 없이는 행 순서를 보장하지 않으므로,
-    이 정렬은 TUI 출력과 테스트 스냅샷이 매번 같은 순서로 나오게 하는 계약입니다.
+    파일 행은 `ORDER BY active_path`로 정렬한다. DB는 별도 정렬 없이는 행 순서를 보장하지 않으므로,
+    이 정렬은 TUI 출력과 테스트 snapshot이 매번 같은 순서로 나오게 하는 계약이다.
     */
     pub(crate) fn load_repo_scoped_draft_files(
         workspace_dir: &str,
@@ -152,10 +148,9 @@ impl SqlitePlanningAuthorityAdapter {
             .with_context(|| format!("failed to iterate staged draft `{draft_name}`"))?;
 
         /*
-        학습 주석:
         rusqlite의 `query_map`은 iterator를 만들 때뿐 아니라 각 행을 꺼내 decode할 때도 실패할 수
-        있습니다. 그래서 루프 안에서 `row.context(...)`를 붙여, SQL 실행 실패와 행 decode 실패를
-        서로 다른 메시지로 남깁니다.
+        있다. 그래서 loop 안에서 `row.context(...)`를 붙여, SQL 실행 실패와 행 decode 실패를
+        서로 다른 message로 남긴다.
         */
         let mut staged_files = Vec::new();
         for row in rows {
@@ -175,17 +170,16 @@ impl SqlitePlanningAuthorityAdapter {
     }
 
     /*
-    학습 주석:
-    초안 안의 단일 planning 파일 본문만 추가하거나 교체합니다.
+    초안 안의 단일 planning 파일 본문만 추가하거나 교체한다.
 
     `stage_repo_scoped_draft_files`가 초안 전체를 갈아끼우는 bulk API라면, 이 함수는 사용자가
-    한 파일만 수정했을 때 쓰는 좁은 API입니다. `ON CONFLICT(draft_name, active_path)`를 사용하므로
-    같은 초안과 active path 조합이 이미 있으면 content만 바꾸고, 없으면 새 행을 만듭니다.
+    한 파일만 수정했을 때 쓰는 좁은 API다. `ON CONFLICT(draft_name, active_path)`를 사용하므로
+    같은 초안과 active path 조합이 이미 있으면 content만 바꾸고, 없으면 새 행을 만든다.
 
-    이 함수도 `upsert_draft_entry`를 먼저 호출합니다. 그 덕분에 아직 초안 이름이 없던 상태에서
+    이 함수도 `upsert_draft_entry`를 먼저 호출한다. 그 덕분에 아직 초안 이름이 없던 상태에서
     단일 파일만 저장해도 `staged_drafts` 부모 엔트리와 `staged_draft_files` 자식 행이 함께
-    만들어집니다. 외래키처럼 동작하는 논리적 부모-자식 관계를 application 코드가 신경 쓰지
-    않아도 되게 만드는 adapter 내부 책임입니다.
+    만들어진다. 외래키처럼 동작하는 논리적 부모-자식 관계를 application 코드가 신경 쓰지
+    않아도 되게 만드는 adapter 내부 책임이다.
     */
     pub(crate) fn replace_repo_scoped_draft_file(
         workspace_dir: &str,
@@ -219,13 +213,12 @@ impl SqlitePlanningAuthorityAdapter {
 }
 
 /*
-학습 주석:
-`staged_drafts` 테이블의 초안 엔트리를 insert-or-update하는 작은 helper입니다.
+`staged_drafts` 테이블의 초안 엔트리를 insert-or-update하는 작은 helper다.
 
 이 helper가 별도로 있는 이유는 bulk staging과 단일 파일 교체가 모두 같은 부모 엔트리 갱신
-규칙을 공유하기 때문입니다. 초안 이름이 처음 등장하면 새 행을 만들고, 이미 있으면 `updated_at`만
-현재 시각으로 바꿉니다. 즉 `staged_drafts`는 초안의 존재와 마지막 갱신 시각을 표현하고,
-`staged_draft_files`는 그 초안에 속한 실제 planning 파일 본문들을 표현합니다.
+규칙을 공유하기 때문이다. 초안 이름이 처음 등장하면 새 행을 만들고, 이미 있으면 `updated_at`만
+현재 시각으로 바꾼다. 즉 `staged_drafts`는 초안의 존재와 마지막 갱신 시각을 표현하고,
+`staged_draft_files`는 그 초안에 속한 실제 planning 파일 본문들을 표현한다.
 */
 fn upsert_draft_entry(transaction: &rusqlite::Transaction<'_>, draft_name: &str) -> Result<()> {
     transaction
