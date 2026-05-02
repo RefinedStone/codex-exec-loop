@@ -1,9 +1,20 @@
-// Centralize operator-facing planning auto-follow copy so future localization
-// can swap one seam instead of touching orchestration logic.
+// 학습 주석: 이 파일은 planning auto-follow에서 사용자에게 노출되는 고정 문구와 기본 evaluator prompt를 한곳에 모읍니다.
+// runtime, bootstrap, doctor, supporting file seed가 같은 문구 계약을 공유해야 하므로 orchestration 코드 안에 문자열을 흩뿌리지 않습니다.
 
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: 이 문구는 queue head를 자동으로 이어 실행할 때 transcript에 남기는 사용자-facing marker입니다. runtime facade와
+// TUI post-turn 처리 경로가 이 값을 비교해 "사용자가 직접 입력한 prompt"와 "내장 next-task handoff"를 구분합니다.
 pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str = "다음 queued task 1개를 이어서 진행합니다.";
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN은 queue가 비었을 때 planning evaluator가 어떤 기준으로 후속 task를 만들지
+// 판단하게 하는 기본 prompt입니다. bootstrap은 새 workspace에 이 내용을 seed하고, doctor/supporting file 경로는 drift 여부를
+// 이 상수와 비교합니다.
+/*
+학습 주석:
+- 이 prompt는 main session의 TODO 추출기가 아니라 post-turn planning evaluator를 정의합니다.
+- accepted DB direction/task authority와 queue projection을 최종 판단 기준으로 삼게 해, 오래된 파일 authority나 "완료했다"는
+  자연어 선언이 queue를 잘못 비우지 않도록 합니다.
+- 지금 바로 이어갈 항목만 ready/in_progress로 두고 나머지는 proposed로 남기라는 규칙은 auto-follow가 과도하게 많은 작업을
+  한 번에 실행하지 않게 하는 안전장치입니다.
+*/
 pub const DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN: &str = r#"# Queue Idle Review Prompt
 
 Queue가 비었을 때만 이 prompt를 사용합니다. 이 worker는 main session의 TODO 추출기가 아니라 post-turn planning evaluator입니다.
