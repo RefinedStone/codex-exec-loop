@@ -147,6 +147,13 @@ fn acquire_pool_allocation_lock_at(pool_root: &Path) -> Result<PoolAllocationLoc
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn pool_allocation_lock_owner_token() -> String {
+    /*
+    학습 주석: owner token은 lock directory를 만든 실행 주체를 최소 정보로 식별합니다. pid는
+    stale lock을 정리할 때 아직 살아 있는 프로세스인지 확인하는 단서이고, created_at_ms는
+    사람이 pool root를 열어 봤을 때 언제 생긴 lock인지 판단하는 운영 단서입니다. token 전체를
+    release 시 비교하므로, 같은 pid가 재사용되더라도 이전 permit이 새 lock을 삭제할 위험을
+    줄입니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let created_at = SystemTime::now()
         // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -188,6 +195,12 @@ Unknown이면 보수적으로 유지합니다. slot 중복 배정보다 잠시 b
 */
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn remove_stale_pool_allocation_lock(lock_path: &Path) {
+    /*
+    학습 주석: stale 제거는 allocation lock에서 가장 보수적이어야 하는 경로입니다. 여기서 실수로
+    살아 있는 lock을 지우면 두 agent가 같은 idle slot을 동시에 lease할 수 있습니다. 그래서
+    directory 수정 시간이 충분히 오래됐는지 먼저 확인하고, 그 다음 owner pid가 없거나 명확히
+    죽었다고 확인되는 경우에만 directory를 지웁니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Ok(metadata) = fs::metadata(lock_path) else {
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
@@ -205,6 +218,12 @@ fn remove_stale_pool_allocation_lock(lock_path: &Path) {
     };
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if age >= POOL_ALLOCATION_LOCK_STALE_AFTER {
+        /*
+        학습 주석: owner 파일을 읽을 수 없으면 `None`으로 이어지고 stale 제거 대상이 됩니다. 오래된
+        lock에 owner가 없다는 것은 acquire 도중 owner write 전에 죽었거나 파일이 손상된 상태라,
+        새 lease 배정을 영원히 막기보다 lock을 회수하는 쪽이 낫습니다. 하지만 owner pid가 있고
+        liveness가 Alive 또는 Unknown이면 lock을 보존합니다.
+        */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let owner_path = lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE);
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
@@ -229,6 +248,12 @@ fn remove_stale_pool_allocation_lock(lock_path: &Path) {
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn pool_allocation_lock_owner_pid(owner_token: &str) -> Option<u32> {
+    /*
+    학습 주석: owner token은 사람이 읽기 쉬운 key=value 줄 목록입니다. pid parsing은 그중
+    `pid=` 줄만 골라 process liveness check로 넘기는 좁은 helper입니다. 형식이 깨졌거나 숫자로
+    파싱되지 않으면 None으로 두어 stale cleanup이 "소유자를 확인할 수 없는 오래된 lock"으로
+    처리하게 합니다.
+    */
     owner_token
         // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .lines()
@@ -240,6 +265,11 @@ fn pool_allocation_lock_owner_pid(owner_token: &str) -> Option<u32> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 enum PoolAllocationLockOwnerLiveness {
+    /*
+    학습 주석: Alive는 lock을 유지해야 한다는 강한 신호이고, Dead는 오래된 lock을 회수해도 되는
+    신호입니다. Unknown은 보수적 안전 상태로, process lookup 실패나 권한 문제처럼 "죽었다고
+    증명하지 못한" 경우입니다. remove_stale 경로는 Unknown을 Dead처럼 취급하지 않습니다.
+    */
     Alive,
     Dead,
     Unknown,
@@ -260,6 +290,12 @@ fn pool_allocation_lock_owner_liveness(pid: u32) -> PoolAllocationLockOwnerLiven
 #[cfg(unix)]
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
+    /*
+    학습 주석: Unix의 `kill -0`은 실제 signal을 보내지 않고 process 존재/접근 가능 여부만
+    검사합니다. 성공은 pid가 살아 있거나 접근 가능하다는 의미로 Alive이고, non-zero status는
+    process가 없거나 접근할 수 없다는 뜻입니다. 이 구현은 allocation lock recovery의 보조
+    판단일 뿐이라, command 실행 자체가 실패하면 Unknown으로 둡니다.
+    */
     // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match std::process::Command::new("kill")
         // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -280,6 +316,12 @@ fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
 #[cfg(windows)]
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
+    /*
+    학습 주석: Windows에는 `kill -0`과 같은 portable primitive가 없으므로 `tasklist` 필터로
+    pid가 현재 process table에 있는지 확인합니다. 출력 형식은 locale이나 Windows 버전에 따라
+    달라질 수 있어, 명령 실패는 Unknown으로 보수 처리하고, 성공 출력에 pid field가 있을 때만
+    Alive로 판단합니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let filter = format!("PID eq {pid}");
     // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
@@ -318,6 +360,11 @@ fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
 #[cfg(not(any(unix, windows)))]
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn platform_process_liveness(_pid: u32) -> PoolAllocationLockOwnerLiveness {
+    /*
+    학습 주석: 지원하지 않는 platform에서는 process liveness를 안전하게 증명할 방법이 없으므로
+    Unknown을 반환합니다. 이 값은 stale cleanup에서 lock 보존으로 이어져, 자동 회수보다 중복
+    slot 배정 방지를 우선합니다.
+    */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     PoolAllocationLockOwnerLiveness::Unknown
 }
