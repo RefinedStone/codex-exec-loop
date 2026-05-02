@@ -1,3 +1,14 @@
+/*
+ * 학습 주석: runtime/facade.rs는 planning runtime 하위 서비스들을 TUI와 app-server가 쓰기 쉬운 하나의 표면으로 묶습니다.
+ * 이 파일 자체는 복잡한 도메인 판단을 직접 하지 않고, prompt.rs(스냅샷/프롬프트 재료), policy.rs(자동 후속 실행 판단),
+ * repair/reconciliation(턴 이후 planning 파일 변화 수습)을 호출해 "화면과 turn runtime이 필요한 응답 형태"로 변환합니다.
+ *
+ * 연결 그림:
+ * PlanningPromptService -> PlanningRuntimeSnapshot 생성
+ * PlanningRuntimePolicyService -> snapshot을 보고 자동 follow-up 가능 여부와 status 문구 결정
+ * TurnPromptAssemblyService -> 실제 Codex turn에 들어갈 main/sub-session prompt 조립
+ * PlanningReconciliationService -> turn 이후 authority/queue 상태 정리
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
@@ -132,6 +143,11 @@ pub struct PlanningTaskHandoff {
 #[derive(Clone)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningRuntimeFacadeService {
+    /*
+     * 학습 주석: facade가 네 서비스를 필드로 들고 있는 이유는 호출자가 내부 배선을 몰라도 되게 하기 위해서입니다.
+     * TUI 쪽에서는 "snapshot을 읽고, preview를 만들고, 필요하면 handoff prompt를 달라"는 수준으로만 호출하고,
+     * 여기서 prompt/policy/reconciliation 서비스 간의 순서를 맞춥니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     planning_prompt_service: PlanningPromptService,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -169,6 +185,10 @@ impl PlanningRuntimeFacadeService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_directory: &str,
     ) -> PlanningRuntimeSnapshot {
+        /*
+         * 학습 주석: TUI 렌더링 경로에서는 planning 파일 로딩 실패가 앱 전체 panic으로 번지면 안 됩니다.
+         * 그래서 내부 Result를 invalid snapshot으로 접어, 이후 policy/status 계층이 "blocked" 상태와 실패 이유를 표시하게 합니다.
+         */
         self.planning_prompt_service
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .load_runtime_snapshot(workspace_directory)
@@ -204,6 +224,10 @@ impl PlanningRuntimeFacadeService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
+        /*
+         * 학습 주석: builtin next task는 queue.rs가 계산한 queue_head를 실제 사용자 turn prompt로 바꾸는 연결점입니다.
+         * queue_head가 없으면 None을 반환해 policy 쪽의 ActionableQueueRequired block과 같은 의미를 갖습니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let queue_head = snapshot.queue_head()?;
         Some(self.build_task_handoff_with_planning_fragment(queue_head, snapshot.prompt_fragment()))
@@ -249,6 +273,11 @@ impl PlanningRuntimeFacadeService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         planning_prompt_fragment: Option<&str>,
     ) -> PlanningMainSessionHandoff {
+        /*
+         * 학습 주석: main session handoff는 operator가 보고 있는 현재 대화에 이어 붙는 prompt입니다.
+         * 그래서 sub-session handoff와 달리 planning_prompt_fragment를 같이 넣을 수 있고, transcript에는 사람이 이해할
+         * 고정 문구(BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT)를 남겨 자동 후속 실행이 일어난 사실을 표시합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let task_prompt = render_builtin_next_task_handoff_prompt(task);
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -300,6 +329,11 @@ impl PlanningRuntimeFacadeService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         request: PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeAutoFollowDecision {
+        /*
+         * 학습 주석: decide_auto_followup은 policy 결정과 실제 prompt 생성 사이의 어댑터입니다.
+         * policy.rs는 "계속해도 되는가"만 판단하고, 이 함수가 그 결정을 queue_head handoff prompt로 실체화합니다.
+         * 따라서 QueuePrompt 결정이 나와도 snapshot에 queue_head가 없으면 다시 block으로 접어 방어합니다.
+         */
         // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -445,6 +479,11 @@ fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTa
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
+    /*
+     * 학습 주석: 이 함수는 domain의 PriorityQueueTask를 Codex에게 전달할 instruction 문서로 번역합니다.
+     * PromptDocument builder를 쓰면 section 이름(task/rules)이 명확해지고, 나중에 turn_prompt_assembly_service가
+     * 이 handoff 문서를 planning fragment와 함께 안전하게 감쌀 수 있습니다.
+     */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rank_reason = queue_head
         // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
