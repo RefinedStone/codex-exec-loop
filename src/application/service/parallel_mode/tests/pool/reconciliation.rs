@@ -1,23 +1,18 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::*;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::parallel_mode::NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL;
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// pool directory가 아직 만들어지지 않은 상태는 장애가 아니라 초기 준비 상태다.
+// board builder는 slot을 임의로 만들지 않고 missing으로만 보고해야 하며, 이때
+// exhausted를 켜지 않아 dispatcher가 "용량 소진"과 "아직 provision 안 됨"을 구분한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_marks_missing_slots_when_pool_root_has_not_been_created() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("missing-slots");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let readiness = ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeReadinessState::Ready,
         vec![],
         None,
     );
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = build_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -30,29 +25,24 @@ fn reconcile_marks_missing_slots_when_pool_root_has_not_been_created() {
     assert!(pool.reconcile_status.contains("missing slot"));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// detached `prerelease` worktree는 재사용 가능한 idle baseline이다. branch 이름이
+// 실제 local branch가 아니라 detached baseline임을 드러내면서도 slot 하나의
+// capacity로 계산되어야 한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn detached_prerelease_slot_counts_as_idle_baseline() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("idle-slot");
     repo.create_detached_slot(1);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let readiness = ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeReadinessState::Ready,
         vec![],
         None,
     );
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = build_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
         Some(&readiness),
     );
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
@@ -61,33 +51,27 @@ fn detached_prerelease_slot_counts_as_idle_baseline() {
     assert_eq!(pool.missing_slots, DEFAULT_POOL_SIZE - 1);
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// agent branch가 이미 `prerelease`에 merge된 뒤 lease mirror가 없으면 새 작업을
+// 배정하기 전에 cleanup이 필요한 상태다. board는 이를 blocked가 아니라
+// awaiting cleanup으로 분류해 자동 정리 대상임을 표현한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn agent_branch_slot_is_marked_awaiting_cleanup() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("cleanup-slot");
     repo.create_agent_slot(1, "task-one");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path = repo.pool_root().join(slot_id(1));
     repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
     repo.merge_agent_slot_into_akra(&slot_path);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let readiness = ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeReadinessState::Ready,
         vec![],
         None,
     );
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = build_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
         Some(&readiness),
     );
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
@@ -96,29 +80,22 @@ fn agent_branch_slot_is_marked_awaiting_cleanup() {
     assert_eq!(pool.awaiting_cleanup_slots, 1);
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// lease 없이 남은 agent branch가 아직 merge되지 않았다면 자동으로 지우면 안 된다.
+// supervisor는 slot label, reconcile status, top notice에 모두 operator recovery
+// 경로를 노출해 사용자가 branch 내용을 먼저 확인하도록 유도한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("non-merged-slot");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let service = test_parallel_mode_service();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path = repo.create_agent_slot(1, "task-one");
     repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let readiness = ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeReadinessState::Ready,
         vec![],
         None,
     );
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot = &snapshot.pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Blocked);
@@ -126,25 +103,17 @@ fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
     assert!(slot.branch_name.starts_with("akra-agent/slot-1/"));
     assert!(
         slot.worktree_label
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .contains(NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL)
     );
     assert!(
         snapshot
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .pool
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .reconcile_status
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .contains("next action: inspect the slot branch")
     );
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let notice = snapshot
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .top_notice
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .as_deref()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("operator recovery notice should be surfaced");
     assert!(notice.contains("pool: blocked"));
     assert!(notice.contains("slot-1"));
@@ -152,32 +121,25 @@ fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
     assert!(notice.contains("next action: inspect the slot branch"));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// board-only 경로는 사용자의 dirty baseline worktree를 고치지 않는다. detached
+// prerelease slot에 unstaged change가 있으면 즉시 blocked로 표시해 reconcile 실행
+// 전에도 위험 상태가 TUI에 보이도록 한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn dirty_prerelease_baseline_slot_is_blocked_for_operator_recovery() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("dirty-slot");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path = repo.create_detached_slot(1);
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let readiness = ParallelModeReadinessSnapshot::new(
         repo.workspace_dir(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeReadinessState::Ready,
         vec![],
         None,
     );
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = build_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
         Some(&readiness),
     );
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Blocked);
@@ -185,18 +147,14 @@ fn dirty_prerelease_baseline_slot_is_blocked_for_operator_recovery() {
     assert!(slot.worktree_label.contains("unstaged changes"));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// reconcile 경로는 idle detached baseline이 dirty해도 버릴 수 있는 cache로 본다.
+// 실제 작업 lease가 없는 재사용 slot은 reset되어 다시 seed baseline으로 돌아가야
+// 다음 agent에게 오염된 worktree가 배정되지 않는다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("dirty-reusable-slot");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path = repo.create_detached_slot(1);
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -205,52 +163,37 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
     assert_eq!(pool.blocked_slots, 0);
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         fs::read_to_string(slot_path.join("README.md")).expect("README should be readable"),
         "seed\n"
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 한 slot이 running인 동안에도 다른 idle baseline들은 최신 prerelease로 정리될 수
+// 있어야 한다. 이 테스트는 실행 중인 lease를 보존하면서 reusable slot만 reset하고,
+// canonical prerelease ref도 현재 head로 갱신되는지 함께 확인한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("dirty-reusable-slot-with-running-lease");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let service = test_parallel_mode_service();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
     );
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let lease = service
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .acquire_slot_lease(
             &repo.workspace_dir(),
             sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("slot lease should be acquired");
     service
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("slot lease should transition to running");
     repo.commit_on_current_branch("baseline.txt", "new baseline\n", "advance baseline");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let current_head = repo.head_sha();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let reusable_slot_path = repo.pool_root().join(slot_id(2));
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     fs::write(reusable_slot_path.join("README.md"), "dirty\n")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("idle slot should become dirty");
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let refreshed_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -260,9 +203,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     assert_eq!(refreshed_pool.idle_slots, DEFAULT_POOL_SIZE - 1);
     assert_eq!(refreshed_pool.blocked_slots, 0);
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         fs::read_to_string(reusable_slot_path.join("README.md"))
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .expect("README should be readable"),
         "seed\n"
     );
@@ -277,20 +218,17 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
             ],
             None,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("prerelease should resolve"),
         current_head
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// reconcile은 비어 있는 pool root를 실제 capacity로 바꾸는 provisioning 단계다.
+// 모든 slot worktree가 생성되고 missing count가 사라져야 dispatcher가 곧바로
+// idle slot을 사용할 수 있다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_provisions_missing_slots_into_idle_baselines() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("provision-slots");
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -299,21 +237,18 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
     assert_eq!(pool.missing_slots, 0);
     assert!(pool.reconcile_status.contains("provisioned 3"));
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         assert!(repo.pool_root().join(slot_id(slot_number)).exists());
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// pool worktree는 repository 내부가 아니라 sibling `repo-akra-worktrees` 아래에 둔다.
+// 이렇게 해야 원본 checkout의 status와 nested worktree 탐색이 agent slot 파일들로
+// 오염되지 않는다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("pool-root");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool_root = repo.pool_root();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let normalized = pool_root.to_string_lossy().replace('\\', "/");
 
     assert!(
@@ -326,16 +261,14 @@ fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 사용자가 로컬 `prerelease` branch를 지웠더라도 reconcile은 baseline ref를 먼저
+// 복구한 뒤 slot을 provision해야 한다. slot 생성과 branch 복구가 같은 흐름에서
+// 일어나야 이후 slot들이 모두 동일한 기준 commit을 바라본다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("create-akra");
     repo.delete_local_prerelease_branch();
     assert!(!repo.branch_exists("prerelease"));
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -346,20 +279,16 @@ fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
     assert!(pool.reconcile_status.contains("created `prerelease`"));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// empty baseline은 과거 `prerelease` head에 머물 수 있으므로 reconcile이 현재
+// workspace head를 새 baseline으로 채택해야 한다. 이 테스트는 branch ref 자체가
+// 이동했는지 확인해 단순 slot count 성공에 가려지는 stale baseline을 잡는다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_resets_empty_prerelease_baseline_to_current_head() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("reset-akra");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let old_prerelease_head = repo.head_sha();
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let current_head = repo.head_sha();
     assert_ne!(old_prerelease_head, current_head);
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -376,20 +305,18 @@ fn reconcile_resets_empty_prerelease_baseline_to_current_head() {
             ],
             None,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("prerelease should resolve"),
         current_head
     );
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// baseline ref가 이동하면 기존 clean detached slot들도 예전 commit에 떨어져 있을
+// 수 있다. reconcile은 dirty하지 않은 slot을 새 baseline으로 reset해, board에
+// "detached away" 경고가 남지 않도록 정렬한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("reset-detached-slots");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -397,8 +324,6 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
 
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let refreshed_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -408,22 +333,18 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     assert_eq!(refreshed_pool.blocked_slots, 0);
     assert!(refreshed_pool.slots.iter().all(|slot| {
         !slot
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .worktree_label
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .contains("detached away from `prerelease` baseline")
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// agent slot worktree에서 reconcile을 호출해도 canonical `prerelease`는 agent
+// branch HEAD로 갱신되면 안 된다. root detection이 slot workspace를 원본 repo로
+// 되돌려 계산하는지 확인하는 회귀 테스트다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("agent-slot-does-not-reset-akra");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path = repo.create_agent_slot(1, "task-one");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let original_prerelease_head = run_command(
         "git",
         [
@@ -434,7 +355,6 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
         ],
         None,
     )
-    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
     .expect("prerelease should resolve");
     repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
     assert_ne!(
@@ -449,11 +369,8 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
             ],
             None,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("slot head should resolve")
     );
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         slot_path.to_str().expect("slot path should be utf-8"),
@@ -470,57 +387,41 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
             ],
             None,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("prerelease should resolve"),
         original_prerelease_head
     );
     assert!(pool.blocked_slots > 0);
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// merged agent slot은 cleanup pending 상태에서 reconcile이 완전히 회수할 수 있어야
+// 한다. untracked scratch 파일, agent branch, lease mirror가 모두 제거되고 slot이
+// detached prerelease idle 상태로 돌아오는 end-to-end cleanup 계약을 고정한다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reconcile_cleans_merged_agent_slot_back_to_idle() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let repo = TempGitRepo::new("cleanup-execution");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let service = test_parallel_mode_service();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let lease = service
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .acquire_slot_lease(
             &repo.workspace_dir(),
             sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("slot lease should be acquired");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot_path = PathBuf::from(lease.worktree_path.clone());
     repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let branch_name = lease.branch_name.clone();
     service
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .mark_slot_running(&repo.workspace_dir(), &lease.slot_id, "agent-1")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("slot lease should transition to running");
     repo.merge_agent_slot_into_akra(&slot_path);
     service
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("slot lease should transition to cleanup pending");
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     fs::write(slot_path.join("scratch.tmp"), "transient\n")
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("untracked file should be written");
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
     );
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
