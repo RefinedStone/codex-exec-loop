@@ -317,31 +317,32 @@ impl SqlitePlanningAuthorityAdapter {
         load_runtime_projection_snapshot(&connection)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: parallel mode의 slot lease snapshot을 authority DB의 현재 런타임 투영으로 저장합니다.
+    // slot_id가 같은 row는 덮어써서 "지금 이 슬롯의 최신 상태"만 남기고, 변경 이력은 runtime_events에 따로 기록합니다.
     pub(crate) fn upsert_runtime_slot_lease(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: slot lease projection을 저장할 authority DB를 찾는 workspace 경로입니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: domain layer가 만든 slot lease 상태입니다. 이 adapter는 내용을 해석하지 않고 JSON으로 보존합니다.
         lease: &ParallelModeSlotLeaseSnapshot,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 같은 workspace의 parallel runtime 상태는 같은 authority DB에 모입니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: upsert, invalid marker 삭제, event append를 원자적으로 묶기 위해 mutable connection을 엽니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: `runtime_slot_leases.content`는 원본 snapshot 전체를 JSON으로 저장합니다.
+        // 나중에 load 단계에서 같은 domain 타입으로 역직렬화해 adapter 밖에는 DB column 세부사항을 숨깁니다.
         let payload_json = serde_json::to_string(lease)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to serialize runtime slot lease projection")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 이 트랜잭션이 성공해야 current row, invalid marker 정리, event log가 같은 상태를 가리킵니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open runtime slot lease transaction")?;
+        // 학습 주석: projection 쪽 변경 신호는 claim heartbeat와 별도로 `last_runtime_projection_at`에 남깁니다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        // 학습 주석: slot_id를 primary identity로 보고, 같은 slot의 lease가 오면 updated_at/content만 최신화합니다.
+        // 그래서 snapshot 조회자는 중복 row를 합칠 필요 없이 테이블 그대로 현재 슬롯 상태로 읽을 수 있습니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
                  VALUES (?1, ?2, ?3)
@@ -350,21 +351,21 @@ impl SqlitePlanningAuthorityAdapter {
                      content = excluded.content",
                 params![lease.slot_id, Utc::now().to_rfc3339(), payload_json],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to persist runtime slot lease `{}`", lease.slot_id))?;
+        // 학습 주석: 정상 lease가 들어왔다는 것은 같은 slot의 invalid marker가 더 이상 유효하지 않다는 뜻입니다.
+        // invalid 테이블을 같이 비워야 UI나 reducer가 오래된 "무효" 상태를 현재 lease 위에 덧씌우지 않습니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
                 params![lease.slot_id],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| {
                 format!(
                     "failed to clear invalid runtime slot lease `{}`",
                     lease.slot_id
                 )
             })?;
+        // 학습 주석: current row는 최신 상태만 보존하므로, 무엇이 저장되었는지 추적할 감사/디버그 이벤트를 별도로 남깁니다.
         append_runtime_event(
             &transaction,
             "slot_lease_upsert",
@@ -376,51 +377,48 @@ impl SqlitePlanningAuthorityAdapter {
                 lease.state.label()
             ),
             &serde_json::to_string(lease)
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .context("failed to serialize runtime slot lease event payload")?,
         )?;
+        // 학습 주석: commit이 끝나야 snapshot loader가 lease row와 event log를 같은 시점의 결과로 볼 수 있습니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit runtime slot lease transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 더 이상 현재 상태로 보여주면 안 되는 slot lease를 runtime projection에서 제거합니다.
+    // 삭제 이벤트는 실제 row를 지웠을 때만 남겨, 없는 lease를 반복 삭제하는 호출이 이벤트 로그를 부풀리지 않게 합니다.
     pub(crate) fn remove_runtime_slot_lease(workspace_dir: &str, slot_id: &str) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 제거할 slot lease가 저장된 authority DB 위치를 workspace에서 계산합니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: current row 삭제, invalid marker 정리, event append를 한 트랜잭션으로 처리합니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 트랜잭션을 사용해 snapshot 조회자가 삭제 전/후 상태가 섞인 중간 결과를 보지 않게 합니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open runtime slot lease removal transaction")?;
+        // 학습 주석: projection 변경 시각을 갱신해 외부 관찰자가 snapshot을 다시 읽을 근거를 남깁니다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 삭제된 행 수로 "실제로 현재 lease가 있었는지"를 판단합니다.
+        // 이 값은 아래에서 이벤트를 남길지 결정하는 신호입니다.
         let deleted_rows = transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "DELETE FROM runtime_slot_leases WHERE slot_id = ?1",
                 params![slot_id],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to delete runtime slot lease `{slot_id}`"))?;
+        // 학습 주석: lease를 제거하면 같은 slot에 남아 있던 invalid marker도 더 이상 보여줄 현재 대상이 없습니다.
+        // 두 테이블을 같이 정리해 snapshot 조립 단계의 상태 해석을 단순하게 유지합니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
                 params![slot_id],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to clear invalid runtime slot lease `{slot_id}`"))?;
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: 실제 row가 있었을 때만 제거 이벤트를 남깁니다.
+        // 호출자가 cleanup을 여러 번 반복해도 runtime_events는 의미 있는 전이만 담게 됩니다.
         if deleted_rows > 0 {
             append_runtime_event(
                 &transaction,
@@ -431,13 +429,11 @@ impl SqlitePlanningAuthorityAdapter {
                 "{}",
             )?;
         }
+        // 학습 주석: commit 후 snapshot loader는 해당 slot이 current lease 목록에서 빠진 상태를 읽습니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit runtime slot lease removal transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
