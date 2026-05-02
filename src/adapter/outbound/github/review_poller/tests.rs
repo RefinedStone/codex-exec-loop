@@ -8,15 +8,15 @@ use super::{
 use crate::domain::github_review::{GithubPullRequestActivityKind, GithubPullRequestTarget};
 
 /*
-학습 주석: review poller adapter는 GitHub REST API, local git origin, RefinedStone credential
-위치를 domain snapshot으로 바꾸는 outbound boundary입니다. 이 테스트 파일은 네트워크를 실제로
-치지 않고도 "입력 문자열/JSON이 어떤 domain shape로 정규화되는가"를 고정합니다.
+review poller adapter는 GitHub REST API, local git origin, RefinedStone credential 위치를 domain
+snapshot으로 바꾸는 outbound boundary다. 이 테스트 파일은 네트워크를 실제로 치지 않고도 "입력
+문자열/JSON이 어떤 domain shape로 정규화되는가"를 고정한다.
 */
 
 #[test]
 fn parses_refinedstone_credential_lines() {
-    // 학습 주석: credential file에는 Git remote URL처럼 생긴 한 줄이 들어옵니다. adapter는
-    // URL 전체를 저장하지 않고 Basic-auth password 위치의 token만 curl bearer token으로 사용합니다.
+    // credential file에는 Git remote URL처럼 생긴 한 줄이 들어온다. adapter는 URL 전체를 저장하지
+    // 않고 Basic-auth password 위치의 token만 curl bearer token으로 사용한다.
     let token = GithubReviewPollerAdapter::parse_refinedstone_token(
         "https://RefinedStone:abc123@github.com",
     )
@@ -27,8 +27,8 @@ fn parses_refinedstone_credential_lines() {
 
 #[test]
 fn parses_repository_full_name_from_github_ssh_origin() {
-    // 학습 주석: production repo origin은 SSH 형식일 수 있습니다. poller는 이 값을 GitHub API
-    // endpoint의 `{owner}/{repo}` segment로 바꿔야 PR lookup과 activity fetch를 수행할 수 있습니다.
+    // production repo origin은 SSH 형식일 수 있다. poller는 이 값을 GitHub API endpoint의
+    // `{owner}/{repo}` segment로 바꿔야 PR lookup과 activity fetch를 수행할 수 있다.
     let repository =
         GithubReviewPollerAdapter::parse_repository_full_name("git@github.com:acme/widgets.git")
             .expect("repository should parse");
@@ -38,8 +38,8 @@ fn parses_repository_full_name_from_github_ssh_origin() {
 
 #[test]
 fn parses_repository_full_name_from_github_https_origin() {
-    // 학습 주석: HTTPS origin도 같은 repository identity로 정규화합니다. git transport 방식이
-    // 달라도 review polling domain target은 같은 `owner/repo` 문자열이어야 합니다.
+    // HTTPS origin도 같은 repository identity로 정규화한다. git transport 방식이 달라도 review polling
+    // domain target은 같은 `owner/repo` 문자열이어야 한다.
     let repository = GithubReviewPollerAdapter::parse_repository_full_name(
         "https://github.com/acme/widgets.git",
     )
@@ -50,8 +50,8 @@ fn parses_repository_full_name_from_github_https_origin() {
 
 #[test]
 fn encodes_branch_head_filter_for_pull_request_lookup() {
-    // 학습 주석: GitHub PR search의 `head` query는 `owner:branch` 형태인데 agent branch에는
-    // slash가 들어갑니다. 이 값을 percent-encode하지 않으면 branch lookup이 다른 query로 해석됩니다.
+    // GitHub PR search의 `head` query는 `owner:branch` 형태인데 agent branch에는 slash가 들어간다.
+    // 이 값을 percent-encode하지 않으면 branch lookup이 다른 query로 해석된다.
     let encoded =
         GithubReviewPollerAdapter::encode_query_value("RefinedStone:feature/native-shell");
 
@@ -60,8 +60,8 @@ fn encodes_branch_head_filter_for_pull_request_lookup() {
 
 #[test]
 fn resolves_windows_home_for_current_user_case_insensitively() {
-    // 학습 주석: WSL 환경에서는 Windows user directory casing이 login casing과 다를 수 있습니다.
-    // credential fallback이 RefinedStone 토큰을 놓치지 않도록 user lookup을 case-insensitive로 유지합니다.
+    // WSL 환경에서는 Windows user directory casing이 login casing과 다를 수 있다. credential fallback이
+    // RefinedStone 토큰을 놓치지 않도록 user lookup을 case-insensitive로 유지한다.
     let users_root = unique_temp_dir("users-root");
     fs::create_dir_all(users_root.join("Akra")).expect("user home should be created");
 
@@ -75,8 +75,8 @@ fn resolves_windows_home_for_current_user_case_insensitively() {
 
 #[test]
 fn parses_pull_request_locator_response_json() {
-    // 학습 주석: branch-to-PR lookup endpoint는 PR number만 필요합니다. locator response를
-    // 작게 유지하면 이후 full PR fetch와 activity fetch를 명확히 분리할 수 있습니다.
+    // branch-to-PR lookup endpoint는 PR number만 필요하다. locator response를 작게 유지하면 이후 full
+    // PR fetch와 activity fetch를 명확히 분리할 수 있다.
     let body = r#"[{ "number": 64 }]"#;
 
     let response: Vec<PullRequestLocatorResponse> =
@@ -88,8 +88,8 @@ fn parses_pull_request_locator_response_json() {
 
 #[test]
 fn parses_pull_request_response_json() {
-    // 학습 주석: full PR response는 snapshot header를 구성하는 title/url/head/base만 추출합니다.
-    // adapter가 GitHub payload 전체에 결합되지 않도록 필요한 field subset만 deserialize합니다.
+    // full PR response는 snapshot header를 구성하는 title/url/head/base만 추출한다. adapter가 GitHub
+    // payload 전체에 결합되지 않도록 필요한 field subset만 deserialize한다.
     let body = r#"{
             "title": "Add review polling",
             "html_url": "https://github.com/acme/widgets/pull/42",
@@ -108,9 +108,9 @@ fn parses_pull_request_response_json() {
 
 #[test]
 fn maps_and_sorts_review_activity_across_response_types() {
-    // 학습 주석: GitHub는 PR conversation을 issue comments, review comments, review submissions
-    // 세 endpoint로 나눠 제공합니다. poller snapshot은 operator가 시간순으로 읽을 수 있도록
-    // 이 응답들을 하나의 activity list로 합칩니다.
+    // GitHub는 PR conversation을 issue comments, review comments, review submissions 세 endpoint로
+    // 나눠 제공한다. poller snapshot은 operator가 시간순으로 읽을 수 있도록 이 응답들을 하나의 activity
+    // list로 합친다.
     let target = GithubPullRequestTarget::new("acme/widgets", 42);
     let pull_request: PullRequestResponse = GithubReviewPollerAdapter::parse_json(
         r#"{
@@ -188,8 +188,8 @@ fn maps_and_sorts_review_activity_across_response_types() {
 
 #[test]
 fn skips_pending_reviews_without_submitted_timestamp() {
-    // 학습 주석: pending review는 아직 GitHub conversation에 공개되지 않은 draft 상태입니다.
-    // submitted_at이 없는 review를 snapshot에서 제외해야 operator에게 미공개 draft가 새 활동처럼 보이지 않습니다.
+    // pending review는 아직 GitHub conversation에 공개되지 않은 draft 상태다. submitted_at이 없는
+    // review를 snapshot에서 제외해야 operator에게 미공개 draft가 새 활동처럼 보이지 않는다.
     let target = GithubPullRequestTarget::new("acme/widgets", 42);
     let pull_request: PullRequestResponse = GithubReviewPollerAdapter::parse_json(
         r#"{
@@ -226,8 +226,8 @@ fn skips_pending_reviews_without_submitted_timestamp() {
 }
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
-    // 학습 주석: Windows-home test는 실제 user directory를 건드리지 않아야 하므로 현재 epoch
-    // timestamp를 붙인 process-local temp root를 만들어 fixture 충돌을 피합니다.
+    // Windows-home test는 실제 user directory를 건드리지 않아야 하므로 현재 epoch timestamp를 붙인
+    // process-local temp root를 만들어 fixture 충돌을 피한다.
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after unix epoch")
