@@ -1,7 +1,9 @@
 // Centralize operator-facing planning auto-follow copy so future localization
 // can swap one seam instead of touching orchestration logic.
 
+// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
 pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str = "다음 queued task 1개를 이어서 진행합니다.";
+// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
 pub const DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN: &str = r#"# Queue Idle Review Prompt
 
 Queue가 비었을 때만 이 prompt를 사용합니다. 이 worker는 main session의 TODO 추출기가 아니라 post-turn planning evaluator입니다.
