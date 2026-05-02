@@ -1,210 +1,250 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::ops::Range;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use ratatui::backend::{Backend, ClearType};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use ratatui::buffer::Cell;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use ratatui::layout::{Position, Size};
 
-// 학습 주석: `trait`는 타입이 제공해야 하는 동작의 계약을 정의하며, 다른 구현체를 같은 방식으로 다루게 합니다.
+/*
+ * InlineTerminalAdapter는 frame을 host terminal scrollback 안에 끼워 넣어 그린다.
+ * ratatui::Backend에는 "resize 중 append_lines를 잠시 무시해 달라"는 훅이 없으므로,
+ * adapter가 필요한 제어점을 이 작은 확장 trait로 추가한다. 실제 구현은 아래 wrapper가 맡고,
+ * 상위 inline_terminal_adapter.rs는 Backend + 이 resize 제어 계약만 알고 동작한다.
+ */
 pub(crate) trait InlineResizeBackend: Backend {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn set_resize_append_lines_suppressed(&mut self, suppressed: bool);
 }
 
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+/*
+ * InlineTerminalBackend는 실제 터미널 backend 앞에 놓이는 얇은 보정막이다.
+ * draw는 terminal 크기 밖 cell을 버리고, append_lines는 inline viewport resize 중에
+ * host scrollback을 밀지 않도록 억제할 수 있으며, cursor 위치는 append_lines 이후에도
+ * 상위 rendering 코드가 같은 좌표계를 이어 쓰도록 캐시한다.
+ */
 pub(crate) struct InlineTerminalBackend<B> {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    /*
+     * 실제 출력은 CrosstermBackend, TestBackend, Vt100Backend 같은 inner가 수행한다.
+     * 이 wrapper는 I/O 자체를 바꾸기보다 inline terminal에 필요한 전후 보정만 추가한다.
+     */
     inner: B,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    /*
+     * autoresize_inline_viewport와 draw_inline_frame은 크기 조정 중 ratatui가 호출하는
+     * append_lines가 host scrollback에 새 줄을 밀어 넣지 않도록 이 flag를 켠다.
+     */
     suppress_resize_append_lines: bool,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    /*
+     * ratatui backend의 cursor query는 실제 터미널에 물어볼 수 있어 비용과 부작용이 있다.
+     * 한 번 읽거나 설정한 좌표를 기억해 inline history 삽입 뒤에도 shell 위치 계산을 안정화한다.
+     */
     tracked_cursor_position: Option<Position>,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl<B> InlineTerminalBackend<B> {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub(crate) fn new(inner: B) -> Self {
+        /*
+         * 기본 상태에서는 일반 backend처럼 모든 append_lines를 통과시킨다.
+         * cursor는 첫 query나 set_cursor_position에서 채워져 이후 append_lines 보정에 쓰인다.
+         */
         Self {
             inner,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             suppress_resize_append_lines: false,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             tracked_cursor_position: None,
         }
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[cfg(test)]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub(crate) fn inner(&self) -> &B {
+        /*
+         * 테스트는 wrapper가 inner backend에 몇 번 질의했는지, 어떤 buffer를 남겼는지
+         * 확인해야 하므로 read-only 접근자를 cfg(test)로만 연다.
+         */
         &self.inner
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[cfg(test)]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub(crate) fn inner_mut(&mut self) -> &mut B {
+        /*
+         * fixture backend의 cursor나 화면 상태를 직접 준비하기 위한 테스트 전용 통로다.
+         * production 경로에서는 wrapper의 보정 규칙을 우회하지 못하게 닫아 둔다.
+         */
         &mut self.inner
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl<B: Backend> InlineResizeBackend for InlineTerminalBackend<B> {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn set_resize_append_lines_suppressed(&mut self, suppressed: bool) {
+        /*
+         * 상위 adapter는 resize/replay 구간의 앞뒤에서 이 값을 토글한다.
+         * flag만 바꾸고 flush하지 않아야 같은 draw transaction 안에서 host scrollback 변화만 막을 수 있다.
+         */
         self.suppress_resize_append_lines = suppressed;
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl<B: Backend> Backend for InlineTerminalBackend<B> {
-    // 학습 주석: `type` 별칭은 복잡한 타입 이름에 의도를 드러내는 짧은 이름을 붙입니다.
     type Error = B::Error;
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        /*
+         * inline viewport는 resize와 replay가 섞일 때 ratatui buffer보다 실제 backend가 작을 수 있다.
+         * 크기 밖 cell을 inner에 넘기면 테스트 backend와 vt100 backend가 서로 다르게 반응할 수 있어,
+         * wrapper에서 현재 size 안의 cell만 통과시켜 draw의 좌표계를 단일화한다.
+         */
         let size = self.inner.size()?;
         self.inner
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .draw(content.filter(move |(x, y, _)| *x < size.width && *y < size.height))
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        /*
+         * append_lines는 host terminal 기준으로 스크롤백에 줄을 추가하는 강한 동작이다.
+         * inline viewport를 다시 그리는 동안에는 화면 높이 보정용 호출이 실제 scrollback 삽입으로
+         * 번지면 안 되므로 flag가 켜진 구간에서는 성공한 no-op으로 처리한다.
+         */
         if self.suppress_resize_append_lines {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(());
         }
         self.inner.append_lines(n)?;
         self.track_cursor_after_append_lines(n);
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        /*
+         * cursor visibility는 inline 보정 상태와 독립적인 terminal side effect다.
+         * wrapper가 의미를 추가하지 않으므로 inner backend에 그대로 위임한다.
+         */
         self.inner.hide_cursor()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        // hide_cursor와 같은 이유로 visibility 복원도 inner의 책임을 그대로 따른다.
         self.inner.show_cursor()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        /*
+         * 첫 cursor query 뒤에는 wrapper가 append_lines와 set_cursor_position을 추적한다.
+         * 이렇게 해야 history flush가 여러 번 이어져도 실제 terminal query를 반복하지 않고
+         * inline shell positioning이 같은 좌표를 기준으로 계산된다.
+         */
         if let Some(position) = self.tracked_cursor_position {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(position);
         }
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let position = self.inner.get_cursor_position()?;
         self.tracked_cursor_position = Some(position);
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(position)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        /*
+         * cursor를 실제 backend에 이동시킨 뒤 같은 값을 cache에도 반영한다.
+         * 이후 append_lines 보정은 이 cached position을 화면 아래쪽으로 밀어 shell cursor를 따라간다.
+         */
         let position = position.into();
         self.inner.set_cursor_position(position)?;
         self.tracked_cursor_position = Some(position);
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn clear(&mut self) -> Result<(), Self::Error> {
+        /*
+         * clear 계열은 ratatui가 terminal surface를 비우는 명령이다.
+         * inline wrapper는 scrollback 삽입과 cursor tracking만 보정하므로 clear 의미는 바꾸지 않는다.
+         */
         self.inner.clear()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        // region clear도 draw clipping 대상이 아니라 backend 고유 구현에 그대로 맡긴다.
         self.inner.clear_region(clear_type)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn size(&self) -> Result<Size, Self::Error> {
+        /*
+         * size는 draw clipping과 상위 layout 계산의 공통 기준이다.
+         * wrapper가 별도 viewport 크기를 들고 있지 않으므로 inner backend의 현재 크기가 곧 진실이다.
+         */
         self.inner.size()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
+        /*
+         * pixel/row 단위 window 정보는 terminal backend만 알 수 있다.
+         * inline adapter는 cell 좌표 보정만 하므로 window_size를 변형하지 않는다.
+         */
         self.inner.window_size()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn flush(&mut self) -> Result<(), Self::Error> {
+        /*
+         * flush 시점은 ratatui Terminal이 draw transaction을 끝내는 경계다.
+         * wrapper 내부 flag나 cursor cache를 여기서 초기화하면 같은 frame의 replay 계산이 깨지므로 위임만 한다.
+         */
         self.inner.flush()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn scroll_region_up(&mut self, region: Range<u16>, line_count: u16) -> Result<(), Self::Error> {
+        /*
+         * scroll_region_*은 backend가 지원하는 viewport 내부 스크롤 명령이다.
+         * host scrollback에 새 줄을 추가하는 append_lines와 달리 region 내부 동작이라 그대로 보낸다.
+         */
         self.inner.scroll_region_up(region, line_count)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn scroll_region_down(
         &mut self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         region: Range<u16>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         line_count: u16,
     ) -> Result<(), Self::Error> {
+        // scroll_region_up과 대칭인 동작이며 wrapper가 추가 상태를 갱신하지 않는다.
         self.inner.scroll_region_down(region, line_count)
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl<B: Backend> InlineTerminalBackend<B> {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn track_cursor_after_append_lines(&mut self, line_count: u16) {
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        /*
+         * append_lines는 terminal 하단에 줄을 추가하며 cursor를 다음 줄로 밀 수 있다.
+         * 실제 backend마다 cursor query 결과가 달라질 수 있으므로, wrapper가 알고 있는 cursor를
+         * 같은 규칙으로 갱신해 이후 get_cursor_position이 일관된 값을 반환하게 한다.
+         */
         if line_count == 0 {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return;
         }
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let Some(mut position) = self.tracked_cursor_position else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
+            /*
+             * 아직 cursor를 관찰한 적이 없으면 추정하지 않는다.
+             * 첫 query에서 inner backend의 실제 위치를 받아오는 편이 더 안전하다.
+             */
             return;
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Ok(size) = self.inner.size() {
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+            /*
+             * 높이를 모르면 cursor clamping도 할 수 없으므로 size 조회 성공 시에만 갱신한다.
+             * height 0은 backend fixture나 비정상 resize에서 나올 수 있는 방어 케이스다.
+             */
             if size.height == 0 {
-                // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return;
             }
             position.x = 0;
             position.y = position
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .y
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .saturating_add(line_count)
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .min(size.height.saturating_sub(1));
             self.tracked_cursor_position = Some(position);
         }
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl<B: std::fmt::Display> std::fmt::Display for InlineTerminalBackend<B> {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        /*
+         * snapshot 테스트와 debug 출력은 inner backend의 display 구현을 기대한다.
+         * wrapper 상태를 함께 출력하면 기존 terminal 화면 비교가 흔들리므로 그대로 위임한다.
+         */
         self.inner.fmt(formatter)
     }
 }
