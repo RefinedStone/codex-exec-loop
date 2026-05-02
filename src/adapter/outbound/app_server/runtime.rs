@@ -1,3 +1,9 @@
+/*
+ * 학습 주석: runtime.rs는 app-server connection을 "매번 새로 spawn할 것인가, 재사용할 것인가"라는 운영 정책으로 감쌉니다.
+ * 긴 turn stream은 connection을 독점할 수 있지만, startup checks/recent sessions/snapshot 같은 짧은 요청은 재사용 connection이 훨씬 빠릅니다.
+ * 그래서 SharedAppServerRuntime은 하나의 connection과 그 connection에서 생긴 notices를 관리하고,
+ * 실패 시 mod.rs의 with_shared_runtime이 reset/retry/fallback 판단을 수행합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use anyhow::{Context, Result};
 
@@ -14,6 +20,10 @@ use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 #[derive(Default)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct SharedAppServerRuntime {
+    /*
+     * 학습 주석: shared runtime은 단순 connection cache가 아니라 UI에 알려야 할 attachment/profile/notices도 같이 들고 있습니다.
+     * app-server가 재시작되면 사용자는 terminal bridge가 새 프로세스에 붙었는지 알아야 하므로 attachment_profile과 initialize_detail을 보존합니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     connection: Option<AppServerConnection>,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -28,6 +38,10 @@ pub(super) struct SharedAppServerRuntime {
 impl SharedAppServerRuntime {
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub(super) fn ensure_connected(&mut self, adapter: &CodexAppServerAdapter) -> Result<()> {
+        /*
+         * 학습 주석: ensure_connected는 lazy initialization과 health check를 합친 함수입니다.
+         * 이미 connection이 살아 있으면 그대로 쓰고, 죽어 있으면 reset 후 adapter.open_connection으로 새 child process를 만들고 initialize handshake를 수행합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let reconnect_notice = match self.connection.as_mut() {
             // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
@@ -208,6 +222,11 @@ pub(super) fn request_failure_outcome(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     attempt: usize,
 ) -> RequestFailureOutcome {
+    /*
+     * 학습 주석: 이 작은 함수는 retry 정책을 순수 함수로 분리한 것입니다.
+     * shared connection의 첫 실패는 오래된 프로세스/깨진 상태일 수 있어 reset 후 재시도하고,
+     * isolated fallback의 첫 실패는 reset 대상이 없으므로 같은 방식으로 한 번 더 시도합니다.
+     */
     // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match (mode, attempt) {
         // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.

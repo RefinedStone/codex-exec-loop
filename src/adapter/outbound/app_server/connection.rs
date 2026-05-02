@@ -1,3 +1,8 @@
+/*
+ * 학습 주석: connection.rs는 `codex app-server` child process와 직접 대화하는 가장 낮은 outbound adapter입니다.
+ * 위 계층은 typed method(start_thread, start_turn 등)를 호출하지만, 이 파일은 실제로 stdin에 JSON line을 쓰고
+ * stdout/stderr reader thread에서 notification/response line을 받아 request id와 매칭합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::io::{BufRead, BufReader, Write};
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
@@ -52,6 +57,11 @@ use self::diagnostics::{ConnectionDiagnostics, PendingNotifications};
 #[derive(Clone, Default)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct AppServerTurnInterruptSignal {
+    /*
+     * 학습 주석: interrupt signal은 여러 session/stream이 공유하는 세대 카운터입니다.
+     * Ctrl-C 같은 stop 요청이 들어오면 generation을 증가시키고, 각 stream loop는 자신이 시작할 때 본 generation보다
+     * 커졌는지 확인해 "내가 시작한 뒤 stop 요청이 왔는가"를 판단합니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     generation: Arc<AtomicU64>,
 }
@@ -144,6 +154,10 @@ impl AppServerConnectionConfig {
 
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(super) struct AppServerConnection {
+    /*
+     * 학습 주석: AppServerConnection은 child process handle, stdin writer, stdout reader channel, pending notification buffer를 함께 들고 있습니다.
+     * Rust 소유권 관점에서 stdin은 요청을 보내기 위해 이 구조체가 소유하고, stdout/stderr는 별도 thread로 넘긴 뒤 mpsc channel로 결과만 받습니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     child: Child,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -177,6 +191,11 @@ impl AppServerConnection {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         config: AppServerConnectionConfig,
     ) -> Result<Self> {
+        /*
+         * 학습 주석: spawn은 외부 CLI 프로세스를 Rust 객체로 감싸는 생성자입니다.
+         * stdin/stdout/stderr를 모두 piped로 열어야 app-server와 line protocol을 주고받을 수 있고,
+         * stdout/stderr는 block read가 필요하므로 reader thread가 mpsc sender로 AppServerLine을 넘깁니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut child = Command::new("codex")
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.

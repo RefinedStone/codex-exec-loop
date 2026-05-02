@@ -1,3 +1,14 @@
+/*
+ * 학습 주석: app_server adapter는 application port(CodexAppServerPort)를 실제 `codex app-server` 프로세스에 연결하는 outbound 경계입니다.
+ * domain/application 계층은 "thread 시작", "turn stream 실행", "recent sessions 조회" 같은 의도만 알고,
+ * 이 모듈이 JSON-RPC 스타일 요청/응답, 프로세스 생명주기, shared runtime 재사용, fallback connection을 처리합니다.
+ *
+ * 큰 흐름:
+ * - connection.rs: codex app-server 프로세스를 spawn하고 stdin/stdout line protocol을 관리합니다.
+ * - protocol.rs: app-server request/response/notification DTO와 변환 함수를 둡니다.
+ * - runtime.rs: 여러 짧은 조회 요청이 하나의 app-server connection을 재사용하도록 shared runtime을 관리합니다.
+ * - 이 mod.rs: port trait 구현체로서 TUI/application service가 호출하는 공개 메서드를 조립합니다.
+ */
 // 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 pub(crate) mod connection;
 // 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
@@ -81,6 +92,11 @@ Do not push, open pull requests, merge, rebase shared branches, or clean up the 
 #[derive(Clone)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct CodexAppServerAdapter {
+    /*
+     * 학습 주석: 이 adapter는 설정값과 실행 중인 shared runtime 상태를 함께 보관합니다.
+     * client_name/version은 app-server initialize handshake에 쓰이고, execution_policy는 새 thread 생성 시
+     * approval/sandbox 정책으로 전달됩니다. shared_runtime은 startup/session 조회처럼 짧은 요청을 빠르게 처리하기 위한 재사용 연결입니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     client_name: String,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -174,6 +190,11 @@ impl CodexAppServerAdapter {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
+        /*
+         * 학습 주석: 새 대화 흐름은 "thread를 먼저 만들고, 그 thread id로 turn을 시작한 뒤, stream notification을 끝까지 읽는" 2단계입니다.
+         * ThreadPrepared 이벤트를 먼저 보내는 이유는 TUI가 실제 assistant 토큰을 받기 전에도 thread id/title/cwd를 표시하고
+         * 이후 reattach 가능한 상태로 바꿀 수 있게 하기 위해서입니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let result = self.with_streaming_runtime(|connection| {
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -227,6 +248,10 @@ impl CodexAppServerAdapter {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
+        /*
+         * 학습 주석: hidden planning thread는 사용자가 보는 main session과 별도로 planning queue를 평가하는 worker 세션입니다.
+         * ephemeral/service_name/developer_instructions를 넣어 일반 대화와 구분하고, planning_worker_turn_input으로 queue mutation skill을 붙입니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let result = self.with_isolated_streaming_runtime(|connection| {
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -285,6 +310,11 @@ impl CodexAppServerAdapter {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
+        /*
+         * 학습 주석: with_shared_runtime은 짧은 조회 요청의 핵심 회복 전략입니다.
+         * shared mutex를 잡을 수 있으면 같은 app-server process를 재사용하고, turn stream이 mutex를 점유 중이면 isolated fallback을 씁니다.
+         * 첫 실패는 reset/retry로 복구하고, 두 번째 실패는 mode별 context를 붙여 호출자에게 돌려줍니다.
+         */
         // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
         for attempt in 0..2 {
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
