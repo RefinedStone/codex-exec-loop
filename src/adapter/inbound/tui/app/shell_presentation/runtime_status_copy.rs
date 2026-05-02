@@ -1,27 +1,24 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::time::{Duration, Instant};
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::text::compact_whitespace_detail;
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::Style;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{
     AkraTheme, AutoFollowRuntimePhase, ConversationInputState, ConversationViewModel, Line,
     Modifier, Span,
 };
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// shell presentation의 런타임 상태 문구를 한곳에 모아 둔다. 컨트롤러 상태를 다시
+// 해석하지 않고 `ConversationViewModel`의 projection만 읽어, 화면 조각들이 같은
+// working/idle 판단과 auto-follow 문구를 공유하게 한다.
 pub(super) fn compact_inline_detail(text: &str, max_len: usize) -> String {
     compact_whitespace_detail(text, max_len)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    // auto-follow가 평가/큐/실행 중이면 사용자의 수동 turn이 없어도 하단 상태는
+    // working이어야 한다. prompt 입력은 가능하더라도 런타임은 아직 살아 있기 때문이다.
     if conversation.has_running_turn() || conversation.auto_follow_state.has_live_activity() {
         "working"
     } else {
@@ -29,14 +26,12 @@ pub(super) fn turn_status_label(conversation: &ConversationViewModel) -> &'stati
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_working_line(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     conversation: &ConversationViewModel,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     max_detail_len: usize,
 ) -> Option<Line<'static>> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // auto-follow activity가 있으면 manual turn보다 우선해 표시한다. 자동 후속 작업은
+    // 내부적으로 turn을 만들기 전 평가/큐 단계도 있으므로 별도 시작 시각을 사용한다.
     let (started_at, detail) = if conversation.auto_follow_state.has_live_activity() {
         (
             conversation.auto_follow_state.active_started_at()?,
@@ -48,42 +43,34 @@ pub(super) fn build_working_line(
             manual_turn_working_detail(conversation)?,
         )
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // status line은 terminal 폭을 가장 먼저 잃는 영역이라 detail을 whitespace 단위로
+    // 접어 두고, elapsed는 monotonic Instant 기준으로만 계산한다.
     let detail = compact_inline_detail(&detail, max_detail_len);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let elapsed = format_elapsed(Instant::now().saturating_duration_since(started_at));
 
     Some(Line::from(vec![
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Span::styled(
             "◦ Working".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::muted().add_modifier(Modifier::BOLD),
         ),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Span::styled(format!(" ({elapsed} • {detail})"), AkraTheme::subtle()),
     ]))
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<String> {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !conversation.has_running_turn() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return None;
     }
 
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let interrupt_label = conversation.interrupt_support_label();
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match conversation.input_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        // submission 단계는 아직 streaming payload가 없으므로 시작 중임을 명확히 표시한다.
         ConversationInputState::SubmittingTurn => {
             Some(format!("starting turn / interrupt {interrupt_label}"))
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::StreamingTurn => {
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+            // live message가 생긴 뒤에는 agent가 실제 응답을 생산 중이고, 그 전에는
+            // 서버 응답을 기다리는 상태로 분리해 사용자가 멈춤처럼 보지 않게 한다.
             if conversation.live_agent_message.is_some() {
                 Some(format!("turn running / interrupt {interrupt_label}"))
             } else {
@@ -92,105 +79,83 @@ fn manual_turn_working_detail(conversation: &ConversationViewModel) -> Option<St
                 ))
             }
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => None,
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let interrupt_label = conversation.interrupt_support_label();
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match &conversation.auto_follow_state.runtime_phase {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+        // Idle은 보통 호출되지 않지만, projection 조합 실수에도 빈 문자열 대신 진단 가능한
+        // 라벨을 남긴다.
         AutoFollowRuntimePhase::Idle => "idle".to_string(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto follow-up".to_string(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Queued { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
             format!(
                 "auto turn {turn_index}/{max_auto_turns} starting / interrupt {interrupt_label}"
             )
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Running { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} running / interrupt {interrupt_label}")
         }
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn auto_follow_prompt_status_line(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     conversation: &ConversationViewModel,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     inline: bool,
 ) -> Option<String> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // prompt 영역 문구는 working line보다 짧다. interrupt 가능 여부는 이미 working
+    // line에 있으므로 여기서는 사용자가 지금 입력해도 되는지에 초점을 둔다.
     let detail = match &conversation.auto_follow_state.runtime_phase {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Idle => return None,
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Evaluating { .. } => "auto follow-up evaluating".to_string(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Queued { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} queued")
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} starting")
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         AutoFollowRuntimePhase::Running { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} running")
         }
     };
 
     Some(if inline {
+        // inline 모드는 입력 줄 옆에 붙기 때문에 "idle이 되면 Enter"라는 행동 단서까지
+        // 한 줄로 압축한다.
         format!("prompt: {detail}  |  type now, Enter when idle")
     } else {
         detail
     })
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn auto_follow_prompt_lines(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     conversation: &ConversationViewModel,
 ) -> Option<Vec<Line<'static>>> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 테스트용 multiline helper는 동일한 status core를 써서 inline/multiline copy가
+    // phase mapping을 따로 drift하지 않게 한다.
     let detail = auto_follow_prompt_status_line(conversation, false)?;
     Some(vec![
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Line::from(format!("Auto follow-up is {detail}.")),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         Line::from("Type now; press Enter after the shell returns idle."),
     ])
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in super::super) fn format_elapsed(duration: Duration) -> String {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let total_seconds = duration.as_secs();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let hours = total_seconds / 3600;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let minutes = (total_seconds % 3600) / 60;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let seconds = total_seconds % 60;
 
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    // 초 단위 상태는 즉시성을, 분/시간 단위 상태는 큰 흐름을 보여주도록 가장 큰 두
+    // 단위까지만 노출한다.
     if hours > 0 {
         format!("{hours}h {minutes}m")
     } else if minutes > 0 {
@@ -200,69 +165,50 @@ pub(in super::super) fn format_elapsed(duration: Duration) -> String {
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inline_input_state_label(input_state: ConversationInputState) -> &'static str {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    // 좁은 footer에 들어가는 machine-readable에 가까운 라벨이다. 상세한 사용자 문장은
+    // working line과 prompt notice에서만 만든다.
     match input_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::DraftReady => "draft",
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::ReadyToContinue => "ready",
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::SubmittingTurn => "sending",
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::StreamingTurn => "streaming",
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn input_state_style(input_state: ConversationInputState) -> Style {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    // 상태 색은 테스트 snapshot에서만 직접 검증한다. production 렌더링은 같은 helper를
+    // 거쳐 ready/sending/streaming의 시각적 의미를 맞춘다.
     match input_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::success()
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::SubmittingTurn => AkraTheme::warning(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationInputState::StreamingTurn => AkraTheme::accent(),
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod tests {
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use super::*;
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use crate::adapter::inbound::tui::app::{AutoFollowState, ConversationViewModel};
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn auto_follow_status_lines_use_infinite_label() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         conversation.auto_follow_state = AutoFollowState::new();
         conversation
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .auto_follow_state
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .set_max_auto_turns(INFINITE_AUTO_FOLLOW_MAX_TURNS);
         conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Running {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             started_at: Instant::now(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             turn_index: 2,
         };
 
+        // infinite 설정은 working line과 prompt notice 모두에서 같은 max-turn label을
+        // 써야 사용자가 자동 후속 실행 한계를 다르게 읽지 않는다.
         assert_eq!(
             auto_follow_working_detail(&conversation),
             "auto turn 2/infinite running / interrupt unsupported"
