@@ -26,6 +26,16 @@ const POOL_ALLOCATION_LOCK_RETRY: Duration = Duration::from_millis(25);
 // 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
 const POOL_ALLOCATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(300);
 
+/*
+학습 주석: allocation lock은 여러 turn submission이 동시에 빈 slot을 잡으려 할 때 같은
+slot을 중복 배정하지 않게 하는 파일시스템 락입니다. lock directory 생성은 대부분의
+파일시스템에서 원자적이므로, 성공한 프로세스 하나만 lease 선택과 branch 생성 구간에
+들어갈 수 있습니다.
+
+`Drop`에서 release를 호출하므로, acquire 후 중간에 에러가 나도 스코프를 벗어나며 락이
+해제됩니다. owner token을 함께 저장하는 이유는 stale lock 제거와 잘못된 owner의 release를
+구분하기 위해서입니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub(in crate::application::service::parallel_mode) struct PoolAllocationLock {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -42,6 +52,12 @@ impl Drop for PoolAllocationLock {
     }
 }
 
+/*
+학습 주석: public acquire 함수는 먼저 canonical repo root와 default pool root를 찾고,
+pool root 디렉터리를 보장한 뒤 실제 lock acquire로 들어갑니다. 호출자가 workspace 하위
+디렉터리에서 시작해도 같은 canonical root를 기준으로 같은 pool lock을 사용해야 병렬
+slot 배정이 하나의 임계구역으로 묶입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn acquire_pool_allocation_lock(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -61,6 +77,14 @@ pub(in crate::application::service::parallel_mode) fn acquire_pool_allocation_lo
     acquire_pool_allocation_lock_at(&pool_root)
 }
 
+/*
+학습 주석: 실제 lock 획득 루프는 `.allocation-lock` 디렉터리 생성을 시도합니다. 이미 있으면
+stale lock인지 확인한 뒤 짧게 sleep하고 재시도합니다. timeout을 둔 이유는 다른 프로세스가
+정상적으로 slot을 배정 중일 때 무한정 TUI turn submission이 멈추지 않게 하기 위해서입니다.
+
+owner 파일 쓰기에 실패하면 방금 만든 lock directory를 지우고 실패합니다. owner token 없는
+lock은 누가 소유하는지 검증할 수 없어서 release 안전성이 떨어지기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn acquire_pool_allocation_lock_at(pool_root: &Path) -> Result<PoolAllocationLock, String> {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -134,6 +158,12 @@ fn pool_allocation_lock_owner_token() -> String {
     format!("pid={}\ncreated_at_ms={created_at}\n", std::process::id())
 }
 
+/*
+학습 주석: release는 owner 파일의 내용이 현재 permit의 owner token과 같을 때만 lock directory를
+지웁니다. acquire timeout 중 stale lock 제거가 일어났거나 다른 프로세스가 새 lock을 잡은
+상태에서 이전 permit이 drop될 수 있으므로, token 확인 없이 삭제하면 남의 lock을 풀 수
+있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn release_pool_allocation_lock(lock_path: &Path, owner_token: &str) {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -150,6 +180,12 @@ fn release_pool_allocation_lock(lock_path: &Path, owner_token: &str) {
     }
 }
 
+/*
+학습 주석: stale lock 제거는 오래된 lock directory가 있고, owner pid가 없거나 죽은 것으로
+확인될 때만 실행됩니다. 수정 시간이 짧으면 정상 작업 중일 수 있어 건드리지 않고, pid 상태가
+Unknown이면 보수적으로 유지합니다. slot 중복 배정보다 잠시 busy로 남는 편이 안전하기
+때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn remove_stale_pool_allocation_lock(lock_path: &Path) {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -209,6 +245,12 @@ enum PoolAllocationLockOwnerLiveness {
     Unknown,
 }
 
+/*
+학습 주석: owner liveness는 플랫폼별 process table을 아주 얕게 확인합니다. Unix에서는
+`kill -0`, Windows에서는 `tasklist`를 사용하고, 둘 다 실패하면 Unknown으로 둡니다.
+Unknown을 Dead로 취급하지 않는 이유는 권한 문제나 플랫폼 차이로 살아 있는 프로세스를
+잘못 죽은 것으로 판단해 lock을 훔치는 일을 피하기 위해서입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn pool_allocation_lock_owner_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
     platform_process_liveness(pid)

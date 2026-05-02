@@ -11,6 +11,12 @@ use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::super::ensure_directory_exists;
 
+/*
+학습 주석: lease 파일은 planning authority의 runtime lease record를 사람이 확인하거나
+복구할 수 있게 pool root 아래에 미러링한 JSON입니다. 실제 권위 있는 저장소는
+`PlanningAuthorityPort`이지만, `.leases/<slot>.json` 미러는 worktree pool을 파일시스템에서
+점검할 때 중요한 단서가 됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn slot_leases_root(pool_root: &Path) -> PathBuf {
     pool_root.join(".leases")
@@ -26,6 +32,15 @@ pub(in crate::application::service::parallel_mode) fn slot_lease_file_path(
     slot_leases_root(pool_root).join(format!("{slot_id}.json"))
 }
 
+/*
+학습 주석: slot lease 저장은 두 저장소를 함께 갱신합니다. 먼저 planning authority에
+upsert해 application이 읽는 runtime projection을 갱신하고, 그 다음 pool root의 JSON 파일을
+temp file + rename 방식으로 기록합니다. rename을 쓰는 이유는 중간에 프로세스가 죽어도
+부분적으로 쓰인 lease 파일을 최종 파일명으로 남기지 않기 위해서입니다.
+
+이 함수가 실패를 `String`으로 자세히 반환하는 이유는 슬롯 획득/상태 전이 중 어디서
+원장 갱신이 막혔는지 TUI notice와 테스트에서 바로 드러내기 위해서입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -69,6 +84,12 @@ pub(in crate::application::service::parallel_mode) fn write_slot_lease(
         .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
 }
 
+/*
+학습 주석: slot lease 제거는 cleanup의 마지막 원장 정리 단계입니다. planning authority에서
+runtime lease를 먼저 지우고, 성공한 경우에만 파일 미러를 지웁니다. 권위 저장소 삭제가
+실패했는데 파일만 지우면 application projection과 파일시스템 단서가 엇갈리므로 false를
+반환해 호출자가 cleanup 실패로 취급하게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn remove_slot_lease(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
