@@ -133,6 +133,13 @@ pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefres
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: dispatch plan은 "지금 몇 개의 병렬 agent를 새로 띄워도 되는가"를 TUI와
+orchestrator가 판단할 때 쓰는 계산 결과입니다. idle slot 수는 물리적 실행 capacity이고,
+excluded_task_ids는 이미 lease나 distributor queue에 잡혀 있는 task를 다시 배정하지 않기
+위한 중복 방지 목록입니다. candidates는 planning queue에서 실제로 배정할 수 있는 작업만
+capacity만큼 잘라낸 결과입니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelModeDispatchPlan {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -145,6 +152,12 @@ pub struct ParallelModeDispatchPlan {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/*
+학습 주석: orchestrator trigger는 queue processing을 왜 실행했는지 남기는 provenance입니다.
+main turn이 끝나서 실행한 tick, official planning refresh가 끝나서 실행한 tick, 사용자가 수동
+dispatch한 tick은 같은 distributor queue를 움직이지만, notice와 telemetry를 해석할 때 원인이
+다릅니다. enum으로 두면 호출자가 임의 문자열을 만들지 않고 정해진 사건만 넘기게 됩니다.
+*/
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum ParallelModeOrchestratorTrigger {
     MainTurnCompleted,
@@ -154,6 +167,13 @@ pub enum ParallelModeOrchestratorTrigger {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: orchestrator tick result는 distributor queue를 한 번 움직인 결과입니다. blocked가
+true이면 integration worktree 자체가 잘못되어 queue processing에 들어가지 못한 것이고,
+false이면 queue processing은 실행되었으며 notices에 실제 push/PR/integration/cleanup 결과가
+들어갑니다. 이 구분은 TUI가 "운영자가 먼저 worktree를 고쳐야 함"과 "queue가 정상 처리됨"을
+다르게 표시하게 합니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelModeOrchestratorTickResult {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -166,6 +186,16 @@ pub struct ParallelModeOrchestratorTickResult {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Clone)]
+/*
+학습 주석: ParallelModeService는 병렬 모드 application 계층의 facade입니다. TUI는 이 타입을
+통해 readiness, supervisor snapshot, dispatch plan, slot lifecycle, official completion,
+distributor orchestration을 호출합니다. 내부적으로는 planning authority, GitHub automation,
+runtime port를 조합하고, 실제 세부 정책은 pool/distributor/supervisor/session_detail 모듈로
+분산되어 있습니다.
+
+이 타입이 adapter를 직접 구현하지 않고 port trait을 받는 구조는 application layer가 git,
+GitHub, sqlite 같은 outbound 세부 구현에 묶이지 않게 해 줍니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelModeService {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -214,6 +244,12 @@ impl ParallelModeService {
         }
     }
 
+    /*
+    학습 주석: refresh order 예약은 official completion worker가 시작되기 전에 순번을 고정하는
+    경로입니다. slot workspace가 Running lease에 연결되어 있을 때만 예약하며, 일반 workspace나
+    아직 실행되지 않은 lease에서는 None을 반환합니다. 이렇게 해야 여러 hidden worker가 거의
+    동시에 시작되어도 planning ledger refresh 순서가 뒤섞이지 않습니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn reserve_workspace_official_completion_refresh_order(
         &self,
@@ -243,6 +279,16 @@ impl ParallelModeService {
             .map_err(|error| error.to_string())
     }
 
+    /*
+    학습 주석: readiness inspection은 병렬 모드의 enable gate입니다. git repository, git
+    worktree, integration branch, push remote, GitHub automation, planning runtime, authority
+    shadow store를 capability snapshot으로 모읍니다. domain의 readiness state는 이 capability
+    목록에서 derive되며, 첫 non-ready capability는 top alert로 올라갑니다.
+
+    readiness가 통과되면 distributor runtime recovery를 한 번 시도합니다. 단순 readiness 조회가
+    queue record와 lease의 재시작 후 상태를 정리하는 이유는 supervisor를 열었을 때 오래된
+    blocked/cleaning 상태가 현재 git/GitHub 현실과 최대한 맞아 있어야 하기 때문입니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn inspect_readiness(
         &self,
@@ -366,6 +412,12 @@ impl ParallelModeService {
         snapshot
     }
 
+    /*
+    학습 주석: build_supervisor_snapshot은 읽기 전용 snapshot 경로입니다. readiness 결과와 mode
+    enabled 여부를 넘겨 pool/roster/detail/distributor 화면 모델을 만들지만, pool worktree를
+    새로 만들거나 cleanup하는 reconcile 부작용은 실행하지 않습니다. 단순 화면 refresh가 저장소
+    상태를 바꾸지 않게 하려는 경계입니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn build_supervisor_snapshot(
         &self,
@@ -385,6 +437,12 @@ impl ParallelModeService {
         )
     }
 
+    /*
+    학습 주석: reconcile_supervisor_snapshot은 같은 supervisor snapshot을 반환하지만, mode가 켜진
+    상태에서 pool baseline/slot worktree/cleanup 상태를 기대 형태로 수렴시키는 경로입니다.
+    사용자가 병렬 모드를 켜거나 명시적으로 refresh할 때 사용하며, 읽기 전용 snapshot과 구분해
+    side effect가 있는 작업을 예측 가능하게 합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn reconcile_supervisor_snapshot(
         &self,
@@ -404,6 +462,12 @@ impl ParallelModeService {
         )
     }
 
+    /*
+    학습 주석: dispatch plan은 planning queue와 pool capacity를 맞물려 계산합니다. 먼저 pool을
+    reconcile해 missing/cleanup 가능한 slot을 정리하고, 현재 idle slot 수만큼만 active planning
+    task를 후보로 뽑습니다. 이미 lease 중이거나 distributor queue에 있는 task는 excluded로
+    제거해 같은 task가 중복 agent에게 배정되지 않게 합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn build_dispatch_plan(
         &self,
@@ -471,6 +535,12 @@ impl ParallelModeService {
         })
     }
 
+    /*
+    학습 주석: orchestrator tick은 distributor queue head를 한 번 진행시키는 public entry입니다.
+    queue 처리 전에 integration worktree blocker를 먼저 검사합니다. integration branch가 아니거나
+    dirty하면 cherry-pick/push 흐름이 잘못된 workspace에 적용될 수 있으므로, 이 경우에는
+    process_queue를 호출하지 않고 blocked result만 반환합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn run_orchestrator_tick(
         &self,
@@ -506,6 +576,12 @@ impl ParallelModeService {
     }
 }
 
+/*
+학습 주석: 기본 supervisor notice는 readiness나 pool recovery가 더 구체적인 알림을 제공하지
+않을 때만 사용되는 fallback 메시지입니다. mode enabled와 readiness 존재 여부의 조합으로
+"켜졌지만 준비 안 됨", "꺼졌지만 검토 가능", "readiness를 다시 실행해야 함" 같은 화면 상단
+문구를 고릅니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn default_supervisor_notice(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.

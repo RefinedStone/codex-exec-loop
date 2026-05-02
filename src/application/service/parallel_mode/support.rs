@@ -13,6 +13,12 @@ use super::pool::reset_slot_worktree_to_akra;
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::readiness::run_command;
 
+/*
+학습 주석: directory creation은 pool root, lease root, slot parent처럼 여러 모듈에서 반복되는
+작은 filesystem boundary입니다. 이미 존재하면 성공으로 보고, 없으면 `create_dir_all`로 부모까지
+만듭니다. 호출자는 이 함수를 통해 "디렉터리 보장"이라는 의도를 드러내고, 실패는 각 문맥에
+맞는 메시지로 감쌉니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
@@ -25,12 +31,22 @@ pub(crate) fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
     fs::create_dir_all(path)
 }
 
+/*
+학습 주석: current_timestamp는 lease/session/queue record의 공통 시간 포맷입니다. RFC3339 UTC를
+사용하면 문자열 정렬과 사람이 읽는 표시가 모두 안정적이고, 다른 모듈이 별도의 시간 포맷을
+만들지 않아도 됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn current_timestamp() -> String {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     Utc::now().to_rfc3339()
 }
 
+/*
+학습 주석: current_branch_name은 slot worktree와 integration worktree가 기대 branch에 있는지
+확인하는 공통 git query입니다. lease running 전이, cleanup pending 전이, distributor readiness
+검사가 모두 이 함수를 통해 branch drift를 감지합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn current_branch_name(worktree_path: &Path) -> Option<String> {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -48,6 +64,12 @@ pub(crate) fn current_branch_name(worktree_path: &Path) -> Option<String> {
     )
 }
 
+/*
+학습 주석: unstarted slot branch discard는 lease 저장 실패나 stream startup failure처럼 agent가
+아직 Running에 들어가기 전의 rollback 경로입니다. 먼저 slot worktree를 baseline으로 되돌리고,
+그 다음 repo에서 agent branch를 삭제합니다. 실행 중 작업에 쓰는 cleanup과 달리, 여기서는
+"결과가 없는 시작 실패"를 pool 오염 없이 되돌리는 것이 목적입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn discard_unstarted_slot_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.

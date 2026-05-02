@@ -22,6 +22,11 @@ use super::{DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH};
 // 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
 const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
 
+/*
+학습 주석: readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것입니다.
+병렬 모드는 git worktree와 branch를 강하게 전제하므로, repo root가 없으면 나머지 capability는
+모두 prerequisite blocked 상태가 됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
     run_command(
@@ -33,6 +38,11 @@ pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
     .filter(|value| !value.is_empty())
 }
 
+/*
+학습 주석: git worktree capability는 이 repository가 `git worktree list --porcelain`을 실행할 수
+있는지 확인합니다. pool slot은 모두 git worktree로 만들어지므로, 이 명령이 실패하면 slot
+provision/reconcile/inspection 전체가 신뢰할 수 없습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_git_worktree(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -67,6 +77,12 @@ pub(super) fn inspect_git_worktree(
     }
 }
 
+/*
+학습 주석: akra branch capability는 pool baseline이 될 integration branch를 찾습니다. local
+`prerelease`가 있거나 origin의 remote tracking branch가 있으면 ready이고, 둘 다 없어도 HEAD가
+있으면 최초 reconcile에서 baseline을 만들 수 있으므로 ready로 둡니다. 완전히 HEAD가 없는 repo만
+blocked입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_akra_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -131,6 +147,12 @@ pub(super) fn inspect_akra_branch(
     )
 }
 
+/*
+학습 주석: push remote capability는 distributor가 source branch와 integration branch를 원격에
+push할 수 있는지를 미리 진단합니다. remote URL이 없거나 HTTPS GitHub 형식이 아니거나 credential
+fill이 실패하면 degraded로 둡니다. degraded는 병렬 모드 자체를 완전히 막지는 않지만, GitHub
+delivery 자동화가 나중에 blocked될 수 있음을 supervisor에 보여 줍니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_push_remote(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -232,6 +254,12 @@ pub(super) fn inspect_push_remote(
     }
 }
 
+/*
+학습 주석: GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 repo-local
+`scripts/gh-refinedstone.sh` fallback을 허용합니다. 이 capability는 실제 auth 여부가 아니라
+"GitHub 조작을 시도할 실행 경로가 있는가"를 확인합니다. auth 여부는 다음 `inspect_gh_auth`가
+별도로 판단합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_gh_binary(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -271,6 +299,12 @@ pub(super) fn inspect_gh_binary(
     }
 }
 
+/*
+학습 주석: GitHub auth capability는 실제로 PR 생성/조회/close 같은 GitHub API 작업을 할 수
+있는지 확인합니다. `gh`가 있으면 `gh auth status` 계열을, fallback script만 있으면 script의
+auth status를 사용합니다. binary capability가 ready가 아니면 auth도 degraded로 두어 원인
+체인이 화면에 드러나게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_gh_auth(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -334,6 +368,11 @@ fn github_fallback_script_available(runtime: &dyn ParallelModeRuntimePort) -> bo
     runtime.path_exists(Path::new(GITHUB_SCRIPT_PATH))
 }
 
+/*
+학습 주석: planning capability는 병렬 mode가 배정할 queue와 official completion ledger를
+신뢰할 수 있는지 확인합니다. workspace가 없거나 invalid면 blocked이고, ready 상태에서는
+task가 있든 없든 병렬 모드의 나머지 capability 판단을 계속할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_planning(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -413,6 +452,15 @@ pub(super) fn inspect_planning(
     }
 }
 
+/*
+학습 주석: authority store capability는 planning 문서 mirror와 repo-scoped shadow store가
+동기화되어 있는지 확인합니다. 병렬 agent는 slot worktree에서 작업하지만 planning authority는
+canonical repo root 기준으로 session/queue/lease projection을 읽으므로, shadow store parity가
+깨지면 supervisor와 distributor가 다른 현실을 볼 수 있습니다.
+
+git repository와 planning capability가 ready가 아니면 이 검사를 미루고 prerequisite blocked를
+반환합니다. 선행 조건이 없을 때 store parity 실패처럼 보이는 가짜 오류를 줄이기 위해서입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_authority_store(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -508,6 +556,11 @@ pub(super) fn inspect_authority_store(
     }
 }
 
+/*
+학습 주석: prerequisite blocked capability는 어떤 capability가 자기 검사를 할 수 없을 때 쓰는
+공통 helper입니다. 예를 들어 git repo root가 없으면 worktree, push remote, authority store는
+각자 실패를 추측하지 않고 "git repository detection을 기다림"이라고 표시합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn blocked_prerequisite_capability(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -527,6 +580,12 @@ pub(super) fn blocked_prerequisite_capability(
     )
 }
 
+/*
+학습 주석: credential fill에는 protocol, host, path를 분리해 넘겨야 하므로 HTTPS remote URL을
+간단히 파싱합니다. SSH remote나 비 GitHub 형식은 여기서 None이 되어 push capability가
+degraded로 표시됩니다. distributor 자동화는 현재 HTTPS credential flow를 기준으로 설계되어
+있기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -545,6 +604,12 @@ pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
     Some((host.to_string(), path.to_string()))
 }
 
+/*
+학습 주석: readiness와 pool helper의 low-level command 실행은 interactive prompt를 꺼야 합니다.
+`GIT_TERMINAL_PROMPT=0`, null stderr/stdout 정책을 통해 capability check가 사용자 입력을
+기다리며 TUI를 멈추지 않게 합니다. 값이 필요한 경우에는 `run_command`, 성공 여부만 필요한
+경우에는 이 함수를 사용합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -> bool {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -556,6 +621,11 @@ pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -
     command.status().is_ok_and(|status| status.success())
 }
 
+/*
+학습 주석: run_command는 readiness와 git helper가 짧은 stdout 값을 얻을 때 쓰는 공통 wrapper입니다.
+명령이 실패하거나 stdout이 비어 있으면 None을 반환해 호출자가 capability degraded/blocked를
+명시적으로 선택하게 합니다. stderr는 숨겨 capability 화면에 raw command noise가 섞이지 않게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn run_command<const N: usize>(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
