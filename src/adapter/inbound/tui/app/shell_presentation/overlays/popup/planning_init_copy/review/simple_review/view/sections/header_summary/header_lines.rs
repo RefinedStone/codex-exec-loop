@@ -1,10 +1,15 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: header text 자체는 popup 공통 header module에 있습니다. 이 section helper는 깊은
+// simple_review view 위치에서 그 공통 header builder를 가져와 section composition에 연결합니다.
 use super::super::super::super::super::header;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: `Line`은 TUI renderer가 그릴 수 있는 presentation 단위입니다. helper 반환 타입을
+// Line vector로 고정해 상위 section collector가 다른 section과 같은 형태로 합치게 합니다.
 use crate::adapter::inbound::tui::app::Line;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: `collect_simple_review_header_lines`는 simple review popup의 제목/상단 안내 줄을
+// section bundle에 넣기 위한 얇은 adapter입니다. 실제 문구 생성은 공통 header module에 남겨
+// header copy가 여러 view 조립 경로에서 중복되지 않게 합니다.
 pub(super) fn collect_simple_review_header_lines() -> Vec<Line<'static>> {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 공통 builder 결과를 그대로 반환합니다. 이 함수의 의미는 변환이 아니라
+    // header section이라는 view assembly 위치를 명명하는 데 있습니다.
     header::build_simple_review_header_lines()
 }
