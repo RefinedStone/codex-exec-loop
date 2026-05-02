@@ -34,8 +34,20 @@ pub(super) fn can_refresh_pool_baseline_from_workspace(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     runtime_projection: &PlanningAuthorityRuntimeProjectionSnapshot,
 ) -> bool {
+    /*
+    학습 주석: 이 predicate는 "현재 workspace HEAD를 pool baseline으로 삼아도 되는가"를
+    single boolean으로 압축합니다. pool baseline을 잘못 움직이면 이후 새 agent branch가 잘못된
+    출발점에서 만들어지므로, distributor queue가 비어 있고 현재 branch가 통합/agent 전용 branch가
+    아닌 아주 제한된 상황만 허용합니다.
+    */
     runtime_projection.distributor_queue_records.is_empty()
         && runtime_projection.slot_leases.values().all(|lease| {
+            /*
+            학습 주석: 여기서는 Leased/Running만 허용합니다. 직관과 달리 lease가 아예 없거나
+            CleanupPending이 섞인 상태보다, 아직 완료되지 않은 active lease만 있는 상태가 baseline
+            refresh에 더 안전합니다. 완료/통합 대기 산출물이 queue나 cleanup 경계에 걸려 있으면
+            baseline 이동이 그 산출물의 통합 여부 판단을 흐릴 수 있기 때문입니다.
+            */
             matches!(
                 lease.state,
                 // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -43,6 +55,12 @@ pub(super) fn can_refresh_pool_baseline_from_workspace(
             )
         })
         && current_branch_name(Path::new(repo_root)).is_some_and(|branch_name| {
+            /*
+            학습 주석: current branch guard는 사용자가 이미 `prerelease`나 `akra-agent/...`에
+            들어와 있는 상황을 제외합니다. baseline branch 위에서 baseline을 다시 잡는 것은
+            의미가 없고, agent branch 위에서 baseline을 잡으면 아직 distributor를 통과하지 않은
+            작업 결과가 pool 전체 출발선이 될 수 있습니다.
+            */
             branch_name != POOL_BASELINE_BRANCH
                 && !branch_name.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/"))
         })
@@ -66,6 +84,12 @@ pub(super) fn ensure_pool_baseline_branch(
 ) -> Result<(String, bool), ()> {
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if reset_to_current_head && let Some(head_sha) = resolve_branch_head(repo_root, "HEAD") {
+        /*
+        학습 주석: reset_to_current_head는 readiness/reconcile이 "지금 workspace HEAD를 새
+        baseline으로 고정해도 된다"고 판단한 뒤에만 true로 들어옵니다. `branch -f prerelease HEAD`
+        는 local baseline ref를 이동시키는 강한 작업이므로, 위 predicate를 통과한 경로에서만
+        사용되어야 합니다.
+        */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let existed = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH).is_some();
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
@@ -87,10 +111,20 @@ pub(super) fn ensure_pool_baseline_branch(
 
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if let Some(baseline_head) = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH) {
+        /*
+        학습 주석: 이미 local baseline branch가 있으면 그것이 가장 명확한 기준입니다. remote나
+        HEAD fallback보다 먼저 반환해, 사용자가 의도적으로 local prerelease를 고정해 둔 경우
+        reconcile이 그 선택을 덮어쓰지 않게 합니다.
+        */
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return Ok((baseline_head, false));
     }
 
+    /*
+    학습 주석: local baseline이 없을 때만 origin/prerelease 또는 HEAD fallback으로 branch를
+    만듭니다. fresh clone에서는 remote tracking branch만 있을 수 있고, 테스트 repo나 초기 로컬
+    repo에서는 HEAD만 있을 수 있습니다. created flag는 실제 `git branch` 성공 여부만 반영합니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let remote_ref = format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}");
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -156,6 +190,12 @@ pub(super) fn provision_missing_slots(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     worktree_records: &[GitWorktreeRecord],
 ) -> usize {
+    /*
+    학습 주석: provisioning은 missing slot을 "만들 수 있는 경우에만" 만듭니다. slot path가 이미
+    존재하면 그것이 빈 디렉터리인지, 사용자 파일인지, 깨진 worktree인지 여기서 추측하지 않습니다.
+    그런 애매한 상태는 inspection/reconcile board에서 operator recovery 대상으로 드러내는 쪽이
+    자동 삭제보다 안전합니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut provisioned_slots = 0;
 
@@ -172,6 +212,11 @@ pub(super) fn provision_missing_slots(
             // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             || slot_path.exists()
         {
+            /*
+            학습 주석: worktree inventory에 있거나 파일시스템 path가 이미 있으면 skip합니다. 둘 중
+            하나만 true인 경우도 중요합니다. inventory에는 없지만 path가 있으면 git worktree가
+            아닌 충돌물이므로 `git worktree add`로 덮지 않습니다.
+            */
             // 학습 주석: `break`와 `continue`는 반복문의 진행을 직접 제어할 때 사용합니다.
             continue;
         }
@@ -183,6 +228,11 @@ pub(super) fn provision_missing_slots(
         };
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if ensure_directory_exists(slot_parent).is_err() {
+            /*
+            학습 주석: parent directory 생성 실패는 전체 reconcile을 중단하지 않고 해당 slot만
+            건너뜁니다. pool board는 남은 slot 상태를 계속 계산할 수 있어야 하고, 실패한 path는
+            다음 reconcile에서 다시 시도될 수 있습니다.
+            */
             // 학습 주석: `break`와 `continue`는 반복문의 진행을 직접 제어할 때 사용합니다.
             continue;
         }
@@ -202,6 +252,11 @@ pub(super) fn provision_missing_slots(
                 POOL_BASELINE_BRANCH,
             ],
         ) {
+            /*
+            학습 주석: 성공 count만 올리는 이유는 reconcile summary가 "이번 tick에서 실제로
+            provision된 slot 수"를 보여 주기 때문입니다. 실패한 worktree add는 slot inspection의
+            blocked/missing 상태로 남아 다음 refresh에서 다시 관찰됩니다.
+            */
             provisioned_slots += 1;
         }
     }
@@ -228,6 +283,12 @@ pub(super) fn reset_reusable_detached_baseline_slots(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
 ) -> usize {
+    /*
+    학습 주석: reusable detached reset은 lease가 없는 idle 후보만 대상으로 합니다. 이 함수는
+    "slot worktree가 detached baseline이어야 한다"는 pool invariant를 baseline branch 이동 뒤에도
+    유지합니다. active lease가 있는 slot은 branch/head가 baseline과 달라도 agent 작업일 수 있어
+    절대 reset하지 않습니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let baseline_head = resolve_pool_baseline_head(repo_root).unwrap_or_default();
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
@@ -244,6 +305,11 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         let slot_id = slot_id(slot_number);
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if slot_leases.contains_key(&slot_id) {
+            /*
+            학습 주석: lease record가 있다는 것은 slot 상태 판단의 권위가 runtime projection에
+            있다는 뜻입니다. 파일시스템만 보고 reset하면 Running agent나 cleanup pending 작업의
+            산출물을 잃을 수 있으므로, lease가 있는 slot은 이 helper의 책임 밖으로 둡니다.
+            */
             // 학습 주석: `break`와 `continue`는 반복문의 진행을 직접 제어할 때 사용합니다.
             continue;
         }
@@ -262,6 +328,11 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         };
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if !worktree_record.detached {
+            /*
+            학습 주석: branch checkout 상태의 worktree는 idle pool invariant가 이미 깨진 상태일
+            수 있지만, 이 함수는 detached baseline refresh 전용입니다. branch checkout 불일치는
+            slot inspection이 더 구체적인 recovery notice로 보여 주게 남겨 둡니다.
+            */
             // 학습 주석: `break`와 `continue`는 반복문의 진행을 직접 제어할 때 사용합니다.
             continue;
         }
@@ -271,6 +342,11 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         if worktree_record.head_sha == baseline_head
             && slot_status.is_some_and(SlotGitStatus::is_clean_baseline)
         {
+            /*
+            학습 주석: head가 현재 baseline이고 git status도 clean이면 reset은 불필요합니다.
+            불필요한 hard reset/clean을 피하면 사용자가 보고 있는 idle worktree timestamp나 git
+            metadata churn도 줄어듭니다.
+            */
             // 학습 주석: `break`와 `continue`는 반복문의 진행을 직접 제어할 때 사용합니다.
             continue;
         }
