@@ -1,18 +1,23 @@
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: entry 단계는 simple review view build 요청을 contract handoff pipeline으로 넘깁니다.
+// path attribute는 `entry/contract_handoff.rs`를 이 entry module의 내부 구현으로 연결합니다.
 #[path = "entry/contract_handoff.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod contract_handoff;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: entry 함수의 반환 타입은 이미 공통 planning init overlay view입니다. 즉 entry 바깥에서는
+// simple review 전용 조립 단계가 보이지 않고, renderer가 이해하는 최종 view만 받습니다.
 use super::super::super::super::super::PlanningInitOverlayView;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: copy는 simple review popup의 text/option 상태 입력입니다. entry는 이 값을 받아
+// contract handoff 계층에 넘기는 첫 함수입니다.
 use super::super::super::super::super::copy::PlanningSimpleReviewCopy;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: `build_simple_review_overlay_view`는 view index가 호출하는 내부 entry point입니다.
+// 함수 이름은 최종 산출물을 말하지만, 실제 단계 분리는 아래 contract_handoff module에 맡깁니다.
 pub(super) fn build_simple_review_overlay_view(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: `copy` ownership을 넘겨 handoff pipeline이 section/contract/view 생성 과정에서
+    // 필요한 데이터를 안전하게 소유하거나 빌릴 수 있게 합니다.
     copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: copy에서 바로 view를 만들지 않고 handoff layer를 거치게 해, copy-to-contract와
+    // contract-to-view 책임을 별도 파일에서 설명하고 테스트할 수 있는 구조를 유지합니다.
     contract_handoff::build_simple_review_overlay_view_from_copy(copy)
 }

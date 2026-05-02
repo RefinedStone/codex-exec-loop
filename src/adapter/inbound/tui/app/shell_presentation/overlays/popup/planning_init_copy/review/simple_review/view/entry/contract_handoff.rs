@@ -1,26 +1,31 @@
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: assembly module은 이미 만들어진 assembly contract를 최종 overlay view로 넘기는 절반을
+// 담당합니다. handoff index는 copy->contract와 contract->view를 한 namespace에 묶습니다.
 #[path = "contract_handoff/assembly.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod assembly;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: contract module은 copy를 assembly contract로 만드는 절반을 담당합니다. 이 단계에서
+// copy의 presentation data가 section/contract 구조로 정리됩니다.
 #[path = "contract_handoff/contract.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod contract;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: wiring module은 contract 생성과 final assembly를 실제 순서로 호출합니다. handoff index는
+// 하위 단계들을 숨기고 copy 입력 하나를 받는 facade를 제공합니다.
 #[path = "contract_handoff/wiring.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod wiring;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: handoff의 최종 산출물도 공통 overlay view입니다. 이 타입이 상위 popup renderer와
+// simple review 내부 조립 pipeline을 연결합니다.
 use super::super::super::super::super::super::PlanningInitOverlayView;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: input copy는 아직 contract로 정규화되지 않은 simple review presentation source입니다.
+// handoff는 이 값을 받아 view 생성 pipeline 전체를 실행합니다.
 use super::super::super::super::super::super::copy::PlanningSimpleReviewCopy;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: `build_simple_review_overlay_view_from_copy`는 handoff 계층의 공개 함수입니다. caller는
+// copy만 넘기고, 이 함수 아래에서 contract 생성과 overlay assembly가 이어집니다.
 pub(super) fn build_simple_review_overlay_view_from_copy(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: `copy`를 값으로 받아 pipeline 전체가 입력을 소유합니다. contract 생성 단계에서는
+    // borrow로 읽고, 최종 view는 만들어진 contract를 소유합니다.
     copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: wiring module에 실제 순서 결정을 맡겨, 이 파일은 handoff namespace와 public entry
+    // 이름을 제공하는 얇은 facade로 남습니다.
     wiring::build_simple_review_overlay_view_from_copy(copy)
 }
