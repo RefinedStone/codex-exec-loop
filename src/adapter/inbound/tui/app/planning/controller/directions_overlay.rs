@@ -1,83 +1,81 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+/*
+ * 학습 주석: directions overlay controller는 shell key input을 directions maintenance state machine에
+ * 연결한다. application service가 만든 summary와 `DirectionsMaintenanceOverlayUiState`가 화면 상태를
+ * 보관하고, 이 파일은 사용자의 키 입력을 "editor 열기", "detail doc 생성 확인", "status message 표시"
+ * 같은 app-level action으로 바꾸는 inbound adapter 역할을 한다.
+ */
 use super::*;
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl NativeTuiApp {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+     * 학습 주석: shell_controller는 DirectionsMaintenance overlay가 열려 있을 때 모든 key event를
+     * 이 함수로 넘긴다. 반환값 true는 key가 directions overlay context에서 소비됐다는 뜻이며,
+     * manual editor step에서도 draft editor handler까지 위임한 뒤 shell 전역 shortcut으로 흘리지 않는다.
+     */
     pub(crate) fn handle_directions_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self.directions_maintenance_overlay_ui_state.step() {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             DirectionsMaintenanceOverlayStep::Overview => match key.code {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                /*
+                 * 학습 주석: Overview의 Enter는 가장 흔한 복구 작업인 queue-idle prompt editor로 바로 들어간다.
+                 * prompt는 directions maintenance의 supporting file 중 하나라 manual editor flow를 재사용한다.
+                 */
                 KeyCode::Enter if key.modifiers.is_empty() => self.open_queue_idle_prompt_editor(),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                /*
+                 * 학습 주석: detail doc 생성은 DB direction authority가 parse 가능한 상태에서만 허용한다.
+                 * parse error가 남아 있으면 생성할 대상과 파일 경로 판단 자체가 불안정하므로 status line으로
+                 * 먼저 authority 수정을 요구한다.
+                 */
                 KeyCode::Char('d') if key.modifiers.is_empty() => {
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if self
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .directions_maintenance_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .summary()
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .and_then(|summary| summary.parse_error.as_deref())
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .is_some()
                     {
                         self.dispatch_conversation_input(
-                            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                             ConversationInputEvent::StatusMessageShown {
-                                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                 status_text:
                                     "fix DB direction authority errors before generating detail docs"
-                                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                         .to_string(),
                             },
                         );
                     } else if self
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .directions_maintenance_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .actionable_detail_doc_directions()
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .is_empty()
                     {
+                        /*
+                         * 학습 주석: actionable list가 비어 있으면 service summary상 모든 direction이 이미
+                         * ready 상태다. selection step을 열어 빈 목록을 보여 주지 않고 현재 상태를 설명한다.
+                         */
                         self.dispatch_conversation_input(
-                            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                             ConversationInputEvent::StatusMessageShown {
-                                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                 status_text:
                                     "every direction already has a healthy detail doc mapping"
-                                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                         .to_string(),
                             },
                         );
                     } else {
                         self.directions_maintenance_overlay_ui_state
-                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                             .open_detail_doc_selection();
                     }
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                /*
+                 * 학습 주석: `p`는 queue-idle prompt 편집 shortcut이다. prompt도 direction authority를
+                 * 기준으로 생성/검증되므로 parse error가 있으면 editor를 열지 않고 같은 recovery channel인
+                 * status_text로 막는다.
+                 */
                 KeyCode::Char('p') if key.modifiers.is_empty() => {
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if self
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .directions_maintenance_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .summary()
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .and_then(|summary| summary.parse_error.as_deref())
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .is_some()
                     {
                         self.dispatch_conversation_input(
-                            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                             ConversationInputEvent::StatusMessageShown {
-                                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                 status_text:
                                     "fix DB direction authority errors before editing queue-idle prompt"
-                                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                         .to_string(),
                             },
                         );
@@ -85,134 +83,109 @@ impl NativeTuiApp {
                         self.open_queue_idle_prompt_editor();
                     }
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                /*
+                 * 학습 주석: reload는 overlay state를 service의 최신 workspace summary로 교체한다.
+                 * `present_directions_maintenance_overview`가 summary load, overlay visibility, status dispatch를
+                 * 함께 처리하므로 controller는 여기서 동일한 entrypoint를 재사용한다.
+                 */
                 KeyCode::Char('r') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .present_directions_maintenance_overview(
                         "reloaded directions maintenance".to_string(),
                         true,
                     ),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 _ => {}
             },
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             DirectionsMaintenanceOverlayStep::DetailDocSelection => match key.code {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: selection step의 back/left는 pending 생성 없이 overview로 돌아가는 탐색 동작이다.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .return_to_overview(),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: 위/아래 이동은 actionable detail-doc 목록 안에서만 clamp된다.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_missing_detail_doc_selection(-1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_missing_detail_doc_selection(1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                /*
+                 * 학습 주석: Enter는 곧바로 파일 생성 service를 호출하지 않고 confirm step을 연다.
+                 * UI state가 현재 direction id/title을 snapshot으로 잡아 이후 Enter on Yes가 같은 대상을 실행한다.
+                 */
                 KeyCode::Enter if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .open_detail_doc_confirm(),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 _ => {}
             },
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             DirectionsMaintenanceOverlayStep::DetailDocConfirm => match key.code {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                // 학습 주석: confirm에서 back/left는 선택 목록으로 돌아가 대상 direction을 다시 고르게 한다.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .open_detail_doc_selection(),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
+                /*
+                 * 학습 주석: confirm choice는 Yes/No 두 칸짜리 선택 상태다. 숫자 1/2와 j/k를 함께 받아
+                 * keyboard-only 사용자가 renderer의 옵션 순서를 그대로 조작할 수 있게 한다.
+                 */
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_detail_doc_confirm_choice(-1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_detail_doc_confirm_choice(1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 KeyCode::Char('1') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_detail_doc_confirm_choice(-1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 KeyCode::Char('2') if key.modifiers.is_empty() => self
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .directions_maintenance_overlay_ui_state
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .move_detail_doc_confirm_choice(1),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 KeyCode::Enter if key.modifiers.is_empty() => {
-                    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
                     match self
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .directions_maintenance_overlay_ui_state
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .detail_doc_confirm_choice()
                     {
-                        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                         DetailDocConfirmChoice::Yes => {
-                            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+                            /*
+                             * 학습 주석: service/editor 호출에는 title이 아니라 direction id만 넘긴다.
+                             * pending snapshot이 없으면 confirm state가 불완전한 것이므로 아무 작업도 시작하지 않는다.
+                             */
                             let direction_id = self
-                                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                 .directions_maintenance_overlay_ui_state
-                                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                 .pending_detail_doc_creation()
-                                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                 .map(|pending| pending.direction_id().to_string());
-                            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                             if let Some(direction_id) = direction_id {
                                 self.open_directions_detail_doc_editor(&direction_id);
                             }
                         }
-                        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                         DetailDocConfirmChoice::No => {
+                            /*
+                             * 학습 주석: No는 service를 호출하지 않는 명시적 취소다. overview로 돌아가고,
+                             * status line에 directions 파일이 바뀌지 않았음을 남겨 operator가 결과를 확인하게 한다.
+                             */
                             self.directions_maintenance_overlay_ui_state
-                                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                 .return_to_overview();
                             self.dispatch_conversation_input(
-                                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                 ConversationInputEvent::StatusMessageShown {
-                                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                                     status_text:
                                         "detail doc creation skipped; directions remain unchanged"
-                                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                                             .to_string(),
                                 },
                             );
                         }
                     }
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 _ => {}
             },
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             DirectionsMaintenanceOverlayStep::ManualEditor => {
-                // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+                /*
+                 * 학습 주석: manual editor step은 directions overlay 안에 draft editor를 중첩한 상태다.
+                 * 먼저 닫기 확인 키를 처리해 dirty/invalid draft 위험을 보존하고, 일반 편집 키는 공통
+                 * draft editor handler에 save/promote 함수를 주입해 처리한다.
+                 */
                 if self.handle_directions_manual_editor_close_confirmation_key(key) {
-                    // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                     return true;
                 }
                 self.handle_draft_editor_key(
                     key,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     Self::save_directions_manual_editor,
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     Self::promote_directions_manual_editor,
                 );
             }
