@@ -11,7 +11,7 @@ use crate::application::service::planning::runtime::prompt::{
 use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::prompt_component::PromptDocument;
 use crate::application::service::turn_prompt_assembly_service::{
-    ManualPromptAssemblyRequest, TurnPromptAssemblyService,
+    MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, TurnPromptAssemblyService,
 };
 use crate::domain::planning::PriorityQueueTask;
 use anyhow::Result;
@@ -112,12 +112,12 @@ impl PlanningRuntimeFacadeService {
     pub fn build_manual_prompt(
         &self,
         operator_prompt: &str,
-        _snapshot: &PlanningRuntimeSnapshot,
+        snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<String> {
         self.turn_prompt_assembly_service
             .build_manual_prompt(ManualPromptAssemblyRequest {
                 operator_prompt,
-                planning_prompt_fragment: None,
+                planning_prompt_fragment: snapshot.prompt_fragment(),
             })
     }
 
@@ -126,12 +126,29 @@ impl PlanningRuntimeFacadeService {
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
         let queue_head = snapshot.queue_head()?;
-        Some(self.build_task_handoff(queue_head))
+        Some(self.build_task_handoff_with_planning_fragment(queue_head, snapshot.prompt_fragment()))
     }
 
     pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
+        self.build_task_handoff_with_planning_fragment(task, None)
+    }
+
+    fn build_task_handoff_with_planning_fragment(
+        &self,
+        task: &PriorityQueueTask,
+        planning_prompt_fragment: Option<&str>,
+    ) -> PlanningMainSessionHandoff {
+        let task_prompt = render_builtin_next_task_handoff_prompt(task);
+        let prompt = self
+            .turn_prompt_assembly_service
+            .build_main_session_prompt(MainSessionPromptAssemblyRequest {
+                user_prompt: &task_prompt,
+                planning_prompt_fragment,
+            })
+            .expect("queued task handoff prompt should not be empty");
+
         PlanningMainSessionHandoff {
-            prompt: render_builtin_next_task_handoff_prompt(task),
+            prompt,
             transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
             task: PlanningTaskHandoff {
                 task_id: task.task_id.trim().to_string(),
