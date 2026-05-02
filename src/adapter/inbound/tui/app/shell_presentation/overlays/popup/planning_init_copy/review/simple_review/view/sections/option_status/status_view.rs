@@ -1,13 +1,17 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: status module은 simple review popup 하단 status view를 실제로 만드는 공통 builder입니다.
+// 이 section helper는 그 builder를 option/status section assembly 위치로 끌어옵니다.
 use super::super::super::super::super::status;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: copy는 status 계산의 input이고, PlanningSimpleReviewStatusView는 section bundle에
+// 들어갈 output입니다. 이 둘을 같은 section namespace에서 다루도록 가져옵니다.
 use super::{PlanningSimpleReviewCopy, PlanningSimpleReviewStatusView};
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: `collect_simple_review_status_view`는 section collector가 status 하위 builder의 파일 구조를
+// 몰라도 status view를 얻도록 해 주는 adapter입니다. 실제 text/key line 조립은 status module에 남깁니다.
 pub(super) fn collect_simple_review_status_view(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: `copy`를 borrow로 받아 option lines collector와 같은 snapshot을 공유합니다.
     copy: &PlanningSimpleReviewCopy,
 ) -> PlanningSimpleReviewStatusView {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: status builder에 그대로 위임해 이 helper가 section 위치 명명 외의 표시 정책을
+    // 추가하지 않게 합니다.
     status::build_simple_review_status_view(copy)
 }
