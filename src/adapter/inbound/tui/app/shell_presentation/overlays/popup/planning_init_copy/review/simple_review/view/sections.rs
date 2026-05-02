@@ -1,34 +1,37 @@
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: composition module은 header/summary/options/status 조각을 최종 section DTO로 합치는 단계입니다.
 #[path = "sections/composition.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 pub(super) mod composition;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: header_summary module은 copy와 무관한 상단 고정 설명 영역을 수집합니다.
 #[path = "sections/header_summary.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod header_summary;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: option_status module은 copy를 읽어 action options와 status view를 함께 수집합니다.
 #[path = "sections/option_status.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod option_status;
 
+// 학습 주석: sections 하위 module들이 같은 copy type을 짧은 경로로 쓰도록 이 surface에서 재-export합니다.
 pub(super) use super::super::super::super::super::copy::PlanningSimpleReviewCopy;
+// 학습 주석: status view DTO도 section composition contract의 일부라 이 module surface에서 공유합니다.
 pub(super) use super::super::super::status::PlanningSimpleReviewStatusView;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: composition은 수집된 section 조각을 `PlanningSimpleReviewOverlaySections`로 묶는 마지막 단계입니다.
 use composition::{PlanningSimpleReviewOverlaySections, compose_simple_review_overlay_sections};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: header/summary 수집은 copy에 의존하지 않는 고정 text path입니다.
 use header_summary::collect_simple_review_header_summary_sections;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: option/status 수집은 copy에 담긴 review 대상 상태를 읽는 path입니다.
 use option_status::collect_simple_review_option_status_sections;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: simple review overlay의 section 수집 entry입니다. 화면 조립 pipeline에서 copy DTO를 section
+// groups로 바꾸고, 다음 assembly contract 단계가 이 결과만 소비하게 합니다.
 pub(super) fn collect_simple_review_overlay_sections(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: copy는 option/status 쪽에서만 읽히지만 entry 함수가 copy를 받아 전체 section collection을
+    // 한 번에 끝내도록 합니다.
     copy: &PlanningSimpleReviewCopy,
 ) -> PlanningSimpleReviewOverlaySections {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: header/summary는 copy 없이 고정 안내를 만들기 때문에 먼저 독립적으로 수집합니다.
     let header_summary_sections = collect_simple_review_header_summary_sections();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: option/status는 현재 review copy에 따라 달라지는 action과 상태 line을 수집합니다.
     let option_status_sections = collect_simple_review_option_status_sections(copy);
 
+    // 학습 주석: 두 section 묶음을 composition DTO로 합쳐 assembly contract builder가 field 단위로 옮길 수
+    // 있는 안정적인 shape를 만듭니다.
     compose_simple_review_overlay_sections(header_summary_sections, option_status_sections)
 }
