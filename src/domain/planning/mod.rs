@@ -1,42 +1,35 @@
 /*
- * 학습 주석: planning 도메인 모듈은 Akra의 "작업 계획 원장"을 표현하는 순수 도메인 계층입니다.
- * 이 파일은 JSON/TOML/DB에서 읽혀 온 계획 데이터를 Rust 타입으로 고정하고, application/service 계층이
- * 같은 단어로 대화하도록 공통 계약을 제공합니다.
+ * planning 도메인 모듈은 Akra의 작업 계획 원장을 표현하는 순수 도메인 계층이다. 이 파일은
+ * JSON/TOML/DB에서 읽혀 온 계획 데이터를 Rust 타입으로 고정하고, application/service 계층이 같은
+ * 단어로 대화하도록 공통 계약을 제공한다.
  *
- * 연결 흐름은 대략 다음과 같습니다.
- * 1. outbound DB/filesystem adapter가 방향 문서(DirectionCatalogDocument)와 작업 문서(TaskAuthorityDocument)를 읽습니다.
- * 2. runtime/validation 서비스가 이 타입들을 이용해 문서가 유효한지 검사합니다.
- * 3. queue.rs의 PriorityQueueService가 같은 타입을 입력으로 받아 다음 실행 후보를 계산합니다.
- * 4. TUI와 app-server adapter는 PriorityQueueProjection을 화면 문구나 하위 세션 handoff prompt로 변환합니다.
+ * 연결 흐름은 adapter가 `DirectionCatalogDocument`와 `TaskAuthorityDocument`를 읽고, validation
+ * service가 이 타입들로 문서 의미를 검사한 뒤, `queue.rs`의 `PriorityQueueService`가 같은 타입을
+ * 입력으로 다음 실행 후보를 계산하는 식이다. TUI와 app-server adapter는 `PriorityQueueProjection`을
+ * 화면 문구나 하위 세션 handoff prompt로 변환한다.
  *
  * 그래서 이 파일의 enum/struct는 단순 데이터 묶음이 아니라, adapter -> application -> domain 경계를
- * 통과할 때 의미가 흐트러지지 않게 붙잡아 주는 중심 어휘입니다.
+ * 통과할 때 의미가 흐트러지지 않게 붙잡아 주는 중심 어휘다.
  */
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use serde::{Deserialize, Serialize};
 
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 pub mod queue;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 pub mod validation;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 pub use queue::{PriorityQueueBuildError, PriorityQueueService};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 pub use validation::PlanningSemanticValidationService;
 
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.
 pub const PLANNING_FORMAT_VERSION: u32 = 1;
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// official completion refresh contract는 worker 완료 통지를 root turn에 다시 주입하는 별도 wire contract다.
 pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningWorkspaceState {
     /*
-     * 학습 주석: workspace state는 planning runtime이 "지금 operator에게 무엇을 보여줄지" 결정하는 큰 상태값입니다.
-     * Authoring/Ready/Executing/Repairing/BlockedInvalid는 UI copy, 자동 후속 실행 정책, repair prompt 선택에 이어집니다.
+     * workspace state는 planning runtime이 "지금 operator에게 무엇을 보여줄지" 결정하는 큰 상태값이다.
+     * Authoring/Ready/Executing/Repairing/BlockedInvalid는 UI copy, 자동 후속 실행 정책, repair prompt
+     * 선택으로 이어진다.
      */
     Uninitialized,
     Authoring,
@@ -46,556 +39,434 @@ pub enum PlanningWorkspaceState {
     BlockedInvalid,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningAuthorityLocation {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // workspace root는 operator가 작업 중인 repo/worktree 기준점이다.
     pub workspace_root: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // canonical repo root는 shadow store와 branch/worktree bookkeeping이 공유하는 정규화된 root다.
     pub canonical_repo_root: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // runtime dir은 planning authority mirror와 transient runtime artifacts가 놓이는 위치다.
     pub runtime_dir: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // authority store path는 DB/filesystem adapter가 실제 planning authority를 찾는 persistent boundary다.
     pub authority_store_path: String,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningAuthorityShadowStoreSyncState {
+    // 새 shadow store가 만들어져 현재 authority를 처음 mirror한 상태다.
     Bootstrapped,
+    // source authority와 shadow store가 이미 같은 상태였다.
     InSync,
+    // drift나 누락을 발견해 다시 mirror한 상태다.
     Resynced,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningAuthorityShadowStoreSyncState {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // status copy와 logs가 enum 이름 대신 stable snake_case label을 쓰도록 고정한다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Bootstrapped => "bootstrapped",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::InSync => "in_sync",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Resynced => "resynced",
         }
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningAuthorityShadowStoreInspection {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // inspection이 어떤 workspace/store를 봤는지 함께 싣는다.
     pub location: PlanningAuthorityLocation,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // sync_state는 mirror가 만들어졌는지, 이미 동기였는지, 재동기화됐는지를 요약한다.
     pub sync_state: PlanningAuthorityShadowStoreSyncState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub mirrored_document_count: usize,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub parity_issue_count: usize,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // parity issue 전체를 UI에 다 싣지 않고 대표 예시만 보낸다.
     pub parity_issue_examples: Vec<String>,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningFileKind {
+    // direction authority file에서 나온 validation issue다.
     Directions,
+    // task authority file에서 나온 validation issue다.
     TaskAuthority,
+    // worker result/output markdown에서 나온 issue다.
     ResultOutput,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningValidationSeverity {
+    // promotion/execution을 막는 문제다.
     Error,
+    // 실행은 가능하지만 operator가 봐야 하는 degraded state다.
     Warning,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningValidationIssue {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // UI와 mutation service가 block 여부를 판단하는 severity다.
     pub severity: PlanningValidationSeverity,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // issue가 어느 authority artifact에 속하는지 나타낸다.
     pub file_kind: PlanningFileKind,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // machine-readable issue code다. tests와 repair prompt가 이 값을 기준으로 분기할 수 있다.
     pub code: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // operator-facing detail이다. validation service가 구체적인 id/path를 포함해 채운다.
     pub message: String,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningValidationReport {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // validation은 fail-fast가 아니라 report accumulation 방식이라 issue list를 그대로 보관한다.
     pub issues: Vec<PlanningValidationIssue>,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningValidationReport {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 새 validation run마다 빈 report를 만들고 각 검사 pass가 issue를 추가한다.
     pub fn new() -> Self {
         Self { issues: Vec::new() }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // warning은 promotion을 막지 않으므로 error만 검사한다.
     pub fn has_errors(&self) -> bool {
         self.issues
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .any(|issue| issue.severity == PlanningValidationSeverity::Error)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // application service와 UI가 promote 가능 여부를 읽는 가장 짧은 predicate다.
     pub fn is_valid(&self) -> bool {
         !self.has_errors()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // validation pass는 file kind와 code를 함께 넣어 repair/admin surface가 위치와 원인을 분리해서 보여 주게 한다.
     pub fn push_error(
         &mut self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         file_kind: PlanningFileKind,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         code: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         message: impl Into<String>,
     ) {
         self.issues.push(PlanningValidationIssue {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             severity: PlanningValidationSeverity::Error,
             file_kind,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             code: code.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             message: message.into(),
         });
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // warning은 report에 남지만 `is_valid`에는 영향을 주지 않는다.
     pub fn push_warning(
         &mut self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         file_kind: PlanningFileKind,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         code: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         message: impl Into<String>,
     ) {
         self.issues.push(PlanningValidationIssue {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             severity: PlanningValidationSeverity::Warning,
             file_kind,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             code: code.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             message: message.into(),
         });
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // callers that need blocking issues only can use this filtered view without copying messages manually.
     pub fn errors(&self) -> Vec<&PlanningValidationIssue> {
         self.issues
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .filter(|issue| issue.severity == PlanningValidationSeverity::Error)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .collect()
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct DirectionCatalogDocument {
     /*
-     * 학습 주석: direction catalog는 "왜 이 일을 하는가"를 담는 상위 계획 문서입니다.
-     * 각 DirectionDefinition은 여러 TaskDefinition의 부모가 되며, queue.rs는 task.direction_id를 통해
-     * 이 문서의 direction과 연결합니다. direction이 paused/done이면 하위 task가 ready여도 queue에서 제외됩니다.
+     * direction catalog는 "왜 이 일을 하는가"를 담는 상위 계획 문서다. 각 `DirectionDefinition`은
+     * 여러 `TaskDefinition`의 부모가 되며, queue builder는 `task.direction_id`를 통해 이 문서의
+     * direction과 연결한다. direction이 paused/done이면 하위 task가 ready여도 queue에서 제외된다.
      */
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // planning authority schema version이다.
     pub version: u32,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue가 비었을 때 멈출지, review prompt로 새 작업을 제안할지 정하는 direction-level policy다.
     pub queue_idle: QueueIdleConfig,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // operator-facing workstream definitions다.
     pub directions: Vec<DirectionDefinition>,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct DirectionDefinition {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // task.direction_id가 참조하는 stable id다.
     pub id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // TUI/admin/prompt에서 direction을 짧게 식별하는 제목이다.
     pub title: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // worker prompt가 방향성을 이해할 수 있게 하는 설명이다.
     pub summary: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // completion/repair 판단에 쓰는 operator-authored success criteria다.
     pub success_criteria: Vec<String>,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // worker에게 범위를 좁혀 주는 선택적 hint다.
     pub scope_hints: Vec<String>,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 자세한 direction markdown 문서의 상대 경로다.
     pub detail_doc_path: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue inclusion을 결정하는 direction lifecycle state다.
     pub state: DirectionState,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct QueueIdleConfig {
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // executable task가 없을 때 runtime이 취할 policy다.
     pub policy: QueueIdlePolicy,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // review-and-enqueue flow가 사용할 queue-idle prompt markdown 경로다.
     pub prompt_path: String,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl Default for QueueIdleConfig {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 명시 policy가 없는 기존 authority 문서는 idle 상태에서 멈추는 쪽을 기본값으로 둔다.
     fn default() -> Self {
         Self {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             policy: QueueIdlePolicy::Stop,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             prompt_path: String::new(),
         }
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum QueueIdlePolicy {
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[default]
+    // queue가 비면 operator input을 기다린다.
     Stop,
+    // queue가 비면 review prompt를 통해 후속 task proposal을 만들 수 있다.
     ReviewAndEnqueue,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum DirectionState {
+    // active direction만 executable queue에 들어갈 수 있다.
     Active,
+    // paused direction은 보존하되 실행 후보에서 제외한다.
     Paused,
+    // done direction은 완료된 workstream이라 하위 ready task도 실행 후보에서 제외한다.
     Done,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct TaskAuthorityDocument {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // task authority schema version이다.
     pub version: u32,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 실행 단위의 source-of-truth list다.
     pub tasks: Vec<TaskDefinition>,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct TaskDefinition {
     /*
-     * 학습 주석: TaskDefinition은 실제 실행 단위의 원본(authority)입니다.
-     * queue.rs가 PriorityQueueTask로 복사하기 전까지는 이 타입이 source of truth이고,
-     * validation.rs는 이 구조체의 필드 조합을 검사해 "LLM이 만든 task에는 relation note가 있는가",
-     * "dependency와 blocker가 자기 자신이나 존재하지 않는 id를 가리키지 않는가" 같은 도메인 규칙을 보장합니다.
+     * `TaskDefinition`은 실제 실행 단위의 원본 authority다. queue builder가 `PriorityQueueTask`로
+     * 복사하기 전까지는 이 타입이 source of truth이고, validation은 이 구조체의 필드 조합을 검사해
+     * LLM-authored task의 relation note, dependency/blocker reference, status semantics를 보장한다.
      */
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // task graph node id다.
     pub id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // parent direction id다.
     pub direction_id: String,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // LLM이 만든 task가 어떤 direction을 어떻게 만족시키는지 설명하는 audit note다.
     pub direction_relation_note: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue/admin/prompt에 노출되는 task title이다.
     pub title: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // worker handoff prompt의 중심 설명이다.
     pub description: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue inclusion과 validation semantics를 결정하는 lifecycle state다.
     pub status: TaskStatus,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // operator가 부여한 기본 우선순위다.
     pub base_priority: i32,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // runtime이나 operator가 일시적으로 더하는 priority adjustment다.
     pub dynamic_priority_delta: i32,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // dynamic priority가 0이 아닐 때 이유를 남기는 audit field다.
     pub priority_reason: String,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 완료되어야 이 task가 실행 가능한 dependency ids다.
     pub depends_on: Vec<String>,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 해소되어야 이 task가 막히지 않는 blocker ids다.
     pub blocked_by: Vec<String>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 최초 생성 주체다. LLM-authored relation note policy에 쓰인다.
     pub created_by: TaskActor,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 마지막 수정 주체다. LLM이 수정한 task도 relation note를 요구한다.
     pub last_updated_by: TaskActor,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // app-server/root turn과 연결되는 optional provenance id다.
     pub source_turn_id: Option<String>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // RFC3339 timestamp string이다. validation이 형식을 검사한다.
     pub updated_at: String,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum TaskStatus {
+    // dependency/blocker가 해소되면 실행 후보가 될 수 있다.
     Ready,
+    // 명시적으로 막힌 task다.
     Blocked,
+    // 현재 진행 중인 task다. queue rank에서 ready보다 우선한다.
     InProgress,
+    // 완료되어 dependency를 만족시키는 task다.
     Done,
+    // 더 진행하지 않는 task다. blocker 해소 관점에서는 막지 않는 상태로 취급한다.
     Cancelled,
+    // 자동 worker가 아니라 사용자 응답을 기다리는 상태다.
     AwaitingUser,
+    // LLM이 제안했지만 아직 authority로 승격되지 않은 task다.
     Proposed,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum TaskActor {
+    // operator나 explicit user action이 만든 변경이다.
     User,
+    // LLM/worker가 만든 변경이다.
     Llm,
+    // system bootstrap/repair가 만든 변경이다.
     System,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PriorityQueueProjection {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 지금 바로 실행할 하나의 후보다.
     pub next_task: Option<PriorityQueueTask>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue에서 visible한 executable/active tasks다.
     pub active_tasks: Vec<PriorityQueueTask>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 아직 promote되지 않은 follow-up proposals다.
     pub proposed_tasks: Vec<PriorityQueueTask>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue에서 제외된 task와 그 이유다.
     pub skipped_tasks: Vec<PriorityQueueSkippedTask>,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PriorityQueueTask {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue ordering 결과의 1-based rank다.
     pub rank: usize,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub task_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub direction_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub direction_title: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub task_title: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub status: TaskStatus,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub combined_priority: i32,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub updated_at: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // queue builder가 왜 이 rank가 나왔는지 설명하는 audit trail이다.
     pub rank_reasons: Vec<String>,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PriorityQueueSkippedTask {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub task_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub task_title: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub direction_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub status: TaskStatus,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // blocked/done/paused direction 같은 skip reason을 operator-facing text로 담는다.
     pub reason: String,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(rename_all = "snake_case")]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningRefreshContractKind {
+    // official worker completion을 root planning turn에 다시 반영하는 refresh다.
     OfficialCompletion,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningOfficialCompletionRefreshPayload {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 완료를 보고한 parallel/worker agent id다.
     pub agent_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub task_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub task_title: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub branch_name: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub worktree_path: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub commit_sha: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // worker가 실행한 validation/test summary다.
     pub validation_summary: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // root turn에 짧게 반영할 완료 요약이다.
     pub final_response_summary: String,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 필요할 때 root turn에 더 긴 final response를 보존한다.
     pub final_response_text: Option<String>,
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[serde(default)]
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 실패/부분 완료의 맥락이다. 성공 payload에서는 비어 있을 수 있다.
     pub failure_context: Option<String>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // completion event timestamp다.
     pub completed_at: String,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningOfficialCompletionRefreshPayload {
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[allow(clippy::too_many_arguments)]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // payload는 wire contract라 field가 많다. builder struct 대신 explicit constructor로 callsite intent를 보존한다.
     pub fn new(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         agent_id: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_id: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_title: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         branch_name: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         worktree_path: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         commit_sha: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         validation_summary: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         final_response_summary: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         final_response_text: Option<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         failure_context: Option<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         completed_at: impl Into<String>,
     ) -> Self {
         Self {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             agent_id: agent_id.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_id: task_id.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_title: task_title.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             branch_name: branch_name.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             worktree_path: worktree_path.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             commit_sha: commit_sha.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             validation_summary: validation_summary.into(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             final_response_summary: final_response_summary.into(),
             final_response_text,
             failure_context,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             completed_at: completed_at.into(),
         }
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[serde(deny_unknown_fields)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningOfficialCompletionRefreshContract {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // refresh contract schema version이다.
     pub version: u32,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // future refresh 종류 확장을 위한 discriminator다.
     pub refresh_kind: PlanningRefreshContractKind,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // refresh를 받을 root planning turn id다.
     pub root_turn_id: String,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 같은 root turn에 여러 completion이 들어올 때 ordering을 고정한다.
     pub refresh_order: u64,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub completion: PlanningOfficialCompletionRefreshPayload,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningOfficialCompletionRefreshContract {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // current official completion contract의 version/kind를 한곳에서 고정한다.
     pub fn new(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         root_turn_id: impl Into<String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         refresh_order: u64,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         completion: PlanningOfficialCompletionRefreshPayload,
     ) -> Self {
         Self {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             version: PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             refresh_kind: PlanningRefreshContractKind::OfficialCompletion,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             root_turn_id: root_turn_id.into(),
             refresh_order,
             completion,
@@ -603,120 +474,91 @@ impl PlanningOfficialCompletionRefreshContract {
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl DirectionState {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // queue builder는 active direction만 실행 후보로 본다.
     pub fn allows_queue_execution(self) -> bool {
         self == Self::Active
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // UI/admin copy가 serde spelling과 같은 label을 쓰게 한다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Active => "active",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Paused => "paused",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Done => "done",
         }
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl QueueIdlePolicy {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // status line과 prompt copy에서 policy를 stable label로 보여 준다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Stop => "stop",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::ReviewAndEnqueue => "review_and_enqueue",
         }
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl TaskStatus {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // queue ordering에서 실행 가능한 status만 rank를 갖는다.
     pub fn queue_readiness_rank(self) -> Option<u8> {
         /*
-         * 학습 주석: queue_readiness_rank는 상태값을 정렬 가능한 숫자로 바꾸는 작은 도메인 정책입니다.
-         * InProgress가 0, Ready가 1인 이유는 이미 시작된 작업을 새 ready 작업보다 먼저 이어가야 하기 때문입니다.
-         * None을 반환하는 상태는 "queue에 올릴 수는 있지만 실행 후보는 아니다"라는 뜻이라 queue.rs에서 skipped/proposed로 분기됩니다.
+         * InProgress가 0, Ready가 1인 이유는 이미 시작된 작업을 새 ready 작업보다 먼저 이어가야 하기
+         * 때문이다. None을 반환하는 상태는 "queue에 올릴 수는 있지만 실행 후보는 아니다"라는 뜻이라
+         * queue builder에서 skipped/proposed로 분기된다.
          */
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::InProgress => Some(0),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Ready => Some(1),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Blocked | Self::Done | Self::Cancelled | Self::AwaitingUser | Self::Proposed => {
                 None
             }
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // persisted snake_case와 UI label을 맞춘다.
     pub fn label(self) -> &'static str {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Ready => "ready",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Blocked => "blocked",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::InProgress => "in_progress",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Done => "done",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Cancelled => "cancelled",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::AwaitingUser => "awaiting_user",
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Self::Proposed => "proposed",
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // Done task만 dependency를 만족시킨다.
     pub fn is_dependency_complete(self) -> bool {
         self == Self::Done
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // blocker는 "worker가 더 기다려야 하는가" 관점이라 dependency completion보다 넓게 해소 상태를 본다.
     pub fn clears_blocker(self) -> bool {
         /*
-         * 학습 주석: blocker는 "이 task가 끝나거나 더는 막지 않는 상태가 될 때까지 기다린다"는 의미입니다.
-         * Done은 완료라서 막지 않고, Cancelled는 더 진행하지 않으므로 막지 않으며, AwaitingUser는 자동 실행 관점에서
-         * worker가 해결할 수 없는 사용자 대기 상태라 queue가 계속 막히지 않도록 해제 상태로 취급합니다.
+         * Done은 완료라서 막지 않고, Cancelled는 더 진행하지 않으므로 막지 않는다. AwaitingUser는 자동
+         * 실행 관점에서 worker가 해결할 수 없는 사용자 대기 상태라 queue가 계속 막히지 않도록 해제
+         * 상태로 취급한다.
          */
         matches!(self, Self::Done | Self::Cancelled | Self::AwaitingUser)
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod tests {
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use super::{
         PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
         PlanningRefreshContractKind,
     };
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn official_completion_refresh_contract_round_trips_as_versioned_json() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let contract = PlanningOfficialCompletionRefreshContract::new(
             "turn-42",
             7,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningOfficialCompletionRefreshPayload::new(
                 "agent-2",
                 "task-9",
@@ -732,13 +574,9 @@ mod tests {
             ),
         );
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let serialized =
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             serde_json::to_string_pretty(&contract).expect("contract should serialize");
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let restored: PlanningOfficialCompletionRefreshContract =
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             serde_json::from_str(&serialized).expect("contract should deserialize");
 
         assert_eq!(
@@ -747,7 +585,6 @@ mod tests {
         );
         assert_eq!(
             restored.refresh_kind,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningRefreshContractKind::OfficialCompletion
         );
         assert_eq!(restored.root_turn_id, "turn-42");
@@ -760,25 +597,19 @@ mod tests {
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl TaskDefinition {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // validation이 LLM-authored relation note policy를 중복하지 않도록 이 domain helper를 쓴다.
     pub fn requires_relation_note(&self) -> bool {
-        /*
-         * 학습 주석: LLM이 만들거나 수정한 task는 direction과 어떤 관련이 있는지 별도 설명이 필요합니다.
-         * 이 함수는 validation.rs가 정책을 중복하지 않도록 "relation note가 의무인지"만 한곳에서 판정합니다.
-         */
         self.created_by == TaskActor::Llm || self.last_updated_by == TaskActor::Llm
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // base priority와 runtime/operator adjustment를 합친 queue ordering 점수다.
     pub fn combined_priority(&self) -> i32 {
         self.base_priority + self.dynamic_priority_delta
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // equality/diff에서 link ordering noise를 줄이기 위한 normalized copy다.
     pub fn normalized(&self) -> Self {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut normalized = self.clone();
         normalized.depends_on.sort();
         normalized.blocked_by.sort();
@@ -786,45 +617,37 @@ impl TaskDefinition {
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningWorkspaceFiles<'a> {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // parsed directions authority다.
     pub directions: &'a DirectionCatalogDocument,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // task authority는 caller가 JSON text로 다시 저장/검증할 수 있게 raw text를 보존한다.
     pub task_authority_json: &'a str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // worker result markdown의 current raw contents다.
     pub result_output_markdown: &'a str,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningValidationResult {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // parse가 성공한 directions document다. parse failure면 None이고 report에 issue가 남는다.
     pub directions: Option<DirectionCatalogDocument>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // parse가 성공한 task authority document다.
     pub task_authority: Option<TaskAuthorityDocument>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // parse/semantic validation issue를 누적한 report다.
     pub report: PlanningValidationReport,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningValidationResult {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // parsed documents가 있어도 report에 error가 있으면 promote/execution은 막힌다.
     pub fn is_valid(&self) -> bool {
         self.report.is_valid()
     }
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PriorityQueueProjection {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // shell/status copy에서 다음 실행 후보를 한 줄로 보여 주기 위한 summary다.
     pub fn queue_summary(&self) -> String {
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self.next_task.as_ref() {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             Some(task) => format!(
                 "next task: rank {} / {} / {} / priority {}",
                 task.rank,
@@ -832,43 +655,28 @@ impl PriorityQueueProjection {
                 task.task_title.trim(),
                 task.combined_priority,
             ),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             None => "queue idle: no executable planning task".to_string(),
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // proposed task가 있을 때 footer/status에 표시할 짧은 summary다.
     pub fn proposal_summary(&self, max_visible_titles: usize) -> Option<String> {
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if self.proposed_tasks.is_empty() {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return None;
         }
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let task_titles = self
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .proposed_tasks
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(|task| task.task_title.trim())
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .filter(|title| !title.is_empty())
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .take(max_visible_titles)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .collect::<Vec<_>>();
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let remaining_count = self.proposed_tasks.len().saturating_sub(task_titles.len());
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let title_segment = if task_titles.is_empty() {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             String::new()
         } else {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let mut segment = format!(": {}", task_titles.join(" | "));
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if remaining_count > 0 {
                 segment.push_str(&format!(" | +{remaining_count} more"));
             }
@@ -878,7 +686,6 @@ impl PriorityQueueProjection {
         Some(format!(
             "{} promotable follow-up proposal{} available{}",
             self.proposed_tasks.len(),
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if self.proposed_tasks.len() == 1 {
                 ""
             } else {
@@ -888,72 +695,51 @@ impl PriorityQueueProjection {
         ))
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // TUI list는 전체 queue 대신 limit만큼의 stable clone을 받는다.
     pub fn visible_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.active_tasks.iter().take(limit).cloned().collect()
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // proposed task panel도 active queue와 같은 pagination contract를 쓴다.
     pub fn visible_proposed_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.proposed_tasks.iter().take(limit).cloned().collect()
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod priority_queue_projection_tests {
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use super::{PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus};
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn queue_task(rank: usize, task_id: &str, task_title: &str) -> PriorityQueueTask {
         PriorityQueueTask {
             rank,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_id: task_id.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             direction_id: "general-workstream".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             direction_title: "General workstream".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_title: task_title.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             status: TaskStatus::Ready,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             combined_priority: 80,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             updated_at: "2026-04-30T00:00:00Z".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             rank_reasons: vec!["status=ready".to_string()],
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn projection(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         next_task: Option<PriorityQueueTask>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         proposed_tasks: Vec<PriorityQueueTask>,
     ) -> PriorityQueueProjection {
         PriorityQueueProjection {
             next_task,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             active_tasks: Vec::new(),
             proposed_tasks,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             skipped_tasks: Vec::<PriorityQueueSkippedTask>::new(),
         }
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn queue_summary_projects_next_task_details() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let projection = projection(
             Some(queue_task(1, " task-1 ", " Extract domain summary ")),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Vec::new(),
         );
 
@@ -963,11 +749,8 @@ mod priority_queue_projection_tests {
         );
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn queue_summary_reports_idle_when_no_task_is_executable() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let projection = projection(None, Vec::new());
 
         assert_eq!(
@@ -976,11 +759,8 @@ mod priority_queue_projection_tests {
         );
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn proposal_summary_projects_count_titles_and_overflow() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let projection = projection(
             None,
             vec![
