@@ -1,19 +1,20 @@
-// 학습 주석: 이 크레이트/모듈 전체에 적용되는 속성으로, 컴파일러나 도구가 파일을 해석하는 방식을 조정합니다.
+// 학습 주석: 기본 binary는 사용하지 않는 코드가 생기면 즉시 컴파일 오류로 막습니다.
+// 실행 진입점이 얇기 때문에 dead_code를 허용하면 실제로 연결되지 않은 bootstrap 코드를 놓치기 쉽습니다.
 #![deny(dead_code)]
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: 기본 실행 파일의 역할은 library crate의 `run()`을 호출하고 OS 종료 코드로 변환하는 것입니다.
+// 실제 TUI/app-server 흐름은 library 쪽에 두어 bin과 테스트 가능한 application code를 분리합니다.
 fn main() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: `run()`이 성공하면 application이 결정한 종료 코드를 그대로 사용합니다.
+    // 실패하면 anyhow error chain을 stderr에 출력하고 일반 실패 코드 1로 바꿉니다.
     let exit_code = match codex_exec_loop_native::run() {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(exit_code) => exit_code,
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Err(error) => {
             eprintln!("{error:#}");
             1
         }
     };
 
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: Rust의 `main`은 i32를 직접 반환하지 않으므로 명시적으로 프로세스를 종료해 shell에 결과를 전달합니다.
     std::process::exit(exit_code);
 }

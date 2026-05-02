@@ -1,19 +1,18 @@
-// 학습 주석: 이 크레이트/모듈 전체에 적용되는 속성으로, 컴파일러나 도구가 파일을 해석하는 방식을 조정합니다.
+// 학습 주석: `akra` binary도 기본 main과 같은 bootstrap이므로 사용되지 않는 코드가 남으면 컴파일에서 바로 드러나게 합니다.
 #![deny(dead_code)]
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: 명시적인 `akra` binary entrypoint입니다.
+// package 기본 binary와 같은 library `run()`을 호출해 CLI/TUI 실행 경로가 한곳으로 모이게 합니다.
 fn main() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: library가 반환한 정상 종료 코드는 그대로 shell로 전달하고, 오류는 출력 후 code 1로 표준화합니다.
     let exit_code = match codex_exec_loop_native::run() {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(exit_code) => exit_code,
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Err(error) => {
             eprintln!("{error:#}");
             1
         }
     };
 
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: `std::process::exit`을 사용해 wrapper가 만든 exit_code를 운영체제에 정확히 반영합니다.
     std::process::exit(exit_code);
 }

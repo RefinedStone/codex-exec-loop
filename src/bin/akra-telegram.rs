@@ -1,16 +1,15 @@
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: telegram binary는 Telegram inbound adapter만 띄우는 얇은 프로세스 wrapper입니다.
+// 실제 bot 설정 읽기와 실행은 adapter의 `run_from_env()`가 담당합니다.
 fn main() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: bot runner가 정상 종료하면 code 0을, 환경/실행 오류를 반환하면 stderr 출력 후 code 1을 사용합니다.
     let exit_code = match codex_exec_loop_native::adapter::inbound::telegram_bot::run_from_env() {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(()) => 0,
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Err(error) => {
             eprintln!("{error:#}");
             1
         }
     };
 
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: supervisor나 shell script가 bot bootstrap 실패를 감지하도록 프로세스 종료 코드를 명시합니다.
     std::process::exit(exit_code);
 }
