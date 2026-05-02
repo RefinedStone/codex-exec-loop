@@ -1,54 +1,56 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+/*
+ * 학습 주석: directions_copy는 directions maintenance overlay의 copy deck이다. controller는
+ * DirectionsMaintenanceOverlayView라는 작은 view-model만 만들고, 실제 문장과 key hint는 이 파일에
+ * 모아 두어 상태 전환 로직이 UI 문구 변경에 끌려가지 않게 한다.
+ */
 use super::super::super::{AkraTheme, DetailDocConfirmChoice, Line};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::super::option_lines::overlay_option_line;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::DirectionsMaintenanceOverlayView;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: 모든 directions overlay가 같은 title prefix를 써서 shell chrome 안에서 한 기능군으로 보이게 한다.
 fn directions_title_line(suffix: &'static str) -> Line<'static> {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     AkraTheme::title_line("Directions Maintenance", suffix)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * 학습 주석: overview overlay는 directions catalog와 queue-idle prompt health를 한 화면에 압축한다.
+ * 여기서 action copy는 "accepted state는 promote 전까지 변하지 않는다"는 authoring architecture를
+ * 반복해서 보여 주며, operator가 raw file을 직접 고치기 전에 staged draft/editor 흐름으로 들어가게 한다.
+ */
 pub(super) fn build_overview_overlay_view(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     missing_doc_count: usize,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     broken_doc_count: usize,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     total_direction_count: usize,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     queue_idle_policy: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     queue_idle_prompt_status: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     queue_idle_prompt: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     parse_error_summary: Option<&str>,
 ) -> DirectionsMaintenanceOverlayView {
     DirectionsMaintenanceOverlayView {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         header_lines: vec![
             directions_title_line(" / shell inspection"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "Review operator-owned planning directions and queue-idle policy without editing raw files first.",
             ),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        /*
+         * 학습 주석: summary는 이 overlay가 inspector이면서도 editor 진입점임을 설명한다. accepted DB
+         * authority를 바로 바꾸지 않고 staged draft를 만들기 때문에, runtime prompt는 promote 전까지
+         * 기존 accepted state를 계속 본다.
+         */
         summary_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "Use Enter or `p` to create/edit the queue-idle prompt, or `d` to create a detail-doc mapping.",
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "Accepted planning state does not change until you promote the staged draft.",
             ),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        /*
+         * 학습 주석: parse error가 있으면 repair/detail actions를 막는다. controller가 invalid catalog를
+         * direction 단위로 신뢰할 수 없으므로, 먼저 prompt editor나 reload/manual repair 쪽으로 operator를
+         * 유도하는 presentation contract다.
+         */
         option_lines: vec![
             overlay_option_line(
                 "Enter",
@@ -72,107 +74,94 @@ pub(super) fn build_overview_overlay_view(
                 parse_error_summary.is_some(),
             ),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: status는 health snapshot을 그대로 노출해 doctor/admin 경로와 같은 문제 수치를 보여 준다.
         status_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(format!(
                 "directions: {total_direction_count} total / {missing_doc_count} missing docs / {broken_doc_count} broken docs"
             )),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(format!(
                 "queue idle: policy {queue_idle_policy} / prompt {queue_idle_prompt_status} / {queue_idle_prompt}"
             )),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(match parse_error_summary {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 Some(error) => format!("directions parse error: {error}"),
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 None => "directions parsing: ok".to_string(),
             }),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         key_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::key_line(
                 "Enter/p: edit queue-idle prompt    d: create or repair detail doc",
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::key_line("r: reload summary    Esc/Ctrl+C: close"),
         ],
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * 학습 주석: detail-doc selection은 validation 결과에서 missing/broken mapping만 option으로 받은 뒤,
+ * operator에게 어느 direction의 supporting file을 만들지 고르게 한다. 이 파일은 선택 목록을 계산하지
+ * 않고 copy shell만 책임져 presentation layer의 역할을 좁게 유지한다.
+ */
 pub(super) fn build_detail_doc_selection_overlay_view(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     option_lines: Vec<Line<'static>>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     selected_direction_title: Option<&str>,
 ) -> DirectionsMaintenanceOverlayView {
     DirectionsMaintenanceOverlayView {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         header_lines: vec![
             directions_title_line(" / detail docs"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "Choose a direction whose detail-doc mapping should be created or repaired.",
             ),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        /*
+         * 학습 주석: generated path copy는 supporting_files helper와 같은 convention을 사용자에게 드러낸다.
+         * file 생성과 catalog mapping 갱신이 함께 staged 된다는 점을 설명해 runtime prompt가 promote 후에만
+         * 새 detail doc을 참조한다는 경계를 유지한다.
+         */
         summary_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "Generated docs follow `.codex-exec-loop/planning/directions/<direction-id>.md`.",
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "The file and `detail_doc_path` mapping are staged first and only become active after promote.",
             ),
         ],
         option_lines,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         status_lines: vec![Line::from(format!(
             "selected: {}",
             selected_direction_title.unwrap_or("none")
         ))],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         key_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::key_line("Up/Down or j/k: move selection"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::key_line("Enter: continue    Backspace/Left: back    Esc/Ctrl+C: close"),
         ],
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * 학습 주석: confirm overlay는 selected direction을 실제 staged file mutation으로 넘기기 전 마지막
+ * checkpoint다. 여기서 Yes/No만 고르게 만들어, accidental doc generation이 accepted directions catalog에
+ * 직접 반영되지 않는 staged-edit workflow를 화면에서도 명확히 한다.
+ */
 pub(super) fn build_detail_doc_confirm_overlay_view(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     direction_title: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     direction_id: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     selected_choice: DetailDocConfirmChoice,
 ) -> DirectionsMaintenanceOverlayView {
     DirectionsMaintenanceOverlayView {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         header_lines: vec![
             directions_title_line(" / confirm detail doc"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(
                 "Open a staged detail document for the selected direction and repair the mapping if needed?",
             ),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 확인 문구는 사람이 보는 제목과 결정적 생성 경로를 함께 보여 주어 staged 변경을 추적하기 쉽게 한다.
         summary_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(format!("direction: {direction_title}")),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(format!(
                 "default repair path: .codex-exec-loop/planning/directions/{direction_id}.md"
             )),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: selected_choice는 controller state에서 온 값이라 키 이동과 render가 같은 선택 source를 본다.
         option_lines: vec![
             overlay_option_line(
                 "1",
@@ -189,38 +178,32 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
                 false,
             ),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         status_lines: vec![Line::from("confirmation: generate a staged doc file now")],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         key_lines: vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::key_line("Up/Down or j/k: change selection"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             AkraTheme::key_line("Enter: act    Backspace/Left: back    Esc/Ctrl+C: close"),
         ],
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * 학습 주석: manual editor overlay는 directions draft editor가 화면을 장악할 때 shell overlay frame에
+ * 남기는 최소 copy다. 실제 editing/rendering은 dedicated editor view가 맡고, 이 함수는 방향성 문구와
+ * escape key만 제공해 presentation 책임을 분리한다.
+ */
 pub(super) fn build_manual_editor_overlay_view() -> DirectionsMaintenanceOverlayView {
     DirectionsMaintenanceOverlayView {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         header_lines: vec![
             directions_title_line(" / staged editor"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from("Edit the staged directions draft and save to re-run validation."),
         ],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         summary_lines: vec![Line::from(
             "This state renders through the dedicated draft editor view.",
         )],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         option_lines: vec![Line::from(
             "Use Tab to switch files and Ctrl+S to save + validate.",
         )],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         status_lines: vec![Line::from("editor ready")],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         key_lines: vec![AkraTheme::key_line("Esc/Ctrl+C: close")],
     }
 }
