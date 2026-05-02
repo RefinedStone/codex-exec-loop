@@ -1,9 +1,6 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::recent_sessions::SessionCatalog;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::capability_copy::{
     attachment_profile_summary_line, recent_session_status_blocked_by_startup,
     recent_session_status_load_failed, recent_session_status_loaded, recent_session_status_loading,
@@ -15,90 +12,81 @@ use super::capability_copy::{
     startup_overlay_running_checks_label, startup_probe_loading_summary_line,
     startup_probe_not_started_line,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{AkraTheme, Line, NativeTuiApp, Span, StartupState};
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * capability_projection은 NativeTuiApp의 runtime capability 상태를 renderer-ready Line/String으로
+ * 접는 계층이다. capability_copy가 문구 자체를 소유하고, 이 파일은 StartupState/SessionState 같은
+ * app state를 읽어 어떤 문구와 색을 선택할지 결정한다. shell_core, popup_frame, inline_inspection은
+ * 이 projection 결과만 받아 배치한다.
+ */
 pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    /*
+     * startup overlay 상단 요약은 상세 check list보다 먼저 보이는 상태 헤더다.
+     * Idle/Loading/Ready/Failed를 각기 다른 두 줄 요약으로 접어, 사용자가 현재 probe가
+     * 시작 전인지, 실행 중인지, 계속 가능한지, 완전히 실패했는지 즉시 구분하게 한다.
+     */
     match &app.startup_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Idle => vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(startup_overlay_idle_status_line()),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(startup_probe_not_started_line()),
         ],
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Loading => vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(vec![
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 Span::styled("status: ", AkraTheme::muted()),
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 Span::styled(startup_overlay_running_checks_label(), AkraTheme::warning()),
             ]),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(startup_probe_loading_summary_line()),
         ],
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Ready(diagnostics) => vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(vec![
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 Span::styled("status: ", AkraTheme::muted()),
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 Span::styled(
                     startup_overlay_readiness_label(diagnostics.can_continue()),
-                    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
                     if diagnostics.can_continue() {
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                         AkraTheme::success()
                     } else {
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                         AkraTheme::warning()
                     },
                 ),
             ]),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            /*
+             * cwd와 attachment profile은 startup check가 끝난 뒤의 execution context다.
+             * 세부 diagnostics list와 별개로 상단에 고정해 operator가 현재 thread 연결 방식을 빠르게 확인한다.
+             */
             Line::from(format!("cwd: {}", diagnostics.cwd)),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(attachment_profile_summary_line(
                 diagnostics.attachment_profile,
             )),
         ],
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Failed(message) => vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(vec![
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 Span::styled("status: ", AkraTheme::muted()),
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 Span::styled(startup_overlay_failed_label(), AkraTheme::danger()),
             ]),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(message.clone()),
         ],
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    /*
+     * public facade는 app 전체를 받지만 실제 projection은 StartupState만 필요하다.
+     * 테스트와 다른 renderer가 state 단위 helper를 직접 재사용할 수 있도록 아래 함수로 위임한다.
+     */
     build_startup_check_lines_from_state(&app.startup_state)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_startup_check_lines_from_state(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     startup_state: &StartupState,
 ) -> Vec<Line<'static>> {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    /*
+     * startup check list는 summary보다 자세한 capability inventory다.
+     * Ready 상태에서는 startup_service가 수집한 각 probe 결과를 같은 marker format으로 정렬해 보여 준다.
+     */
     match startup_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Idle => vec![Line::from(startup_check_not_started_line())],
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Loading => startup_check_loading_lines(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Ready(diagnostics) => vec![
             diagnostic_item(
                 "codex binary",
@@ -115,6 +103,10 @@ pub(super) fn build_startup_check_lines_from_state(
                 diagnostics.initialize_ok,
                 &diagnostics.initialize_detail,
             ),
+            /*
+             * attachment mode와 recovery anchor는 pass/fail probe가 아니라 선택된 launch profile이다.
+             * 그래도 capability panel에서 함께 보여야 startup 이후 session recovery 동작을 예측할 수 있다.
+             */
             diagnostic_item(
                 "attachment mode",
                 true,
@@ -130,90 +122,83 @@ pub(super) fn build_startup_check_lines_from_state(
                 diagnostics.account_ok,
                 &diagnostics.account_detail,
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             Line::from(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
         ],
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Failed(message) => vec![Line::from(format!("startup error: {message}"))],
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_startup_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    /*
+     * warning projection도 StartupState만 필요하다. app facade를 제공해 shell_presentation의 외부 API는
+     * NativeTuiApp 중심으로 유지하고, tests는 from_state helper를 호출할 수 있게 한다.
+     */
     build_startup_warning_lines_from_state(&app.startup_state)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_startup_warning_lines_from_state(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     startup_state: &StartupState,
 ) -> Vec<Line<'static>> {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    /*
+     * warnings는 Ready diagnostics의 부가 신호다. 실패 상태는 warning bucket이 아니라 실패 메시지를
+     * 직접 보여 주고, 나머지 상태는 operator가 볼 수 있는 "no warnings" placeholder를 유지한다.
+     */
     match startup_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .warnings
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .cloned()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(Line::from)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .collect::<Vec<_>>(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         StartupState::Failed(message) => vec![Line::from(message.clone())],
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         _ => vec![Line::from("no warnings")],
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    /*
+     * recent session status는 startup gate와 session loader state가 함께 결정한다.
+     * shell header는 긴 SessionCatalog enum을 직접 알 필요 없이 이 label 하나만 받아 표시한다.
+     */
     if !app.can_open_session_list() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
+        /*
+         * startup이 아직 session list를 열 수 없는 상태면 SessionState보다 startup gate가 우선한다.
+         * Loading은 기다리는 중, Ready/Failed인데 열 수 없으면 blocked, Idle은 아직 probe 전으로 구분한다.
+         */
         return match &app.startup_state {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             StartupState::Loading => recent_session_status_waiting_for_startup().to_string(),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             StartupState::Ready(_) | StartupState::Failed(_) => {
                 recent_session_status_blocked_by_startup().to_string()
             }
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             StartupState::Idle => recent_session_status_not_requested().to_string(),
         };
     }
 
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
+    /*
+     * startup gate를 통과한 뒤에는 shell_chrome의 SessionState가 source of truth다.
+     * Ready 안에서도 catalog tier가 Unsupported/Partial/Ready로 갈라지므로 capability_copy의
+     * tier-aware 문구를 사용한다.
+     */
     match &app.session_state {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         SessionState::Idle => recent_session_status_ready_to_load().to_string(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         SessionState::Loading => recent_session_status_loading().to_string(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         SessionState::Failed(_) => recent_session_status_load_failed().to_string(),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         SessionState::Ready(catalog) => match catalog {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             SessionCatalog::Unsupported(status) => recent_session_status_unsupported(status.tier),
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             SessionCatalog::Partial(status) => recent_session_status_partial(status.tier),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             SessionCatalog::Ready {
                 tier,
                 recent_sessions,
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             } => recent_session_status_loaded(*tier, recent_sessions.items.len()),
         },
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn diagnostic_item(title: &str, ok: bool, detail: &str) -> Line<'static> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    /*
+     * startup check rows share a compact marker/title/detail format.
+     * marker selection stays in capability_copy so icon/copy conventions remain centralized.
+     */
     let marker = startup_diagnostic_marker(ok);
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     Line::from(format!("{marker} {title}: {detail}"))
 }
