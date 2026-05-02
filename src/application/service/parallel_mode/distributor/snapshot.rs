@@ -15,6 +15,15 @@ use super::super::{
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
 
+/*
+학습 주석: distributor snapshot은 durable queue와 session history를 TUI용 읽기 모델로
+바꿉니다. 활성 queue record가 있으면 그 queue head가 화면의 중심입니다. 활성 record가
+없으면 최근 session detail을 살펴 commit_ready, ledger_refreshing 같은 완료 파이프라인의
+마지막 의미 있는 상태를 보여 줍니다.
+
+이 함수가 `selected_runtime_session_detail`을 재사용하는 이유는 supervisor detail과
+distributor 패널이 같은 "현재 가장 볼 만한 세션" 기준을 공유해야 하기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn build_distributor_snapshot_from_context(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -103,6 +112,12 @@ pub(super) fn build_distributor_snapshot_from_context(
         .with_orchestrator_status(build_idle_orchestrator_status(context))
 }
 
+/*
+학습 주석: orchestrator status는 queue head 하나가 왜 진행 중이거나 막혀 있는지를
+작업자 관점으로 압축한 진단 정보입니다. active record 개수로 뒤 queue item이 head에
+막혀 있는지 표시하고, matching lease를 찾아 slot return 대기 사유까지 함께 보여 줍니다.
+이 값은 단순 queue item 목록보다 "다음에 무엇을 복구해야 하는가"에 초점을 둡니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn build_orchestrator_status(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -189,6 +204,12 @@ fn orchestrator_barrier_state(
     }
 }
 
+/*
+학습 주석: integration worktree readiness는 queue가 비어 있을 때도 계속 보여 줘야 하는
+운영 상태입니다. queue item이 없더라도 integration branch가 아닌 곳에 있거나 로컬 변경이
+남아 있으면 다음 delivery tick이 막힙니다. snapshot에서 미리 드러내면 사용자가 queue가
+생기기 전에 작업대를 정리할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> String {
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -219,6 +240,12 @@ fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> Strin
     }
 }
 
+/*
+학습 주석: slot return wait reason은 queue head와 lease state를 함께 봐야만 알 수 있는
+메시지입니다. queue가 Cleaning이면 cleanup 자체가 남은 것이고, queue가 아직 통합 단계이면
+Running lease가 유지되는 것이 정상입니다. 이 설명이 없으면 사용자는 슬롯이 오래 점유된
+상태를 누수로 오해할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn slot_return_wait_reason(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -340,6 +367,13 @@ fn detail_has_history_state(
         .any(|entry| entry.state_label == state_label)
 }
 
+/*
+학습 주석: completion feed는 병렬 작업의 큰 흐름을 다섯 단계로 요약합니다. reported는
+agent가 결과를 냈는지, ledger refreshing은 official completion이 돌고 있는지, official은
+commit-ready 결과가 생겼는지, merge queued는 distributor가 잡은 일이 있는지, merged는
+integration branch에 실제로 들어갔는지를 보여 줍니다. 각 항목은 session history에서 가장
+최근 요약을 골라 화면에 올립니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn build_distributor_completion_feed(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.

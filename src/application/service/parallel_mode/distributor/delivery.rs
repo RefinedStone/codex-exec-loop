@@ -17,6 +17,16 @@ use self::integration::{
     ensure_distributor_integration_worktree_ready, format_conflict_file_suffix,
 };
 
+/*
+학습 주석: 이 함수는 queue head 하나를 end-to-end로 delivery하는 상태 기계입니다.
+입력 record는 planning authority에 저장된 durable queue item이고, 각 단계는 record 상태를
+갱신한 뒤 다음 단계로 넘어갑니다. 순서는 source branch push, PR 준비/검사, integration
+branch 반영, slot cleanup입니다.
+
+각 단계 뒤에 Blocked 상태를 확인하고 즉시 반환하는 구조가 중요합니다. delivery 중 어느
+단계라도 사람이 개입해야 하는 문제가 생기면, 뒤 단계가 잘못 실행되지 않고 현재까지의
+notice만 TUI에 표시됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn process_distributor_queue_record(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -146,6 +156,16 @@ pub(super) fn process_distributor_queue_record(
     Ok(notices)
 }
 
+/*
+학습 주석: integration 단계는 슬롯 branch의 특정 commit을 integration worktree에 반영합니다.
+먼저 slot worktree가 예상 branch와 예상 head commit에 머물러 있는지 확인합니다. 이 확인이
+없으면 agent가 낸 결과가 아닌 다른 commit을 cherry-pick할 수 있습니다.
+
+이미 patch-equivalent commit이 integration branch에 있으면 중복 cherry-pick 대신 완료로
+기록합니다. 그렇지 않으면 cherry-pick을 시도하고, conflict가 나면 abort 후 conflict file
+목록과 recovery note를 record에 남겨 사용자가 복구할 수 있게 합니다. 성공 후에는 integration
+branch를 push하고, source PR이 있으면 닫은 뒤 Cleaning 상태로 넘어갑니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn distributor_integrate_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -426,6 +446,15 @@ fn distributor_integrate_branch(
     ))
 }
 
+/*
+학습 주석: delivery가 integration branch 반영까지 끝나면 슬롯 worktree를 다시 idle pool로
+돌려야 합니다. Running lease는 먼저 CleanupPending으로 저장해 supervisor가 "통합은 끝났고
+반환 대기 중"인 상태를 볼 수 있게 합니다. 실제 `cleanup_slot`이 성공하면 session detail에
+cleaned 이력을 남기고 queue record를 Done으로 닫습니다.
+
+cleanup 실패는 통합 실패가 아니라 slot 반환 실패입니다. 그래서 record를 block 처리해
+operator가 worktree/branch 상태를 복구한 뒤 같은 queue item을 다시 진행할 수 있게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn distributor_cleanup_integrated_slot(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
