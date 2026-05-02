@@ -1,3 +1,17 @@
+/*
+ * 학습 주석: planning 도메인 모듈은 Akra의 "작업 계획 원장"을 표현하는 순수 도메인 계층입니다.
+ * 이 파일은 JSON/TOML/DB에서 읽혀 온 계획 데이터를 Rust 타입으로 고정하고, application/service 계층이
+ * 같은 단어로 대화하도록 공통 계약을 제공합니다.
+ *
+ * 연결 흐름은 대략 다음과 같습니다.
+ * 1. outbound DB/filesystem adapter가 방향 문서(DirectionCatalogDocument)와 작업 문서(TaskAuthorityDocument)를 읽습니다.
+ * 2. runtime/validation 서비스가 이 타입들을 이용해 문서가 유효한지 검사합니다.
+ * 3. queue.rs의 PriorityQueueService가 같은 타입을 입력으로 받아 다음 실행 후보를 계산합니다.
+ * 4. TUI와 app-server adapter는 PriorityQueueProjection을 화면 문구나 하위 세션 handoff prompt로 변환합니다.
+ *
+ * 그래서 이 파일의 enum/struct는 단순 데이터 묶음이 아니라, adapter -> application -> domain 경계를
+ * 통과할 때 의미가 흐트러지지 않게 붙잡아 주는 중심 어휘입니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +34,10 @@ pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningWorkspaceState {
+    /*
+     * 학습 주석: workspace state는 planning runtime이 "지금 operator에게 무엇을 보여줄지" 결정하는 큰 상태값입니다.
+     * Authoring/Ready/Executing/Repairing/BlockedInvalid는 UI copy, 자동 후속 실행 정책, repair prompt 선택에 이어집니다.
+     */
     Uninitialized,
     Authoring,
     Ready,
@@ -203,6 +221,11 @@ impl PlanningValidationReport {
 #[serde(deny_unknown_fields)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct DirectionCatalogDocument {
+    /*
+     * 학습 주석: direction catalog는 "왜 이 일을 하는가"를 담는 상위 계획 문서입니다.
+     * 각 DirectionDefinition은 여러 TaskDefinition의 부모가 되며, queue.rs는 task.direction_id를 통해
+     * 이 문서의 direction과 연결합니다. direction이 paused/done이면 하위 task가 ready여도 queue에서 제외됩니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub version: u32,
     // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
@@ -311,6 +334,12 @@ pub struct TaskAuthorityDocument {
 #[serde(deny_unknown_fields)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct TaskDefinition {
+    /*
+     * 학습 주석: TaskDefinition은 실제 실행 단위의 원본(authority)입니다.
+     * queue.rs가 PriorityQueueTask로 복사하기 전까지는 이 타입이 source of truth이고,
+     * validation.rs는 이 구조체의 필드 조합을 검사해 "LLM이 만든 task에는 relation note가 있는가",
+     * "dependency와 blocker가 자기 자신이나 존재하지 않는 id를 가리키지 않는가" 같은 도메인 규칙을 보장합니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub id: String,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -613,6 +642,11 @@ impl QueueIdlePolicy {
 impl TaskStatus {
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn queue_readiness_rank(self) -> Option<u8> {
+        /*
+         * 학습 주석: queue_readiness_rank는 상태값을 정렬 가능한 숫자로 바꾸는 작은 도메인 정책입니다.
+         * InProgress가 0, Ready가 1인 이유는 이미 시작된 작업을 새 ready 작업보다 먼저 이어가야 하기 때문입니다.
+         * None을 반환하는 상태는 "queue에 올릴 수는 있지만 실행 후보는 아니다"라는 뜻이라 queue.rs에서 skipped/proposed로 분기됩니다.
+         */
         // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self {
             // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
@@ -654,6 +688,11 @@ impl TaskStatus {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn clears_blocker(self) -> bool {
+        /*
+         * 학습 주석: blocker는 "이 task가 끝나거나 더는 막지 않는 상태가 될 때까지 기다린다"는 의미입니다.
+         * Done은 완료라서 막지 않고, Cancelled는 더 진행하지 않으므로 막지 않으며, AwaitingUser는 자동 실행 관점에서
+         * worker가 해결할 수 없는 사용자 대기 상태라 queue가 계속 막히지 않도록 해제 상태로 취급합니다.
+         */
         matches!(self, Self::Done | Self::Cancelled | Self::AwaitingUser)
     }
 }
@@ -725,6 +764,10 @@ mod tests {
 impl TaskDefinition {
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn requires_relation_note(&self) -> bool {
+        /*
+         * 학습 주석: LLM이 만들거나 수정한 task는 direction과 어떤 관련이 있는지 별도 설명이 필요합니다.
+         * 이 함수는 validation.rs가 정책을 중복하지 않도록 "relation note가 의무인지"만 한곳에서 판정합니다.
+         */
         self.created_by == TaskActor::Llm || self.last_updated_by == TaskActor::Llm
     }
 
