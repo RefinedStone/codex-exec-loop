@@ -734,29 +734,40 @@ pub(super) fn reconcile_task_authority_with_directions(
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction catalog에서 유효한 direction id 집합만 추출합니다.
+
+이 helper는 task pruning과 validation에서 "현재 살아 있는 direction"의 기준을 만듭니다. id는 trim해서
+저장합니다. direction 문서 작성 과정에서 공백이 섞여도 DB의 task direction_id 비교는 정규화된
+문자열끼리 이루어져야 하기 때문입니다.
+*/
 pub(super) fn direction_ids(directions: &DirectionCatalogDocument) -> BTreeSet<String> {
     directions
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .directions
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .iter()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|direction| direction.id.trim().to_string())
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .collect()
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction authority tables를 새 catalog 문서로 전체 교체합니다.
+
+direction authority는 config row 하나와 direction row 여러 개로 나뉘어 저장됩니다. config row에는 catalog
+전체 version과 queue idle 정책이 들어가고, 각 direction row에는 조회용 column과 JSON 원문이 함께
+들어갑니다. task 저장과 마찬가지로 SQL에서 자주 볼 필드는 column으로 풀고, domain 복원에는
+`content_json`을 사용합니다.
+
+먼저 기존 row를 모두 지우는 이유는 삭제된 direction을 정확히 반영하기 위해서입니다. direction은 개수가
+많지 않고 catalog 전체가 하나의 권위 문서이므로, 부분 upsert보다 전체 재생성이 의미가 더 분명합니다.
+*/
 pub(super) fn replace_direction_authority_tables(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     transaction: &rusqlite::Transaction<'_>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     directions: &DirectionCatalogDocument,
 ) -> Result<()> {
     clear_direction_authority_rows(transaction)?;
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute(
             "INSERT INTO planning_direction_config
              (config_key, version, queue_idle_policy, queue_idle_prompt_path)
@@ -767,14 +778,10 @@ pub(super) fn replace_direction_authority_tables(
                 directions.queue_idle.prompt_path.trim(),
             ],
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to persist planning direction config")?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for (index, direction) in directions.directions.iter().enumerate() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let direction_id = direction.id.trim();
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "INSERT INTO planning_directions
                  (direction_id, direction_order, title, state, detail_doc_path, content_json)
@@ -785,97 +792,108 @@ pub(super) fn replace_direction_authority_tables(
                     direction.title.trim(),
                     direction.state.label(),
                     direction.detail_doc_path.trim(),
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     serde_json::to_string(direction)
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .context("failed to serialize planning direction row")?,
                 ],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| format!("failed to persist planning direction `{direction_id}`"))?;
     }
+    /*
+    학습 주석:
+    `direction_authority_version`은 load 쪽의 존재 판단에는 직접 쓰이지 않지만, DB를 열어 보는 도구나
+    미래 migration이 현재 저장된 direction catalog version을 빠르게 확인할 수 있게 하는 metadata입니다.
+    */
     upsert_metadata(
         transaction,
         "direction_authority_version",
         &directions.version.to_string(),
     )?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction authority를 비운 뒤 metadata version을 0으로 표시합니다.
+
+row를 삭제하는 것만으로도 `direction_authority_exists`는 false를 반환합니다. 여기에 version 0 metadata를
+쓰는 것은 "명시적으로 비워진 상태"를 store metadata에서도 읽을 수 있게 하기 위한 표식입니다.
+*/
 pub(super) fn clear_direction_authority_tables(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     transaction: &rusqlite::Transaction<'_>,
 ) -> Result<()> {
     clear_direction_authority_rows(transaction)?;
     upsert_metadata(transaction, "direction_authority_version", "0")?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction authority의 실제 row들을 삭제합니다.
+
+direction rows를 먼저 지우고 config를 나중에 지우면, 중간 실패가 발생하더라도 config만 남아 있는 상태를
+줄일 수 있습니다. 이 함수는 보통 외부 transaction 안에서 호출되므로 최종 원자성은 caller의 commit이
+보장합니다.
+*/
 fn clear_direction_authority_rows(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute("DELETE FROM planning_directions", [])
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to clear planning direction rows")?;
     transaction
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .execute("DELETE FROM planning_direction_config", [])
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to clear planning direction config")?;
-    // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
     Ok(())
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+direction authority가 DB에 존재하는지 확인합니다.
+
+현재 존재 신호는 `planning_directions`에 최소 한 row가 있는지입니다. config row만으로 판단하지 않는
+이유는 config는 기본값이나 metadata 성격이 강하고, 실제 direction catalog의 핵심은 direction 목록이기
+때문입니다.
+*/
 fn direction_authority_exists(connection: &Connection) -> Result<bool> {
     connection
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM planning_directions LIMIT 1)",
             [],
-            // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
             |row| row.get::<_, i64>(0),
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|exists| exists != 0)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .context("failed to inspect planning direction rows")
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+학습 주석:
+task authority 문서를 현재 유효한 direction id 집합에 맞게 in-place로 정리합니다.
+
+이 함수는 두 단계로 동작합니다.
+1. 존재하지 않는 direction을 참조하는 task를 제거하고, 제거된 task id를 모읍니다.
+2. 남은 task들의 `depends_on` / `blocked_by`에서 제거된 task id를 참조하는 edge를 삭제합니다.
+
+반환값은 실제로 문서가 바뀌었는지 여부입니다. caller는 false면 DB rewrite를 생략할 수 있고, true면
+정리된 task authority와 빈 queue projection을 다시 저장합니다. 빈 direction id 집합을 넘기면 모든 task가
+제거되므로, direction authority가 삭제된 경우에도 같은 helper를 재사용할 수 있습니다.
+*/
 pub(super) fn prune_task_authority_to_direction_ids(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     task_authority: &mut TaskAuthorityDocument,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     direction_ids: &BTreeSet<String>,
 ) -> bool {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut removed_task_ids = BTreeSet::new();
     task_authority.tasks.retain(|task| {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let keep = direction_ids.contains(task.direction_id.trim());
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if !keep {
             removed_task_ids.insert(task.id.trim().to_string());
         }
         keep
     });
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if removed_task_ids.is_empty() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return false;
     }
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for task in &mut task_authority.tasks {
         task.depends_on
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
         task.blocked_by
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
     }
     true
