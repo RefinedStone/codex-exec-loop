@@ -21,6 +21,12 @@ use super::readiness::run_command;
 */
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
+    /*
+    학습 주석: `exists`를 먼저 보는 것은 이미 디렉터리가 준비된 hot path에서 불필요한 syscall
+    error handling을 줄이기 위한 단순 guard입니다. 단, 파일이 같은 path에 있어도 `exists`는 true를
+    반환하므로 이 helper는 "path가 directory인지 검증"하는 강한 invariant checker가 아닙니다.
+    그런 검증은 pool inspection처럼 operator recovery를 구분해야 하는 모듈에서 따로 수행합니다.
+    */
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if path.exists() {
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
@@ -38,6 +44,12 @@ pub(crate) fn ensure_directory_exists(path: &Path) -> std::io::Result<()> {
 */
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn current_timestamp() -> String {
+    /*
+    학습 주석: timestamp는 session detail history, distributor queue record, lease transition이 서로
+    같은 시간 언어로 정렬되도록 하는 작은 contract입니다. local timezone을 쓰지 않고 UTC RFC3339를
+    쓰면 hidden worker, TUI, recovery process가 다른 환경에서 실행되어도 비교 가능한 문자열을
+    공유합니다.
+    */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     Utc::now().to_rfc3339()
 }
@@ -49,6 +61,12 @@ pub(crate) fn current_timestamp() -> String {
 */
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(crate) fn current_branch_name(worktree_path: &Path) -> Option<String> {
+    /*
+    학습 주석: `rev-parse --abbrev-ref HEAD`는 detached HEAD에서 `HEAD`를 돌려줄 수 있습니다. caller는
+    이 값을 그대로 branch 이름처럼 믿지 않고, detached baseline인지 agent branch인지 각 문맥에서
+    다시 판정해야 합니다. 여기서는 git query를 표준화하고 실패를 `None`으로 접어 readiness와
+    lifecycle guard가 같은 방식으로 branch unknown 상태를 처리하게 합니다.
+    */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let worktree_path_string = worktree_path.display().to_string();
     run_command(
@@ -79,6 +97,12 @@ pub(crate) fn discard_unstarted_slot_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     branch_name: &str,
 ) -> bool {
+    /*
+    학습 주석: 이 rollback은 "lease를 만들려 했지만 agent가 아직 작업을 시작하지 못한" 짧은 실패
+    창에만 쓰입니다. Running 이후의 cleanup은 official completion/distributor가 담당하고, 여기서
+    그 branch를 삭제하면 실제 산출물을 잃을 수 있습니다. 그래서 이름도 discard_unstarted로 제한해
+    호출자가 lifecycle 전제를 의식하게 합니다.
+    */
     reset_slot_worktree_to_akra(slot_path).succeeded()
         && run_git_sequence(
             "delete unstarted slot branch",
