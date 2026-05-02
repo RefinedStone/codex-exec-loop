@@ -10,6 +10,11 @@ pub struct MainSessionPromptAssemblyRequest<'a> {
     pub planning_prompt_fragment: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubSessionPromptAssemblyRequest<'a> {
+    pub handoff_prompt: &'a str,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TurnPromptAssemblyService;
 
@@ -19,6 +24,12 @@ const MAIN_SESSION_SYSTEM_PROMPT: &str = r#"아래 user prompt를 수행하세�
 - 수정사항: 변경한 파일 위치와 핵심 변경
 - 결과: 실행/검증 결과
 - 다음 추천: 성능개선, 추천수정, 우려되는 문제"#;
+
+const SUB_SESSION_SYSTEM_PROMPT: &str = r#"아래 queued-task handoff만 수행하세요.
+이 세션은 leased worktree에서 실행되는 Akra sub session입니다.
+작업 범위는 handoff의 task 하나로 제한하고, 의미 있는 코드 변경이 있으면 작은 reviewable commit을 남기세요.
+push, PR 생성, merge, shared branch rebase, worktree cleanup은 수행하지 마세요. 완료 후 Akra distributor가 delivery를 처리합니다.
+최종 답변에는 변경 요약, 검증 결과, 남은 작업만 간결하게 포함하세요."#;
 
 impl TurnPromptAssemblyService {
     pub fn new() -> Self {
@@ -45,6 +56,21 @@ impl TurnPromptAssemblyService {
             MAIN_SESSION_SYSTEM_PROMPT,
             user_prompt,
             request.planning_prompt_fragment,
+        ))
+    }
+
+    pub fn build_sub_session_prompt(
+        &self,
+        request: SubSessionPromptAssemblyRequest<'_>,
+    ) -> Option<String> {
+        let handoff_prompt = request.handoff_prompt.trim();
+        if handoff_prompt.is_empty() {
+            return None;
+        }
+
+        Some(render_sub_session_prompt(
+            SUB_SESSION_SYSTEM_PROMPT,
+            handoff_prompt,
         ))
     }
 }
@@ -74,10 +100,20 @@ fn render_main_session_prompt(
     result
 }
 
+fn render_sub_session_prompt(system_prompt: &str, handoff_prompt: &str) -> String {
+    let mut result = String::new();
+    result.push_str("system prompt:\n");
+    result.push_str(system_prompt.trim());
+    result.push_str("\n\nqueued-task handoff:\n");
+    result.push_str(handoff_prompt.trim());
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, TurnPromptAssemblyService,
+        MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest,
+        SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
     };
 
     #[test]
@@ -124,6 +160,25 @@ mod tests {
         assert!(rendered.contains("- 수정사항: 변경한 파일 위치와 핵심 변경"));
         assert!(
             rendered.ends_with("user prompt:\n# queued-task-handoff\n\n[task]\nintent=Continue")
+        );
+    }
+
+    #[test]
+    fn sub_session_prompt_has_delivery_guardrails() {
+        let service = TurnPromptAssemblyService::new();
+
+        let prompt = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
+            handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
+        });
+
+        let rendered = prompt.expect("sub session prompt should render");
+        assert!(rendered.starts_with("system prompt:\n"));
+        assert!(rendered.contains("Akra sub session"));
+        assert!(rendered.contains("push, PR 생성, merge"));
+        assert!(
+            rendered.ends_with(
+                "queued-task handoff:\n# queued-task-handoff\n\n[task]\nintent=Continue"
+            )
         );
     }
 }

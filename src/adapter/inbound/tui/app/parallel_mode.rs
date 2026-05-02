@@ -217,7 +217,7 @@ impl NativeTuiApp {
         let mut launched_titles = Vec::new();
         let mut blocked_details = Vec::new();
         for task in dispatch_plan.candidates {
-            let handoff = self.planning.runtime.build_task_handoff(&task);
+            let handoff = self.planning.runtime.build_sub_session_task_handoff(&task);
             let lease_request = parallel_mode_slot_lease_request(&handoff.task);
             match self
                 .parallel_mode_service()

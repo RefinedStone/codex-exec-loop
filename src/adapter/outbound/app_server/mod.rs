@@ -39,6 +39,16 @@ use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCata
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
+const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
+const PARALLEL_WORKER_SERVICE_NAME: &str = "akra-parallel-worker";
+const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning-only sub session.
+Evaluate accepted DB direction authority, accepted DB task authority, and DB queue projection only.
+Do not edit planning files, source files, SQL, or JSON authority directly.
+Use the attached queue-mutation skill and `akra planning-tool run .` before falling back to final planning_task_commands."#;
+const PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra parallel task sub session running in a leased worktree.
+Execute only the queued-task handoff supplied in the turn prompt.
+Keep changes scoped to that task and leave a small reviewable commit when source changes are needed.
+Do not push, open pull requests, merge, rebase shared branches, or clean up the worktree; Akra distributor handles delivery after completion."#;
 
 #[derive(Clone)]
 pub struct CodexAppServerAdapter {
@@ -108,6 +118,7 @@ impl CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
                 model: model.map(str::to_string),
+                ..ThreadStartParams::default()
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
@@ -143,6 +154,9 @@ impl CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
                 model: Some(PLANNING_WORKER_MODEL.to_string()),
+                developer_instructions: Some(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
+                service_name: Some(PLANNING_WORKER_SERVICE_NAME.to_string()),
+                ephemeral: Some(true),
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
@@ -488,6 +502,9 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
                 model: None,
+                developer_instructions: Some(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
+                service_name: Some(PARALLEL_WORKER_SERVICE_NAME.to_string()),
+                ephemeral: Some(true),
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
@@ -526,7 +543,12 @@ fn finish_stream_result(
 
 #[cfg(test)]
 mod tests {
-    use super::CodexAppServerAdapter;
+    use super::protocol::ThreadStartParams;
+    use super::{
+        CodexAppServerAdapter, PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS,
+        PARALLEL_WORKER_SERVICE_NAME, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS,
+        PLANNING_WORKER_SERVICE_NAME,
+    };
 
     #[test]
     fn planning_worker_turn_input_attaches_queue_mutation_skill_before_prompt() {
@@ -541,5 +563,36 @@ mod tests {
         assert_eq!(input_items[0]["name"], "akra-planning-queue-mutation");
         assert_eq!(input_items[1]["type"], "text");
         assert_eq!(input_items[1]["text"], "refresh queue");
+    }
+
+    #[test]
+    fn thread_start_params_support_sub_session_metadata() {
+        let params = ThreadStartParams {
+            cwd: Some("/repo".to_string()),
+            developer_instructions: Some(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
+            service_name: Some(PARALLEL_WORKER_SERVICE_NAME.to_string()),
+            ephemeral: Some(true),
+            ..ThreadStartParams::default()
+        };
+
+        let serialized = serde_json::to_value(params).expect("params should serialize");
+
+        assert_eq!(serialized["cwd"], "/repo");
+        assert_eq!(serialized["serviceName"], PARALLEL_WORKER_SERVICE_NAME);
+        assert_eq!(serialized["ephemeral"], true);
+        assert!(
+            serialized["developerInstructions"]
+                .as_str()
+                .is_some_and(|value| value.contains("leased worktree"))
+        );
+    }
+
+    #[test]
+    fn sub_session_developer_instructions_separate_planning_and_parallel_contracts() {
+        assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("planning-only sub session"));
+        assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("akra planning-tool run ."));
+        assert!(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.contains("parallel task sub session"));
+        assert!(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.contains("Do not push"));
+        assert_ne!(PLANNING_WORKER_SERVICE_NAME, PARALLEL_WORKER_SERVICE_NAME);
     }
 }
