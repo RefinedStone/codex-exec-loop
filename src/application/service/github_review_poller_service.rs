@@ -559,50 +559,64 @@ mod tests {
         assert_eq!(result.changes[0].id, 320);
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: `snapshot` helper는 각 테스트가 관심 있는 target과 event 목록만 넘기면
+    // `GithubPullRequestActivitySnapshot` 전체를 만들 수 있게 하는 fixture factory입니다. PR metadata를
+    // 한곳에 고정해 테스트 본문이 diff 시나리오에 집중하게 합니다.
     fn snapshot(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: target은 service가 poll한 PR identity입니다. helper가 이 값을 그대로 snapshot에
+        // 넣어 result.snapshot과 caller의 target이 같은 PR을 가리키게 합니다.
         target: GithubPullRequestTarget,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: events는 각 테스트가 edge case에 맞게 구성한 activity stream입니다. helper는
+        // 순서를 바꾸지 않으므로 정렬 테스트는 의도한 원본 순서를 service에 그대로 전달합니다.
         events: Vec<GithubPullRequestActivityEvent>,
     ) -> GithubPullRequestActivitySnapshot {
         GithubPullRequestActivitySnapshot {
             target,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: title은 diff logic에는 영향을 주지 않지만 snapshot domain type이 PR 표시 정보를
+            // 함께 운반한다는 contract를 유지합니다.
             title: "Add review polling".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: url은 GitHub PR 화면으로 돌아갈 수 있는 metadata입니다. 테스트에서는 고정값으로
+            // 두어 event filtering assertion과 독립시킵니다.
             url: "https://github.com/acme/widgets/pull/42".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: head_branch/base_branch도 poll diff에는 직접 쓰이지 않지만, service가 반환하는
+            // snapshot이 실제 PR context를 잃지 않는지 보여 주는 fixture metadata입니다.
             head_branch: "feature/native-github-poller-port".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             base_branch: "prerelease".to_string(),
             events,
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: `event` helper는 diff에 중요한 id, kind, submitted_at만 테스트마다 바꾸고 나머지
+    // GitHub activity 필드는 안정적인 기본값으로 채웁니다. 덕분에 각 테스트는 cursor와 identity
+    // 조건만 읽으면 됩니다.
     fn event(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: id는 identity key의 핵심 값입니다. 테스트는 id 차이로 어떤 event가 changes에
+        // 남았는지 명확히 확인합니다.
         id: u64,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: kind는 identity에 포함되는 activity 종류입니다. review, review comment,
+        // issue comment가 같은 id를 가질 가능성까지 구분하는 데 필요합니다.
         kind: GithubPullRequestActivityKind,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: submitted_at은 timestamp cursor와 정렬의 기준입니다. 문자열이지만 ISO-8601 UTC
+        // 형태라 lexicographic sort가 시간 순서와 일치합니다.
         submitted_at: &str,
     ) -> GithubPullRequestActivityEvent {
         GithubPullRequestActivityEvent {
             id,
             kind,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: event가 받은 timestamp를 owned String으로 바꾸어 domain event가 test helper의
+            // borrowed input lifetime에 묶이지 않게 합니다.
             submitted_at: submitted_at.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: author/body는 notification display에 필요한 metadata지만, 이 service test에서는
+            // diff 결과와 무관하므로 고정 기본값을 사용합니다.
             author_login: "reviewer".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             body: "Looks good".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: state는 review approval/request-changes 같은 상태가 있을 때 채워지는 선택값입니다.
+            // 여기서는 event identity와 timestamp diff만 보므로 None으로 둡니다.
             state: None,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: url은 id를 포함해 assertion 실패 시 어떤 fixture event인지 추적하기 쉽게 합니다.
             url: format!("https://github.com/acme/widgets/pull/42#{id}"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: path는 inline review comment가 파일 경로를 가질 때 쓰입니다. 현재 테스트들은
+            // path 기반 분기가 아니라 poll diff를 검증하므로 비워 둡니다.
             path: None,
         }
     }
