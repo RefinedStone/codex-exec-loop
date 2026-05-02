@@ -21,6 +21,7 @@ pub(crate) enum AutoFollowupSkipReason {
     PlanningQueueHeadRequired,
     PlanningRepeatedQueueHead,
     ParallelSessionCompleted,
+    PostTurnEvaluationTimedOut,
 }
 
 impl AutoFollowupSkipReason {
@@ -68,6 +69,10 @@ impl AutoFollowupSkipReason {
                 "parallel agent session completed its assigned task; follow-up stays with the supervisor instead of reusing the same slot session"
                     .to_string()
             }
+            Self::PostTurnEvaluationTimedOut => {
+                "post-turn planner evaluation did not finish before the recovery timeout"
+                    .to_string()
+            }
         }
     }
 
@@ -83,6 +88,7 @@ impl AutoFollowupSkipReason {
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
             Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
             Self::ParallelSessionCompleted => "stopped: parallel session completed",
+            Self::PostTurnEvaluationTimedOut => "paused: post-turn planner timeout",
         }
     }
 
@@ -124,6 +130,30 @@ impl AutoFollowupSkipReason {
                 "turn completed / auto follow-up stopped: parallel session completion is handed back to the supervisor"
                     .to_string()
             }
+            Self::PostTurnEvaluationTimedOut => {
+                "turn completed / auto follow-up paused: post-turn planner timed out".to_string()
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AutoFollowState, AutoFollowupSkipReason};
+
+    #[test]
+    fn post_turn_timeout_skip_reason_has_operator_copy() {
+        let reason = AutoFollowupSkipReason::PostTurnEvaluationTimedOut;
+        let state = AutoFollowState::new();
+
+        assert!(
+            reason
+                .runtime_status(&state)
+                .contains("post-turn planner timed out")
+        );
+        assert_eq!(
+            reason.activity_summary(),
+            "paused: post-turn planner timeout"
+        );
     }
 }

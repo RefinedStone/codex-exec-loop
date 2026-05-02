@@ -7,9 +7,13 @@ use anyhow::Result;
 use crossterm::event::KeyEventState;
 
 use super::*;
-use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnEvaluation;
+use crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason;
+use crate::adapter::inbound::tui::app::conversation_runtime::{
+    ConversationPostTurnAction, ConversationPostTurnEvaluation,
+};
 use crate::adapter::inbound::tui::app::{
-    ConversationInputState, ConversationState, InlineShellCommand,
+    ConversationInputState, ConversationState, InlineShellCommand, PlannerWorkerPanelState,
+    PlannerWorkerStatus,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -21,7 +25,7 @@ use crate::application::port::outbound::session_catalog_port::SessionCatalogPort
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -428,6 +432,76 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
             .planner_worker_panel_state
             .last_summary
             .is_none()
+    );
+}
+
+#[test]
+fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
+    let mut runtime = make_test_runtime();
+    runtime.take_redraw_request();
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-1".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
+
+    let build_message = |notice: &str| BackgroundMessage::PostTurnEvaluated {
+        thread_id: "thread-1".to_string(),
+        queued_from_turn_id: "turn-1".to_string(),
+        evaluation: Box::new(ConversationPostTurnEvaluation {
+            planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
+            planning_repair_state: None,
+            runtime_notices: vec![notice.to_string()],
+            action: ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::PlanningBlocked,
+            },
+        }),
+        planner_worker_panel_state: PlannerWorkerPanelState {
+            status: PlannerWorkerStatus::RefreshFailed,
+            last_operation_label: None,
+            last_queue_summary: None,
+            last_summary: Some(notice.to_string()),
+            last_rejected_summary: None,
+            last_notice_detail: None,
+            last_prompt: None,
+            last_response: None,
+            last_host_detail: None,
+        },
+    };
+
+    runtime
+        .app
+        .tx
+        .send(build_message("first evaluation"))
+        .expect("background message should enqueue");
+    runtime
+        .app
+        .tx
+        .send(build_message("late duplicate"))
+        .expect("background message should enqueue");
+
+    runtime.poll_background_messages();
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(
+        conversation
+            .runtime_notices
+            .contains(&"first evaluation".to_string())
+    );
+    assert!(
+        !conversation
+            .runtime_notices
+            .contains(&"late duplicate".to_string())
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .planner_worker_panel_state
+            .last_summary
+            .as_deref(),
+        Some("first evaluation")
     );
 }
 

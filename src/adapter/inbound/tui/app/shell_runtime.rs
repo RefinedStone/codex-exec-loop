@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::{
-    BackgroundMessage, ConversationLifecycleEvent, ConversationRuntimeEvent,
+    BackgroundMessage, ConversationLifecycleEvent, ConversationRuntimeEvent, ConversationState,
     FollowupOverlayUiEvent, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
 };
 
@@ -133,6 +133,10 @@ impl ShellRuntime {
                         .should_apply_post_turn_evaluation(&thread_id, &queued_from_turn_id)
                     {
                         continue;
+                    }
+                    if let ConversationState::Ready(conversation) = &mut self.app.conversation_state
+                    {
+                        conversation.record_post_turn_evaluation_applied(&queued_from_turn_id);
                     }
                     self.app.planner_worker_panel_state = planner_worker_panel_state;
                     self.app.invalidate_parallel_mode_supervisor_snapshot();

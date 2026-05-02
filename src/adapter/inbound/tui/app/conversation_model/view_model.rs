@@ -100,6 +100,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_control_truth: ConversationRuntimeControlTruth,
     pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
+    pub(crate) last_applied_post_turn_evaluation_id: Option<String>,
     pub(crate) status_text: String,
 }
 
@@ -141,6 +142,7 @@ impl ConversationViewModel {
             turn_control_truth,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
+            last_applied_post_turn_evaluation_id: None,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -197,6 +199,7 @@ impl ConversationViewModel {
             turn_control_truth,
             last_auto_followup_activity: None,
             last_planning_task_handoff: None,
+            last_applied_post_turn_evaluation_id: None,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -501,7 +504,12 @@ impl ConversationViewModel {
     ) -> bool {
         self.thread_id == thread_id
             && !self.has_running_turn()
+            && self.last_applied_post_turn_evaluation_id.as_deref() != Some(queued_from_turn_id)
             && self.turn_activity.last_completed_turn_id.as_deref() == Some(queued_from_turn_id)
+    }
+
+    pub(crate) fn record_post_turn_evaluation_applied(&mut self, queued_from_turn_id: &str) {
+        self.last_applied_post_turn_evaluation_id = Some(queued_from_turn_id.to_string());
     }
 
     #[cfg(test)]

@@ -27,6 +27,8 @@ use super::super::{
 };
 
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
+#[cfg(not(test))]
+const POST_TURN_EVALUATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
     "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
 const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
@@ -534,7 +536,21 @@ impl NativeTuiApp {
         {
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                let execution = executor.run(&conversation, &request);
+                let (execution_tx, execution_rx) = std::sync::mpsc::channel();
+                let fallback_conversation = conversation.clone();
+                let fallback_request = request.clone();
+                std::thread::spawn(move || {
+                    let execution = executor.run(&conversation, &request);
+                    let _ = execution_tx.send(execution);
+                });
+                let execution = execution_rx
+                    .recv_timeout(POST_TURN_EVALUATION_TIMEOUT)
+                    .unwrap_or_else(|_| {
+                        post_turn_evaluation_timeout_execution(
+                            &fallback_conversation,
+                            &fallback_request,
+                        )
+                    });
                 let _ = tx.send(BackgroundMessage::PostTurnEvaluated {
                     thread_id: execution.thread_id,
                     queued_from_turn_id: execution.queued_from_turn_id,
@@ -577,6 +593,43 @@ impl NativeTuiApp {
         } else {
             self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshRunning;
         }
+    }
+}
+
+#[cfg(not(test))]
+fn post_turn_evaluation_timeout_execution(
+    conversation: &ConversationViewModel,
+    request: &PostTurnEvaluationRequest,
+) -> PostTurnEvaluationExecution {
+    let message = format!(
+        "post-turn planner evaluation timed out after {} seconds",
+        POST_TURN_EVALUATION_TIMEOUT.as_secs()
+    );
+    PostTurnEvaluationExecution {
+        thread_id: conversation.thread_id.clone(),
+        queued_from_turn_id: request.queued_from_turn_id.clone(),
+        evaluation: ConversationPostTurnEvaluation {
+            planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
+            planning_repair_state: None,
+            runtime_notices: vec![message.clone()],
+            action: ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::PostTurnEvaluationTimedOut,
+            },
+        },
+        planner_worker_panel_state: PlannerWorkerPanelState {
+            status: PlannerWorkerStatus::RefreshFailed,
+            last_operation_label: Some("post-turn".to_string()),
+            last_summary: Some(message),
+            last_rejected_summary: None,
+            last_queue_summary: Some("planning refresh timed out".to_string()),
+            last_notice_detail: None,
+            last_prompt: None,
+            last_response: None,
+            last_host_detail: Some(
+                "host recovered the main session from a stalled post-turn planner evaluation"
+                    .to_string(),
+            ),
+        },
     }
 }
 

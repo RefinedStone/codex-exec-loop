@@ -51,6 +51,7 @@ fn ready_conversation() -> ConversationViewModel {
         turn_control_truth: ConversationRuntimeControlTruth::default(),
         last_auto_followup_activity: None,
         last_planning_task_handoff: None,
+        last_applied_post_turn_evaluation_id: None,
         status_text: "thread loaded".to_string(),
     }
 }
