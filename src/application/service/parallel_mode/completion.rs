@@ -176,10 +176,10 @@ impl ParallelModeService {
     UI-visible 상태만 기록하며, lease 자체는 Running으로 유지합니다. 아직 distributor queue에
     넣을 수 있는 commit-ready 결과가 아니기 때문입니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: hidden official worker가 ledger refresh를 시작했음을 session projection에 표시합니다.
     pub fn mark_workspace_official_completion_refreshing(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: refreshing 표시를 적용할 parallel slot workspace입니다.
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
         /*
@@ -188,17 +188,14 @@ impl ParallelModeService {
         않는 이유는 planning authority 갱신은 별도 official completion worker의 책임이고,
         parallel mode service는 supervisor와 TUI가 읽을 session projection만 관리하기 때문입니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: workspace가 parallel slot으로 해석되지 않으면 이 transition의 대상이 아니므로 None으로 빠집니다.
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
-        // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
         else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: Running이 아니면 이미 완료/정리 쪽으로 전이되었거나 아직 실행 중이 아니므로 과거 상태로 되돌리지 않습니다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
 
@@ -213,7 +210,7 @@ impl ParallelModeService {
             &resolution.context.pool_root,
             &resolution.lease,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: helper가 만든 snapshot을 Option으로 감싸 public API의 "대상 없음" 표현과 맞춥니다.
         .map(Some)
     }
 
@@ -223,12 +220,12 @@ impl ParallelModeService {
     넣어도 되는 검증된 결과가 생겼다는 뜻입니다. 바로 뒤에서 turn service가
     `enqueue_workspace_commit_ready_result`를 호출해 queue record를 만듭니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: official ledger refresh 성공 후 slot session을 commit_ready로 표시합니다.
     pub fn mark_workspace_commit_ready(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: commit_ready 상태로 표시할 parallel slot workspace입니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: planning authority refresh가 어떤 결과로 끝났는지 session history에 남길 문장입니다.
         authority_refresh_outcome: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
         /*
@@ -237,17 +234,15 @@ impl ParallelModeService {
         이유는 caller가 "ledger 반영 성공"과 "distributor queue 등록 성공"을 각각 다른 runtime
         notice로 보고할 수 있고, 실패 시 어느 단계에서 멈췄는지 운영자가 구분할 수 있기 때문입니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: commit_ready도 workspace 문자열을 lease projection으로 다시 해석한 뒤에만 적용합니다.
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
-        // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
         else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: Running lease만 commit_ready로 갈 수 있습니다.
+        // cleanup pending 같은 후속 상태가 된 slot은 늦은 성공 이벤트로 되돌리면 안 됩니다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
 
@@ -263,7 +258,7 @@ impl ParallelModeService {
             &resolution.lease,
             authority_refresh_outcome,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: session detail helper의 Result를 그대로 올리되, 성공 값은 Option으로 감싸 facade 계약을 유지합니다.
         .map(Some)
     }
 
@@ -274,15 +269,15 @@ impl ParallelModeService {
     distributor 모듈의 책임으로 둡니다. 이 한 줄 wrapper가 있는 덕분에 completion lifecycle
     caller는 `ParallelModeService`만 의존하면 됩니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: commit_ready로 표시된 workspace를 distributor queue에 등록하도록 위임합니다.
     pub fn enqueue_workspace_commit_ready_result(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: queue item으로 바꿀 slot workspace입니다.
         workspace_dir: &str,
     ) -> Result<Option<crate::domain::parallel_mode::ParallelModeDistributorQueueItem>, String>
     {
+        // 학습 주석: completion service는 public facade만 제공하고, 중복 방지와 queue row 작성은 distributor service가 맡습니다.
         self.distributor_service
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .enqueue_workspace_commit_ready_result(workspace_dir)
     }
 
@@ -292,8 +287,9 @@ impl ParallelModeService {
     cleanup 순서로 소비됩니다. 여기서는 상세 단계를 숨기고 workspace_dir만 넘겨, TUI command나
     orchestrator tick이 같은 public service API를 호출하게 합니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: distributor queue head를 처리하도록 distributor service에 위임합니다.
     pub fn process_distributor_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
+        // 학습 주석: push/PR/integration/cleanup 같은 세부 단계는 distributor module에 숨기고 notice 목록만 반환합니다.
         self.distributor_service.process_queue(workspace_dir)
     }
 
@@ -303,12 +299,12 @@ impl ParallelModeService {
     outcome에 남깁니다. lease를 즉시 cleanup하지 않는 이유는 실패 원인을 확인하거나 재시도할
     수 있도록 slot 상태를 보존하기 위해서입니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: official ledger refresh 실패를 session projection에 기록하고 distributor 전이를 막습니다.
     pub fn mark_workspace_official_completion_failed(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 실패 상태를 남길 parallel slot workspace입니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: official worker가 반환한 실패 원인입니다. session history와 UI feed에 남습니다.
         failure_detail: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
         /*
@@ -316,17 +312,14 @@ impl ParallelModeService {
         신뢰 가능한 완료로 반영되지 않았다는 뜻입니다. 그래서 lease는 Running으로 남겨 재시도나
         수동 확인 여지를 둡니다. distributor queue에 넣지 않는 것이 핵심 안전장치입니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 실패 전이도 parallel slot workspace로 해석되는 경우에만 적용합니다.
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
-        // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
         else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: Running 상태가 아니면 이미 다른 lifecycle 전이가 적용된 것이므로 실패 이벤트로 되돌리지 않습니다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
 
@@ -343,7 +336,7 @@ impl ParallelModeService {
             &resolution.lease,
             failure_detail,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: 실패 기록이 성공하면 새 session detail snapshot을 Some으로 돌려 caller가 notice를 만들 수 있게 합니다.
         .map(Some)
     }
 
