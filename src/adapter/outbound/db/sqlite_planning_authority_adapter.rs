@@ -159,70 +159,73 @@ impl SqlitePlanningAuthorityAdapter {
         load_active_document(&connection, relative_path)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    task authority snapshot을 repo-scoped authority DB에서 읽습니다.
+
+    이 함수는 application service가 현재 task ledger와 queue projection을 확인할 때 쓰는 좁은 입구입니다.
+    실제 row 복원은 store/task row 모듈이 담당하고, 여기서는 workspace 경로를 DB 위치로 해석한 뒤
+    connection을 열어 위임합니다.
+    */
     pub(crate) fn load_task_authority_snapshot(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let connection = open_authority_connection(&location)?;
         load_task_authority_snapshot_from_connection(&connection)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    direction authority snapshot을 repo-scoped authority DB에서 읽습니다.
+
+    direction authority는 task가 속할 수 있는 큰 작업 방향 catalog입니다. task authority와 분리되어 있지만
+    task pruning에서 서로 연결되므로, 같은 DB의 planning revision 체계 안에서 읽고 씁니다.
+    */
     pub(crate) fn load_direction_authority_snapshot(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let connection = open_authority_connection(&location)?;
         load_direction_authority_snapshot_from_connection(&connection)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    direction authority catalog를 commit하고 planning revision을 갱신합니다.
+
+    commit에는 caller가 마지막으로 관찰한 planning revision이 들어올 수 있습니다. 이 값이 현재 DB revision과
+    다르면 optimistic concurrency conflict를 반환합니다. 여러 agent나 TUI 동작이 같은 authority를 동시에
+    바꾸는 상황에서 오래된 화면의 저장이 최신 상태를 덮어쓰지 않게 하는 장치입니다.
+
+    기존 snapshot과 새 directions가 같으면 no-op commit으로 보고 revision을 올리지 않습니다. 실제 변경이
+    있으면 direction tables를 교체하고, 사라진 direction을 참조하는 task authority도 같은 transaction에서
+    정리한 뒤 revision을 올립니다.
+    */
     pub(crate) fn commit_direction_authority_snapshot(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         commit: PlanningDirectionAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open direction authority commit transaction")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let current_revision = read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0);
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(observed_revision) = commit.observed_planning_revision
             && observed_revision != current_revision
         {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(PlanningTaskAuthorityCommitResult::Conflict {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 observed_planning_revision: observed_revision,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 current_planning_revision: current_revision,
             });
         }
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(existing_snapshot) =
             load_direction_authority_snapshot_from_connection(&transaction)?
             && existing_snapshot.directions == *commit.directions
         {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 planning_revision: current_revision,
             });
         }
@@ -234,30 +237,28 @@ impl SqlitePlanningAuthorityAdapter {
         )?;
         replace_direction_authority_tables(&transaction, commit.directions)?;
         reconcile_task_authority_with_directions(&transaction, Some(commit.directions))?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let planning_revision = bump_planning_revision(&transaction)?;
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit direction authority transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    direction authority snapshot을 제거합니다.
+
+    direction catalog가 사라지면 task가 참조할 수 있는 direction id 집합도 비게 됩니다. 따라서 같은
+    transaction에서 task authority reconcile을 호출해 모든 task와 edge를 정리합니다. 이후 revision을
+    올려 downstream runtime이 planning authority 변화로 인식하게 합니다.
+    */
     pub(crate) fn clear_direction_authority_snapshot(workspace_dir: &str) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open direction authority clear transaction")?;
         upsert_authority_metadata(
             &transaction,
@@ -268,55 +269,45 @@ impl SqlitePlanningAuthorityAdapter {
         reconcile_task_authority_with_directions(&transaction, None)?;
         bump_planning_revision(&transaction)?;
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to clear direction authority transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    task authority 문서와 queue projection을 함께 commit합니다.
+
+    task authority는 task 정의 목록이고 queue projection은 그 목록에서 파생된 현재 실행 순서입니다. 두 값은
+    같은 planning revision의 snapshot이어야 하므로 한 transaction에서 같이 저장합니다. direction commit과
+    동일하게 observed revision으로 optimistic concurrency를 검사하고, 기존 task authority/queue projection과
+    완전히 같으면 revision bump를 생략합니다.
+    */
     pub(crate) fn commit_task_authority_snapshot(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open task authority commit transaction")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let current_revision = read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0);
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(observed_revision) = commit.observed_planning_revision
             && observed_revision != current_revision
         {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(PlanningTaskAuthorityCommitResult::Conflict {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 observed_planning_revision: observed_revision,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 current_planning_revision: current_revision,
             });
         }
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(existing_snapshot) = load_task_authority_snapshot_from_connection(&transaction)?
             && existing_snapshot.task_authority == *commit.task_authority
             && existing_snapshot.queue_projection == *commit.queue_projection
         {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 planning_revision: current_revision,
             });
         }
@@ -327,41 +318,35 @@ impl SqlitePlanningAuthorityAdapter {
             commit.task_authority,
             commit.queue_projection,
         )?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let planning_revision = bump_planning_revision(&transaction)?;
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit task authority transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    task authority snapshot과 queue projection을 제거합니다.
+
+    direction clear와 달리 task clear는 direction catalog를 건드리지 않습니다. 작업 목록만 초기화하고,
+    metadata와 planning revision을 갱신해 이후 load가 task authority 없음 상태를 반환하도록 만듭니다.
+    */
     pub(crate) fn clear_task_authority_snapshot(workspace_dir: &str) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open task authority clear transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
         clear_task_authority_tables(&transaction)?;
         bump_planning_revision(&transaction)?;
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to clear task authority transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
