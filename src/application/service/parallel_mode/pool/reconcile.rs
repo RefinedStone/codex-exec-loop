@@ -17,6 +17,16 @@ use super::{
     resolve_branch_head, resolve_pool_baseline_head, slot_id,
 };
 
+/*
+학습 주석: pool baseline branch는 idle slot worktree들이 되돌아갈 기준점입니다. 이 함수는
+현재 workspace HEAD로 baseline을 새로 잡아도 되는지를 결정합니다. distributor queue가
+비어 있어야 하고, slot lease가 있더라도 아직 Leased/Running인 작업만 있어야 하며, 현재
+workspace branch가 baseline branch나 agent branch가 아니어야 합니다.
+
+이 조건은 baseline refresh가 진행 중인 통합 결과나 agent branch를 기준점으로 삼는 일을
+막습니다. baseline은 pool의 공통 출발선이므로, queue/slot pipeline이 안정적인 순간에만
+갱신할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn can_refresh_pool_baseline_from_workspace(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -38,6 +48,15 @@ pub(super) fn can_refresh_pool_baseline_from_workspace(
         })
 }
 
+/*
+학습 주석: reconcile은 pool baseline branch가 반드시 존재한다고 가정하고 slot worktree를
+만듭니다. 이 함수는 그 branch를 찾거나 만듭니다. `reset_to_current_head`가 true이면 현재
+HEAD로 baseline을 강제로 맞추고, 아니면 기존 local baseline, origin baseline, 마지막으로
+현재 HEAD 순서로 기준점을 찾습니다.
+
+반환값의 bool은 branch를 새로 만들었는지를 나타냅니다. 상위 reconcile summary는 이 값을
+사용해 사용자가 방금 어떤 pool 구조 변화가 일어났는지 알 수 있게 합니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn ensure_pool_baseline_branch(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -118,6 +137,16 @@ pub(super) fn ensure_pool_baseline_branch(
         .ok_or(())
 }
 
+/*
+학습 주석: missing slot provisioning은 pool size만큼 정해진 slot path를 확인하고, 아직
+git worktree inventory에도 없고 파일시스템에도 없는 slot만 새로 만듭니다. 이미 디렉터리가
+있는데 git worktree가 아니라면 안전하게 덮어쓸 수 없으므로 provisioning하지 않고, 나중에
+slot inspection에서 Blocked로 보여 줍니다.
+
+새 slot은 `--detach POOL_BASELINE_BRANCH`로 만들어집니다. idle slot은 특정 branch checkout이
+아니라 baseline commit에 매달린 중립 worktree여야 lease 획득 시 새 agent branch로 전환하기
+쉽기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn provision_missing_slots(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -180,6 +209,14 @@ pub(super) fn provision_missing_slots(
     provisioned_slots
 }
 
+/*
+학습 주석: detached baseline slot은 idle pool의 정상 형태지만, baseline branch가 갱신되면
+기존 slot이 이전 commit에 머물 수 있습니다. 이 함수는 lease가 없는 detached slot만 검사해
+현재 `POOL_BASELINE_BRANCH` head와 다르거나 clean하지 않으면 reset sequence를 실행합니다.
+
+lease가 있는 slot은 agent 작업이 걸려 있을 수 있으므로 건드리지 않습니다. 이 경계가 있어야
+reconcile이 pool 위생을 맞추면서도 실행 중인 병렬 작업을 방해하지 않습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn reset_reusable_detached_baseline_slots(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.

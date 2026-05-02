@@ -19,6 +19,17 @@ use super::{
     slot_id,
 };
 
+/*
+학습 주석: reusable slot cleanup은 reconcile 과정에서 "이제 pool baseline으로 되돌려도 되는"
+slot을 찾아 자동으로 정리합니다. 대상은 slot 번호별 worktree inventory를 기준으로 찾고,
+agent branch prefix, lease state, worktree clean 여부, branch가 baseline에 통합되었는지를
+모두 만족해야 합니다.
+
+이 함수가 conservative한 이유는 slot worktree가 사용자의 미완성 변경이나 아직 통합되지
+않은 agent branch를 품을 수 있기 때문입니다. lease가 Leased/Running이면 건드리지 않고,
+통합 증거가 없으면 cleanup하지 않으며, 실제 cleanup도 `cleanup_slot`의 단계별 성공 여부를
+보고 count를 올립니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn cleanup_reusable_slots(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -114,6 +125,11 @@ fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {
     branch_is_integrated_into(repo_root, branch_name, POOL_BASELINE_BRANCH)
 }
 
+/*
+학습 주석: cleanup readiness의 핵심 git 질문은 "agent branch의 변경이 pool baseline에
+이미 포함되었는가"입니다. `merge-base --is-ancestor`는 branch tip이 base branch의 조상인지
+확인하므로, true이면 branch를 지워도 baseline이 그 변경을 잃지 않는다는 뜻입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn branch_is_integrated_into(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -146,6 +162,16 @@ pub(in crate::application::service::parallel_mode) fn branch_is_cleanup_ready(
     branch_is_integrated_into_akra(repo_root, branch_name)
 }
 
+/*
+학습 주석: slot cleanup은 세 단계를 모두 성공해야 true를 반환합니다. 먼저 slot worktree를
+pool baseline detached 상태로 reset/clean하고, repo에서 agent branch를 삭제하고, planning
+authority에 남은 lease metadata를 제거합니다. 마지막으로 git status가 clean baseline인지
+다시 확인해 실제 pool 재사용 가능 상태까지 검증합니다.
+
+중간 단계가 실패하면 false만 반환합니다. 호출자는 이 false를 이용해 queue record를
+Blocked로 남기거나 reconcile count를 올리지 않습니다. 즉 cleanup 실패는 조용히 성공으로
+간주되지 않고 supervisor가 계속 복구 대상으로 볼 수 있게 됩니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn cleanup_slot(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -194,6 +220,12 @@ pub(in crate::application::service::parallel_mode) fn cleanup_slot(
     inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
 }
 
+/*
+학습 주석: pool slot을 baseline으로 되돌리는 git sequence입니다. checkout detach, hard reset,
+clean 순서를 한 리포트로 묶어 호출자가 실패 단계를 확인할 수 있게 합니다. branch를 직접
+checkout하지 않고 detached baseline으로 두는 이유는 idle slot이 특정 작업 branch를 소유하지
+않는 중립 상태여야 다음 lease가 새 agent branch를 안전하게 만들 수 있기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_akra(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
