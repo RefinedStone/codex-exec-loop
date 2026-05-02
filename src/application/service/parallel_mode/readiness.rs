@@ -1,75 +1,52 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
-use std::path::Path;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
-use std::process::{Command, Stdio};
-
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+use super::{DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
-
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
-use super::{DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH};
-
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+use std::path::Path;
+use std::process::{Command, Stdio};
 const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
 
 /*
-학습 주석: readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것입니다.
-병렬 모드는 git worktree와 branch를 강하게 전제하므로, repo root가 없으면 나머지 capability는
-모두 prerequisite blocked 상태가 됩니다.
+readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것이다. 병렬 모드는 git
+worktree와 branch를 강하게 전제하므로, repo root가 없으면 나머지 capability는 모두 prerequisite
+blocked 상태가 된다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn detect_git_repo_root(workspace_dir: &str) -> Option<String> {
     run_command(
         "git",
         ["-C", workspace_dir, "rev-parse", "--show-toplevel"],
         None,
     )
-    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
     .filter(|value| !value.is_empty())
 }
 
 /*
-학습 주석: git worktree capability는 이 repository가 `git worktree list --porcelain`을 실행할 수
-있는지 확인합니다. pool slot은 모두 git worktree로 만들어지므로, 이 명령이 실패하면 slot
-provision/reconcile/inspection 전체가 신뢰할 수 없습니다.
+git worktree capability는 이 repository가 `git worktree list --porcelain`을 실행할 수 있는지
+확인한다. pool slot은 모두 git worktree로 만들어지므로, 이 명령이 실패하면
+slot provision/reconcile/inspection 전체가 신뢰할 수 없다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_git_worktree(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     runtime: &dyn ParallelModeRuntimePort,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match runtime.run_command(
         "git",
         &["-C", repo_root, "worktree", "list", "--porcelain"],
         None,
     ) {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         Some(_) => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GitWorktree,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             "git worktree support is available",
             None,
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         None => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GitWorktree,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Blocked,
             "git worktree commands are unavailable in this repository",
             Some("upgrade git or repair the repository worktree metadata".to_string()),
@@ -78,19 +55,14 @@ pub(super) fn inspect_git_worktree(
 }
 
 /*
-학습 주석: akra branch capability는 pool baseline이 될 integration branch를 찾습니다. local
-`prerelease`가 있거나 origin의 remote tracking branch가 있으면 ready이고, 둘 다 없어도 HEAD가
-있으면 최초 reconcile에서 baseline을 만들 수 있으므로 ready로 둡니다. 완전히 HEAD가 없는 repo만
-blocked입니다.
+akra branch capability는 pool baseline이 될 integration branch를 찾는다. local `prerelease`가
+있거나 origin의 remote tracking branch가 있으면 ready이고, 둘 다 없어도 HEAD가 있으면 최초
+reconcile에서 baseline을 만들 수 있으므로 ready로 둔다. 완전히 HEAD가 없는 repo만 blocked다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_akra_branch(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     runtime: &dyn ParallelModeRuntimePort,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if runtime.command_succeeds(
         "git",
         &[
@@ -112,35 +84,23 @@ pub(super) fn inspect_akra_branch(
             &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
         ],
     ) {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::AkraBranch,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             format!("{POOL_BASELINE_BRANCH} is available"),
             None,
         );
     }
-
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if runtime.command_succeeds("git", &["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::AkraBranch,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             format!("{POOL_BASELINE_BRANCH} is missing locally but can be created from HEAD"),
             None,
         );
     }
-
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     ParallelModeCapabilitySnapshot::new(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeCapabilityKey::AkraBranch,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeCapabilityState::Blocked,
         format!("{POOL_BASELINE_BRANCH} is missing and this repository has no usable HEAD yet"),
         Some("create an initial commit or restore the integration branch before enabling parallel mode".to_string()),
@@ -148,19 +108,15 @@ pub(super) fn inspect_akra_branch(
 }
 
 /*
-학습 주석: push remote capability는 distributor가 source branch와 integration branch를 원격에
-push할 수 있는지를 미리 진단합니다. remote URL이 없거나 HTTPS GitHub 형식이 아니거나 credential
-fill이 실패하면 degraded로 둡니다. degraded는 병렬 모드 자체를 완전히 막지는 않지만, GitHub
-delivery 자동화가 나중에 blocked될 수 있음을 supervisor에 보여 줍니다.
+push remote capability는 distributor가 source branch와 integration branch를 원격에 push할 수
+있는지를 미리 진단한다. remote URL이 없거나 HTTPS GitHub 형식이 아니거나 credential fill이
+실패하면 degraded로 둔다. degraded는 병렬 모드 자체를 완전히 막지는 않지만, GitHub delivery
+자동화가 나중에 blocked될 수 있음을 supervisor에 보여 준다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_push_remote(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     runtime: &dyn ParallelModeRuntimePort,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(push_url) = runtime.run_command(
         "git",
         &[
@@ -173,11 +129,8 @@ pub(super) fn inspect_push_remote(
         ],
         None,
     ) else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::PushRemote,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             format!("push remote `{DEFAULT_PUSH_REMOTE_NAME}` is not configured"),
             Some(
@@ -185,69 +138,45 @@ pub(super) fn inspect_push_remote(
             ),
         );
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some((host, path)) = parse_https_remote(&push_url) else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::PushRemote,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             format!("unsupported push remote `{push_url}`"),
             Some("use an https GitHub remote to enable push capability checks".to_string()),
         );
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(credentials) = runtime.run_command_with_stdin(
         "git",
         &["credential", "fill"],
         &format!("protocol=https\nhost={host}\npath={path}\n\n"),
     ) else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::PushRemote,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             "git credentials are not available for the push remote",
             Some("restore push credentials before relying on distributor automation".to_string()),
         );
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let username = credentials.lines().find_map(|line| {
         line.strip_prefix("username=")
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(str::trim)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .filter(|value| !value.is_empty())
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(str::to_string)
     });
-
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match username {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         Some(username) => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::PushRemote,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             format!("push remote is configured and resolves credentials for {username}"),
             None,
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         None => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::PushRemote,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             "push remote exists but no username was resolved",
             Some(
                 "restore repository credentials before relying on distributor automation"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
             ),
         ),
@@ -255,43 +184,31 @@ pub(super) fn inspect_push_remote(
 }
 
 /*
-학습 주석: GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 repo-local
-`scripts/gh-refinedstone.sh` fallback을 허용합니다. 이 capability는 실제 auth 여부가 아니라
-"GitHub 조작을 시도할 실행 경로가 있는가"를 확인합니다. auth 여부는 다음 `inspect_gh_auth`가
-별도로 판단합니다.
+GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 repo-local
+`scripts/gh-refinedstone.sh` fallback을 허용한다. 이 capability는 실제 auth 여부가 아니라
+"GitHub 조작을 시도할 실행 경로가 있는가"를 확인한다. auth 여부는 다음 `inspect_gh_auth`가
+별도로 판단한다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_gh_binary(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     runtime: &dyn ParallelModeRuntimePort,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match runtime.find_executable("gh") {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         Some(path) => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GhBinary,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             format!("gh found at {}", path.display()),
             None,
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         None if github_fallback_script_available(runtime) => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GhBinary,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             format!(
                 "gh is not installed; RefinedStone API fallback is available at {GITHUB_SCRIPT_PATH}"
             ),
             None,
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         None => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GhBinary,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             "gh is not installed on PATH and the RefinedStone fallback script is missing",
             Some("install GitHub CLI or restore scripts/gh-refinedstone.sh".to_string()),
@@ -300,152 +217,101 @@ pub(super) fn inspect_gh_binary(
 }
 
 /*
-학습 주석: GitHub auth capability는 실제로 PR 생성/조회/close 같은 GitHub API 작업을 할 수
-있는지 확인합니다. `gh`가 있으면 `gh auth status` 계열을, fallback script만 있으면 script의
-auth status를 사용합니다. binary capability가 ready가 아니면 auth도 degraded로 두어 원인
-체인이 화면에 드러나게 합니다.
+GitHub auth capability는 실제로 PR 생성/조회/close 같은 GitHub API 작업을 할 수 있는지 확인한다.
+`gh`가 있으면 `gh auth status` 계열을, fallback script만 있으면 script의 auth status를 사용한다.
+binary capability가 ready가 아니면 auth도 degraded로 두어 원인 체인이 화면에 드러나게 한다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_gh_auth(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     runtime: &dyn ParallelModeRuntimePort,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     gh_binary: &ParallelModeCapabilitySnapshot,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     repo_root: Option<&str>,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if gh_binary.state != ParallelModeCapabilityState::Ready {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GhAuth,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             "gh auth is unavailable until the gh binary is installed",
             Some("install gh first, then run `gh auth login`".to_string()),
         );
     }
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let auth_succeeded = if runtime.find_executable("gh").is_some() {
         runtime.gh_auth_status(repo_root)
     } else if github_fallback_script_available(runtime) {
         runtime
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .run_command("bash", &[GITHUB_SCRIPT_PATH, "auth", "status"], repo_root)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .is_some()
     } else {
         false
     };
-
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match auth_succeeded {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         true => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GhAuth,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             "GitHub automation authentication succeeded",
             None,
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         false => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::GhAuth,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             "GitHub automation is not authenticated for this workspace",
             Some("verify gh auth or the repo-local RefinedStone credential".to_string()),
         ),
     }
 }
-
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn github_fallback_script_available(runtime: &dyn ParallelModeRuntimePort) -> bool {
     runtime.path_exists(Path::new(GITHUB_SCRIPT_PATH))
 }
 
 /*
-학습 주석: planning capability는 병렬 mode가 배정할 queue와 official completion ledger를
-신뢰할 수 있는지 확인합니다. workspace가 없거나 invalid면 blocked이고, ready 상태에서는
-task가 있든 없든 병렬 모드의 나머지 capability 판단을 계속할 수 있습니다.
+planning capability는 병렬 mode가 배정할 queue와 official completion ledger를 신뢰할 수 있는지
+확인한다. workspace가 없거나 invalid면 blocked이고, ready 상태에서는 task가 있든 없든 병렬
+모드의 나머지 capability 판단을 계속할 수 있다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_planning(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     snapshot: &PlanningRuntimeSnapshot,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !snapshot.workspace_present() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::Planning,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Blocked,
             "planning workspace is not initialized",
             Some(
                 "open `:planning` and initialize the workspace before enabling parallel mode"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
             ),
         );
     }
-
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match snapshot.workspace_status() {
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         PlanningRuntimeWorkspaceStatus::Uninitialized => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::Planning,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Blocked,
             "planning workspace is not initialized",
             Some(
                 "open `:planning` and initialize the workspace before enabling parallel mode"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
             ),
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         PlanningRuntimeWorkspaceStatus::Invalid => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::Planning,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Blocked,
             snapshot
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .failure_reason()
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .unwrap_or("planning validation failed"),
             Some("repair planning state before enabling parallel mode".to_string()),
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         PlanningRuntimeWorkspaceStatus::ReadyNoTask => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::Planning,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             snapshot
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .queue_summary()
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .unwrap_or("planning workspace is ready with no queue head"),
             None,
         ),
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         PlanningRuntimeWorkspaceStatus::ReadyWithTask => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::Planning,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Ready,
             snapshot
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .queue_summary()
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .unwrap_or("planning workspace is ready"),
             None,
         ),
@@ -453,80 +319,54 @@ pub(super) fn inspect_planning(
 }
 
 /*
-학습 주석: authority store capability는 planning 문서 mirror와 repo-scoped shadow store가
-동기화되어 있는지 확인합니다. 병렬 agent는 slot worktree에서 작업하지만 planning authority는
-canonical repo root 기준으로 session/queue/lease projection을 읽으므로, shadow store parity가
-깨지면 supervisor와 distributor가 다른 현실을 볼 수 있습니다.
+authority store capability는 planning 문서 mirror와 repo-scoped shadow store가 동기화되어 있는지
+확인한다. 병렬 agent는 slot worktree에서 작업하지만 planning authority는 canonical repo root
+기준으로 session/queue/lease projection을 읽으므로, shadow store parity가 깨지면 supervisor와
+distributor가 다른 현실을 볼 수 있다.
 
 git repository와 planning capability가 ready가 아니면 이 검사를 미루고 prerequisite blocked를
-반환합니다. 선행 조건이 없을 때 store parity 실패처럼 보이는 가짜 오류를 줄이기 위해서입니다.
+반환한다. 선행 조건이 없을 때 store parity 실패처럼 보이는 가짜 오류를 줄이기 위해서다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn inspect_authority_store(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     planning_authority: &dyn PlanningAuthorityPort,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     workspace_dir: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     git_repository: &ParallelModeCapabilitySnapshot,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     planning: &ParallelModeCapabilitySnapshot,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if git_repository.state != ParallelModeCapabilityState::Ready {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return blocked_prerequisite_capability(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::AuthorityStore,
             "waiting for git repository detection",
             "enter a git repository first",
         );
     }
-
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if planning.state != ParallelModeCapabilityState::Ready {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return blocked_prerequisite_capability(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::AuthorityStore,
             "waiting for planning readiness",
             "repair or initialize planning before inspecting authority parity",
         );
     }
-
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match planning_authority.inspect_shadow_store(workspace_dir) {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(inspection) => {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let canonical_root = inspection.location.canonical_repo_root;
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let document_count = inspection.mirrored_document_count;
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let detail = match inspection.sync_state {
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 crate::domain::planning::PlanningAuthorityShadowStoreSyncState::Bootstrapped => {
                     format!(
                         "shadow store bootstrapped from {document_count} mirrored documents / canonical root: {canonical_root}"
                     )
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 crate::domain::planning::PlanningAuthorityShadowStoreSyncState::InSync => {
                     format!(
                         "shadow store in sync across {document_count} mirrored documents / canonical root: {canonical_root}"
                     )
                 }
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 crate::domain::planning::PlanningAuthorityShadowStoreSyncState::Resynced => {
-                    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
                     let sample = inspection
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .parity_issue_examples
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .first()
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .map(|example| format!(" / sample: {example}"))
-                        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                         .unwrap_or_default();
                     format!(
                         "shadow store resynced {} parity issue(s) across {document_count} mirrored documents / canonical root: {canonical_root}{sample}",
@@ -534,21 +374,15 @@ pub(super) fn inspect_authority_store(
                     )
                 }
             };
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilitySnapshot::new(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 ParallelModeCapabilityKey::AuthorityStore,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 ParallelModeCapabilityState::Ready,
                 detail,
                 None,
             )
         }
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Err(error) => ParallelModeCapabilitySnapshot::new(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityKey::AuthorityStore,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModeCapabilityState::Degraded,
             format!("shadow store inspection failed: {error}"),
             Some("inspect the repo-scoped authority store and rerun readiness".to_string()),
@@ -557,23 +391,17 @@ pub(super) fn inspect_authority_store(
 }
 
 /*
-학습 주석: prerequisite blocked capability는 어떤 capability가 자기 검사를 할 수 없을 때 쓰는
-공통 helper입니다. 예를 들어 git repo root가 없으면 worktree, push remote, authority store는
-각자 실패를 추측하지 않고 "git repository detection을 기다림"이라고 표시합니다.
+prerequisite blocked capability는 어떤 capability가 자기 검사를 할 수 없을 때 쓰는 공통 helper다.
+예를 들어 git repo root가 없으면 worktree, push remote, authority store는 각자 실패를 추측하지
+않고 "git repository detection을 기다림"이라고 표시한다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn blocked_prerequisite_capability(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     key: ParallelModeCapabilityKey,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     detail: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     next_action: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     ParallelModeCapabilitySnapshot::new(
         key,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ParallelModeCapabilityState::Blocked,
         detail,
         Some(next_action.to_string()),
@@ -581,38 +409,28 @@ pub(super) fn blocked_prerequisite_capability(
 }
 
 /*
-학습 주석: credential fill에는 protocol, host, path를 분리해 넘겨야 하므로 HTTPS remote URL을
-간단히 파싱합니다. SSH remote나 비 GitHub 형식은 여기서 None이 되어 push capability가
-degraded로 표시됩니다. distributor 자동화는 현재 HTTPS credential flow를 기준으로 설계되어
-있기 때문입니다.
+credential fill에는 protocol, host, path를 분리해 넘겨야 하므로 HTTPS remote URL을 간단히
+파싱한다. SSH remote나 비 GitHub 형식은 여기서 None이 되어 push capability가 degraded로
+표시된다. distributor 자동화는 현재 HTTPS credential flow를 기준으로 설계되어 있기 때문이다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let stripped = push_url.trim().strip_prefix("https://")?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut parts = stripped.splitn(2, '/');
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let host = parts.next()?.trim();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let path = parts.next()?.trim();
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if host.is_empty() || path.is_empty() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return None;
     }
     Some((host.to_string(), path.to_string()))
 }
 
 /*
-학습 주석: readiness와 pool helper의 low-level command 실행은 interactive prompt를 꺼야 합니다.
-`GIT_TERMINAL_PROMPT=0`, null stderr/stdout 정책을 통해 capability check가 사용자 입력을
-기다리며 TUI를 멈추지 않게 합니다. 값이 필요한 경우에는 `run_command`, 성공 여부만 필요한
-경우에는 이 함수를 사용합니다.
+readiness와 pool helper의 low-level command 실행은 interactive prompt를 꺼야 한다.
+`GIT_TERMINAL_PROMPT=0`, null stderr/stdout 정책을 통해 capability check가 사용자 입력을 기다리며
+TUI를 멈추지 않게 한다. 값이 필요한 경우에는 `run_command`, 성공 여부만 필요한 경우에는 이
+함수를 사용한다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -> bool {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut command = Command::new(program);
     command.args(args);
     command.stdout(Stdio::null());
@@ -622,40 +440,27 @@ pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -
 }
 
 /*
-학습 주석: run_command는 readiness와 git helper가 짧은 stdout 값을 얻을 때 쓰는 공통 wrapper입니다.
-명령이 실패하거나 stdout이 비어 있으면 None을 반환해 호출자가 capability degraded/blocked를
-명시적으로 선택하게 합니다. stderr는 숨겨 capability 화면에 raw command noise가 섞이지 않게 합니다.
+run_command는 readiness와 git helper가 짧은 stdout 값을 얻을 때 쓰는 공통 wrapper다. 명령이
+실패하거나 stdout이 비어 있으면 None을 반환해 호출자가 capability degraded/blocked를 명시적으로
+선택하게 한다. stderr는 숨겨 capability 화면에 raw command noise가 섞이지 않게 한다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn run_command<const N: usize>(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     program: &str,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     args: [&str; N],
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     current_dir: Option<&str>,
 ) -> Option<String> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut command = Command::new(program);
     command.args(args);
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
     command.stderr(Stdio::null());
     command.env("GIT_TERMINAL_PROMPT", "0");
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let output = command.output().ok()?;
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if !output.status.success() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return None;
     }
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let stdout = String::from_utf8(output.stdout).ok()?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let trimmed = stdout.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
