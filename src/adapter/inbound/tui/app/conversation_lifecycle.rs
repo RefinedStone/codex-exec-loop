@@ -1,3 +1,8 @@
+/*
+ * 학습 주석: conversation_lifecycle.rs는 "어떤 대화 세션을 보고 있는가"를 관리하는 작은 reducer입니다.
+ * runtime reducer가 한 turn의 submit/stream/post-turn 흐름을 다룬다면, lifecycle reducer는 새 draft, 기존 session 선택,
+ * session snapshot load 완료처럼 대화 컨테이너 자체가 바뀌는 사건을 처리합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{ConversationState, ConversationViewModel};
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
@@ -9,6 +14,10 @@ use crate::domain::session_summary::SessionSummary;
 #[derive(Debug, Clone)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum ConversationLifecycleEvent {
+    /*
+     * 학습 주석: LifecycleEvent는 session browser나 shell controller에서 발생한 고수준 navigation event입니다.
+     * NewDraftOpened는 active thread를 버리고 로컬 draft를 만들며, SessionChosen은 아직 snapshot이 없으므로 Loading 상태와 LoadConversation effect를 만듭니다.
+     */
     NewDraftOpened {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_directory: String,
@@ -60,6 +69,11 @@ pub(super) fn reduce_conversation_lifecycle(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     event: ConversationLifecycleEvent,
 ) -> ConversationLifecycleReduction {
+    /*
+     * 학습 주석: lifecycle reducer도 runtime reducer와 같은 패턴을 씁니다.
+     * state 변화는 즉시 계산하지만, 실제 app-server thread read는 LoadConversation effect로 밖에 맡깁니다.
+     * 이렇게 하면 session 선택 UI는 즉시 Loading을 표시하고, 네트워크/프로세스 결과는 ConversationLoaded event로 나중에 돌아옵니다.
+     */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut effects = Vec::new();
 
