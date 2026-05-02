@@ -346,10 +346,10 @@ impl ParallelModeService {
     Running이면서 branch가 baseline에 통합된 경우에만 `mark_slot_cleanup_pending`으로 전이합니다.
     아직 통합되지 않았으면 None을 반환해 slot을 Running으로 유지합니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 통합이 끝난 slot을 cleanup 가능한 상태로 전이할지 workspace 기준으로 판단합니다.
     pub fn mark_workspace_slot_cleanup_pending_if_ready(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: cleanup pending 후보가 되는 slot workspace입니다.
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
         /*
@@ -357,27 +357,22 @@ impl ParallelModeService {
         idle baseline으로 되돌릴 수 있다"는 lease 상태입니다. 이 함수는 workspace만 아는 호출자를
         위해 lease resolution, state guard, branch merge 여부 확인을 한 번에 수행합니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: workspace가 slot lease로 해석되지 않으면 cleanup lifecycle 대상이 아니므로 None입니다.
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
-        // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
         else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: 이미 CleanupPending이면 이 함수는 멱등적으로 현재 lease snapshot을 그대로 돌려줍니다.
         if resolution.lease.state == ParallelModeSlotLeaseState::CleanupPending {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(Some(resolution.lease));
         }
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: Running이 아닌 다른 상태는 cleanup pending으로 바로 갈 수 없는 lifecycle 상태입니다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: agent branch가 baseline에 통합되기 전에는 worktree를 정리하면 산출물을 잃을 수 있습니다.
         if !branch_is_cleanup_ready(&resolution.context.repo_root, &resolution.lease.branch_name) {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
 
@@ -392,7 +387,7 @@ impl ParallelModeService {
             &resolution.lease.slot_id,
             &resolution.lease.agent_id,
         )
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+        // 학습 주석: lifecycle helper의 성공 snapshot을 Option으로 감싸 workspace 기반 facade 계약에 맞춥니다.
         .map(Some)
     }
 
@@ -402,10 +397,10 @@ impl ParallelModeService {
     발견했을 때 사용합니다. cleanup 성공 후 cleaned session detail을 남겨 completion feed와
     supervisor detail이 "slot returned to idle"까지 보여 줄 수 있게 합니다.
     */
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: CleanupPending slot을 실제로 idle baseline 상태로 되돌립니다.
     pub fn cleanup_workspace_slot_if_pending(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: cleanup을 시도할 slot workspace입니다.
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
         /*
@@ -414,17 +409,15 @@ impl ParallelModeService {
         움직입니다. Running 상태를 여기서 cleanup하면 아직 통합되지 않은 agent 작업을 잃을 수
         있습니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: cleanup은 authority projection에 등록된 slot에서만 수행합니다.
         let Some(resolution) =
             resolve_workspace_slot_lease(self.planning_authority.as_ref(), workspace_dir)?
-        // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
         else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         };
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: CleanupPending이 아니면 slot 정리를 실행하지 않습니다.
+        // 이 guard가 Running 작업의 worktree reset을 막는 마지막 방어선입니다.
         if resolution.lease.state != ParallelModeSlotLeaseState::CleanupPending {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(None);
         }
 
@@ -434,7 +427,8 @@ impl ParallelModeService {
         queue delivery 성공 후 slot 재사용을 막는 운영 문제이기 때문입니다. 성공하지 못했는데
         Some을 반환하면 supervisor가 slot을 재사용 가능하다고 오해할 수 있습니다.
         */
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // 학습 주석: pool helper가 false를 돌려주면 baseline reset 또는 lease 정리가 실패한 것입니다.
+        // caller가 slot을 재사용하지 않도록 오류로 승격합니다.
         if !cleanup_slot(
             self.planning_authority.as_ref(),
             &resolution.context.repo_root,
@@ -443,13 +437,13 @@ impl ParallelModeService {
             &resolution.workspace_path,
             &resolution.lease.branch_name,
         ) {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Err(format!(
                 "slot `{}` could not be reset to `{POOL_BASELINE_BRANCH}` after successful completion",
                 resolution.lease.slot_id
             ));
         }
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: cleanup 성공 후 session detail에도 cleaned 이벤트를 남깁니다.
+        // 이 기록은 관찰용이므로 실패해도 이미 완료된 slot reset을 되돌리지 않습니다.
         let _ = record_cleaned_session_detail(
             self.planning_authority.as_ref(),
             &resolution.context.repo_root,
@@ -463,12 +457,12 @@ impl ParallelModeService {
         진행할 수 있게 합니다.
         */
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+        // 학습 주석: cleanup이 끝난 slot lease snapshot을 반환해 caller가 완료 notice나 다음 queue tick을 만들 수 있게 합니다.
         Ok(Some(resolution.lease))
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: 외부 runtime에서 들어온 optional text를 "실제 내용이 있는 값"만 남기도록 정규화합니다.
 fn normalized_optional_text(text: Option<&str>) -> Option<&str> {
     /*
     학습 주석: optional text normalization은 외부 runtime에서 들어오는 빈 문자열과 실제 값의
@@ -483,11 +477,11 @@ fn normalized_optional_text(text: Option<&str>) -> Option<&str> {
 짧은 한 줄로 줄입니다. 가장 먼저 비어 있지 않은 응답 줄을 쓰고, 응답이 없으면 failure context를
 요약으로 사용합니다. 둘 다 없을 때도 기본 문구를 만들어 UI가 빈 summary를 표시하지 않게 합니다.
 */
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: final response와 failure context에서 session feed에 표시할 짧은 completion summary를 고릅니다.
 fn completion_summary_from_text(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: agent가 남긴 최종 사용자 응답입니다. 가장 우선되는 summary 원천입니다.
     final_response_text: Option<&str>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: final response가 없을 때 실패/후속 조치 맥락을 summary로 승격하기 위한 fallback입니다.
     failure_context: Option<&str>,
 ) -> String {
     /*
@@ -496,26 +490,23 @@ fn completion_summary_from_text(
     실패성 완료는 failure context가 더 진단 가치가 높습니다. 마지막 기본 문구는 legacy runtime이나
     이상 이벤트에서도 feed가 빈 문자열을 표시하지 않도록 하는 방어선입니다.
     */
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    // 학습 주석: 정상 응답이 있으면 첫 유효 줄을 그대로 summary로 사용합니다.
     if let Some(summary) = final_response_text
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .and_then(first_non_empty_line)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .filter(|summary| !summary.is_empty())
     {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return summary.to_string();
     }
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    // 학습 주석: final response가 없으면 실패 맥락을 사용해 왜 완료가 특이한지 feed에 드러냅니다.
     if let Some(context) = failure_context {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return format!("agent session finished with follow-up context: {context}");
     }
 
+    // 학습 주석: 둘 다 없을 때도 feed에 빈 문자열이 들어가지 않도록 안정적인 기본 문구를 반환합니다.
     "agent session reported completion without a structured final summary".to_string()
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: 여러 줄 텍스트에서 표시 가능한 첫 번째 줄을 찾는 순수 helper입니다.
 fn first_non_empty_line(text: &str) -> Option<&str> {
     /*
     학습 주석: multi-line final response를 한 줄 summary로 줄일 때는 markdown 제목, 빈 줄,
