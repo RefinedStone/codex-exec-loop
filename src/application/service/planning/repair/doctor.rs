@@ -1,3 +1,8 @@
+/*
+ * 학습 주석: repair/doctor.rs는 planning workspace의 현재 건강 상태를 CLI/TUI가 읽기 쉬운 진단 보고서로 바꿉니다.
+ * prompt.rs나 reconciliation.rs가 실제 복구 prompt/후처리 작업을 다룬다면, doctor는 "지금 상태가 absent/incomplete/invalid/ready 중 무엇인가"를
+ * 빠르게 분류해 사용자에게 다음 행동을 알려주는 관찰용 계층입니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::text::compact_whitespace_detail;
 
@@ -15,6 +20,10 @@ const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningDoctorState {
+    /*
+     * 학습 주석: doctor state는 runtime snapshot status보다 사용자 진단에 맞춘 표현입니다.
+     * ReadyWithoutTask와 ReadyWithTask를 나누는 이유는 둘 다 정상(exit 0)이지만, 하나는 queue가 비어 있고 하나는 바로 실행 가능한 작업이 있기 때문입니다.
+     */
     Absent,
     Incomplete,
     Invalid,
@@ -137,6 +146,10 @@ impl PlanningDoctorReport {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Self {
+        /*
+         * 학습 주석: from_snapshot은 PlanningRuntimeSnapshot의 세부 정보를 doctor report로 투영합니다.
+         * ready 상태일 때만 queue/proposal summary를 보여주고, incomplete/invalid 상태에서는 failure_reason을 issue로 보존합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let planning_state = classify_doctor_state(snapshot);
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.

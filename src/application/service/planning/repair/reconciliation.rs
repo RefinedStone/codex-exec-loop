@@ -1,3 +1,12 @@
+/*
+ * 학습 주석: repair/reconciliation.rs는 Codex turn이 끝난 뒤 planning workspace가 안전한 상태로 남았는지 확인하는 후처리 계층입니다.
+ * 현재 구현은 DB authority가 source of truth가 되면서, operator가 직접 편집해야 하는 result output 같은 보호 파일을
+ * turn 시작 전 snapshot으로 되돌리는 역할에 집중합니다.
+ *
+ * runtime/facade.rs는 turn 시작 전에 load_execution_snapshot을 호출하고, turn 종료 후 reconcile_after_turn을 호출합니다.
+ * 따라서 이 파일은 "turn 실행 전 상태"와 "turn이 바꾼 planning path 목록"을 비교해, 다음 auto-follow나 repair prompt가
+ * 오염된 planning 파일을 기반으로 실행되지 않도록 막는 안전장치입니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::sync::Arc;
 
@@ -56,6 +65,11 @@ impl PlanningExecutionSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningReconciliationResult {
+    /*
+     * 학습 주석: reconciliation result는 단순 성공/실패가 아니라 TUI와 auto-follow policy가 참고할 후처리 보고서입니다.
+     * notices는 operator에게 보여줄 메시지이고, repair_request/auto_followup_block_reason은 나중에 repair worker나
+     * auto-follow 중단 판단으로 연결됩니다. 지금은 보호 파일 복구 중심이지만 타입은 더 넓은 repair 흐름을 담도록 열려 있습니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub notices: Vec<String>,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -169,6 +183,10 @@ impl PlanningReconciliationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<PlanningExecutionSnapshot> {
+        /*
+         * 학습 주석: execution snapshot은 turn을 시작하기 전 보호해야 할 planning 파일의 기준점입니다.
+         * result_output_markdown을 저장해 두었다가, turn 종료 후 해당 파일이 바뀌었으면 commit_planning_workspace_files로 되돌립니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let workspace_record = self
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -195,6 +213,11 @@ impl PlanningReconciliationService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         execution_snapshot: &PlanningExecutionSnapshot,
     ) -> Result<PlanningReconciliationResult> {
+        /*
+         * 학습 주석: reconcile_after_turn은 "Codex가 planning 보호 파일을 건드렸는가"를 changed_planning_file_paths로 먼저 거릅니다.
+         * 관련 변경이 없으면 아무 것도 하지 않고 default result를 반환합니다. 관련 변경이 있으면 turn 전 snapshot을 다시 commit해
+         * source-of-truth 파일이 예상치 못하게 바뀌는 것을 막고, notice를 남겨 TUI가 복구 사실을 표시하게 합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let change_set = PlanningChangeSet::from_paths(changed_planning_file_paths);
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.

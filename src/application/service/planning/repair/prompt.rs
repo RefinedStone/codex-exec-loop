@@ -1,3 +1,11 @@
+/*
+ * 학습 주석: repair/prompt.rs는 planning repair worker에게 줄 instruction 문서를 조립합니다.
+ * reconciliation이나 runtime validation이 문제를 발견하면 PlanningRepairRequest를 만들고,
+ * 이 파일은 accepted authority, rejected candidate, validation errors, retry reason을 PromptDocument section으로 정리합니다.
+ *
+ * 중요한 원칙은 "repair worker가 직접 파일을 고치는 것이 아니라 task mutation contract로 DB authority를 고치게 한다"는 점입니다.
+ * 그래서 add_planning_task_mutation_sections와 repair_constraints를 함께 넣어 출력 형식을 좁힙니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::collections::{BTreeSet, HashMap};
 
@@ -63,6 +71,11 @@ pub fn build_planning_repair_prompt(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     retry_reason: Option<PlanningRepairRetryReason>,
 ) -> String {
+    /*
+     * 학습 주석: build_planning_repair_prompt는 repair session 하나에 들어갈 전체 prompt를 만듭니다.
+     * accepted_*는 현재 신뢰 가능한 DB authority이고, rejected_*는 직전 후보가 왜 실패했는지 보여주는 비교 자료입니다.
+     * attempt_number/max_attempts/retry_reason은 같은 실패를 반복하지 않도록 worker에게 현재 재시도 맥락을 알려줍니다.
+     */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let prompt_context = build_planning_repair_prompt_context(request, previous_handoff);
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -172,6 +185,10 @@ fn repair_handoff(handoff: PlanningRepairPromptHandoff<'_>) -> PlanningPromptHan
 
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn validation_lines(request: &PlanningRepairRequest) -> Vec<String> {
+    /*
+     * 학습 주석: validation_lines는 실패 원인을 worker가 놓치지 않도록 prompt의 validation section으로 평탄화합니다.
+     * failure_summary는 사람이 읽는 한 줄 요약이고, validation_errors는 구체적인 validator 메시지 목록입니다.
+     */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut lines = vec![format!("failure_summary={}", request.failure_summary)];
     lines.extend(
