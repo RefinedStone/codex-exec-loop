@@ -1,3 +1,8 @@
+/*
+ * 학습 주석: runtime/policy.rs는 planning snapshot을 "자동으로 다음 turn을 이어갈 수 있는가"와
+ * "사용자에게 어떤 상태 문구를 보여줄 것인가"로 해석하는 정책 계층입니다.
+ * prompt.rs가 데이터를 모으고 facade.rs가 외부 API를 제공한다면, 이 파일은 그 사이에서 실행 가능/차단/요약 문구를 결정합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::runtime::prompt::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
@@ -16,6 +21,11 @@ pub struct PlanningRuntimePolicyService;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub enum PlanningAutoFollowBlockReason {
+    /*
+     * 학습 주석: block reason은 단순 bool 대신 자동 follow-up이 멈춘 이유를 구체적으로 보존합니다.
+     * 이 값은 preview/status projection으로 이어져 operator가 "파일이 invalid인지", "queue head가 없는지",
+     * "같은 queue head 반복 방지에 걸렸는지"를 구분해서 볼 수 있게 합니다.
+     */
     InvalidWorkspace,
     ActionableQueueRequired,
     RepeatedQueueHead,
@@ -155,6 +165,11 @@ impl PlanningRuntimePolicyService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningAutoFollowPolicyDecision {
+        /*
+         * 학습 주석: 자동 follow-up은 queue-driven execution만 허용합니다.
+         * 따라서 snapshot이 invalid이거나, 이전에 넘긴 queue head와 같은 task가 다시 감지되거나,
+         * workspace가 준비됐어도 actionable queue head가 없으면 새 prompt를 만들지 않습니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
             // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
@@ -213,6 +228,11 @@ impl PlanningRuntimePolicyService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         request: PlanningRuntimeSummaryRequest<'_>,
     ) -> PlanningRuntimeSummaryView {
+        /*
+         * 학습 주석: summary view는 내부 snapshot을 TUI가 바로 읽을 수 있는 상태 모델로 낮춥니다.
+         * is_repairing/has_running_turn 같은 runtime 상태가 snapshot보다 우선할 수 있으므로,
+         * 여기서 PlanningWorkspaceState로 다시 합성해 화면의 한 줄 상태와 popup detail이 같은 기준을 쓰게 합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let workspace_state = if request.is_repairing {
             // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -273,6 +293,10 @@ impl PlanningRuntimePolicyService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningRuntimePreviewView {
+        /*
+         * 학습 주석: preview는 실제 auto-follow prompt를 보내기 전에 "다음 자동 입력이 어떤 상태인지" 보여주는 얇은 뷰입니다.
+         * Blocked일 때는 reason별 설명을 만들고, 허용 상태일 때는 snapshot의 queue/proposal/failure detail을 짧게 노출합니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let PlanningAutoFollowPolicyDecision::Blocked(reason) = decision {
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
@@ -337,6 +361,11 @@ impl PlanningRuntimePolicyService {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         request: PlanningRuntimeSummaryLineRequest<'_>,
     ) -> Option<String> {
+        /*
+         * 학습 주석: build_summary_line은 여러 상태 조각을 하나의 footer/status line으로 압축합니다.
+         * 항상 보여야 하는 상황(always_show/notice/repair/running)이 아니면 uninitialized planning은 숨겨,
+         * 기본 대화 화면이 불필요한 planning noise로 채워지지 않게 합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
             // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.

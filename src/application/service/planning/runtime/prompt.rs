@@ -1,3 +1,13 @@
+/*
+ * 학습 주석: runtime/prompt.rs는 planning workspace의 실제 파일/DB 상태를 읽어 PlanningRuntimeSnapshot으로 압축합니다.
+ * snapshot은 이후 policy.rs, facade.rs, TUI overlay, auto-follow prompt assembly가 공통으로 참조하는 "현재 planning 세계의 사진"입니다.
+ *
+ * 이 파일의 핵심 흐름:
+ * 1. PlanningWorkspacePort로 operator 파일을 읽고, PlanningTaskRepositoryPort로 DB task authority를 읽습니다.
+ * 2. PlanningValidationService로 directions/task/result-output의 유효성을 검사합니다.
+ * 3. domain::PriorityQueueService로 queue projection을 계산합니다.
+ * 4. fragment.rs의 build_prompt_fragment가 Codex turn에 붙일 compact planning context를 만듭니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::collections::hash_map::DefaultHasher;
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
@@ -68,6 +78,11 @@ pub enum PlanningRuntimeWorkspaceStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct PlanningRuntimeSnapshot {
+    /*
+     * 학습 주석: snapshot은 service 계층 밖으로 내보내는 immutable 상태 묶음입니다.
+     * 필드 대부분이 private인 이유는 외부 코드가 직접 조립하지 않고, 아래 constructor/loader를 통해
+     * workspace_status, queue_head, signatures, failure_reason의 불변 관계를 지키게 하기 위해서입니다.
+     */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     workspace_present: bool,
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -233,6 +248,11 @@ impl PlanningRuntimeSnapshot {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         queue_projection: PriorityQueueProjection,
     ) -> Self {
+        /*
+         * 학습 주석: ready_with_queue_projection은 정상 workspace의 가장 정보가 많은 constructor입니다.
+         * queue_head 존재 여부로 ReadyWithTask/ReadyNoTask를 결정하고, 전체 projection을 보존해 UI가
+         * active/proposed/skipped 목록을 더 자세히 보여줄 수 있게 합니다.
+         */
         Self {
             // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             workspace_present: true,
@@ -472,6 +492,11 @@ impl PlanningPromptService {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn load_runtime_snapshot(&self, workspace_dir: &str) -> Result<PlanningRuntimeSnapshot> {
+        /*
+         * 학습 주석: load_runtime_snapshot은 planning runtime의 데이터 파이프라인 전체를 실행합니다.
+         * 파일이 없으면 uninitialized, 일부만 있으면 invalid, validation이 실패해도 invalid, queue build가 실패해도 invalid로 접습니다.
+         * 정상인 경우에만 prompt fragment와 queue projection을 가진 ready snapshot을 반환합니다.
+         */
         self.authority_seed_service
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .ensure_default_authority(workspace_dir)?;
@@ -493,6 +518,10 @@ impl PlanningPromptService {
         let missing_paths = missing_workspace_paths(&workspace_record);
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if !missing_paths.is_empty() {
+            /*
+             * 학습 주석: workspace_present는 true지만 필수 파일이 빠진 상태입니다.
+             * 이 상태를 uninitialized로 보지 않는 이유는 사용자가 이미 planning을 시작했으므로 repair/doctor 안내가 필요하기 때문입니다.
+             */
             // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Ok(PlanningRuntimeSnapshot::invalid(format!(
                 "planning files incomplete: missing {}",
@@ -540,6 +569,10 @@ impl PlanningPromptService {
             &direction_authority_snapshot.directions,
             &authority_task_authority_json,
         );
+        /*
+         * 학습 주석: workspace_files는 operator가 보는 directions/result-output과 DB가 들고 있는 task authority를 함께 묶습니다.
+         * task authority는 DB snapshot을 JSON 문자열로 직렬화한 값이라 기존 파일 기반 validator 계약과 호환됩니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut validation_result = self
             // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
@@ -614,6 +647,10 @@ impl PlanningPromptService {
             Ok(queue_projection) => queue_projection,
             // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Err(error) => {
+                /*
+                 * 학습 주석: validation report가 놓친 실행 전제 문제는 queue build error로 들어옵니다.
+                 * 이 경우에도 panic하지 않고 invalid snapshot으로 바꿔 TUI와 repair 흐름이 문제를 설명할 수 있게 합니다.
+                 */
                 // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return Ok(PlanningRuntimeSnapshot::invalid(format!(
                     "planning queue build failed: {error}"
@@ -648,6 +685,10 @@ impl PlanningPromptService {
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let prompt_fragment =
             build_prompt_fragment(&directions, &queue_projection, result_output_markdown);
+        /*
+         * 학습 주석: prompt_fragment는 "현재 planning context"를 Codex turn에 붙이는 압축 텍스트입니다.
+         * queue_projection은 자동 실행 대상과 제안 목록을 제공하고, result_output_markdown은 이전 결과/운영자 메모를 전달합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let queue_idle_prompt_path =
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
