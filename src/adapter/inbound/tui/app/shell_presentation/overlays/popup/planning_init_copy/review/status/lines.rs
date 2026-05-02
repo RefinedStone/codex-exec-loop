@@ -1,37 +1,44 @@
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: editing module은 turn budget 입력을 수정 중일 때만 나타나는 상태 줄을 만듭니다.
+// status/lines는 mode별 line builder를 한곳에서 조립하는 index입니다.
 #[path = "lines/editing.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod editing;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: first_error_tail은 validation error가 있을 때 status 끝에 붙는 조건부 줄을 만듭니다.
+// prefix와 mode lines 뒤에 붙기 때문에 별도 module로 둡니다.
 #[path = "lines/first_error_tail.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod first_error_tail;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: non_editing module은 일반 review 상태에서 가능한 promotion/close/detail actions를
+// 설명하는 줄을 만듭니다. editing mode와 다른 controls를 보여 주기 위해 분리합니다.
 #[path = "lines/non_editing.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod non_editing;
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: prefix module은 validation state와 turn budget처럼 mode와 무관하게 항상 앞쪽에
+// 표시할 상태 줄을 담당합니다.
 #[path = "lines/prefix.rs"]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod prefix;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: 모든 status builder는 ratatui `Line` vector를 반환합니다. 이 layer는 문자열 상태를
+// renderer가 바로 배치할 수 있는 presentation primitive로 정규화합니다.
 use ratatui::text::Line;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: copy는 simple review popup의 상태 snapshot입니다. validation, budget label, editing flag,
+// first error를 읽어 status area를 조립합니다.
 use crate::adapter::inbound::tui::app::shell_presentation::overlays::popup::planning::copy::PlanningSimpleReviewCopy;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: `build_simple_review_status_lines`는 status area의 text lines를 순서대로 구성합니다.
+// 항상 보이는 prefix를 먼저 만들고, editing 여부에 따라 control 안내를 바꾼 뒤, 첫 validation
+// error가 있으면 tail로 덧붙입니다.
 pub(super) fn build_simple_review_status_lines(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: `copy`는 화면에 표시할 현재 simple review 상태입니다. 이 함수는 읽기만 하므로
+    // borrow로 받아 상위 view builder가 같은 copy로 key line도 만들 수 있게 합니다.
     copy: &PlanningSimpleReviewCopy,
 ) -> Vec<Line<'static>> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // 학습 주석: prefix는 validation state와 turn budget label이라 editing/non-editing 양쪽에서
+    // 공통으로 보입니다. 이후 mode별 줄과 error tail을 같은 vector에 이어 붙입니다.
     let mut status_lines = prefix::build_simple_review_status_prefix_lines(
         copy.validation_ok,
         &copy.max_auto_turns_label,
     );
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+    // 학습 주석: turn budget을 편집 중이면 Enter/Esc 중심의 입력 안내가 필요하고, 평상시에는
+    // promote/detail/close action 안내가 필요합니다.
     if copy.is_turn_budget_editing {
         status_lines.extend(editing::build_simple_review_editing_status_lines(
             copy.turn_budget_buffer.as_str(),
@@ -42,5 +49,7 @@ pub(super) fn build_simple_review_status_lines(
     status_lines.extend(first_error_tail::build_simple_review_first_error_tail_line(
         copy.first_error.as_deref(),
     ));
+    // 학습 주석: status_lines는 prefix -> mode-specific lines -> optional first error 순서로 반환됩니다.
+    // 이 순서가 popup 하단에서 사용자가 먼저 전체 상태를 보고, 다음 행동과 오류를 이어 읽게 합니다.
     status_lines
 }

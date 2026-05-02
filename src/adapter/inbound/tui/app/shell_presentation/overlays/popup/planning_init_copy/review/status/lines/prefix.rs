@@ -1,25 +1,29 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// 학습 주석: prefix lines도 popup renderer가 바로 그릴 수 있는 `Line`으로 만들어집니다. 이 깊은
+// relative import는 shell presentation layer의 Line type alias로 돌아갑니다.
 use super::super::super::super::super::super::super::super::Line;
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// 학습 주석: `build_simple_review_status_prefix_lines`는 editing 여부와 무관하게 항상 보여 줄 상태
+// summary를 만듭니다. validation 결과와 turn budget은 사용자가 promotion 가능성을 판단하는 첫 정보입니다.
 pub(super) fn build_simple_review_status_prefix_lines(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: validation_ok는 staged simple scaffold를 바로 promote할 수 있는지 나타냅니다.
     validation_ok: bool,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: max_auto_turns_label은 이미 presentation-friendly 문자열로 만들어진 turn budget 표시입니다.
     max_auto_turns_label: &str,
 ) -> Vec<Line<'static>> {
     vec![
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 첫 줄은 validation state를 사용자 언어로 압축합니다. bool을 그대로 보이지 않고
+        // ok/needs attention으로 바꿔 action 가능성을 바로 읽게 합니다.
         Line::from(format!(
             "validation state: {}",
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+            // 학습 주석: validation이 실패했을 때는 뒤쪽 first error tail이 구체적인 이유를 보완합니다.
             if validation_ok {
                 "ok"
             } else {
                 "needs attention"
             }
         )),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 두 번째 줄은 현재 자동 턴 예산을 보여 줍니다. editing mode에 들어가기 전후 모두
+        // 같은 위치에서 예산 상태를 확인할 수 있게 하는 고정 prefix입니다.
         Line::from(format!("turn budget: {max_auto_turns_label}")),
     ]
 }
