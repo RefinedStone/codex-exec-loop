@@ -3,70 +3,58 @@
  * runtime reducer가 한 turn의 submit/stream/post-turn 흐름을 다룬다면, lifecycle reducer는 새 draft, 기존 session 선택,
  * session snapshot load 완료처럼 대화 컨테이너 자체가 바뀌는 사건을 처리합니다.
  */
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{ConversationState, ConversationViewModel};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::session_summary::SessionSummary;
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
+/*
+ * 학습 주석: LifecycleEvent는 session browser나 shell controller에서 발생한 고수준 navigation event입니다.
+ * 이 reducer는 app-server를 직접 읽지 않고 "어떤 conversation container를 보여야 하는가"만 결정합니다.
+ */
 pub(super) enum ConversationLifecycleEvent {
-    /*
-     * 학습 주석: LifecycleEvent는 session browser나 shell controller에서 발생한 고수준 navigation event입니다.
-     * NewDraftOpened는 active thread를 버리고 로컬 draft를 만들며, SessionChosen은 아직 snapshot이 없으므로 Loading 상태와 LoadConversation effect를 만듭니다.
-     */
     NewDraftOpened {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 새 draft는 아직 thread id가 없으므로 workspace만으로 Ready view model을 재구성합니다.
         workspace_directory: String,
     },
     SessionChosen {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 목록의 summary는 shell chrome에 보관하고, 본문은 effect가 snapshot을 가져온 뒤 채웁니다.
         session: SessionSummary,
     },
     ConversationLoaded {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: inbound adapter가 app-server/session read 결과를 reducer가 이해하는 성공/실패 값으로 접습니다.
         result: Result<ConversationSnapshot, String>,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: snapshot에 cwd가 비어 있거나 draft fallback이 필요할 때 같은 shell 기준 경로를 유지합니다.
         draft_workspace_directory: String,
     },
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
+// 학습 주석: Effect는 reducer 밖에서 실행할 IO 요청입니다. 이 파일은 어떤 thread를 읽을지만 선언합니다.
 pub(super) enum ConversationLifecycleEffect {
     LoadConversation { thread_id: String },
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+// 학습 주석: Lifecycle state는 conversation body와 session chrome을 함께 보관해 두 화면이 같은 선택을 보게 합니다.
 pub(super) struct ConversationLifecycleState {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: body 영역의 Loading/Ready/Failed 상태입니다.
     pub conversation_state: ConversationState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: 현재 shell이 "선택된 기존 세션"으로 강조할 summary입니다. draft에서는 비워 둡니다.
     pub active_session: Option<SessionSummary>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: stop/interrupt 같은 turn 제어 truth는 snapshot 재구성 시에도 동일한 source of truth를 씁니다.
     pub turn_control_truth: ConversationRuntimeControlTruth,
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+// 학습 주석: Reduction은 순수한 상태 갱신 결과와 adapter가 실행할 effect queue를 한 번에 반환합니다.
 pub(super) struct ConversationLifecycleReduction {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub state: ConversationLifecycleState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     pub effects: Vec<ConversationLifecycleEffect>,
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn reduce_conversation_lifecycle(
     mut state: ConversationLifecycleState,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     event: ConversationLifecycleEvent,
 ) -> ConversationLifecycleReduction {
     /*
@@ -74,49 +62,40 @@ pub(super) fn reduce_conversation_lifecycle(
      * state 변화는 즉시 계산하지만, 실제 app-server thread read는 LoadConversation effect로 밖에 맡깁니다.
      * 이렇게 하면 session 선택 UI는 즉시 Loading을 표시하고, 네트워크/프로세스 결과는 ConversationLoaded event로 나중에 돌아옵니다.
      */
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut effects = Vec::new();
 
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match event {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ConversationLifecycleEvent::NewDraftOpened {
             workspace_directory,
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         } => {
+            // 학습 주석: 새 draft는 session 목록의 선택과 독립적이므로 active_session을 먼저 끊어 shell 강조를 없앱니다.
             state.active_session = None;
             state.conversation_state =
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 ConversationState::ready(ConversationViewModel::new_draft_with_truth(
                     workspace_directory,
                     state.turn_control_truth,
                 ));
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         ConversationLifecycleEvent::SessionChosen { session } => {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+            // 학습 주석: session summary는 move되어 state에 들어가므로 effect용 thread id를 먼저 복사합니다.
             let thread_id = session.id.clone();
             state.active_session = Some(session);
             state.conversation_state = ConversationState::Loading;
             effects.push(ConversationLifecycleEffect::LoadConversation { thread_id });
         }
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         ConversationLifecycleEvent::ConversationLoaded {
             result,
             draft_workspace_directory,
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         } => {
             state.conversation_state = match result {
-                // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
                 Ok(snapshot) => {
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                    // 학습 주석: loaded snapshot도 runtime truth를 새로 만들지 않고 shell이 가진 truth를 주입받습니다.
                     ConversationState::ready(ConversationViewModel::from_snapshot_with_truth(
                         snapshot,
                         draft_workspace_directory,
                         state.turn_control_truth,
                     ))
                 }
-                // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
                 Err(message) => ConversationState::Failed(message),
             };
         }
@@ -125,74 +104,54 @@ pub(super) fn reduce_conversation_lifecycle(
     ConversationLifecycleReduction { state, effects }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 mod tests {
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
     use super::*;
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn choosing_session_marks_state_loading_and_emits_load_effect() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 선택 직후에는 snapshot을 기다리므로 Ready 내용 대신 Loading과 effect 계약을 검증합니다.
         let state = sample_state();
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let session = sample_session("thread-2");
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let reduced = reduce_conversation_lifecycle(
             state,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationLifecycleEvent::SessionChosen { session },
         );
 
         assert!(matches!(
             reduced.state.conversation_state,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationState::Loading
         ));
         assert_eq!(
             reduced
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .state
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .active_session
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .as_ref()
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .map(|session| session.id.as_str()),
             Some("thread-2")
         );
         assert_eq!(
             reduced.effects,
             vec![ConversationLifecycleEffect::LoadConversation {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 thread_id: "thread-2".to_string()
             }]
         );
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn new_draft_replaces_active_session_and_sets_workspace() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: draft 전환은 기존 session 선택을 해제하고 즉시 입력 가능한 Ready 상태로 돌아가야 합니다.
         let mut state = sample_state();
         state.active_session = Some(sample_session("thread-1"));
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let reduced = reduce_conversation_lifecycle(
             state,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ConversationLifecycleEvent::NewDraftOpened {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 workspace_directory: "/tmp/new-root".to_string(),
             },
         );
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let ConversationState::Ready(conversation) = reduced.state.conversation_state else {
             panic!("draft should become ready");
         };
@@ -200,47 +159,32 @@ mod tests {
         assert_eq!(conversation.cwd, "/tmp/new-root");
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn sample_state() -> ConversationLifecycleState {
+        // 학습 주석: 기본 fixture는 이미 Ready인 draft에서 lifecycle event만 바꿔 보는 형태로 둡니다.
         ConversationLifecycleState {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             conversation_state: ConversationState::ready(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 ConversationViewModel::new_draft_with_truth(
                     "/tmp/root".to_string(),
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     ConversationRuntimeControlTruth::default(),
                 ),
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             active_session: None,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             turn_control_truth: ConversationRuntimeControlTruth::default(),
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn sample_session(id: &str) -> SessionSummary {
+        // 학습 주석: reducer는 summary의 id/cwd만 직접 의미 있게 쓰지만 전체 struct를 채워 실제 목록 입력과 맞춥니다.
         SessionSummary {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             id: id.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             name: Some(id.to_string()),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             preview: "preview".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             cwd: "/tmp/root".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             source: "codex".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             model_provider: "openai".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             updated_at_epoch: 1_700_000_000,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             status_type: "ready".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             path: format!("/tmp/root/{id}.json"),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             git_branch: Some("main".to_string()),
         }
     }
