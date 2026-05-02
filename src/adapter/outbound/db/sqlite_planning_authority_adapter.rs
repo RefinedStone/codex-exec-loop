@@ -1,142 +1,160 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+/*
+학습 주석:
+이 파일은 SQLite 기반 planning authority adapter의 최상위 조립 지점입니다.
+
+하위 모듈들은 active document, draft, task row, runtime projection처럼 저장소 내부 관심사를 나눠 맡고,
+이 파일은 application port trait이 요구하는 함수들을 SQLite transaction 흐름으로 연결합니다. 즉 여기의
+함수들은 대부분 "port method -> workspace 위치 해석 -> DB connection 열기 -> 하위 저장소 함수 호출 ->
+metadata/revision 갱신"이라는 adapter orchestration 역할을 합니다.
+
+프로젝트 구조 관점에서 이 타입은 outbound adapter입니다. domain/application은 SQLite를 직접 알지 않고
+`PlanningAuthorityPort`와 `PlanningTaskRepositoryPort`만 의존하며, 이 파일이 그 port 계약을 실제 DB
+작업으로 번역합니다.
+*/
 use std::collections::{BTreeMap, BTreeSet};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::fs;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use std::path::{Path, PathBuf};
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use anyhow::{Context, Result, anyhow};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use rusqlite::{Connection, OptionalExtension, params};
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningDirectionAuthoritySnapshot,
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot,
     PlanningTaskRepositoryPort,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
 };
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: active snapshot 테이블을 다루는 하위 모듈입니다.
 mod active_documents;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: repo-scoped draft staging을 SQLite 행으로 저장하는 하위 모듈입니다.
 mod draft_files;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: filesystem workspace port가 git-backed workspace를 발견했을 때 호출하는 trait adapter입니다.
 mod repo_scoped_workspace;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: parallel/app-server runtime projection tables를 다루는 하위 모듈입니다.
 mod runtime_projection;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: schema, metadata, authority document load/store의 공통 저장소 모듈입니다.
 mod store;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: task authority 문서와 queue projection을 정규화된 task table로 펼치는 모듈입니다.
 mod task_authority_rows;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: workspace path를 canonical repo root와 authority DB 위치로 해석하는 모듈입니다.
 mod workspace_paths;
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use self::active_documents::{
     apply_active_workspace_record, remove_active_documents, set_active_document,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use self::store::*;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use self::task_authority_rows::{clear_task_authority_tables, replace_task_authority_tables};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
     PlanningAuthorityShadowStoreSyncState,
 };
 
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker입니다.
 const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 5;
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분합니다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: official refresh claim은 repo 전체에 하나만 있어야 하므로 고정 scope key를 사용합니다.
 const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: distributor queue head claim을 runtime_claims table에서 식별하는 claim kind입니다.
 const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: claim owner가 갱신하지 않은 채 이 시간을 넘기면 다른 worker가 stale claim으로 볼 수 있습니다.
 const CLAIM_STALE_AFTER_SECS: i64 = 300;
-// 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
+// 학습 주석: task authority 문서 version을 metadata table에 저장할 때 쓰는 key입니다.
 const TASK_LEDGER_VERSION_METADATA_KEY: &str = "task_authority_version";
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Default)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+/*
+학습 주석:
+SQLite planning authority adapter의 값 타입입니다.
+
+필드를 갖지 않는 이유는 모든 상태가 repo-scoped authority DB 파일과 transaction 안에 있기 때문입니다.
+adapter 인스턴스는 connection pool이나 cache를 소유하지 않고, 호출마다 workspace에서 DB 위치를 해석해
+connection을 엽니다. 그래서 `Default`와 `new()`는 단순한 생성자 역할만 합니다.
+*/
 pub struct SqlitePlanningAuthorityAdapter;
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl SqlitePlanningAuthorityAdapter {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    상태 없는 adapter 값을 만듭니다.
+
+    application wiring에서는 구체 타입을 생성해 port trait object나 service dependency로 넘깁니다. 이
+    생성자는 그런 조립 지점에서 `Default::default()` 대신 명시적인 의도를 보여주기 위한 API입니다.
+    */
     pub fn new() -> Self {
         Self
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    repo-scoped active workspace 파일 snapshot을 authority DB에 commit합니다.
+
+    `PlanningWorkspaceLoadRecord`는 filesystem workspace adapter가 사용하는 load record와 같은 형태입니다.
+    이 함수는 그 record를 SQLite의 `active_documents` table로 반영하고, 실제 내용이 바뀌었을 때만
+    `planning_revision`을 올립니다. revision은 runtime projection과 polling 쪽에서 "planning 상태가
+    갱신되었는가"를 판단하는 기준이므로, no-op commit에서 불필요하게 증가하면 downstream worker가
+    쓸데없이 다시 반응할 수 있습니다.
+
+    metadata 갱신, active document 적용, revision bump는 하나의 transaction 안에서 실행됩니다. 따라서
+    active snapshot과 revision은 항상 같은 commit 시점의 상태로 유지됩니다.
+    */
     pub(crate) fn commit_active_workspace_files(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open authority-store active commit transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_active_commit_at")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let changed = apply_active_workspace_record(&transaction, record)?;
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if changed {
             bump_planning_revision(&transaction)?;
         }
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit authority-store active commit transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    active workspace snapshot을 `PlanningWorkspaceLoadRecord`로 읽습니다.
+
+    이 함수는 commit 함수의 반대 방향 adapter입니다. workspace path에서 같은 authority DB 위치를 찾고,
+    store 모듈의 `load_active_workspace_record`로 실제 record 조립을 위임합니다. 상위 caller는 SQLite
+    table 구조를 모르고 기존 workspace port의 record만 받습니다.
+    */
     pub(crate) fn load_active_workspace_files(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let connection = open_authority_connection(&location)?;
         load_active_workspace_record(&connection)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+    학습 주석:
+    active snapshot에서 planning 파일 하나만 읽습니다.
+
+    전체 workspace record가 필요 없는 호출 경로를 위한 좁은 API입니다. 예를 들어 특정 authority 문서나
+    결과 파일 하나만 확인할 때 전체 active document map을 application 쪽으로 끌어올리지 않아도 됩니다.
+    row가 없으면 `None`이므로, caller는 "파일 없음"과 "DB 조회 실패"를 구분할 수 있습니다.
+    */
     pub(crate) fn load_active_planning_file(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         relative_path: &str,
     ) -> Result<Option<String>> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let connection = open_authority_connection(&location)?;
         load_active_document(&connection, relative_path)
     }
