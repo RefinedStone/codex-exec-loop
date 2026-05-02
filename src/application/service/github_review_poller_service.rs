@@ -99,11 +99,16 @@ impl GithubReviewPollerService {
         })
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: `collect_changes`는 정렬된 현재 activity와 직전 poll cursor를 비교해
+    // UI나 상위 application layer가 "이번 poll에서 새로 본 GitHub 변화"만 처리하도록 돕는
+    // 내부 diff helper입니다.
     fn collect_changes(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: `events`는 방금 `load_snapshot`이 GitHub PR에서 읽어 온 review/comment
+        // activity입니다. 이 함수는 slice로 빌려 읽기 때문에 caller의 snapshot ownership을
+        // 가져오지 않고, 새 변화로 판정된 항목만 마지막에 복제합니다.
         events: &[GithubPullRequestActivityEvent],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: `previous_state`는 직전 poll에서 저장한 timestamp cursor와 같은 timestamp
+        // bucket의 event identity 집합입니다. 값이 없으면 아직 baseline을 세우지 않은 첫 poll입니다.
         previous_state: Option<&GithubPullRequestPollState>,
     ) -> Vec<GithubPullRequestActivityEvent> {
         /*
@@ -112,7 +117,9 @@ impl GithubReviewPollerService {
         놓칠 수 있습니다. 반대로 identity set만 쓰면 오래된 event까지 매 poll마다 비교해야 하므로,
         latest timestamp를 큰 경계로 두고 같은 timestamp 안에서만 identity로 중복을 제거합니다.
         */
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 첫 poll은 "변화 탐지"가 아니라 "현재 GitHub 상태를 기준점으로 저장"하는
+        // 단계입니다. 여기서 과거 event를 모두 반환하지 않아야 사용자가 이미 지나간 review를
+        // 새 알림처럼 받지 않습니다.
         let Some(previous_state) = previous_state else {
             /*
             학습 주석: previous_state가 없으면 첫 poll입니다. 이때 기존 GitHub activity를 모두
@@ -123,7 +130,9 @@ impl GithubReviewPollerService {
             return Vec::new();
         };
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 이전 poll state는 있었지만 latest timestamp가 없다면 직전 snapshot에는
+        // activity가 하나도 없었습니다. 이제 보이는 현재 event들은 모두 비어 있던 기준점 이후에
+        // 처음 발견된 변화로 다루어야 합니다.
         let Some(latest_submitted_at) = previous_state.latest_submitted_at.as_ref() else {
             /*
             학습 주석: 이전 state가 있지만 latest timestamp가 없다는 것은 과거 snapshot이 비어
@@ -135,9 +144,12 @@ impl GithubReviewPollerService {
         };
 
         events
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: 현재 snapshot의 각 event를 순회하며 cursor와 비교합니다. snapshot 생성부가
+            // 정렬을 담당하므로 여기서는 순서를 다시 만들지 않고 포함 여부만 판단합니다.
             .iter()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: filter closure는 "직전 latest timestamp보다 늦은 event"와 "같은 timestamp지만
+            // 직전 latest bucket에는 없던 event"만 통과시킵니다. 이 두 조건이 timestamp cursor와
+            // identity set을 하나의 증분 diff 규칙으로 묶습니다.
             .filter(|event| {
                 /*
                 학습 주석: timestamp가 cursor보다 크면 명백한 새 event입니다. timestamp가 같으면
@@ -146,17 +158,24 @@ impl GithubReviewPollerService {
                 안전하게 구분됩니다.
                 */
                 event.submitted_at > *latest_submitted_at
-                    // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
+                    // 학습 주석: 같은 timestamp의 event는 시간만으로 새/기존을 나눌 수 없습니다. 그래서
+                    // 직전 state가 기억한 identity set에 없을 때만 새 activity로 인정합니다.
                     || (event.submitted_at == *latest_submitted_at
                         && !previous_state
-                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+                            // 학습 주석: `seen_events_at_latest_timestamp`는 직전 poll의 맨 끝 timestamp에
+                            // 함께 있던 event identity만 담습니다. cursor 경계에서만 쓰이는 좁은
+                            // 중복 제거 장치라 오래된 모든 event를 저장할 필요가 없습니다.
                             .seen_events_at_latest_timestamp
-                            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+                            // 학습 주석: `identity()`는 review와 review comment를 구분하는 kind까지 포함한
+                            // key를 만듭니다. GitHub id 공간이 종류별로 겹쳐도 contains 검사가
+                            // 잘못된 중복 판정을 하지 않게 하는 연결점입니다.
                             .contains(&event.identity()))
             })
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: iterator가 들고 있는 것은 `events` slice 안의 참조입니다. 반환 타입은 소유한
+            // event vector이므로, 통과한 event를 복제해 caller가 독립적으로 changes를 보관하게 합니다.
             .cloned()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
+            // 학습 주석: collect는 통과한 owned event들을 하나의 `Vec`으로 모아 poll result의
+            // `changes` 필드에 바로 넣을 수 있는 형태로 마무리합니다.
             .collect()
     }
 }
