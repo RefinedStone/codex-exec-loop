@@ -48,7 +48,7 @@ pub use self::runtime::facade::{
     PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeRenderedPreview,
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
-    PlanningRuntimeSummaryRequest, PlanningTaskHandoff,
+    PlanningRuntimeSummaryRequest, PlanningSubSessionHandoff, PlanningTaskHandoff,
 };
 pub use self::runtime::intake::{
     LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator, PlanningTaskIntakeCommitResult,

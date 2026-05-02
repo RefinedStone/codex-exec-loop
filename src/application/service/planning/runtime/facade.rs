@@ -11,7 +11,8 @@ use crate::application::service::planning::runtime::prompt::{
 use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::prompt_component::PromptDocument;
 use crate::application::service::turn_prompt_assembly_service::{
-    MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, TurnPromptAssemblyService,
+    MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionPromptAssemblyRequest,
+    TurnPromptAssemblyService,
 };
 use crate::domain::planning::PriorityQueueTask;
 use anyhow::Result;
@@ -60,6 +61,12 @@ pub struct PlanningRuntimeRenderedPreview {
 pub struct PlanningMainSessionHandoff {
     pub prompt: String,
     pub transcript_text: String,
+    pub task: PlanningTaskHandoff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningSubSessionHandoff {
+    pub prompt: String,
     pub task: PlanningTaskHandoff,
 }
 
@@ -133,6 +140,24 @@ impl PlanningRuntimeFacadeService {
         self.build_task_handoff_with_planning_fragment(task, None)
     }
 
+    pub fn build_sub_session_task_handoff(
+        &self,
+        task: &PriorityQueueTask,
+    ) -> PlanningSubSessionHandoff {
+        let task_prompt = render_builtin_next_task_handoff_prompt(task);
+        let prompt = self
+            .turn_prompt_assembly_service
+            .build_sub_session_prompt(SubSessionPromptAssemblyRequest {
+                handoff_prompt: &task_prompt,
+            })
+            .expect("queued sub session handoff prompt should not be empty");
+
+        PlanningSubSessionHandoff {
+            prompt,
+            task: planning_task_handoff_from_queue_task(task),
+        }
+    }
+
     fn build_task_handoff_with_planning_fragment(
         &self,
         task: &PriorityQueueTask,
@@ -150,14 +175,7 @@ impl PlanningRuntimeFacadeService {
         PlanningMainSessionHandoff {
             prompt,
             transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
-            task: PlanningTaskHandoff {
-                task_id: task.task_id.trim().to_string(),
-                task_title: task.task_title.trim().to_string(),
-                direction_id: task.direction_id.trim().to_string(),
-                combined_priority: task.combined_priority,
-                updated_at: task.updated_at.trim().to_string(),
-                status_label: task.status.label().to_string(),
-            },
+            task: planning_task_handoff_from_queue_task(task),
         }
     }
 
@@ -261,6 +279,17 @@ impl PlanningRuntimeFacadeService {
             changed_planning_file_paths,
             execution_snapshot,
         )
+    }
+}
+
+fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTaskHandoff {
+    PlanningTaskHandoff {
+        task_id: task.task_id.trim().to_string(),
+        task_title: task.task_title.trim().to_string(),
+        direction_id: task.direction_id.trim().to_string(),
+        combined_priority: task.combined_priority,
+        updated_at: task.updated_at.trim().to_string(),
+        status_label: task.status.label().to_string(),
     }
 }
 

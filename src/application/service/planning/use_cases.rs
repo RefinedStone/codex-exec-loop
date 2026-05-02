@@ -19,6 +19,7 @@ use super::runtime::facade::{
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeFacadeService, PlanningRuntimePreviewRequest,
     PlanningRuntimeRenderedPreview, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
+    PlanningSubSessionHandoff,
 };
 use super::runtime::intake::{
     PlanningTaskIntakeCommitResult, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
@@ -207,6 +208,13 @@ impl PlanningRuntimeUseCases {
 
     pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
         self.runtime_facade.build_task_handoff(task)
+    }
+
+    pub fn build_sub_session_task_handoff(
+        &self,
+        task: &PriorityQueueTask,
+    ) -> PlanningSubSessionHandoff {
+        self.runtime_facade.build_sub_session_task_handoff(task)
     }
 
     pub fn decide_auto_followup(
