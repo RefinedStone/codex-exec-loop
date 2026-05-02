@@ -284,163 +284,155 @@ pub trait PlanningAuthorityPort: Send + Sync {
     ) -> Result<()>;
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Default)]
-// 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+/*
+ * 학습 주석: `NoopPlanningAuthorityPort`는 authority DB가 연결되지 않은 경량 조립 경로의 fallback입니다.
+ * TUI 테스트, 단일 workspace 실행, `PlanningServices::from_workspace_port`처럼 planning workspace만 주입하는 경로도
+ * 같은 application service를 사용할 수 있어야 하므로, 이 구현은 runtime projection을 저장하지 않고
+ * claim도 항상 성공한 것처럼 돌려줍니다. 즉 실제 동기화 보장이 아니라 "비영속 단일 실행용 무해한 대체물"입니다.
+ */
 pub struct NoopPlanningAuthorityPort {
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+    // 학습 주석: official refresh 순번만은 단조 증가시켜 orchestration 코드가 정상 adapter와 같은 흐름을 타게 합니다.
     next_refresh_order: AtomicU64,
 }
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 별도 authority store가 없으므로 workspace_dir 자체를 workspace root와 canonical repo root로 간주합니다.
     fn resolve_authority_location(&self, workspace_dir: &str) -> Result<PlanningAuthorityLocation> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningAuthorityLocation {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 호출자가 넘긴 경로를 그대로 운영 기준 루트로 보고합니다.
             workspace_root: workspace_dir.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: repo-scoped 정규화가 없는 fallback이므로 canonical root도 같은 값입니다.
             canonical_repo_root: workspace_dir.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: runtime projection을 저장하지 않으므로 runtime_dir은 비워 둡니다.
             runtime_dir: String::new(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: SQLite authority store가 없다는 것을 빈 경로로 표현합니다.
             authority_store_path: String::new(),
         })
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: mirror 자체가 없으므로 shadow store는 항상 동기화 상태이며 문서/문제 수는 0으로 보고합니다.
     fn inspect_shadow_store(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: location fallback을 만들기 위해 그대로 전달되는 workspace 기준입니다.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityShadowStoreInspection> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningAuthorityShadowStoreInspection {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: Noop location도 inspection 결과에 넣어 admin/readiness 출력 형식을 유지합니다.
             location: self.resolve_authority_location(workspace_dir)?,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 비교할 shadow store가 없으므로 불일치가 없다는 의미로 InSync를 사용합니다.
             sync_state: PlanningAuthorityShadowStoreSyncState::InSync,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: mirror 문서를 만들지 않는 adapter라 count는 항상 0입니다.
             mirrored_document_count: 0,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: parity 검사도 수행하지 않으므로 issue 수는 0입니다.
             parity_issue_count: 0,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: 보고할 mismatch 예시가 없습니다.
             parity_issue_examples: Vec::new(),
         })
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: process-local counter로 refresh order를 발급해 worker orchestration의 순번 의존 로직을 살립니다.
     fn reserve_next_official_refresh_order(&self, _workspace_dir: &str) -> Result<u64> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+        // 학습 주석: relaxed ordering이면 충분합니다. Noop은 persistence/교차 process 동기화를 제공하지 않기 때문입니다.
         Ok(self.next_refresh_order.fetch_add(1, Ordering::Relaxed) + 1)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 단일 실행 fallback에서는 경합을 추적하지 않고 모든 official refresh claim을 즉시 허용합니다.
     fn acquire_official_refresh_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: Noop은 namespace별 claim table이 없으므로 사용하지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 순번 검사는 실제 adapter 책임이며 Noop에서는 항상 실행 가능하다고 봅니다.
         _refresh_order: u64,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: owner_token을 저장하지 않으므로 재진입/경합 구분도 하지 않습니다.
         _owner_token: &str,
     ) -> Result<PlanningAuthorityOfficialRefreshClaimStatus> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningAuthorityOfficialRefreshClaimStatus::Acquired)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 저장된 claim이 없으므로 release는 no-op입니다.
     fn release_official_refresh_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: Noop release에서는 namespace를 확인하지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 진행 포인터를 저장하지 않으므로 refresh order도 사용하지 않습니다.
         _refresh_order: u64,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: owner 검증을 하지 않는 것도 Noop의 비영속 fallback 성격 때문입니다.
         _owner_token: &str,
     ) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: distributor queue도 실제 저장소가 없으므로 모든 claim을 허용해 호출 흐름을 막지 않습니다.
     fn try_acquire_distributor_queue_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: queue namespace를 저장하지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: queue item별 lock table이 없으므로 식별자는 무시됩니다.
         _queue_item_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: owner token도 저장하지 않습니다.
         _owner_token: &str,
     ) -> Result<bool> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(true)
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 저장된 distributor claim이 없기 때문에 해제도 no-op입니다.
     fn release_distributor_queue_claim(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: namespace를 쓰지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: item id를 쓰지 않습니다.
         _queue_item_id: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: owner token을 쓰지 않습니다.
         _owner_token: &str,
     ) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: runtime projection을 저장하지 않으므로 항상 빈 snapshot을 반환합니다.
     fn load_runtime_projections(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: workspace별 projection 분리도 제공하지 않습니다.
         _workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(PlanningAuthorityRuntimeProjectionSnapshot::default())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: slot lease upsert는 받아들이지만 저장하지 않습니다. 경량 경로에서 pool 상태가 누적되지 않게 합니다.
     fn upsert_runtime_slot_lease(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: 저장소가 없으므로 workspace를 쓰지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: lease 내용도 검증하지 않고 버립니다.
         _lease: &ParallelModeSlotLeaseSnapshot,
     ) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 저장된 slot lease가 없으므로 제거 요청도 성공한 no-op으로 처리합니다.
     fn remove_runtime_slot_lease(&self, _workspace_dir: &str, _slot_id: &str) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: session detail upsert도 저장하지 않습니다. 실제 session history는 SQLite authority adapter의 책임입니다.
     fn upsert_runtime_session_detail(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: workspace namespace를 사용하지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: detail payload도 저장하지 않습니다.
         _detail: &ParallelModeAgentSessionDetailSnapshot,
     ) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: distributor queue record도 저장하지 않아 Noop projection은 항상 빈 queue를 유지합니다.
     fn upsert_runtime_distributor_queue_record(
         &self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: workspace namespace를 사용하지 않습니다.
         _workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: record payload도 저장하지 않습니다.
         _record: &PlanningAuthorityDistributorQueueRecord,
     ) -> Result<()> {
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 }
