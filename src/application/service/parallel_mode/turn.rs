@@ -9,6 +9,13 @@ use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: 이 요청 타입은 TUI가 "대화 스트림을 시작한다"는 한 가지 동작을
+application 계층으로 넘길 때 필요한 입력을 담습니다. 평소에는 현재 workspace와
+thread_id를 그대로 사용하지만, 병렬 모드에서는 `slot_lease_request`가 함께 들어와
+"먼저 빈 슬롯 worktree를 빌린 뒤 그 worktree에서 새 thread를 시작하라"는 의미가
+됩니다. 그래서 이 타입은 대화 런타임과 병렬 슬롯 런타임 사이의 작은 경계 객체입니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelTurnStreamLaunchRequest {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -23,6 +30,16 @@ pub struct ParallelTurnStreamLaunchRequest {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: launch outcome은 실제 스트림 실행에 사용할 요청을 다시 돌려줍니다.
+병렬 슬롯을 빌린 경우 `request.workspace_directory`가 원래 저장소에서 슬롯 worktree로
+바뀌고 `thread_id`가 `None`이 됩니다. 슬롯마다 별도의 Codex thread를 시작해야
+주 저장소의 대화와 슬롯 대화가 섞이지 않기 때문입니다.
+
+`invalidate_supervisor_snapshot`은 TUI 캐시 무효화 신호입니다. lease 획득은 감독자
+패널의 슬롯 상태를 바꾸므로, 상위 화면은 이 값을 보고 최신 pool/roster/detail을
+다시 읽습니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelTurnStreamLaunchOutcome {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -35,6 +52,12 @@ pub struct ParallelTurnStreamLaunchOutcome {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+학습 주석: 스트림 이벤트 outcome은 "대화 런타임에서 관측한 이벤트가 슬롯 lease
+상태를 바꾸었는가"를 알려 줍니다. `ThreadPrepared`는 thread id를 lease에 기록하고,
+`TurnStarted`는 슬롯을 running 상태로 전환합니다. 이 구분이 있어야 시작 직전 실패와
+실행 중 실패를 다르게 처리할 수 있습니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelTurnStreamEventOutcome {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -57,6 +80,13 @@ pub struct ParallelTurnStreamCompletionOutcome {
 
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[derive(Clone)]
+/*
+학습 주석: 이 서비스는 TUI의 conversation stream lifecycle과 `ParallelModeService`의
+slot lease 상태 기계를 이어 주는 얇은 application 서비스입니다. 대화 런타임은
+ThreadPrepared, TurnStarted, terminal failure 같은 스트림 사건을 알고 있고,
+병렬 모드 서비스는 lease 파일과 planning authority 상태를 알고 있습니다. 이 타입은
+두 세계가 서로의 세부 구현을 직접 알지 않도록 상태 전이 호출만 번역합니다.
+*/
 // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
 pub struct ParallelModeTurnService {
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -84,6 +114,16 @@ impl ParallelModeTurnService {
         }
     }
 
+    /*
+    학습 주석: 스트림을 실제로 띄우기 전 병렬 슬롯 lease가 필요한지 판단하는 진입점입니다.
+    `slot_lease_request`가 없으면 일반 대화이므로 입력 요청을 그대로 돌려주고, 있으면
+    `ParallelModeService::acquire_slot_lease`로 비어 있는 슬롯을 하나 확보합니다.
+
+    lease가 성공하면 반환 요청을 슬롯 worktree 기준으로 다시 작성합니다. 여기서
+    `thread_id`를 비우는 것이 중요합니다. 기존 thread를 재사용하면 root workspace의
+    대화 기록과 슬롯 작업 대화가 연결될 수 있으므로, 슬롯 작업은 항상 leased worktree의
+    새 thread로 시작합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn prepare_stream_launch(
         &self,
@@ -131,6 +171,16 @@ impl ParallelModeTurnService {
         })
     }
 
+    /*
+    학습 주석: 대화 스트림은 여러 이벤트를 순서대로 방출하지만, 병렬 슬롯 상태에 의미가
+    있는 이벤트는 일부뿐입니다. `ThreadPrepared`는 Codex app-server가 새 thread id를
+    확정했다는 뜻이므로 lease에 thread id를 저장합니다. `TurnStarted`는 실제 turn이
+    시작되었다는 뜻이므로 슬롯을 running으로 바꿉니다.
+
+    이 함수가 `turn_started_observed`를 따로 반환하는 이유는 완료 처리에서 "시작도 못한
+    lease"와 "시작한 뒤 실패한 turn"을 구분하기 위해서입니다. 시작 전 실패는 슬롯을 즉시
+    release할 수 있지만, 시작 후 성공은 공식 완료/검증/통합 큐 단계로 이어져야 합니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn sync_stream_event(
         &self,
@@ -230,6 +280,16 @@ impl ParallelModeTurnService {
         }
     }
 
+    /*
+    학습 주석: 스트림 종료 시점에는 단순히 lease를 없애면 안 됩니다. turn이 시작되기도
+    전에 실패했다면 슬롯 worktree에 의미 있는 작업이 없으므로 lease를 release합니다.
+    반대로 turn이 정상적으로 시작되고 실패 이벤트 없이 끝났다면, 슬롯은 곧바로 reusable이
+    아니라 "공식 완료를 기다리는 작업 결과"가 됩니다. 이후 official completion이 작업
+    요약/검증 결과를 기록하고 distributor queue에 넘깁니다.
+
+    `saw_failed_before_turn_started`, `saw_failed_event`, `terminal_failure_observed`를
+    나눠 받는 것은 스트림 이벤트의 실패 시점이 슬롯 정리 정책을 바꾸기 때문입니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn finalize_stream_completion(
         &self,
@@ -311,6 +371,13 @@ impl ParallelModeTurnService {
         }
     }
 
+    /*
+    학습 주석: official completion은 슬롯 agent가 낸 결과를 root planning authority의
+    언어로 다시 정리하는 단계입니다. 여기서는 root turn id, refresh 순서, 최종 답변,
+    검증 요약을 `ParallelModeService`에 넘겨 슬롯 lease를 "공식 완료 진행 중" 상태로
+    전환합니다. 이 단계를 거쳐야 distributor가 어떤 task 결과를 어떤 순서로 통합할지
+    안정적으로 판단할 수 있습니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn begin_official_completion(
         &self,
@@ -376,6 +443,16 @@ impl ParallelModeTurnService {
         }
     }
 
+    /*
+    학습 주석: official completion이 성공하면 슬롯 결과는 commit-ready 상태가 되고,
+    distributor queue에 들어갑니다. 즉, agent worktree에서 나온 변경을 바로 통합하지
+    않고 queue record로 한 번 직렬화합니다. 병렬 agent는 여러 개지만 prerelease 통합은
+    한 줄로 처리해야 충돌과 순서 의존성을 관리할 수 있기 때문입니다.
+
+    마지막 `run_orchestrator_tick`은 방금 enqueue한 결과를 계기로 queue 처리를 한 번 더
+    진행하게 합니다. 이 덕분에 사용자가 별도 새로고침을 누르지 않아도 공식 완료 직후
+    통합 오케스트레이션이 이어질 수 있습니다.
+    */
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub fn finalize_official_completion_success(
         &self,
