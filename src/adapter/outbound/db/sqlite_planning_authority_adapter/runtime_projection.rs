@@ -437,31 +437,32 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: parallel agent session의 상세 상태를 runtime projection에 저장합니다.
+    // session_key 단위로 최신 row를 유지하고, slot_id는 어떤 slot에서 실행 중인 session인지 빠르게 필터링하는 색인 역할을 합니다.
     pub(crate) fn upsert_runtime_session_detail(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: session detail row를 저장할 authority DB를 찾는 workspace 경로입니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: domain이 만든 session 상태 snapshot입니다. adapter는 이 값을 JSON으로 저장하고 다시 복원합니다.
         detail: &ParallelModeAgentSessionDetailSnapshot,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: workspace 경계를 DB 위치로 바꿔 같은 실행군의 runtime projection을 한 파일에 모읍니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: session row upsert와 event append를 원자적으로 처리하기 위해 connection을 mutable로 엽니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: content column에는 전체 snapshot을 JSON으로 담습니다.
+        // 개별 column은 조회/정렬에 필요한 최소 필드이고, 나머지 상세 내용은 JSON이 원본 구조를 보존합니다.
         let payload_json = serde_json::to_string(detail)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to serialize runtime session detail projection")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: current row와 event log가 서로 다른 상태를 가리키지 않도록 같은 트랜잭션에 넣습니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open runtime session detail transaction")?;
+        // 학습 주석: runtime projection 변경이므로 claim용 metadata가 아니라 projection용 metadata를 갱신합니다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        // 학습 주석: session_key가 같은 row는 업데이트해 한 session의 최신 상태만 남깁니다.
+        // slot 이동이나 상태 변화가 생기면 slot_id, updated_at, content가 함께 새 snapshot으로 교체됩니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "INSERT INTO runtime_session_details (session_key, slot_id, updated_at, content)
                  VALUES (?1, ?2, ?3, ?4)
@@ -476,13 +477,14 @@ impl SqlitePlanningAuthorityAdapter {
                     payload_json
                 ],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| {
                 format!(
                     "failed to persist runtime session detail `{}`",
                     detail.session_key
                 )
             })?;
+        // 학습 주석: current row만 보면 이전 상태 전이를 알 수 없으므로 upsert 이벤트를 남깁니다.
+        // event payload도 같은 snapshot JSON을 담아 나중에 진단할 때 당시 값을 재현할 수 있습니다.
         append_runtime_event(
             &transaction,
             "session_detail_upsert",
@@ -493,44 +495,43 @@ impl SqlitePlanningAuthorityAdapter {
                 detail.session_key, detail.state_label
             ),
             &serde_json::to_string(detail)
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .context("failed to serialize runtime session detail event payload")?,
         )?;
+        // 학습 주석: commit이 성공해야 snapshot loader가 session row와 event를 함께 관찰합니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit runtime session detail transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: distributor queue의 현재 item 상태를 runtime projection에 저장합니다.
+    // queue_item_id 단위로 최신 row를 유지하고, queue_state column은 UI/worker가 JSON을 열지 않고도 상태별로 볼 수 있게 합니다.
     pub(crate) fn upsert_runtime_distributor_queue_record(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: distributor queue projection을 저장할 authority DB를 찾는 workspace 경로입니다.
         workspace_dir: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: application port에서 정의한 queue item snapshot입니다.
+        // 이 adapter는 port 타입을 DB row와 JSON content로 매핑합니다.
         record: &PlanningAuthorityDistributorQueueRecord,
     ) -> Result<()> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: workspace를 실제 authority DB 위치로 변환해 queue 상태를 같은 저장소에 모읍니다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: row upsert와 event append를 하나의 트랜잭션으로 묶기 위해 mutable connection을 엽니다.
         let mut connection = open_authority_connection(&location)?;
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: content에는 queue record 전체를 저장하고, 주요 조회 필드만 별도 column으로 중복 저장합니다.
+        // 이 중복은 schema가 projection 조회를 빠르게 하면서도 원본 port 타입을 잃지 않게 하는 절충입니다.
         let payload_json = serde_json::to_string(record)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to serialize runtime distributor queue projection")?;
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: 이 트랜잭션 안에서 current queue row와 event log가 같은 record를 기준으로 갱신됩니다.
         let transaction = connection
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .transaction()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to open runtime distributor queue transaction")?;
+        // 학습 주석: projection 변경 시각을 갱신해 외부 polling이 queue snapshot을 다시 읽을 수 있게 합니다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        // 학습 주석: queue_item_id가 같은 row는 최신 상태로 덮어씁니다.
+        // session_key와 queue_state를 column으로 둬 session별/상태별 queue 목록을 만들 때 JSON 파싱을 피합니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .execute(
                 "INSERT INTO runtime_distributor_queue
                  (queue_item_id, session_key, queue_state, enqueued_at, updated_at, content)
@@ -550,13 +551,13 @@ impl SqlitePlanningAuthorityAdapter {
                     payload_json
                 ],
             )
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .with_context(|| {
                 format!(
                     "failed to persist runtime distributor queue record `{}`",
                     record.queue_item_id
                 )
             })?;
+        // 학습 주석: queue row는 최신 상태만 남으므로, 상태 전이를 추적할 이벤트를 같이 기록합니다.
         append_runtime_event(
             &transaction,
             "distributor_queue_upsert",
@@ -568,16 +569,13 @@ impl SqlitePlanningAuthorityAdapter {
                 record.queue_state.label()
             ),
             &serde_json::to_string(record)
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .context("failed to serialize runtime distributor queue event payload")?,
         )?;
+        // 학습 주석: commit 후 queue snapshot과 event stream이 같은 upsert 결과를 보여줍니다.
         transaction
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .commit()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .context("failed to commit runtime distributor queue transaction")?;
 
-        // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
         Ok(())
     }
 }
