@@ -1,8 +1,8 @@
 /*
- * 학습 주석: directions supporting_files helper는 direction authority 자체가 아니라 그 authority가
- * 참조하는 보조 markdown 파일을 다룬다. direction detail doc과 queue-idle prompt는 worker prompt와
- * validation에서 함께 읽히므로, authoring/doctor/admin draft 흐름이 같은 생성/정규화 규칙을 쓰도록
- * 이 작은 service helper에 모아 둔다.
+ * directions supporting_files helper는 direction authority 자체가 아니라 그 authority가 참조하는 보조
+ * markdown 파일을 다룬다. direction detail doc과 queue-idle prompt는 worker prompt와 validation에서
+ * 함께 읽히므로, authoring/doctor/admin draft 흐름이 같은 생성/정규화 규칙을 쓰도록 이 작은 service
+ * helper에 모아 둔다.
  */
 use anyhow::{Result, anyhow};
 
@@ -15,17 +15,16 @@ use crate::application::service::planning::shared::contract::{
 use crate::application::service::planning::shared::planning_paths::is_valid_planning_markdown_path;
 use crate::domain::planning::DirectionCatalogDocument;
 
-// 학습 주석: TOML/string field에서 공백뿐인 값을 "없음"으로 다루는 공통 guard다.
+// TOML/string field에서 공백뿐인 값을 "없음"으로 다루는 공통 guard다.
 pub(super) fn trimmed_non_empty(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
 }
 
 /*
- * 학습 주석: queue-idle review prompt는 예전 파일 authority(`directions.toml`, `task-ledger`)를
- * 참조하던 시절의 문구가 workspace에 남아 있을 수 있다. runtime은 이제 accepted DB direction/task
- * authority와 DB queue projection을 기준으로 자동 후속 작업을 평가하므로, legacy prompt만 기본 DB
- * authority copy로 교체한다.
+ * queue-idle review prompt는 예전 파일 authority(`directions.toml`, `task-ledger`)를 참조하던 시절의
+ * 문구가 workspace에 남아 있을 수 있다. runtime은 이제 accepted DB direction/task authority와 DB queue
+ * projection을 기준으로 자동 후속 작업을 평가하므로, legacy prompt만 기본 DB authority copy로 교체한다.
  */
 pub(super) fn normalize_queue_idle_review_prompt_markdown(prompt_markdown: &str) -> String {
     if is_legacy_queue_idle_review_prompt(prompt_markdown) {
@@ -36,9 +35,9 @@ pub(super) fn normalize_queue_idle_review_prompt_markdown(prompt_markdown: &str)
 }
 
 /*
- * 학습 주석: legacy 판별은 source marker와 behavior marker가 함께 있을 때만 참으로 본다.
- * 단순히 migration 문서에서 `directions.toml`을 언급하는 custom prompt까지 덮어쓰면 operator가
- * 의도적으로 작성한 안내문을 잃기 때문이다.
+ * legacy 판별은 source marker와 behavior marker가 함께 있을 때만 참으로 본다. 단순히 migration
+ * 문서에서 `directions.toml`을 언급하는 custom prompt까지 덮어쓰면 operator가 의도적으로 작성한
+ * 안내문을 잃기 때문이다.
  */
 fn is_legacy_queue_idle_review_prompt(prompt_markdown: &str) -> bool {
     let normalized = prompt_markdown.to_lowercase();
@@ -60,9 +59,9 @@ fn is_legacy_queue_idle_review_prompt(prompt_markdown: &str) -> bool {
 #[cfg(test)]
 #[allow(dead_code)]
 /*
- * 학습 주석: 기본 detail doc 본문은 direction metadata를 사람이 편집할 수 있는 markdown scaffold로
- * 투영한다. 실제 production 생성은 doctor/admin 흐름에서 direction 정보를 읽어 같은 구조의 문서를
- * 만들고, 테스트는 이 helper로 제목/goal/success criteria/scope hints 배치 계약을 검증한다.
+ * 기본 detail doc 본문은 direction metadata를 사람이 편집할 수 있는 markdown scaffold로 투영한다.
+ * 실제 production 생성은 doctor/admin 흐름에서 direction 정보를 읽어 같은 구조의 문서를 만들고,
+ * 테스트는 이 helper로 제목/goal/success criteria/scope hints 배치 계약을 검증한다.
  */
 pub(super) fn build_default_detail_doc_markdown(
     direction: &crate::domain::planning::DirectionDefinition,
@@ -77,8 +76,8 @@ pub(super) fn build_default_detail_doc_markdown(
         direction.summary.trim().to_string(),
     ];
     /*
-     * 학습 주석: success criteria와 scope hints는 비어 있을 때 section 자체를 생략한다. 빈 heading을
-     * 만들지 않아 generated detail doc이 operator가 바로 채울 수 있는 짧은 scaffold로 유지된다.
+     * success criteria와 scope hints는 비어 있을 때 section 자체를 생략한다. 빈 heading을 만들지 않아
+     * generated detail doc이 operator가 바로 채울 수 있는 짧은 scaffold로 유지된다.
      */
     if !direction.success_criteria.is_empty() {
         lines.push(String::new());
@@ -108,9 +107,9 @@ pub(super) fn build_default_detail_doc_markdown(
 #[cfg(test)]
 #[allow(dead_code)]
 /*
- * 학습 주석: default detail doc path는 direction id에서 만들어지지만, path traversal이나 잘못된 확장자를
- * 막는 validation contract도 함께 고정되어야 한다. 테스트 helper가 safe path 여부를 바로 검증해
- * direction scaffold가 planning direction docs directory 밖으로 나가지 않게 한다.
+ * default detail doc path는 direction id에서 만들어지지만, path traversal이나 잘못된 확장자를 막는
+ * validation contract도 함께 고정되어야 한다. 테스트 helper가 safe path 여부를 바로 검증해 direction
+ * scaffold가 planning direction docs directory 밖으로 나가지 않게 한다.
  */
 pub(super) fn default_validated_direction_detail_doc_path(direction_id: &str) -> Result<String> {
     let fallback_path = default_direction_detail_doc_path(direction_id);
@@ -125,9 +124,9 @@ pub(super) fn default_validated_direction_detail_doc_path(direction_id: &str) ->
 }
 
 /*
- * 학습 주석: detail doc 생성/repair는 markdown 파일만 만드는 것으로 끝나지 않는다. direction catalog의
- * 해당 direction에도 새 path를 기록해야 validation, runtime prompt fragment, admin overview가 같은
- * supporting file을 찾을 수 있다.
+ * detail doc 생성/repair는 markdown 파일만 만드는 것으로 끝나지 않는다. direction catalog의 해당
+ * direction에도 새 path를 기록해야 validation, runtime prompt fragment, admin overview가 같은 supporting
+ * file을 찾을 수 있다.
  */
 pub(super) fn set_direction_detail_doc_path(
     directions: &mut DirectionCatalogDocument,
@@ -146,9 +145,9 @@ pub(super) fn set_direction_detail_doc_path(
 }
 
 /*
- * 학습 주석: queue-idle prompt path는 direction별 값이 아니라 catalog-level queue_idle 설정이다.
- * authoring init, reset, directions maintenance가 이 setter를 거치면 queue idle review prompt 위치가
- * validation과 runtime prompt assembly에서 같은 source of truth로 읽힌다.
+ * queue-idle prompt path는 direction별 값이 아니라 catalog-level queue_idle 설정이다. authoring init,
+ * reset, directions maintenance가 이 setter를 거치면 queue idle review prompt 위치가 validation과
+ * runtime prompt assembly에서 같은 source of truth로 읽힌다.
  */
 pub(super) fn set_queue_idle_prompt_path(
     directions: &mut DirectionCatalogDocument,
@@ -165,8 +164,8 @@ mod tests {
     #[test]
     fn queue_idle_review_prompt_normalizes_legacy_file_authority_copy() {
         /*
-         * 학습 주석: source marker와 behavior marker가 함께 있는 오래된 prompt는 DB authority runtime과
-         * 맞지 않는다. migration fallback이 기본 prompt로 교체하는지 확인한다.
+         * source marker와 behavior marker가 함께 있는 오래된 prompt는 DB authority runtime과 맞지 않는다.
+         * migration fallback이 기본 prompt로 교체하는지 확인한다.
          */
         let legacy_prompt = r#"# Queue Idle Review Prompt
 
@@ -187,7 +186,7 @@ mod tests {
 
     #[test]
     fn queue_idle_review_prompt_keeps_db_authority_copy() {
-        // 학습 주석: 이미 DB authority를 기준으로 쓰인 prompt는 operator custom copy로 보고 보존한다.
+        // 이미 DB authority를 기준으로 쓰인 prompt는 operator custom copy로 보고 보존한다.
         let prompt = "# Queue Idle Review Prompt\n\n- Use accepted DB authority.";
 
         assert_eq!(normalize_queue_idle_review_prompt_markdown(prompt), prompt);
@@ -196,8 +195,8 @@ mod tests {
     #[test]
     fn queue_idle_review_prompt_keeps_custom_copy_that_mentions_legacy_terms() {
         /*
-         * 학습 주석: legacy 용어를 설명 목적으로 언급하는 prompt까지 덮어쓰면 operator가 작성한
-         * migration guidance가 사라진다. behavior marker가 없으면 그대로 둔다.
+         * legacy 용어를 설명 목적으로 언급하는 prompt까지 덮어쓰면 operator가 작성한 migration guidance가
+         * 사라진다. behavior marker가 없으면 그대로 둔다.
          */
         let prompt = "# Queue Idle Review Prompt\n\n- Explain why directions.toml and task-ledger are legacy terms, but keep accepted DB authority as the source of truth.";
 
