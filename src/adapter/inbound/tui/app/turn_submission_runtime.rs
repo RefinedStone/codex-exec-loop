@@ -1,3 +1,10 @@
+/*
+ * 학습 주석: turn_submission_runtime.rs는 conversation reducer가 만든 effect를 실제 비동기 작업으로 바꾸는 실행 계층입니다.
+ * conversation_runtime.rs가 "무엇을 해야 하는가"를 effect로 표현한다면, 이 파일은 app-server stream 시작,
+ * post-turn planning 평가, auto-follow prompt 재제출, parallel-mode slot lease 연결을 담당합니다.
+ *
+ * NativeTuiApp impl 안에 있는 이유는 effect 실행이 현재 UI state, service handles, terminal shell 상태를 모두 필요로 하기 때문입니다.
+ */
 // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[path = "turn_submission_runtime/post_turn_execution.rs"]
 // 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
@@ -42,6 +49,11 @@ impl NativeTuiApp {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     pub(super) fn start_turn_submission(&mut self) {
+        /*
+         * 학습 주석: start_turn_submission은 Enter/submit 동작의 첫 관문입니다.
+         * 입력이 inline shell command면 conversation turn이 아니라 command executor로 보내고,
+         * 일반 prompt면 conversation reducer의 SubmitPrompt 이벤트로 넘길 준비를 합니다.
+         */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let inline_command = match &self.conversation_state {
             // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
@@ -89,6 +101,11 @@ impl NativeTuiApp {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         effect: ConversationRuntimeEffect,
     ) {
+        /*
+         * 학습 주석: effect 실행은 reducer의 순수 세계와 실제 I/O 세계를 잇는 스위치보드입니다.
+         * StartStream은 stream_execution 모듈로, EvaluateAutoFollowup은 post_turn_execution 모듈로 위임하고,
+         * QueueAutoPrompt는 새 PromptOrigin::AutoFollow를 만들어 다시 submit_prompt로 들어가게 합니다.
+         */
         // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match effect {
             // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -161,6 +178,11 @@ impl NativeTuiApp {
 
     // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
     fn build_parallel_mode_slot_lease_request(&self) -> Option<ParallelModeSlotLeaseRequest> {
+        /*
+         * 학습 주석: parallel mode slot lease는 planning queue handoff와 병렬 작업 풀을 연결하는 지점입니다.
+         * 마지막 planning task handoff가 있어야 어떤 task를 병렬 slot에 빌려줄지 알 수 있으므로,
+         * parallel mode가 켜져 있어도 handoff_task가 없으면 lease request를 만들지 않습니다.
+         */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if !self.parallel_mode_enabled() {
             // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.

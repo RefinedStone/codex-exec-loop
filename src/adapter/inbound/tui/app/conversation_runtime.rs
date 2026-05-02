@@ -1,3 +1,13 @@
+/*
+ * 학습 주석: conversation_runtime.rs는 TUI 대화 화면의 "순수 상태 전이"를 담당합니다.
+ * 이 파일은 app-server를 직접 호출하지 않고, ConversationRuntimeEvent를 받아 ConversationViewModel을 갱신한 뒤
+ * ConversationRuntimeEffect를 반환합니다. 실제 I/O는 turn_submission_runtime.rs가 effect를 실행합니다.
+ *
+ * 이 구조를 reducer/effect로 나눈 이유:
+ * - reducer는 테스트하기 쉽고, 입력 event와 이전 state만으로 다음 state/effect를 결정합니다.
+ * - app-server stream, post-turn planning evaluation 같은 부수효과는 UI 상태 전이와 분리되어 race를 줄입니다.
+ * - auto follow-up은 turn 종료 후 다시 SubmitPrompt로 돌아오는 순환 구조라, 상태 기록과 effect 발행을 명확히 나눠야 합니다.
+ */
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::PromptOrigin;
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
@@ -19,6 +29,12 @@ use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 #[derive(Debug, Clone)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum ConversationRuntimeEvent {
+    /*
+     * 학습 주석: RuntimeEvent는 "이미 일어난 일"을 reducer에 전달하는 입력입니다.
+     * SubmitPrompt는 사용자가 보낸 prompt나 auto-follow prompt를 상태에 반영하고,
+     * StreamUpdated는 app-server notification을 transcript/status로 줄이며,
+     * PostTurnEvaluated는 planning runtime이 다음 자동 prompt를 만들지 판단한 결과를 다시 상태로 넣습니다.
+     */
     SubmitPrompt {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         prompt: String,
@@ -42,6 +58,11 @@ pub(super) enum ConversationRuntimeEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // 학습 주석: `enum`은 가능한 상태나 명령을 정해진 선택지로 제한해 패턴 매칭으로 안전하게 처리하게 해줍니다.
 pub(super) enum ConversationRuntimeEffect {
+    /*
+     * 학습 주석: RuntimeEffect는 reducer가 직접 실행하지 않는 외부 작업 요청입니다.
+     * StartStream은 app-server turn stream을 시작하고, EvaluateAutoFollowup은 turn 종료 후 planning snapshot/reconciliation을 수행하며,
+     * QueueAutoPrompt는 그 결과 생성된 내부 prompt를 다시 submit 흐름으로 넣습니다.
+     */
     StartStream {
         // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         workspace_directory: String,
@@ -126,6 +147,11 @@ pub(super) fn reduce_conversation_runtime(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     event: ConversationRuntimeEvent,
 ) -> ConversationRuntimeReduction {
+    /*
+     * 학습 주석: reduce_conversation_runtime은 TUI conversation runtime의 중심 함수입니다.
+     * 핵심 패턴은 "state를 먼저 안전하게 갱신하고, 필요한 외부 작업을 effects에 쌓아서 호출자가 실행하게 한다"입니다.
+     * 이 덕분에 stream thread에서 도착한 event와 keyboard event가 섞여도, 한 번에 하나의 event만 모델을 바꿉니다.
+     */
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut effects = Vec::new();
 
@@ -138,6 +164,11 @@ pub(super) fn reduce_conversation_runtime(
             origin,
             // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         } => {
+            /*
+             * 학습 주석: SubmitPrompt 분기는 manual prompt와 auto-follow prompt를 같은 turn stream 시작 규칙으로 통합합니다.
+             * manual prompt는 repair/auto-follow state를 초기화하고, auto-follow prompt는 어떤 queue head에서 이어졌는지 기록해
+             * 같은 queue head가 반복 제출되는 것을 post-turn policy가 막을 수 있게 합니다.
+             */
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let prompt = prompt.trim().to_string();
             // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
