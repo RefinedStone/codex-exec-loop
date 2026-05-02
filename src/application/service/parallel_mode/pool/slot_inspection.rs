@@ -34,6 +34,12 @@ pub(super) fn inspect_pool_slot(
 
     // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if context.invalid_slot_leases.contains(slot_id) {
+        /*
+        학습 주석: invalid lease metadata는 가장 먼저 Blocked로 분류합니다. JSON/schema 파싱이
+        실패했거나 authority projection에서 slot id와 맞지 않는 lease가 들어온 경우에는 branch나
+        worktree 상태를 아무리 검사해도 owner/task/branch 관계를 신뢰할 수 없습니다. 그래서
+        operator가 metadata를 고치기 전까지 자동 cleanup이나 새 lease 배정을 막습니다.
+        */
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
@@ -55,6 +61,13 @@ pub(super) fn inspect_pool_slot(
         .find(|record| record.path == slot_path)
     // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
     else {
+        /*
+        학습 주석: worktree inventory에 slot path가 없다는 것은 세 가지로 나뉩니다. lease가 있으면
+        runtime은 slot을 사용 중으로 보는데 git worktree가 사라진 위험 상태이고, path만 있으면
+        git이 관리하지 않는 충돌 directory입니다. 둘 다 자동으로 덮어쓰면 사용자 파일이나 실행 중
+        작업을 잃을 수 있어 Blocked로 둡니다. path도 lease도 없을 때만 Missing으로 보고 reconcile이
+        새 idle worktree를 만들 수 있게 합니다.
+        */
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(slot_lease) = slot_lease {
             // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
@@ -99,6 +112,11 @@ pub(super) fn inspect_pool_slot(
 
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Some(slot_status) = inspect_slot_git_status(&slot_path) else {
+        /*
+        학습 주석: git status를 읽지 못하면 이 slot이 clean baseline인지, rebase/cherry-pick 중인지,
+        untracked 파일을 품고 있는지 알 수 없습니다. unknown 상태에서 idle이나 cleanup-ready로
+        분류하면 reset/clean 같은 destructive 작업으로 이어질 수 있으므로 Blocked를 반환합니다.
+        */
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
@@ -123,6 +141,12 @@ pub(super) fn inspect_pool_slot(
         // 학습 주석: 클로저는 이름 없는 작은 함수로, 주변 값을 캡처해 iterator나 콜백에 전달할 때 자주 사용합니다.
         || (worktree_record.detached && worktree_record.head_sha == context.baseline_head)
     {
+        /*
+        학습 주석: baseline branch checkout 또는 baseline head detached 상태는 idle slot의 정상
+        후보입니다. 하지만 lease metadata가 같이 있으면 runtime projection은 누군가 이 slot을
+        소유한다고 말하고 git은 idle이라고 말하는 split-brain 상태입니다. 이 경우에는 lease
+        owner를 표시하면서 Blocked로 올려 자동 재사용을 막습니다.
+        */
         // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let branch_label = if worktree_record.detached {
             format!("{POOL_BASELINE_BRANCH} (detached)")
@@ -145,6 +169,11 @@ pub(super) fn inspect_pool_slot(
 
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return if slot_status.is_clean_baseline() {
+            /*
+            학습 주석: clean baseline만 Idle입니다. branch/head가 baseline이어도 staged,
+            unstaged, untracked 파일이나 pending operation이 있으면 다음 agent에게 넘길 수 없는
+            오염된 slot입니다. `SlotGitStatus::is_clean_baseline`이 그 마지막 안전 게이트입니다.
+            */
             // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             ParallelModePoolSlotSnapshot::new(
                 slot_id,
@@ -173,8 +202,19 @@ pub(super) fn inspect_pool_slot(
         let expected_agent_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
         // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if branch_name.starts_with(&expected_agent_prefix) {
+            /*
+            학습 주석: `akra-agent/<slot-id>/...` branch는 이 slot이 agent 작업을 수행했거나 수행 중인
+            흔적입니다. 여기부터는 lease metadata와 branch/worktree가 서로 맞는지 검증합니다.
+            같은 prefix라도 lease가 없으면 orphan, lease branch가 다르면 metadata drift, lease
+            path가 다르면 slot path drift로 각각 다른 복구 메시지를 냅니다.
+            */
             // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if slot_status.has_pending_operation {
+                /*
+                학습 주석: pending git operation은 lease 유무와 관계없이 Blocked입니다. rebase,
+                merge, cherry-pick 중인 worktree는 commit graph가 아직 안정되지 않았고, cleanup
+                readiness나 owner 상태보다 먼저 수동 복구가 필요합니다.
+                */
                 // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return ParallelModePoolSlotSnapshot::new(
                     slot_id,
@@ -202,6 +242,12 @@ pub(super) fn inspect_pool_slot(
                 .is_cleanup_ready();
             // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if cleanup_ready {
+                /*
+                학습 주석: lease가 없는 agent branch라도 clean하고 baseline에 통합되어 있으면
+                사용자가 잃을 작업이 없으므로 AwaitingCleanup으로 낮출 수 있습니다. 이 상태는
+                Blocked가 아니라 reconcile/cleanup path가 slot을 idle baseline으로 회수할 수 있는
+                회색 지대입니다.
+                */
                 // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return ParallelModePoolSlotSnapshot::new(
                     slot_id,
@@ -219,6 +265,11 @@ pub(super) fn inspect_pool_slot(
 
             // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let Some(slot_lease) = slot_lease else {
+                /*
+                학습 주석: lease 없이 남은 agent branch가 cleanup-ready도 아니면 operator recovery가
+                필요합니다. branch가 아직 prerelease에 통합되지 않았을 수 있으므로, 자동 reset이나
+                branch delete를 하면 agent 산출물을 잃을 수 있습니다.
+                */
                 // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return ParallelModePoolSlotSnapshot::new(
                     slot_id,
@@ -238,6 +289,11 @@ pub(super) fn inspect_pool_slot(
             };
             // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if slot_lease.branch_name != branch_name {
+                /*
+                학습 주석: lease branch와 실제 worktree branch가 다르면 runtime projection과 git
+                상태가 서로 다른 작업을 가리킵니다. 이 mismatch를 무시하면 dispatcher가 잘못된
+                branch를 완료/cleanup할 수 있으므로 Blocked로 고정합니다.
+                */
                 // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return ParallelModePoolSlotSnapshot::new(
                     slot_id,
@@ -253,6 +309,11 @@ pub(super) fn inspect_pool_slot(
             }
             // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if slot_lease.worktree_path != slot_path.display().to_string() {
+                /*
+                학습 주석: lease worktree path mismatch는 같은 slot id라도 실제 디렉터리 연결이
+                어긋났다는 뜻입니다. nested workspace resolve나 cleanup 경로가 path를 기준으로
+                동작하므로, branch가 맞아도 path가 다르면 안전하게 작업을 계속할 수 없습니다.
+                */
                 // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return ParallelModePoolSlotSnapshot::new(
                     slot_id,
@@ -283,6 +344,12 @@ pub(super) fn inspect_pool_slot(
             "unexpected branch for pool slot"
         };
 
+        /*
+        학습 주석: branch가 현재 slot prefix와 맞지 않으면 idle도 active lease도 아닙니다. 다른 slot의
+        agent branch가 checkout되어 있으면 pool invariant가 깨진 것이고, 일반 unexpected branch면
+        사용자가 수동으로 checkout한 상태일 수 있습니다. 둘 다 자동 reset 대상이 아니므로 Blocked로
+        표시합니다.
+        */
         // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
@@ -300,6 +367,11 @@ pub(super) fn inspect_pool_slot(
 
     // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let detached_label = format!("detached@{}", short_sha(&worktree_record.head_sha));
+    /*
+    학습 주석: 마지막 fallback은 branch가 없고 baseline head도 아닌 detached worktree입니다. 이는
+    과거 baseline, 수동 checkout, 실패한 reset 등 여러 원인이 가능하지만 자동으로 어떤 commit인지
+    해석하지 않습니다. short sha를 label로 노출해 운영자가 실제 commit을 확인하게 합니다.
+    */
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     ParallelModePoolSlotSnapshot::new(
         slot_id,
