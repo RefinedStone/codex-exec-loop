@@ -180,66 +180,96 @@ impl GithubReviewPollerService {
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// 학습 주석: 이 테스트 모듈은 production build에는 들어가지 않고 `cargo test`에서만 컴파일됩니다.
+// service의 public behavior를 같은 파일 옆에서 검증해 private helper인 `collect_changes`까지
+// 간접적으로 안전하게 고정합니다.
 #[cfg(test)]
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+// 학습 주석: `tests` 모듈은 GitHub review poller service의 test-only fixture, fake port,
+// behavior test를 한곳에 묶습니다. production module namespace와 분리되므로 helper 이름이
+// application code와 충돌하지 않습니다.
 mod tests {
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+    // 학습 주석: `Arc`는 fake outbound port를 service에 주입할 때 shared ownership을 맞추기
+    // 위한 표준 포인터입니다. production code와 같은 생성 경로를 쓰면 테스트가 DI contract까지
+    // 함께 검증합니다.
     use std::sync::Arc;
 
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+    // 학습 주석: fake port 구현도 실제 port trait과 같은 `anyhow::Result` 반환 계약을 따릅니다.
+    // 이렇게 해야 테스트 double이 실패 가능성을 감춘 별도 API가 아니라 outbound boundary의
+    // 실제 호출 모양을 그대로 대체합니다.
     use anyhow::Result;
 
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+    // 학습 주석: 테스트 대상은 service 자체입니다. 아래 test들은 adapter나 GitHub API 없이
+    // `GithubReviewPollerService::poll`의 snapshot 정렬, diff, next_state 조립만 확인합니다.
     use super::GithubReviewPollerService;
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+    // 학습 주석: outbound port trait을 가져오는 이유는 fake가 service 바깥의 GitHub 읽기 경계를
+    // 흉내 내기 위해서입니다. service는 concrete adapter가 아니라 이 trait만 의존합니다.
     use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
-    // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+    // 학습 주석: domain type import는 테스트 fixture가 production path와 같은 target, event,
+    // snapshot, poll state 구조를 만들게 해 줍니다. test-only DTO를 만들지 않기 때문에 domain
+    // contract drift를 더 빨리 발견할 수 있습니다.
     use crate::domain::github_review::{
         GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
         GithubPullRequestActivitySnapshot, GithubPullRequestPollState, GithubPullRequestTarget,
     };
 
-    // 학습 주석: `struct`는 여러 값을 하나의 의미 있는 데이터 묶음으로 다루기 위한 Rust의 구조체 정의입니다.
+    // 학습 주석: `FakeGithubReviewPollerPort`는 outbound GitHub adapter 대신 service에 주입되는
+    // in-memory test double입니다. 포트 경계만 대체하고 service 로직은 실제 경로 그대로 실행하게
+    // 만드는 것이 이 구조체의 역할입니다.
     struct FakeGithubReviewPollerPort {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // 학습 주석: fake는 한 번의 poll에서 반환할 snapshot만 들고 있습니다. 테스트별로 이 값을
+        // 다르게 구성하면 GitHub 네트워크 호출 없이 service가 받은 activity 목록을 어떻게
+        // 해석하는지만 좁게 검증할 수 있습니다.
         snapshot: GithubPullRequestActivitySnapshot,
     }
 
-    // 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
+    // 학습 주석: 이 impl은 fake를 실제 `GithubReviewPollerPort`로 취급할 수 있게 합니다. service가
+    // trait object를 받기 때문에 테스트도 production DI와 같은 추상화 수준에서 동작합니다.
     impl GithubReviewPollerPort for FakeGithubReviewPollerPort {
-        // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+        // 학습 주석: `load_pull_request_activity` fake 구현은 입력 target을 따로 검증하지 않고
+        // 준비된 snapshot을 돌려줍니다. 이 테스트들의 관심사는 target validation이 아니라
+        // service가 port 결과를 정렬하고 cursor와 비교하는 application 흐름입니다.
         fn load_pull_request_activity(
             &self,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: `_target`처럼 밑줄로 시작하는 이름은 이 테스트 double에서 target 값을
+            // 의도적으로 사용하지 않는다는 신호입니다. trait signature는 유지하면서 clippy의
+            // unused 경고도 피합니다.
             _target: &GithubPullRequestTarget,
         ) -> Result<GithubPullRequestActivitySnapshot> {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
+            // 학습 주석: snapshot을 clone해서 반환하면 fake가 가진 fixture를 소비하지 않습니다.
+            // 같은 port instance가 여러 poll에서 재사용되어도 테스트 데이터가 그대로 남습니다.
             Ok(self.snapshot.clone())
         }
     }
 
-    // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+    // 학습 주석: `#[test]`는 이 함수가 첫 poll baseline 정책을 고정하는 독립 테스트임을 test runner에
+    // 등록합니다. 실패하면 review poller가 과거 GitHub activity를 새 변화로 replay할 위험이 있습니다.
     #[test]
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    // 학습 주석: 이 테스트는 `previous_state`가 없는 첫 poll의 핵심 정책을 고정합니다. service는
+    // GitHub에서 이미 존재하던 activity를 changes로 replay하지 않고, snapshot에서 next_state만
+    // 만들어 이후 poll의 기준점으로 삼아야 합니다.
     fn first_poll_establishes_baseline_without_replaying_existing_activity() {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: target fixture는 PR 단위 polling이 항상 repository와 PR number를 기준으로
+        // 이루어진다는 domain contract를 보여 줍니다.
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: service fixture에는 이미 두 개의 activity가 있는 snapshot을 넣습니다. 첫 poll에서
+        // 이 두 event가 changes로 나오면 baseline 정책이 깨진 것입니다.
         let service = GithubReviewPollerService::new(Arc::new(FakeGithubReviewPollerPort {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+            // 학습 주석: snapshot helper는 PR metadata와 event vector를 한 번에 묶어 service가
+            // 실제 port에서 받을 형태와 같은 객체를 만듭니다.
             snapshot: snapshot(
                 target.clone(),
                 vec![
                     event(
                         100,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 첫 event는 issue comment입니다. kind가 섞여 있어도 첫 poll은
+                        // 종류와 무관하게 모두 baseline에만 반영해야 합니다.
                         GithubPullRequestActivityKind::IssueComment,
                         "2026-04-08T09:00:00Z",
                     ),
                     event(
                         101,
-                        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+                        // 학습 주석: 두 번째 event는 review입니다. 최신 timestamp가 poll_state cursor로
+                        // 저장되는지 확인하기 위한 뒤쪽 activity 역할을 합니다.
                         GithubPullRequestActivityKind::Review,
                         "2026-04-08T10:00:00Z",
                     ),
@@ -247,9 +277,13 @@ mod tests {
             ),
         }));
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // 학습 주석: `None`은 "직전 poll state가 없다"는 입력입니다. service는 이를 첫 poll로
+        // 해석하고 replay 방지 branch를 타야 합니다.
         let result = service.poll(&target, None).expect("poll should succeed");
 
+        // 학습 주석: 첫 poll의 changes가 비어 있어야 사용자가 기존 GitHub 대화를 새 알림처럼 받지
+        // 않습니다. next_state는 snapshot에서 계산한 poll_state와 같아야 다음 poll이 같은 기준점을
+        // 이어받습니다.
         assert!(result.changes.is_empty());
         assert_eq!(result.next_state, result.snapshot.poll_state());
     }
