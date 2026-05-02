@@ -1,6 +1,12 @@
 // 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::*;
 
+/*
+학습 주석: pool root는 저장소 내부가 아니라 저장소 옆 형제 디렉터리에 둡니다. 병렬 slot
+worktree들이 원본 repo 안에 생기면 git status, cargo scan, editor search가 slot 파일까지
+뒤섞어 볼 수 있기 때문입니다. repo 이름과 canonical path hash를 함께 쓰면 같은 이름의
+repo가 다른 위치에 있어도 pool root가 충돌하지 않습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn derive_default_pool_root(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -28,6 +34,12 @@ pub(in crate::application::service::parallel_mode) fn derive_default_pool_root(
         .join("akra-pool")
 }
 
+/*
+학습 주석: 이 hash는 보안용이 아니라 경로 충돌 방지용 안정 식별자입니다. 같은 canonical
+repo path는 항상 같은 pool root를 얻어야 하고, 서로 다른 checkout은 같은 repo 이름이어도
+다른 pool root를 얻어야 합니다. 짧은 FNV-1a 값이면 디렉터리 이름을 과하게 길게 만들지
+않으면서 이 목적을 달성할 수 있습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn stable_short_hash(value: &str) -> String {
     // 학습 주석: `const`는 컴파일 시점에 값이 고정되는 이름으로, 런타임에 바뀌지 않는 설정값을 표현합니다.
@@ -46,6 +58,12 @@ fn stable_short_hash(value: &str) -> String {
     format!("{hash:016x}")[..12].to_string()
 }
 
+/*
+학습 주석: pool baseline head는 local branch, origin branch, 현재 HEAD 순서로 찾습니다.
+reconcile 초기에 local baseline이 없을 수 있고, freshly cloned workspace에서는 origin
+baseline만 있을 수 있습니다. 둘 다 없을 때 HEAD를 fallback으로 쓰면 최초 pool 생성이
+완전히 막히지 않습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
     resolve_branch_head(repo_root, POOL_BASELINE_BRANCH)
@@ -71,6 +89,15 @@ pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<
     run_command("git", ["-C", repo_root, "rev-parse", branch_name], None)
 }
 
+/*
+학습 주석: `git worktree list --porcelain` 출력은 줄 기반 record 묶음입니다. 이 parser는
+worktree path, HEAD sha, branch, detached 여부를 `GitWorktreeRecord`로 정규화합니다.
+slot inspection과 reconcile은 이 정규화된 inventory를 기준으로 "slot path가 실제 git
+worktree인가"를 판단합니다.
+
+빈 줄을 만날 때마다 builder를 flush하는 구조라 마지막 record가 trailing blank 없이 끝나도
+`chain(std::iter::once(""))` 덕분에 빠지지 않습니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn parse_worktree_records(output: &str) -> Vec<GitWorktreeRecord> {
     // 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
@@ -148,6 +175,12 @@ pub(super) fn parse_worktree_records(output: &str) -> Vec<GitWorktreeRecord> {
     records
 }
 
+/*
+학습 주석: git status inspection은 slot을 자동으로 reset하거나 cleanup해도 되는지 판단하는
+공통 안전 게이트입니다. porcelain status로 staged, unstaged, untracked 변경을 보고,
+git dir 안의 MERGE_HEAD/REBASE_HEAD/CHERRY_PICK_HEAD 같은 파일로 진행 중인 작업도 감지합니다.
+파일 변경이 없더라도 rebase metadata가 남아 있으면 자동 조작은 위험하기 때문입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
     // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
@@ -261,6 +294,12 @@ pub(super) fn canonicalize_best_effort(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/*
+학습 주석: worktree path 비교는 symlink나 상대 경로 때문에 문자열 비교만으로는 부족합니다.
+canonicalize가 성공하면 실제 경로를 비교하고, 실패하면 원래 path를 fallback으로 사용합니다.
+이 best-effort 비교는 nested directory에서 lease를 찾거나 slot path와 lease path를 맞출 때
+불필요한 mismatch를 줄입니다.
+*/
 // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
     canonicalize_best_effort(left) == canonicalize_best_effort(right)
