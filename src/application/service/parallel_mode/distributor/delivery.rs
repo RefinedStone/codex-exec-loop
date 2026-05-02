@@ -1,6 +1,6 @@
 use super::*;
 
-// 학습 주석: delivery는 GitHub-facing 단계와 local integration 단계를 나눠 각 boundary의 실패 복구를 독립시킵니다.
+// delivery는 GitHub-facing 단계와 local integration 단계를 나눠 각 boundary의 실패 복구를 독립시킨다.
 mod github;
 mod integration;
 
@@ -14,14 +14,14 @@ use self::integration::{
 };
 
 /*
-학습 주석: 이 함수는 queue head 하나를 end-to-end로 delivery하는 상태 기계입니다.
+이 함수는 queue head 하나를 end-to-end로 delivery하는 상태 기계이다.
 입력 record는 planning authority에 저장된 durable queue item이고, 각 단계는 record 상태를
-갱신한 뒤 다음 단계로 넘어갑니다. 순서는 source branch push, PR 준비/검사, integration
-branch 반영, slot cleanup입니다.
+갱신한 뒤 다음 단계로 넘어간다. 순서는 source branch push, PR 준비/검사, integration
+branch 반영, slot cleanup이다.
 
-각 단계 뒤에 Blocked 상태를 확인하고 즉시 반환하는 구조가 중요합니다. delivery 중 어느
+각 단계 뒤에 Blocked 상태를 확인하고 즉시 반환하는 구조가 중요하다. delivery 중 어느
 단계라도 사람이 개입해야 하는 문제가 생기면, 뒤 단계가 잘못 실행되지 않고 현재까지의
-notice만 TUI에 표시됩니다.
+notice만 TUI에 표시된다.
 */
 pub(super) fn process_distributor_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
@@ -31,7 +31,7 @@ pub(super) fn process_distributor_queue_record(
     github_automation: &dyn GithubAutomationPort,
 ) -> Result<Vec<String>, String> {
     if !Path::new(&record.worktree_path).exists() {
-        // 학습 주석: source worktree가 없으면 lease를 신뢰할 수 없어 delivery를 시작하지 않고 durable block으로 남깁니다.
+        // source worktree가 없으면 lease를 신뢰할 수 없어 delivery를 시작하지 않고 durable block으로 남긴다.
         return Ok(vec![block_distributor_queue_record(
             planning_authority,
             workspace_dir,
@@ -42,7 +42,7 @@ pub(super) fn process_distributor_queue_record(
         )?]);
     }
 
-    // 학습 주석: delivery는 queue record의 worktree path를 runtime lease로 되검증해 stale queue item을 차단합니다.
+    // delivery는 queue record의 worktree path를 runtime lease로 되검증해 stale queue item을 차단한다.
     let resolution = match resolve_workspace_slot_lease(planning_authority, &record.worktree_path) {
         Ok(Some(resolution)) => resolution,
         Ok(None) => {
@@ -68,7 +68,7 @@ pub(super) fn process_distributor_queue_record(
     };
 
     let mut notices = Vec::new();
-    // 학습 주석: queued부터 integrating까지는 GitHub/integration 단계가 idempotent하게 재시도될 수 있는 delivery window입니다.
+    // queued부터 integrating까지는 GitHub/integration 단계가 idempotent하게 재시도될 수 있는 delivery window이다.
     if matches!(
         record.queue_state,
         ParallelModeQueueItemState::Queued
@@ -84,7 +84,7 @@ pub(super) fn process_distributor_queue_record(
             github_automation,
         )?);
         if record.queue_state == ParallelModeQueueItemState::Blocked {
-            // 학습 주석: block은 operator recovery contract라 뒤 단계를 실행하지 않고 현재 notices만 반환합니다.
+            // block은 operator recovery contract라 뒤 단계를 실행하지 않고 현재 notices만 반환한다.
             return Ok(notices);
         }
 
@@ -119,7 +119,7 @@ pub(super) fn process_distributor_queue_record(
         }
     }
 
-    // 학습 주석: 이미 Cleaning인 record도 이 경로로 들어와 slot cleanup만 재시도할 수 있습니다.
+    // 이미 Cleaning인 record도 이 경로로 들어와 slot cleanup만 재시도할 수 있다.
     let cleanup_notice =
         distributor_cleanup_integrated_slot(planning_authority, &resolution, record)?;
     notices.push(cleanup_notice);
@@ -127,14 +127,14 @@ pub(super) fn process_distributor_queue_record(
 }
 
 /*
-학습 주석: integration 단계는 슬롯 branch의 특정 commit을 integration worktree에 반영합니다.
-먼저 slot worktree가 예상 branch와 예상 head commit에 머물러 있는지 확인합니다. 이 확인이
-없으면 agent가 낸 결과가 아닌 다른 commit을 cherry-pick할 수 있습니다.
+integration 단계는 슬롯 branch의 특정 commit을 integration worktree에 반영한다.
+먼저 slot worktree가 예상 branch와 예상 head commit에 머물러 있는지 확인한다. 이 확인이
+없으면 agent가 낸 결과가 아닌 다른 commit을 cherry-pick할 수 있다.
 
 이미 patch-equivalent commit이 integration branch에 있으면 중복 cherry-pick 대신 완료로
-기록합니다. 그렇지 않으면 cherry-pick을 시도하고, conflict가 나면 abort 후 conflict file
-목록과 recovery note를 record에 남겨 사용자가 복구할 수 있게 합니다. 성공 후에는 integration
-branch를 push하고, source PR이 있으면 닫은 뒤 Cleaning 상태로 넘어갑니다.
+기록한다. 그렇지 않으면 cherry-pick을 시도하고, conflict가 나면 abort 후 conflict file
+목록과 recovery note를 record에 남겨 사용자가 복구할 수 있게 한다. 성공 후에는 integration
+branch를 push하고, source PR이 있으면 닫은 뒤 Cleaning 상태로 넘어간다.
 */
 fn distributor_integrate_branch(
     planning_authority: &dyn PlanningAuthorityPort,
@@ -144,7 +144,7 @@ fn distributor_integrate_branch(
 ) -> Result<String, String> {
     let source_branch = record.effective_source_branch();
     let source_commit_sha = record.effective_source_commit_sha();
-    // 학습 주석: slot git status는 cherry-pick 전에 pending merge/rebase metadata를 잡는 첫 guard입니다.
+    // slot git status는 cherry-pick 전에 pending merge/rebase metadata를 잡는 첫 guard이다.
     let slot_status = inspect_slot_git_status(&resolution.workspace_path).ok_or_else(|| {
         format!(
             "slot `{}` git status could not be inspected for distributor delivery",
@@ -166,7 +166,7 @@ fn distributor_integrate_branch(
     }
 
     if current_branch_name(&resolution.workspace_path).as_deref() != Some(source_branch.as_str()) {
-        // 학습 주석: branch drift는 queue record가 가리키는 agent output과 실제 worktree가 달라졌다는 뜻입니다.
+        // branch drift는 queue record가 가리키는 agent output과 실제 worktree가 달라졌다는 뜻이다.
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
@@ -180,7 +180,7 @@ fn distributor_integrate_branch(
         );
     }
 
-    // 학습 주석: commit SHA까지 고정해 force-push나 추가 commit이 섞인 source branch를 자동 통합하지 않습니다.
+    // commit SHA까지 고정해 force-push나 추가 commit이 섞인 source branch를 자동 통합하지 않는다.
     let current_head = resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
         format!(
             "slot `{}` workspace head could not be resolved for distributor delivery",
@@ -218,7 +218,7 @@ fn distributor_integrate_branch(
         &resolution.context.pool_root,
         record,
     )?;
-    // 학습 주석: session detail은 queue record와 별개로 supervisor detail timeline을 갱신하므로 실패를 무시합니다.
+    // session detail은 queue record와 별개로 supervisor detail timeline을 갱신하므로 실패를 무시한다.
     let _ = record_integrating_session_detail(
         planning_authority,
         &resolution.context.repo_root,
@@ -227,7 +227,7 @@ fn distributor_integrate_branch(
         &record.integration_note,
     );
 
-    // 학습 주석: integration은 canonical repo root에서 수행해 slot worktree가 아닌 prerelease worktree 기준으로 반영합니다.
+    // integration은 canonical repo root에서 수행해 slot worktree가 아닌 prerelease worktree 기준으로 반영한다.
     let integration_repo_root = resolution.context.canonical_repo_root.display().to_string();
 
     if !branch_is_integrated_into(
@@ -271,7 +271,7 @@ fn distributor_integrate_branch(
                 source_commit_sha.as_str(),
             ],
         ) {
-            // 학습 주석: conflict file list는 abort 전에 수집해야 Git index가 충돌 path를 아직 알고 있습니다.
+            // conflict file list는 abort 전에 수집해야 Git index가 충돌 path를 아직 알고 있다.
             let conflict_files = collect_cherry_pick_conflict_files(&integration_repo_root);
             let _ = command_succeeds(
                 "git",
@@ -322,7 +322,7 @@ fn distributor_integrate_branch(
     if let Err(error) =
         github_automation.push_integration_branch(&repo_root, DISTRIBUTOR_INTEGRATION_BRANCH)
     {
-        // 학습 주석: local integration이 성공해도 remote push 실패는 operator가 다시 밀어야 하는 delivery block입니다.
+        // local integration이 성공해도 remote push 실패는 operator가 다시 밀어야 하는 delivery block이다.
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
@@ -335,7 +335,7 @@ fn distributor_integrate_branch(
         );
     }
     if let Some(pr_number) = record.pull_request_number {
-        // 학습 주석: PR close 전 다시 inspect해 URL을 최신화하고, 이미 닫힌 PR은 close 호출을 생략합니다.
+        // PR close 전 다시 inspect해 URL을 최신화하고, 이미 닫힌 PR은 close 호출을 생략한다.
         let pull_request = match github_automation.inspect_pull_request(&repo_root, pr_number) {
             Ok(pull_request) => pull_request,
             Err(error) => {
@@ -387,13 +387,13 @@ fn distributor_integrate_branch(
 }
 
 /*
-학습 주석: delivery가 integration branch 반영까지 끝나면 슬롯 worktree를 다시 idle pool로
-돌려야 합니다. Running lease는 먼저 CleanupPending으로 저장해 supervisor가 "통합은 끝났고
-반환 대기 중"인 상태를 볼 수 있게 합니다. 실제 `cleanup_slot`이 성공하면 session detail에
-cleaned 이력을 남기고 queue record를 Done으로 닫습니다.
+delivery가 integration branch 반영까지 끝나면 슬롯 worktree를 다시 idle pool로
+돌려야 한다. Running lease는 먼저 CleanupPending으로 저장해 supervisor가 "통합은 끝났고
+반환 대기 중"인 상태를 볼 수 있게 한다. 실제 `cleanup_slot`이 성공하면 session detail에
+cleaned 이력을 남기고 queue record를 Done으로 닫는다.
 
-cleanup 실패는 통합 실패가 아니라 slot 반환 실패입니다. 그래서 record를 block 처리해
-operator가 worktree/branch 상태를 복구한 뒤 같은 queue item을 다시 진행할 수 있게 합니다.
+cleanup 실패는 통합 실패가 아니라 slot 반환 실패이다. 그래서 record를 block 처리해
+operator가 worktree/branch 상태를 복구한 뒤 같은 queue item을 다시 진행할 수 있게 한다.
 */
 fn distributor_cleanup_integrated_slot(
     planning_authority: &dyn PlanningAuthorityPort,
@@ -401,7 +401,7 @@ fn distributor_cleanup_integrated_slot(
     record: &mut ParallelModeDistributorQueueRecord,
 ) -> Result<String, String> {
     if resolution.lease.state == ParallelModeSlotLeaseState::Running {
-        // 학습 주석: Running lease를 먼저 CleanupPending으로 바꿔 통합 완료와 slot 반환 사이의 중간 상태를 보존합니다.
+        // Running lease를 먼저 CleanupPending으로 바꿔 통합 완료와 slot 반환 사이의 중간 상태를 보존한다.
         let mut cleanup_pending_lease = resolution.lease.clone();
         cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
         write_slot_lease(
@@ -426,7 +426,7 @@ fn distributor_cleanup_integrated_slot(
         &resolution.workspace_path,
         &resolution.lease.branch_name,
     ) {
-        // 학습 주석: cleanup 실패는 integration 결과를 되돌리지 않고, slot 반환 문제로 block 처리합니다.
+        // cleanup 실패는 integration 결과를 되돌리지 않고, slot 반환 문제로 block 처리한다.
         return block_distributor_queue_record(
             planning_authority,
             &resolution.context.repo_root,
@@ -440,7 +440,7 @@ fn distributor_cleanup_integrated_slot(
         );
     }
 
-    // 학습 주석: cleaned detail은 queue Done 상태와 별도로 session history에 slot 반환 완료를 남깁니다.
+    // cleaned detail은 queue Done 상태와 별도로 session history에 slot 반환 완료를 남긴다.
     let _ = record_cleaned_session_detail(
         planning_authority,
         &resolution.context.repo_root,
