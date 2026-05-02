@@ -1,6 +1,8 @@
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
+/*
+ * TUI inbound adapter는 이 native client의 주 사용자 경험을 담당한다.
+ * app은 상태와 이벤트 루프를, conversation_text는 app-server 대화 표시 변환을,
+ * shell_chrome은 터미널 주변 UI를 나누어 맡는다.
+ */
 pub mod app;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 pub(crate) mod conversation_text;
-// 학습 주석: `mod` 선언은 Rust 파일/하위 모듈을 현재 모듈 트리에 연결하는 입구 역할을 합니다.
 pub mod shell_chrome;
