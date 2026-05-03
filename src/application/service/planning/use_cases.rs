@@ -37,15 +37,14 @@ use super::worker::orchestration::{
 use crate::domain::planning::PriorityQueueTask;
 
 /*
- * This file is the public application facade for planning.  It deliberately
- * contains little business logic: each use-case group exposes a stable API for
- * inbound adapters while preserving ownership of real behavior in authoring,
- * runtime, repair, task-tool, and worker services.
+ * 이 파일은 planning의 public application facade다.
+ * 의도적으로 business logic을 거의 담지 않는다. 각 use-case group은 inbound adapter에 stable API를 제공하고,
+ * 실제 behavior의 ownership은 authoring/runtime/repair/task-tool/worker service에 남긴다.
  */
 #[derive(Clone)]
 pub struct PlanningWorkspaceUseCases {
-    // Workspace use cases cover operator-managed artifacts: initialization,
-    // draft editing, doctor/reset flows, and direction maintenance.
+    // workspace use case는 operator가 관리하는 artifact를 다룬다. initialization, draft editing, doctor/reset,
+    // direction maintenance가 모두 active planning workspace와 authority seed를 공유하기 때문이다.
     init_service: PlanningInitService,
     reset_service: PlanningResetService,
     doctor_service: PlanningDoctorService,
@@ -76,8 +75,8 @@ impl PlanningWorkspaceUseCases {
         &self,
         workspace_dir: &str,
     ) -> anyhow::Result<PlanningWorkspaceInitResult> {
-        // Simple initialization creates the baseline planning workspace; richer
-        // editing paths below stage drafts before promotion.
+        // simple initialization은 baseline planning workspace를 즉시 만든다. 더 풍부한 editing path는 아래에서
+        // draft를 stage한 뒤 promotion하는 흐름을 사용한다.
         self.init_service.initialize_simple_workspace(workspace_dir)
     }
     pub fn reset_workspace(
@@ -100,8 +99,7 @@ impl PlanningWorkspaceUseCases {
         &self,
         workspace_dir: &str,
     ) -> anyhow::Result<PlanningDraftEditorSession> {
-        // Manual editor sessions isolate draft files from active authority until
-        // a later save/promote call validates and publishes them.
+        // manual editor session은 나중의 save/promote가 검증하고 publish하기 전까지 draft file을 active authority에서 격리한다.
         self.init_service.stage_manual_editor_session(workspace_dir)
     }
     pub fn load_manual_editor_session(
@@ -142,9 +140,8 @@ impl PlanningWorkspaceUseCases {
         &self,
         workspace_dir: &str,
     ) -> anyhow::Result<DirectionsMaintenanceSummary> {
-        // Direction maintenance is grouped here because operators edit planning
-        // strategy and workspace files together, even though implementation
-        // lives in PlanningDirectionsService.
+        // direction maintenance는 구현이 PlanningDirectionsService에 있어도 workspace use case에 묶는다.
+        // operator는 planning strategy와 workspace file을 하나의 관리 흐름으로 편집하기 때문이다.
         self.directions_service.load_summary(workspace_dir)
     }
     pub fn load_queue_idle_review_context(
@@ -172,9 +169,8 @@ impl PlanningWorkspaceUseCases {
 }
 #[derive(Clone)]
 pub struct PlanningRuntimeUseCases {
-    // Runtime use cases are called while sessions are running.  Prompt/handoff
-    // rendering stays in the facade; proposed task intake is delegated to the
-    // mutation-backed intake service.
+    // runtime use case는 session 실행 중 호출된다. prompt/handoff rendering은 runtime facade에 남기고,
+    // proposed task intake는 mutation-backed intake service로 위임한다.
     runtime_facade: PlanningRuntimeFacadeService,
     task_intake: PlanningTaskIntakeService,
 }
@@ -200,8 +196,7 @@ impl PlanningRuntimeUseCases {
         &self,
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
-        // Built-in handoff is derived from the current runtime snapshot, not
-        // from caller-maintained queue state.
+        // builtin handoff는 caller가 따로 들고 있는 queue state가 아니라 current runtime snapshot에서 파생한다.
         self.runtime_facade
             .build_builtin_next_task_handoff(snapshot)
     }
@@ -247,8 +242,7 @@ impl PlanningRuntimeUseCases {
         &self,
         request: PlanningTaskIntakeRequest,
     ) -> anyhow::Result<PlanningTaskIntakeProposal> {
-        // Intake is a two-step flow: prepare builds a preview/proposal that
-        // inbound UI can inspect before commit_task_intake persists it.
+        // intake는 two-step flow다. prepare가 preview/proposal을 만들고, inbound UI는 commit 전에 이를 inspect할 수 있다.
         self.task_intake.prepare_task_intake(request)
     }
     pub fn commit_task_intake(
@@ -270,8 +264,7 @@ impl PlanningRuntimeUseCases {
         changed_planning_file_paths: &[String],
         execution_snapshot: &PlanningExecutionSnapshot,
     ) -> anyhow::Result<PlanningReconciliationResult> {
-        // Reconciliation receives the execution snapshot captured before the
-        // turn, then compares it with changed planning files after completion.
+        // reconciliation은 turn 전에 capture한 execution snapshot을 받고, 완료 뒤 바뀐 planning file과 비교한다.
         self.runtime_facade.reconcile_after_turn(
             workspace_dir,
             turn_id,
@@ -282,8 +275,7 @@ impl PlanningRuntimeUseCases {
 }
 #[derive(Clone)]
 pub struct PlanningTaskToolUseCases {
-    // This thin wrapper exposes the LLM-facing planning task tool through the
-    // same use-case aggregation as other runtime planning actions.
+    // 이 얇은 wrapper는 LLM-facing planning task tool을 다른 runtime planning action과 같은 use-case 묶음으로 노출한다.
     task_tool: PlanningTaskToolService,
 }
 impl PlanningTaskToolUseCases {
@@ -303,9 +295,8 @@ impl PlanningTaskToolUseCases {
 }
 #[derive(Clone)]
 pub struct PlanningWorkerUseCases {
-    // Worker use cases own model-mediated queue refresh and repair loops.  The
-    // promotion service is separate because proposal promotion is deterministic
-    // once queue state is known.
+    // worker use case는 model-mediated queue refresh와 repair loop를 소유한다.
+    // proposal promotion은 queue state가 알려진 뒤에는 deterministic하므로 별도 service로 분리한다.
     directions_service: PlanningDirectionsService,
     worker_orchestration: PlanningWorkerOrchestrationService,
     proposal_promotion: PlanningProposalPromotionService,
@@ -344,8 +335,7 @@ impl PlanningWorkerUseCases {
         &self,
         request: PlanningQueueRefreshRequest<'_>,
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
-        // Model replies enter through orchestration so extraction, validation,
-        // repair prompts, and mutation commits stay in one path.
+        // model reply는 orchestration을 통해 들어온다. extraction, validation, repair prompt, mutation commit이 한 경로에 남게 한다.
         self.worker_orchestration.refresh_queue_from_reply(request)
     }
     pub fn refresh_queue_from_official_completion(
@@ -372,8 +362,7 @@ impl PlanningWorkerUseCases {
         &self,
         request: PlanningProposalPromotionRequest<'_>,
     ) -> anyhow::Result<PlanningProposalPromotionOutcome> {
-        // Promotion happens after refresh/repair has produced a queue proposal;
-        // this deterministic step should not ask the worker model again.
+        // promotion은 refresh/repair가 queue proposal을 만든 뒤 실행된다. deterministic 단계라 worker model에게 다시 묻지 않는다.
         self.proposal_promotion
             .promote_top_proposal_to_ready_if_needed(request)
     }
