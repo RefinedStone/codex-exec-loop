@@ -53,6 +53,12 @@ impl StartupService {
         TUI는 StartupState::Failed로 들어가고, 성공하면 `StartupDiagnostics::can_continue()` 같은
         domain 판단으로 prompt submit, session overlay, warning line을 제어한다.
         */
+        /*
+        The ordering is intentional: local prerequisites are checked before the
+        app-server probe so obvious environment problems fail with local context, while
+        app-server account/initialize details are merged only after the process can
+        plausibly launch the Codex binary from this workspace.
+        */
         // 현재 directory는 diagnostics의 기본 위치 표시값이다.
         // 여기서 실패하면 실행 환경 자체를 알 수 없으므로 startup check 전체를 실패로 돌린다.
         let current_directory = std::env::current_dir()
@@ -74,6 +80,12 @@ impl StartupService {
 
         // app-server startup context는 outbound adapter가 initialize/probe 요청을 수행한 결과이다.
         // account warning이나 attachment profile은 local process check만으로는 얻을 수 없다.
+        /*
+        This port call is the first network/process boundary in the check. Keeping it
+        after local workspace detection lets diagnostics distinguish "we could not run
+        local prerequisites" from "app-server/account probing failed" without blending
+        both classes into one generic startup error.
+        */
         let startup_context = self.startup_probe_port.load_startup_context()?;
         /*
         app-server startup context는 local shell에서 직접 알 수 없는 account/login 상태와
@@ -121,6 +133,12 @@ impl StartupService {
         fatal startup failure로 보지 않는다. Akra는 일반 directory에서도 shell을 띄울 수 있고,
         이후 일부 기능만 제한하거나 workspace path를 현재 directory로 표시하면 된다.
         */
+        /*
+        This helper returns a service-private WorkspaceStatus rather than
+        StartupDiagnostics fields directly. That keeps the soft fallback policy local:
+        git discovery may fail, but the caller still receives a normalized path/detail
+        pair that can be merged with app-server readiness.
+        */
         // git 판정 실패 시 fallback path로 쓸 현재 directory이다.
         let current_directory = std::env::current_dir()
             .context("failed to resolve current directory for workspace status")?
@@ -146,6 +164,12 @@ impl StartupService {
             Ok(result) if result.status.success() => {
                 // git stdout은 trailing newline을 포함하므로 trim해서 UI 표시 path로 만든다.
                 let root = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                /*
+                Empty stdout is not expected from a successful `--show-toplevel`, but
+                this branch still treats the command success as the authoritative git
+                signal. If git ever returns unusual output, the detail line preserves
+                the raw trimmed value for diagnosis instead of inventing a path.
+                */
                 Ok(WorkspaceStatus {
                     // git repo 안이므로 workspace check는 명확히 ok이다.
                     ok: true,
