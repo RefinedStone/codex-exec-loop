@@ -255,12 +255,12 @@ pub fn reduce_shell_chrome(
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
         }
         ShellChromeEvent::TransientChromeDismissed => {
-            // Conversation changes clear transient chrome without touching cached startup/session data.
+            // conversation change는 transient chrome만 접고, 이미 cache된 startup/session data는 유지한다.
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Hidden;
         }
         ShellChromeEvent::SessionSelectionMoved { delta } => {
-            // Navigation only applies when a full recent-session catalog is available.
+            // navigation은 full recent-session catalog가 있을 때만 적용된다. attach-only catalog는 selectable row가 없다.
             let SessionState::Ready(catalog) = &state.session_state else {
                 return ShellChromeReduction { state, effects };
             };
@@ -270,7 +270,7 @@ pub fn reduce_shell_chrome(
             if recent_sessions.items.is_empty() {
                 state.selected_session_index = 0;
             } else {
-                // Clamp rather than wrap so repeated keypresses at an edge keep the same row selected.
+                // wrap 대신 clamp를 써서 list 끝에서 반복 keypress가 같은 row에 머물게 한다.
                 let max_index = recent_sessions.items.len().saturating_sub(1) as isize;
                 let current_index = state.selected_session_index as isize;
                 let next_index = (current_index + delta).clamp(0, max_index);
@@ -282,7 +282,11 @@ pub fn reduce_shell_chrome(
     ShellChromeReduction { state, effects }
 }
 
-// Overlay-open loads are idempotent; they should not retry failed catalogs automatically.
+/*
+ * overlay-open load는 idempotent하다.
+ * session overlay를 여는 동작이 failed catalog를 자동 retry하면, 사용자가 단순히 화면을 열었을 뿐인데 IO가 반복된다.
+ * 그래서 Idle일 때만 initial load effect를 queue한다.
+ */
 fn queue_session_load_if_allowed(
     state: &mut ShellChromeState,
     limit: usize,
@@ -297,7 +301,10 @@ fn queue_session_load_if_allowed(
     }
 }
 
-// Explicit reloads are allowed after Ready or Failed, but not while another load is in flight.
+/*
+ * explicit reload는 Ready나 Failed 뒤에 허용하지만, Loading 중에는 중복 effect를 만들지 않는다.
+ * 사용자가 명시적으로 session reload를 요청한 경우에는 실패 복구 의도가 있으므로 overlay-open load보다 넓게 허용한다.
+ */
 fn queue_session_reload_if_allowed(
     state: &mut ShellChromeState,
     limit: usize,
