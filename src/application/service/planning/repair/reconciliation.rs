@@ -1,9 +1,9 @@
 /*
- * Post-turn reconciliation protects planning state after a Codex execution has finished.
- * DB-backed direction/task authority is now the source of truth, so this service currently focuses on
- * active planning support files that must not be casually rewritten by a turn. runtime/facade.rs captures
- * a PlanningExecutionSnapshot before execution and calls reconcile_after_turn afterward with the planning
- * paths touched by the turn; this module compares those two facts and restores protected files when needed.
+ * post-turn reconciliation은 Codex 실행이 끝난 뒤 planning state를 보호하는 경계다.
+ * direction/task authority의 source of truth가 DB로 이동했기 때문에, 현재 이 service는 turn이
+ * 우연히 다시 쓸 수 없는 active planning support file 보호에 집중한다. runtime/facade.rs가 실행
+ * 전에 `PlanningExecutionSnapshot`을 잡고, 실행 후 touched planning path와 함께
+ * `reconcile_after_turn`을 호출하면 이 모듈이 두 사실을 비교해 필요한 보호 파일을 복구한다.
  */
 use std::sync::Arc;
 
@@ -26,10 +26,10 @@ pub use super::protected_restore::PlanningProtectedFileRestoration;
 
 #[derive(Clone)]
 /*
- * Reconciliation is intentionally small in the current DB-authority model.
- * The workspace port is enough to reload and restore support files; validation, queue, and task repository
- * dependencies remain in the constructor contract so older composition and future authority repair flows can
- * share the same service boundary without changing facade wiring again.
+ * 현재 DB-authority 모델에서 reconciliation은 의도적으로 작다. support file reload/restore에는
+ * workspace port만 필요하다. 그래도 validation, queue, task repository dependency를 constructor
+ * contract에 남겨 둔 이유는 기존 composition과 미래 authority repair flow가 facade wiring을 다시
+ * 바꾸지 않고 같은 service boundary를 공유하게 하기 위해서다.
  */
 pub struct PlanningReconciliationService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -37,17 +37,17 @@ pub struct PlanningReconciliationService {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 /*
- * Snapshot of planning files that should survive the user turn unchanged.
- * Only result-output is captured today because task/direction authority moved to DB ports, but the type is
- * deliberately separate from PlanningWorkspaceLoadRecord so it represents an execution guard, not a generic load.
+ * user turn을 unchanged 상태로 지나가야 하는 planning file snapshot이다. task/direction authority가
+ * DB port로 이동했기 때문에 현재는 result-output만 capture한다. `PlanningWorkspaceLoadRecord`와
+ * 별도 타입으로 둔 이유는 generic load 결과가 아니라 execution guard라는 의미를 타입에 남기기 위해서다.
  */
 pub struct PlanningExecutionSnapshot {
-    // result-output.md defines completion copy, so unexpected edits are restored after the turn.
+    // result-output.md는 completion copy contract를 정의하므로, turn 중 unexpected edit이 있으면 복구한다.
     pub result_output_markdown: Option<String>,
 }
 
 impl PlanningExecutionSnapshot {
-    // TUI post-turn code uses this cheap path check before it asks the service to reconcile.
+    // TUI post-turn code는 service 호출 전에 이 cheap path check로 reconciliation 필요 여부를 거른다.
     pub fn captures_path(path: &str) -> bool {
         canonical_active_planning_file_path(path).is_some()
     }
@@ -55,32 +55,33 @@ impl PlanningExecutionSnapshot {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 /*
- * Post-turn reconciliation returns an operational report, not just success/failure.
- * UI callers use notices and restored file lists for status copy; worker orchestration can use repair_request
- * or auto_followup_block_reason when a future authority repair path detects invalid generated planning state.
+ * post-turn reconciliation은 단순 success/failure가 아니라 operational report를 반환한다.
+ * UI caller는 notices와 restored file list로 status copy를 만들고, future authority repair path는
+ * invalid generated planning state를 발견했을 때 repair_request나 auto_followup_block_reason을
+ * worker orchestration에 넘길 수 있다.
  */
 pub struct PlanningReconciliationResult {
-    // Human-readable status lines surfaced by post-turn UI paths.
+    // post-turn UI path에 표시되는 human-readable status line이다.
     pub notices: Vec<String>,
-    // Structured restoration details for protected files when a restore path records per-file outcomes.
+    // restore path가 per-file outcome을 기록할 때 쓰는 protected file 복구 상세다.
     pub restored_protected_files: Vec<PlanningProtectedFileRestoration>,
-    // True when a generated task authority candidate was rejected instead of accepted.
+    // generated task authority candidate가 accepted되지 않고 rejected됐을 때 true다.
     pub rejected_task_authority: bool,
-    // Archive path for the rejected candidate, if the recovery path persisted one for operator inspection.
+    // rejected candidate를 operator inspection용으로 저장했다면 그 archive path다.
     pub rejected_archive_path: Option<String>,
-    // Queue projection adjustment made during authority recovery.
+    // authority recovery 중 수행된 queue projection 조정 결과다.
     pub queue_projection_action: Option<PlanningQueueProjectionAction>,
-    // Prompt payload for a repair worker when automatic reconciliation cannot safely accept a candidate.
+    // automatic reconciliation이 candidate를 안전하게 accept할 수 없을 때 repair worker에게 넘길 prompt payload다.
     pub repair_request: Option<PlanningRepairRequest>,
-    // Reason auto-follow should stop after reconciliation notices unsafe planning state.
+    // reconciliation이 unsafe planning state를 발견한 뒤 auto-follow를 멈춰야 하는 이유다.
     pub auto_followup_block_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
- * Repair request is the serialized context handed to planning repair prompt generation.
- * It carries accepted authority and queue projection as the trusted baseline, plus the rejected candidate and
- * validation messages so the repair worker can emit task mutation commands without guessing what failed.
+ * repair request는 planning repair prompt generation에 넘기는 serialized context다.
+ * accepted authority와 queue projection을 trusted baseline으로 담고, rejected candidate와 validation
+ * message를 함께 실어 repair worker가 무엇이 실패했는지 추측하지 않고 task mutation command를 낼 수 있게 한다.
  */
 pub struct PlanningRepairRequest {
     pub failure_summary: String,
@@ -93,13 +94,13 @@ pub struct PlanningRepairRequest {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-// Compact description of which protected active planning files were touched by a turn.
+// turn이 어떤 protected active planning file을 건드렸는지 나타내는 compact description이다.
 pub(super) struct PlanningChangeSet {
     pub(super) result_output_changed: bool,
 }
 
 impl PlanningChangeSet {
-    // Normalize reported paths through the shared active-planning contract before deciding relevance.
+    // reported path를 shared active-planning contract로 normalize한 뒤 관련성을 판단한다.
     fn from_paths(paths: &[String]) -> Self {
         let mut change_set = Self::default();
         for path in paths {
@@ -110,7 +111,7 @@ impl PlanningChangeSet {
         change_set
     }
 
-    // Reconciliation can be skipped entirely when no protected file changed.
+    // protected file이 바뀌지 않았다면 reconciliation 전체를 건너뛸 수 있다.
     fn has_relevant_changes(self) -> bool {
         self.result_output_changed
     }
@@ -119,7 +120,7 @@ impl PlanningChangeSet {
 impl PlanningReconciliationService {
     #[cfg(test)]
     #[allow(dead_code)]
-    // Test constructor keeps historical dependency shape while routing through the production constructor.
+    // test constructor는 historical dependency shape를 유지하면서 production constructor로 라우팅한다.
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_validation_service: PlanningValidationService,
@@ -134,9 +135,9 @@ impl PlanningReconciliationService {
     }
 
     /*
-     * Production constructor accepts the full reconciliation dependency set.
-     * Current protected-file restoration only stores the workspace port, while the prefixed arguments mark
-     * temporarily dormant authority repair collaborators without leaking that choice into composition.
+     * production constructor는 full reconciliation dependency set을 받는다. 현재 protected-file
+     * restoration은 workspace port만 저장하지만, prefix가 붙은 인자들은 일시적으로 dormant한
+     * authority repair collaborator를 composition 밖으로 노출하지 않기 위한 자리다.
      */
     pub fn with_task_repository(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -150,9 +151,9 @@ impl PlanningReconciliationService {
     }
 
     /*
-     * Capture protected file content before Codex is allowed to execute the turn.
-     * The snapshot is later converted back into a workspace record for restore, so the restore operation uses
-     * the same workspace-port write path as normal planning file commits.
+     * Codex가 turn을 실행하기 전에 protected file content를 capture한다. 이 snapshot은 나중에
+     * restore용 workspace record로 다시 변환되므로, 복구 작업도 일반 planning file commit과 같은
+     * workspace-port write path를 사용한다.
      */
     pub fn load_execution_snapshot(
         &self,
@@ -167,10 +168,10 @@ impl PlanningReconciliationService {
     }
 
     /*
-     * Restore protected planning files only when the turn actually touched a captured active path.
-     * The changed path list is the cheap guard; if it contains result-output, the service commits the
-     * pre-turn snapshot and records a notice so TUI/auto-follow callers can explain that reconciliation
-     * intentionally discarded the turn's edit to protected planning copy.
+     * turn이 capture된 active path를 실제로 건드렸을 때만 protected planning file을 복구한다.
+     * changed path list가 cheap guard이고, result-output이 포함되면 service는 pre-turn snapshot을
+     * commit하고 notice를 기록한다. TUI/auto-follow caller가 reconciliation이 보호 planning copy에
+     * 대한 turn edit을 의도적으로 폐기했음을 설명할 수 있게 하기 위해서다.
      */
     pub fn reconcile_after_turn(
         &self,
@@ -197,7 +198,7 @@ impl PlanningReconciliationService {
     }
 }
 
-// Convert the execution guard back into the minimal workspace-port payload needed for protected-file restore.
+// execution guard를 protected-file restore에 필요한 최소 workspace-port payload로 되돌린다.
 pub(super) fn execution_snapshot_to_workspace_record(
     execution_snapshot: &PlanningExecutionSnapshot,
 ) -> PlanningWorkspaceLoadRecord {
