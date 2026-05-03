@@ -94,6 +94,8 @@ pub struct PlanningDraftEditorSession {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningDraftSaveResult {
+    // save result는 promotion 결과와 다르게 file count를 보고하지 않는다. staged draft를 갱신하고 validation snapshot만
+    // 새로 계산했을 뿐, active workspace나 DB authority에는 아직 아무 효과가 없기 때문이다.
     pub draft_name: String,
     pub validation_report: PlanningValidationReport,
 }
@@ -111,6 +113,7 @@ pub struct PlanningDraftPromoteResult {
 pub struct PlanningWorkspaceInitResult {
     // direct init은 staging과 달리 bootstrap file을 즉시 active workspace에 쓴다. created_paths는 operator가
     // 실제 생성된 planning-relative path를 감사할 수 있게 하는 기록이다.
+    // DB direction/task authority seed도 함께 일어나지만, 그 효과는 file path 목록이 아니라 mode 선택으로 설명된다.
     pub mode: PlanningBootstrapMode,
     pub created_file_count: usize,
     pub created_paths: Vec<String>,
@@ -297,6 +300,9 @@ impl PlanningInitService {
                 validation_report,
             });
         }
+        // 여기부터는 validation이 parsed authority document를 제공한다는 전제 아래 active state transition을 준비한다.
+        // raw staged text를 다시 조합하지 않고 validation_result의 domain value만 쓰는 이유는 promotion과 direct init이
+        // 같은 normalized authority를 repository에 넣게 하기 위해서다.
         let directions = validation_result
             .directions
             .as_ref()
@@ -323,6 +329,7 @@ impl PlanningInitService {
         let promote_result = (|| -> Result<()> {
             // workspace file을 DB authority보다 먼저 쓴다. 성공 경로에서는 committed authority가 missing active markdown을
             // 가리키지 않아야 하기 때문이다. partial workspace write는 아래 rollback이 처리한다.
+            // 반대로 DB commit 뒤 file write를 하면 rollback으로 되돌릴 수 없는 accepted authority가 먼저 노출될 수 있다.
             for file in &loaded.staged_files {
                 self.planning_workspace_port
                     .replace_planning_workspace_file(
@@ -349,6 +356,8 @@ impl PlanningInitService {
         if let Err(error) = promote_result {
             // 여기서 rollback하는 대상은 workspace file write다. DB authority write가 workspace replacement 뒤 실패하면
             // active file layer를 마지막으로 알던 상태로 되돌리고, 원래 authority error를 그대로 표면화한다.
+            // rollback 실패 메시지에 수동 복구 path를 싣는 이유는 이 service가 DB commit 실패와 file 복원 실패를 동시에
+            // 완전히 자동 복구할 수 없기 때문이다.
             if let Err(rollback_error) = self.restore_promoted_active_state(
                 workspace_dir,
                 &applied_paths,
