@@ -7,9 +7,9 @@ use serde::Serialize;
 use std::io::Write;
 
 /*
- * Planning CLI reports are the presentation boundary for shell-facing commands.
- * Application services decide workspace state and mutations; this module freezes
- * the lowercase line protocol and JSONL envelope that scripts and tests consume.
+ * planning CLI report는 shell-facing command의 presentation boundary다.
+ * application service가 workspace state와 mutation 여부를 결정하고, 이 모듈은 script/test가 소비하는
+ * lowercase line protocol과 JSONL envelope를 고정한다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DoctorReport {
@@ -18,8 +18,8 @@ pub(super) struct DoctorReport {
 }
 
 impl DoctorReport {
-    // Path resolution can fail before the doctor service can inspect anything, so
-    // the adapter folds that error into the same report shape and exit-code path.
+    // path resolution은 doctor service가 inspect하기 전에 실패할 수 있다. adapter는 그 error도 같은 report shape와
+    // exit-code path로 접는다.
     pub(super) fn path_issue(workspace_path: String, issue: String) -> Self {
         Self {
             workspace_path,
@@ -27,8 +27,7 @@ impl DoctorReport {
         }
     }
 
-    // The service report owns health semantics; the CLI only adds the exact
-    // workspace label that should be echoed back to the terminal.
+    // health semantics는 service report가 소유한다. CLI는 terminal에 다시 echo할 정확한 workspace label만 더한다.
     pub(super) fn from_service_report(
         workspace_path: String,
         report: PlanningDoctorReport,
@@ -43,8 +42,8 @@ impl DoctorReport {
     }
 }
 
-// Init output joins two service-level facts: the bootstrap result describes file
-// creation, while the runtime snapshot supplies the queue policy visible to users.
+// init output은 service-level fact 두 개를 합친다. bootstrap result는 file creation을 설명하고,
+// runtime snapshot은 사용자가 볼 queue policy를 제공한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitReport {
     workspace_path: String,
@@ -56,8 +55,8 @@ pub(super) struct InitReport {
 }
 
 impl InitReport {
-    // A path issue happens before service execution; keep the visible output close
-    // to a normal init failure so callers only branch on the exit code if needed.
+    // path issue는 service execution 전에 발생한다. visible output을 일반 init failure와 가깝게 유지해
+    // caller가 필요하면 exit code만으로 분기할 수 있게 한다.
     pub(super) fn path_issue(workspace_path: String, issue: String) -> Self {
         Self {
             workspace_path,
@@ -69,8 +68,8 @@ impl InitReport {
         }
     }
 
-    // Capture the service results into owned presentation fields so rendering
-    // stays side-effect free and independent from workspace state after init.
+    // service result를 owned presentation field로 capture한다. rendering이 side-effect free이고 init 이후 workspace state와
+    // 독립적이게 하기 위해서다.
     pub(super) fn success(
         workspace_path: String,
         result: &PlanningWorkspaceInitResult,
@@ -86,8 +85,8 @@ impl InitReport {
         }
     }
 
-    // Service failures have no created-file count or runtime policy to report,
-    // but still use the same command/mode keys as the successful line protocol.
+    // service failure에는 보고할 created-file count나 runtime policy가 없다. 그래도 successful line protocol과 같은
+    // command/mode key를 사용한다.
     pub(super) fn failure(workspace_path: String, issue: String) -> Self {
         Self {
             workspace_path,
@@ -103,8 +102,8 @@ impl InitReport {
     }
 }
 
-// Reset output is intentionally explicit about every rewritten or removed path
-// because downstream automation can parse these lines without reading the files.
+// reset output은 rewrite/remove된 path를 의도적으로 모두 명시한다.
+// downstream automation이 file을 다시 읽지 않고도 이 line들을 parse할 수 있어야 하기 때문이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ResetReport {
     workspace_path: String,
@@ -116,8 +115,8 @@ pub(super) struct ResetReport {
 }
 
 impl ResetReport {
-    // If the adapter cannot resolve the workspace path, no reset target has been
-    // validated yet, so the report omits target and mutation lines.
+    // adapter가 workspace path를 resolve하지 못하면 reset target도 아직 validate되지 않았다.
+    // 그래서 report에서 target과 mutation line을 생략한다.
     pub(super) fn path_issue(workspace_path: String, issue: String) -> Self {
         Self {
             workspace_path,
@@ -129,8 +128,8 @@ impl ResetReport {
         }
     }
 
-    // Clone the path lists into the report to make the render step a pure dump of
-    // the completed service result rather than a second read of workspace state.
+    // path list를 report로 clone해 render step을 completed service result의 순수 dump로 만든다.
+    // workspace state를 두 번째로 읽지 않게 하는 선택이다.
     pub(super) fn success(workspace_path: String, result: &PlanningWorkspaceResetResult) -> Self {
         Self {
             workspace_path,
@@ -142,8 +141,7 @@ impl ResetReport {
         }
     }
 
-    // Once reset dispatch starts, the selected target is useful diagnostic
-    // context even when the service fails before any file mutation is reported.
+    // reset dispatch가 시작된 뒤에는 service가 file mutation 보고 전에 실패해도 selected target이 유용한 diagnostic context다.
     pub(super) fn failure(
         workspace_path: String,
         target: PlanningResetTarget,
@@ -163,8 +161,8 @@ impl ResetReport {
     }
 }
 
-// Machine-facing planning-tool commands use JSONL so callers can distinguish a
-// transport failure from an operation-level error without scraping human text.
+// machine-facing planning-tool command는 JSONL을 사용한다. caller가 human text를 scraping하지 않고도
+// transport failure와 operation-level error를 구분할 수 있게 하기 위해서다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PlanningToolErrorReport {
     pub(super) ok: bool,
@@ -173,8 +171,8 @@ pub(super) struct PlanningToolErrorReport {
     pub(super) guidance: Vec<String>,
 }
 
-// Doctor rendering keeps optional diagnostics as omitted lines, not empty keys,
-// which makes the text stable for both humans and simple shell assertions.
+// doctor rendering은 optional diagnostic을 empty key가 아니라 omitted line으로 유지한다.
+// 사람과 단순 shell assertion 모두에게 안정적인 text가 된다.
 pub(super) fn render_doctor_report(stdout: &mut impl Write, report: &DoctorReport) -> Result<()> {
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
     writeln!(
@@ -203,8 +201,8 @@ pub(super) fn render_doctor_report(stdout: &mut impl Write, report: &DoctorRepor
     Ok(())
 }
 
-// Init renders fixed command/mode headers before optional result lines so every
-// outcome has a predictable prefix in terminal captures and integration tests.
+// init은 optional result line보다 먼저 fixed command/mode header를 렌더링한다.
+// 모든 outcome이 terminal capture와 integration test에서 예측 가능한 prefix를 갖게 하기 위해서다.
 pub(super) fn render_init_report(stdout: &mut impl Write, report: &InitReport) -> Result<()> {
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
     writeln!(stdout, "command: init")?;
@@ -224,8 +222,8 @@ pub(super) fn render_init_report(stdout: &mut impl Write, report: &InitReport) -
     Ok(())
 }
 
-// Reset prints mutation paths as repeated keys, preserving order from the
-// service while avoiding a bespoke list syntax in the human-readable protocol.
+// reset은 mutation path를 repeated key로 출력한다. service가 준 순서를 보존하면서도 human-readable protocol에
+// 별도 list syntax를 만들지 않기 위한 형식이다.
 pub(super) fn render_reset_report(stdout: &mut impl Write, report: &ResetReport) -> Result<()> {
     writeln!(stdout, "workspace: {}", report.workspace_path)?;
     writeln!(stdout, "command: reset")?;
@@ -247,16 +245,15 @@ pub(super) fn render_reset_report(stdout: &mut impl Write, report: &ResetReport)
     Ok(())
 }
 
-// Keep JSON escaping in serde rather than interpolated strings; each call emits
-// exactly one newline-terminated object for streaming consumers.
+// JSON escaping은 interpolated string이 아니라 serde에 맡긴다.
+// 각 호출은 streaming consumer를 위해 newline-terminated object 하나만 emit한다.
 pub(super) fn render_json_line<T: Serialize>(stdout: &mut impl Write, value: &T) -> Result<()> {
     serde_json::to_writer(&mut *stdout, value).context("failed to serialize JSON response")?;
     writeln!(stdout)?;
     Ok(())
 }
 
-// CLI spellings are a compatibility surface, so do not derive them from enum
-// debug names or variant identifiers.
+// CLI spelling은 compatibility surface다. enum debug name이나 variant identifier에서 파생하지 않는다.
 fn bootstrap_mode_label(mode: PlanningBootstrapMode) -> &'static str {
     match mode {
         PlanningBootstrapMode::Detail => "detail",
