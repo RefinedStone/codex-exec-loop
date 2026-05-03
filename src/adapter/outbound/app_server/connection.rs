@@ -280,7 +280,12 @@ impl AppServerConnection {
             }
 
             if !interrupt_sent && interrupt_signal.requested_after(observed_interrupt_generation) {
-                // Only send one interrupt per turn; repeated Ctrl-C increments the generation but should not spam app-server.
+                /*
+                 * The interrupt signal is process-wide, while this loop owns exactly one
+                 * active turn. After translating the first newer generation into
+                 * `turn/interrupt`, later increments are left as UI intent instead of
+                 * repeatedly sending the same app-server method for this turn id.
+                 */
                 self.interrupt_active_turn(thread_id, turn_id, event_sender);
                 interrupt_sent = true;
             }
@@ -332,7 +337,11 @@ impl AppServerConnection {
         turn_id: &str,
         event_sender: &Sender<ConversationStreamEvent>,
     ) {
-        // Interrupt failure is warning-level because the stream may still finish or fail naturally.
+        /*
+         * Interrupt failure is warning-level because the stream is still authoritative.
+         * app-server may complete, fail, or close the turn naturally after the UI asks
+         * for stop, so this method reports status without taking over stream outcome.
+         */
         match self.interrupt_turn(TurnInterruptParams {
             thread_id: thread_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -349,7 +358,12 @@ impl AppServerConnection {
     }
 
     pub(super) fn take_warnings(&mut self) -> Vec<String> {
-        // Collect a short tail of stderr/notifications so callers receive diagnostics emitted just after a response.
+        /*
+         * A successful response can be followed immediately by stderr or loose
+         * notifications from the child. The short drain window gives callers the
+         * operator-visible context without turning normal request completion into a
+         * blocking "wait until silence" operation.
+         */
         self.collect_remaining_warnings();
         self.diagnostics
             .record_warnings(self.pending_notifications.drain_warning_texts());
@@ -368,7 +382,12 @@ impl AppServerConnection {
     where
         T: DeserializeOwned,
     {
-        // Request ids are connection-local and monotonically increasing so late/out-of-order responses can be detected.
+        /*
+         * Request ids are connection-local because one child process owns one JSON-RPC
+         * sequence. Keeping them monotonic lets response wait detect stale or
+         * out-of-order replies instead of accidentally deserializing the wrong method's
+         * result into the typed response expected by the caller.
+         */
         let request_id = self.next_request_id;
         self.next_request_id += 1;
 
@@ -391,7 +410,12 @@ impl AppServerConnection {
     }
 
     fn send_json_line(&mut self, value: Value) -> Result<()> {
-        // app-server speaks newline-delimited JSON; flush is required so child process receives the request immediately.
+        /*
+         * app-server speaks newline-delimited JSON over stdio, not a framed socket.
+         * The explicit flush is part of the transport contract: without it, a request
+         * can sit in the parent process buffer while the caller waits for a response
+         * that the child has not been allowed to observe.
+         */
         writeln!(self.stdin, "{}", serde_json::to_string(&value)?)?;
         self.stdin.flush()?;
         Ok(())
@@ -470,7 +494,11 @@ impl AppServerConnection {
         request_id: i64,
         notification: AppServerNotification,
     ) {
-        // Stream-owned notifications can legitimately race ahead of the response to turn/start, so keep them ordered.
+        /*
+         * Stream-owned notifications can legitimately race ahead of the `turn/start`
+         * response. Buffering them preserves app-server arrival order across the
+         * response-to-stream handoff instead of converting early deltas into warnings.
+         */
         if notification.should_defer_to_turn_stream() {
             self.pending_notifications.push(notification);
             return;
@@ -488,7 +516,12 @@ impl AppServerConnection {
         changed_planning_file_paths: &mut Vec<String>,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<bool> {
-        // Pending notifications preserve arrival order from response wait into the active stream reducer.
+        /*
+         * Pending notifications are consumed before blocking on the reader channel so
+         * deltas observed during response waiting are reduced before later stdout
+         * lines. This keeps the stream reducer's changed-file and completion state in
+         * protocol order.
+         */
         let Some(notification) = self.pending_notifications.pop_front() else {
             return Ok(false);
         };
@@ -510,7 +543,12 @@ impl AppServerConnection {
         changed_planning_file_paths: &mut Vec<String>,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<bool> {
-        // protocol::handle_turn_notification owns payload translation; connection.rs owns diagnostics and loop control.
+        /*
+         * protocol::handle_turn_notification owns payload translation into domain
+         * stream events. This connection layer keeps the transport responsibilities:
+         * reject non-stream notifications, retain diagnostics, and decide when the
+         * outer wait loop can stop.
+         */
         if !notification.should_defer_to_turn_stream() {
             self.diagnostics
                 .record_warning(notification.warning_text("while streaming the active turn"));
@@ -540,7 +578,11 @@ impl AppServerConnection {
     }
 
     fn collect_remaining_warnings(&mut self) {
-        // Drain briefly after a request so stderr/config warnings emitted near process shutdown are not lost.
+        /*
+         * The drain is deliberately short and warning-only. It catches stderr/config
+         * notices emitted just after the response line, while avoiding a second stream
+         * consumer that could steal turn notifications from wait_for_turn_stream.
+         */
         let drain_deadline = Instant::now() + self.config.drain_timeout;
         while Instant::now() < drain_deadline {
             if let Ok(Some(_)) = self.child.try_wait() {
