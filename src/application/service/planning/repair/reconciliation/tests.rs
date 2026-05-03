@@ -1,48 +1,40 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{
     PlanningChangeSet, PlanningRepairPromptHandoff, PlanningRepairRequest,
     build_planning_repair_prompt,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::planning::{
     PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskStatus,
 };
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * Reconciliation tests cover the defensive rules around planner-generated repair output.
+ * The production service currently restores protected files, but these tests also preserve the planned
+ * authority-repair contract: rejected candidates must not erase accepted DB work, regress terminal state,
+ * or keep the previous queue handoff unchanged while pretending progress was made.
+ */
+
+// Mirror of the stale-candidate guard used by repair orchestration tests to pin the expected diagnostics.
 fn stale_candidate_guard_failure(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     accepted_task_authority: Option<&TaskAuthorityDocument>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     candidate_task_authority: &TaskAuthorityDocument,
 ) -> Option<String> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted_task_authority = accepted_task_authority?;
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for accepted_task in &accepted_task_authority.tasks {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let task_id = accepted_task.id.trim();
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let Some(candidate_task) = find_task(candidate_task_authority, task_id) else {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Some(format!(
                 "planner task authority candidate removed accepted DB task `{task_id}`"
             ));
         };
-
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if terminal_status(accepted_task.status) && candidate_task.status != accepted_task.status {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Some(format!(
                 "planner task authority candidate regressed accepted DB task `{task_id}` from `{}` to `{}`",
                 accepted_task.status.label(),
                 candidate_task.status.label()
             ));
         }
-
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if timestamp_regressed(&candidate_task.updated_at, &accepted_task.updated_at) {
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return Some(format!(
                 "planner task authority candidate regressed accepted DB task `{task_id}` updated_at from `{}` to `{}`",
                 accepted_task.updated_at.trim(),
@@ -53,73 +45,51 @@ fn stale_candidate_guard_failure(
     None
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// Done/cancelled tasks are terminal for repair purposes: candidates may not move them backward.
 fn terminal_status(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// Timestamp regression is ignored for malformed or missing dates so schema validation remains the caller's job.
 fn timestamp_regressed(candidate_updated_at: &str, accepted_updated_at: &str) -> bool {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let candidate_updated_at = candidate_updated_at.trim();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted_updated_at = accepted_updated_at.trim();
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if candidate_updated_at.is_empty() || accepted_updated_at.is_empty() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return false;
     }
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Ok(candidate_updated_at) = chrono::DateTime::parse_from_rfc3339(candidate_updated_at)
-    // 학습 주석: `else` 분기는 앞 조건이 실패했을 때 실행되어 흐름의 대안을 제공합니다.
     else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return false;
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let Ok(accepted_updated_at) = chrono::DateTime::parse_from_rfc3339(accepted_updated_at) else {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return false;
     };
 
     candidate_updated_at < accepted_updated_at
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * Guard against repair loops that re-emit the same ready queue head.
+ * A candidate is acceptable when the same task remains at the head only if its authority row actually changed
+ * relative to the accepted DB baseline; otherwise the worker has not advanced the prior handoff.
+ */
 fn queue_advancement_guard_failure(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     accepted_task_authority: Option<&TaskAuthorityDocument>,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     candidate_task_authority: &TaskAuthorityDocument,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     queue_projection: &PriorityQueueProjection,
 ) -> Option<String> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let previous_handoff = previous_handoff?;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let queue_head = queue_projection.next_task.as_ref()?;
-    // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
     if queue_head.task_id.trim() != previous_handoff.task_id.trim() {
-        // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
         return None;
     }
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted_task = accepted_task_authority
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .and_then(|task_authority| find_task(task_authority, previous_handoff.task_id));
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let candidate_task = find_task(candidate_task_authority, previous_handoff.task_id)?;
-
-    // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
     match accepted_task {
         Some(accepted_task)
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if accepted_task.normalized() == candidate_task.normalized()
-                // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
                 && queue_head.status.label() == previous_handoff.status_label.trim() =>
         {
             Some(format!(
@@ -127,86 +97,65 @@ fn queue_advancement_guard_failure(
                 previous_handoff.task_id.trim()
             ))
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         None if candidate_task.updated_at.trim() == previous_handoff.updated_at.trim() => {
             Some(format!(
                 "planner refresh returned previous handoff `{}` as the queue head without DB baseline evidence of a task update",
                 previous_handoff.task_id.trim()
             ))
         }
-        // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
         _ => None,
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// Test helper trims ids like production code because prompts and JSON candidates can contain padded values.
 fn find_task<'a>(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     task_authority: &'a TaskAuthorityDocument,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     task_id: &str,
 ) -> Option<&'a TaskDefinition> {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let task_id = task_id.trim();
     task_authority
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .tasks
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .iter()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .find(|task| task.id.trim() == task_id)
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// DB task authority and legacy queue artifacts are no longer protected workspace files.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn change_set_ignores_legacy_task_file_paths() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let paths = vec![
         "DB task authority".to_string(),
         ".codex-exec-loop/planning/legacy-queue-snapshot.json".to_string(),
     ];
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let change_set = PlanningChangeSet::from_paths(&paths);
 
     assert!(!change_set.has_relevant_changes());
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+/*
+ * Repair prompts must ask for planning_task_commands, not a whole replacement authority document.
+ * This keeps the repair worker inside the same mutation contract used by normal task tooling and prevents
+ * old file-based task-ledger/queue-snapshot language from reappearing in generated prompts.
+ */
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn repair_prompt_requests_task_command_payload_from_db_authority() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let prompt = build_planning_repair_prompt(
         &PlanningRepairRequest {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             failure_summary:
                 "planning worker returned invalid planning_task_commands: missing field `op`"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             validation_errors: vec![
                 "planning worker returned invalid planning_task_commands: missing field `op`"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
             ],
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             accepted_task_authority_json: "{\"version\":1,\"tasks\":[]}".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             accepted_queue_projection_json:
                 "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             rejected_task_authority_json: Some(
                 "{\"planning_task_commands\":{\"version\":1,\"commands\":[{\"create_task\":{\"title\":\"Queue follow-up\"}}]}}"
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .to_string(),
             ),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             rejected_archive_path: None,
         },
         None,
@@ -229,39 +178,24 @@ fn repair_prompt_requests_task_command_payload_from_db_authority() {
     assert!(!prompt.contains("queue snapshot artifact"));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Re-emitting the previous ready handoff unchanged would create an auto-follow repair loop.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T00:00:00Z")],
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let projection = PriorityQueueProjection {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         next_task: Some(queue_task("task-1", TaskStatus::Ready)),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         active_tasks: vec![queue_task("task-1", TaskStatus::Ready)],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         proposed_tasks: Vec::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         skipped_tasks: Vec::new(),
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let failure = queue_advancement_guard_failure(
         Some(PlanningRepairPromptHandoff {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_id: "task-1",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_title: "Task 1",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             updated_at: "2026-04-29T00:00:00Z",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             status_label: "ready",
         }),
         Some(&accepted),
@@ -275,46 +209,28 @@ fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// The same queue head is allowed when the candidate authority records a real update to that task.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn queue_advancement_guard_allows_updated_same_head() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T00:00:00Z")],
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let candidate = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T00:01:00Z")],
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let projection = PriorityQueueProjection {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         next_task: Some(queue_task("task-1", TaskStatus::Ready)),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         active_tasks: vec![queue_task("task-1", TaskStatus::Ready)],
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         proposed_tasks: Vec::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         skipped_tasks: Vec::new(),
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let failure = queue_advancement_guard_failure(
         Some(PlanningRepairPromptHandoff {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_id: "task-1",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             task_title: "Task 1",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             updated_at: "2026-04-29T00:00:00Z",
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             status_label: "ready",
         }),
         Some(&accepted),
@@ -325,15 +241,11 @@ fn queue_advancement_guard_allows_updated_same_head() {
     assert_eq!(failure, None);
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// A candidate cannot move accepted terminal work back into ready/proposed state.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn stale_candidate_guard_rejects_accepted_db_status_regression() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![
             task(
                 "planning-prompt-assembly-remaining-surface-slice",
@@ -347,11 +259,8 @@ fn stale_candidate_guard_rejects_accepted_db_status_regression() {
             ),
         ],
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let stale_candidate = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![
             task(
                 "planning-prompt-assembly-remaining-surface-slice",
@@ -365,8 +274,6 @@ fn stale_candidate_guard_rejects_accepted_db_status_regression() {
             ),
         ],
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let failure = stale_candidate_guard_failure(Some(&accepted), &stale_candidate);
 
     assert_eq!(
@@ -377,26 +284,17 @@ fn stale_candidate_guard_rejects_accepted_db_status_regression() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// The accepted DB row is newer, so the generated candidate is stale even if status did not change.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32Z")],
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let stale_candidate = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T01:43:52Z")],
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let failure = stale_candidate_guard_failure(Some(&accepted), &stale_candidate);
 
     assert_eq!(
@@ -407,95 +305,59 @@ fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// RFC3339 comparison uses instants, not string ordering; fractional seconds after the accepted instant are safe.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn stale_candidate_guard_compares_rfc3339_timestamps_by_time() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let accepted = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32+00:00")],
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let candidate = TaskAuthorityDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32.500Z")],
     };
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let failure = stale_candidate_guard_failure(Some(&accepted), &candidate);
 
     assert_eq!(failure, None);
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// Compact task fixture keeps each guard test focused on id/status/update-time changes.
 fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
     TaskDefinition {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         id: id.to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         direction_id: "direction-a".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         direction_relation_note: "supports direction".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         title: "Task 1".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         description: "Do task 1".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         status: match status {
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             "ready" => TaskStatus::Ready,
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             "done" => TaskStatus::Done,
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             "proposed" => TaskStatus::Proposed,
-            // 학습 주석: `=>` 왼쪽은 매칭될 패턴이고 오른쪽은 그 패턴일 때 실행할 처리입니다.
             _ => panic!("unexpected status"),
         },
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         base_priority: 10,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         dynamic_priority_delta: 0,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         priority_reason: String::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         depends_on: Vec::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         blocked_by: Vec::new(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         created_by: TaskActor::Llm,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         last_updated_by: TaskActor::Llm,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         source_turn_id: None,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         updated_at: updated_at.to_string(),
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// Queue fixture gives advancement tests a ready head without rebuilding the whole projection service.
 fn queue_task(id: &str, status: TaskStatus) -> PriorityQueueTask {
     PriorityQueueTask {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         rank: 1,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_id: id.to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         direction_id: "direction-a".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         direction_title: "Direction A".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_title: "Task 1".to_string(),
         status,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         combined_priority: 10,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         updated_at: "2026-04-29T00:00:00Z".to_string(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         rank_reasons: vec!["status=ready".to_string()],
     }
 }
