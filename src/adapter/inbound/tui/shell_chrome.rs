@@ -2,10 +2,10 @@ use crate::domain::recent_sessions::SessionCatalog;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 /*
- * Shell chrome is the reducer-owned UI state that sits outside a single
- * conversation transcript: startup diagnostics, session browser data, overlay
- * identity, and exit confirmation. The adapter layer dispatches events here and
- * executes returned effects so rendering can stay a pure projection of state.
+ * shell chrome은 단일 conversation transcript 밖에 있는 TUI 상태를 reducer가 소유하게 하는 경계다.
+ * startup diagnostics, session browser data, overlay identity, exit confirmation은 transcript reducer와 다른 수명을 가진다.
+ * adapter layer는 key/callback/transition을 ShellChromeEvent로 보내고, reducer가 돌려준 effect만 실행한다.
+ * 이렇게 해야 rendering은 state의 pure projection으로 남고, startup/session load 같은 side effect는 reducer 안에서 직접 실행되지 않는다.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellOverlay {
@@ -20,8 +20,7 @@ pub enum ShellOverlay {
     TaskIntake,
 }
 
-// Exit confirmation is tracked separately so any overlay can close it without
-// pretending that it is itself part of the overlay stack.
+// exit confirmation은 overlay stack 일부가 아니라 별도 focus guard다. 어떤 overlay event도 이를 닫을 수 있어야 한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitConfirmationState {
     Hidden,
@@ -46,13 +45,13 @@ pub enum SessionState {
 
 #[derive(Debug, Clone)]
 pub struct ShellChromeState {
-    // Exactly one shell overlay is rendered at a time; Hidden returns focus to the transcript.
+    // shell overlay는 한 번에 하나만 render된다. Hidden은 focus를 transcript 입력으로 돌려보내는 상태다.
     pub shell_overlay: ShellOverlay,
     pub exit_confirmation_state: ExitConfirmationState,
-    // Startup state gates session loading because the catalog needs a validated workspace.
+    // startup state는 session loading의 gate다. recent session catalog는 validated workspace가 있어야 의미가 있다.
     pub startup_state: StartupState,
     pub session_state: SessionState,
-    // Selection only applies to a RecentSessions catalog; attach-only catalogs leave it untouched.
+    // selection은 RecentSessions catalog에만 적용된다. attach-only catalog는 기존 선택 index를 건드리지 않는다.
     pub selected_session_index: usize,
 }
 
@@ -82,9 +81,9 @@ impl Default for ShellChromeState {
 }
 
 /*
- * Events are command-style inputs from key handling, startup callbacks, and
- * conversation transitions. They intentionally carry only the data the reducer
- * needs; side effects are described by ShellChromeEffect instead of run here.
+ * event는 key handling, startup callback, conversation transition에서 들어오는 command-style input이다.
+ * reducer가 상태 전이에 필요한 data만 싣고, 실제 IO는 여기서 실행하지 않는다.
+ * shell chrome이 effect description만 반환하면 TUI adapter가 effect 실행을 scheduling하고 reducer는 deterministic하게 테스트할 수 있다.
  */
 #[derive(Debug, Clone)]
 pub enum ShellChromeEvent {
@@ -115,8 +114,7 @@ pub enum ShellChromeEvent {
     OverlayClosed,
     ExitConfirmationShown,
     ExitConfirmationHidden,
-    // Conversation transitions use this event to collapse transient shell chrome so overlays do
-    // not outlive the shell context they were opened from.
+    // conversation transition은 transient shell chrome을 접어 overlay가 열린 shell context보다 오래 남지 않게 한다.
     TransientChromeDismissed,
     SessionSelectionMoved {
         delta: isize,
@@ -127,9 +125,9 @@ pub enum ShellChromeEvent {
 pub enum ShellChromeEffect {
     RunStartupChecks,
     LoadSessionCatalog {
-        // Caller-supplied page size keeps startup preload and explicit reload policies aligned.
+        // caller가 준 page size를 사용해 startup preload와 explicit reload의 paging policy를 맞춘다.
         limit: usize,
-        // Startup preload scopes the catalog to the just-validated workspace; manual loads use None.
+        // startup preload는 방금 validate된 workspace로 catalog를 scope하고, manual load는 None으로 전역 recent list를 요청한다.
         current_workspace_directory: Option<String>,
     },
 }
