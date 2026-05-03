@@ -20,10 +20,10 @@ use crate::application::service::planning::{
 use crate::domain::planning::{DirectionCatalogDocument, PlanningFileKind, PlanningWorkspaceFiles};
 
 /*
- * Draft sessions are the admin editor's isolation layer. The active planning
- * files remain untouched while the operator edits staged copies; every save,
- * validation preview, and promotion must preserve that distinction and expose
- * only the file kind that belongs to the selected editor surface.
+ * draft session은 admin editor의 isolation layer다. operator가 result-output, queue-idle prompt, direction
+ * detail을 고치는 동안 active planning file은 그대로 두고 staged copy만 수정한다. 이 파일의 핵심 책임은
+ * "어떤 active path가 어떤 editor surface에 보이는가", "staged content와 current authority를 어떻게 합쳐
+ * validation하는가", "promote 전에 queue preview를 얼마나 신뢰할 수 있는가"를 한 경계에서 유지하는 것이다.
  */
 impl PlanningAdminFacadeService {
     pub fn create_draft_session(
@@ -31,9 +31,9 @@ impl PlanningAdminFacadeService {
         kind: PlanningAdminDraftKind,
         direction_id: Option<&str>,
     ) -> Result<PlanningAdminSessionView> {
-        // Each draft kind is staged by the workspace service because it owns the
-        // active/staged path mapping. This facade only chooses the right staging
-        // workflow and then renders the common session view.
+        // draft kind마다 staging source가 다르다. full planning은 현재 accepted support files를 모아 수동 editor
+        // draft를 만들고, queue-idle/detail draft는 workspace use case가 알고 있는 전용 staging workflow를 호출한다.
+        // facade는 workflow 선택 뒤 공통 session view를 다시 로드해 모든 draft kind가 같은 응답 구조를 갖게 한다.
         let draft_name = match kind {
             PlanningAdminDraftKind::FullPlanning => self.stage_active_manual_editor_draft()?,
             PlanningAdminDraftKind::QueueIdlePrompt => {
@@ -64,8 +64,8 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftLoadRequest,
     ) -> Result<PlanningAdminSessionView> {
-        // Loading a draft also seeds default authority so validation never runs
-        // against a half-initialized planning workspace.
+        // draft load도 default authority를 먼저 보장한다. editor가 단순히 staged file을 여는 작업처럼 보여도
+        // session view에는 validation과 queue preview가 포함되므로 half-initialized workspace를 기준으로 계산하면 안 된다.
         self.ensure_default_authority()?;
         let loaded = self
             .planning_workspace_port
@@ -76,9 +76,8 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<(PlanningDraftSaveResult, PlanningAdminSessionView)> {
-        // Save persists only the editor-visible files. Hidden staged files stay
-        // untouched so a specialized editor cannot accidentally overwrite
-        // unrelated planning artifacts in the same draft directory.
+        // save는 현재 editor surface에 보이는 file만 저장한다. draft directory 안에 다른 staged artifact가 있더라도
+        // specialized editor가 숨겨진 파일을 body 없음으로 덮어쓰지 않게 visible-file resolution을 먼저 수행한다.
         let visible_files = self.resolve_mutated_visible_files(&request)?;
         let result = self.planning.workspace.save_draft_editor_files(
             self.workspace_dir.as_str(),
@@ -96,8 +95,8 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<(PlanningDraftPromoteResult, PlanningAdminSessionView)> {
-        // Promotion uses the same visible-file resolution as save, then reloads
-        // the session so validation reflects the active files after promotion.
+        // promote도 save와 같은 visible-file resolution을 사용한다. 저장과 승격이 서로 다른 file selection 정책을
+        // 가지면 "저장은 되었지만 promote 때 다른 파일이 반영되는" 위험이 생기므로 두 경로를 같은 helper에 묶는다.
         let visible_files = self.resolve_mutated_visible_files(&request)?;
         let result = self.planning.workspace.promote_draft_editor_files(
             self.workspace_dir.as_str(),
@@ -115,9 +114,8 @@ impl PlanningAdminFacadeService {
         &self,
         request: &PlanningAdminDraftMutationRequest,
     ) -> Result<Vec<PlanningDraftEditorFile>> {
-        // Merge posted editor bodies with the staged records. The active/staged
-        // path pair from storage is preserved; the request is allowed to replace
-        // only bodies keyed by the current editor kind.
+        // posted editor body와 storage의 staged record를 병합한다. request는 key/body만 알고 있고 active/staged path
+        // pairing은 workspace storage가 authority이므로, path는 loaded record에서 보존하고 body만 request 값으로 교체한다.
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(self.workspace_dir.as_str(), &request.draft_name)?;
@@ -145,9 +143,9 @@ impl PlanningAdminFacadeService {
         direction_id: Option<String>,
         loaded: PlanningDraftLoadRecord,
     ) -> Result<PlanningAdminSessionView> {
-        // Session rendering filters staged files down to the selected surface
-        // and pairs them with validation/queue preview computed from the same
-        // staged content.
+        // session rendering은 staged files를 selected surface에 맞게 filter한 뒤, 같은 staged content로 계산한
+        // validation/queue preview를 붙인다. editor가 보고 있는 body와 validation이 서로 다른 source에서 나오면
+        // promote 전 판단이 불가능해진다.
         let validation = self.validate_loaded_draft(&loaded)?;
         let files = loaded
             .staged_files
@@ -178,9 +176,9 @@ impl PlanningAdminFacadeService {
         &self,
         loaded: &PlanningDraftLoadRecord,
     ) -> Result<PlanningAdminDraftValidationSnapshot> {
-        // Validation composes staged edits with current authority: result_output
-        // may be staged, while directions/tasks still come from DB authority for
-        // specialized prompt/detail drafts.
+        // validation은 staged edit와 current authority를 합성한다. direction/task authority는 DB snapshot이 원천이고,
+        // result_output은 staged body가 있으면 그것을 우선한다. 이 조합 덕분에 prompt/detail만 편집하는 draft도
+        // 전체 planning workspace 관점의 validation 결과를 받을 수 있다.
         let staged_files = loaded
             .staged_files
             .iter()
@@ -210,9 +208,9 @@ impl PlanningAdminFacadeService {
                     result_output_markdown: &result_output_markdown,
                 });
         if let Some(directions) = result.directions.as_ref() {
-            // Supporting file checks must see staged files first, then active
-            // workspace files. That lets a draft add or fix a detail document
-            // before promotion.
+            // supporting file validation은 staged file을 먼저 보고, 없을 때 active workspace file로 fallback한다.
+            // draft가 detail document를 새로 만들거나 고치는 중이면 active file만 검사해서는 promote 전에 오류가
+            // 사라졌는지 확인할 수 없다.
             self.planning_validation_service
                 .validate_direction_supporting_files(
                     directions,
@@ -229,8 +227,9 @@ impl PlanningAdminFacadeService {
                 );
         }
         let queue_preview = if result.report.is_valid() {
-            // Queue preview is intentionally best-effort: invalid drafts show
-            // validation issues instead of masking them with queue errors.
+            // queue preview는 intentionally best-effort다. validation이 실패한 draft에서는 queue build 오류를 덧씌우지
+            // 않고 validation issue를 먼저 보여준다. 유효한 draft에서만 projection을 시도해 promote 후 queue 모습을
+            // 참고 정보로 제공한다.
             match (result.directions.as_ref(), result.task_authority.as_ref()) {
                 (Some(directions), Some(task_authority)) => self
                     .priority_queue_service
@@ -253,8 +252,8 @@ impl PlanningAdminFacadeService {
         path: &'static str,
         file_kind: PlanningFileKind,
     ) -> Result<String> {
-        // Core files prefer staged content but fall back to active workspace
-        // content so narrow draft kinds can still validate the full workspace.
+        // core file은 staged content를 우선하지만 없으면 active workspace content로 fallback한다. queue-idle/detail처럼
+        // 좁은 editor도 result-output을 포함한 전체 workspace validation을 받아야 하기 때문이다.
         if let Some(body) = staged_files.get(path) {
             return Ok((*body).to_string());
         }
@@ -263,8 +262,8 @@ impl PlanningAdminFacadeService {
             .ok_or_else(|| missing_core_draft_file_error(path, file_kind))
     }
     pub(super) fn stage_active_manual_editor_draft(&self) -> Result<String> {
-        // Full planning draft stages result_output plus all supporting prompt
-        // and direction detail files currently referenced by direction authority.
+        // full planning draft는 result_output과 direction authority가 현재 참조하는 supporting prompt/detail file을
+        // 함께 stage한다. manual editor가 accepted planning context 전체를 한 draft에서 점검할 수 있게 하는 경로다.
         self.ensure_default_authority()?;
         let directions = self
             .planning_task_repository_port
@@ -283,6 +282,8 @@ impl PlanningAdminFacadeService {
         }];
         let supporting_paths = collect_direction_supporting_paths(&directions);
         for path in supporting_paths {
+            // 참조는 되어 있지만 아직 active file이 없는 supporting path는 stage하지 않는다. validation 단계에서 missing
+            // issue로 보고되며, draft directory에 빈 파일을 몰래 만들어 accepted state와 다른 의미를 부여하지 않는다.
             if let Some(body) = self
                 .planning_workspace_port
                 .load_optional_planning_file(self.workspace_dir.as_str(), &path)?
@@ -310,13 +311,17 @@ impl PlanningAdminFacadeService {
 
 #[derive(Debug, Clone)]
 pub(super) struct PlanningAdminDraftValidationSnapshot {
+    // validation은 admin surface용 DTO다. domain validation report를 직접 들고 있지 않아 session response가
+    // projection 계층의 stable string contract를 따른다.
     validation: PlanningAdminValidationView,
+    // queue_preview는 draft가 valid할 때만 채워지는 보조 예측이다. None은 queue 계산 실패 또는 invalid draft를
+    // 모두 표현하므로 caller는 validation을 우선 표시해야 한다.
     queue_preview: Option<PlanningAdminQueuePreview>,
 }
 
 fn collect_direction_supporting_paths(directions: &DirectionCatalogDocument) -> Vec<String> {
-    // Collect unique supporting files from authority in sorted order so draft
-    // creation is deterministic and does not duplicate shared prompt paths.
+    // authority가 참조하는 supporting file path를 중복 없이 정렬된 순서로 모은다. 같은 prompt/detail file을 여러
+    // direction이 공유해도 draft에는 한 번만 들어가고, stage order가 안정적이라 diff와 test fixture가 흔들리지 않는다.
     let mut paths = BTreeSet::new();
     let prompt_path = directions.queue_idle.prompt_path.trim();
     if !prompt_path.is_empty() {
@@ -333,6 +338,8 @@ fn collect_direction_supporting_paths(directions: &DirectionCatalogDocument) -> 
 }
 
 fn missing_core_draft_file_error(path: &'static str, file_kind: PlanningFileKind) -> anyhow::Error {
+    // core draft file missing은 validation issue가 아니라 session construction 실패다. result_output 같은 핵심 문서가
+    // staged에도 active workspace에도 없으면 editor가 보여 줄 기준 content가 없기 때문이다.
     anyhow!(
         "draft is missing required {} content at {}",
         match file_kind {
@@ -348,8 +355,8 @@ fn file_key_for_kind(
     kind: PlanningAdminDraftKind,
     active_path: &str,
 ) -> Option<PlanningAdminFileKey> {
-    // Active paths classify staged records into editor panes. The second match
-    // enforces that a narrow editor sees only its own file class.
+    // active path는 staged record를 editor pane key로 분류한다. 이어지는 kind match는 full/queue-idle/detail editor가
+    // 자기 surface에 속한 파일만 보게 하는 두 번째 guard다.
     let key = if active_path == RESULT_OUTPUT_FILE_PATH {
         PlanningAdminFileKey::ResultOutput
     } else if active_path == DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
