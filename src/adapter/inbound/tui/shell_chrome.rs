@@ -154,11 +154,11 @@ pub fn reduce_shell_chrome(
             session_page_size,
         } => match result {
             Ok(diagnostics) => {
-                // Capture gating data before moving diagnostics into state.
+                // diagnostics를 state 안으로 move하기 전에 session preload gate와 workspace scope에 필요한 값을 빼 둔다.
                 let can_continue = diagnostics.can_continue();
                 let workspace_path = diagnostics.workspace_path.clone();
                 state.startup_state = StartupState::Ready(diagnostics);
-                // Successful startup primes the session browser once, but does not refresh an existing load.
+                // startup 성공은 session browser를 한 번 prime하지만, 이미 load/ready 상태인 catalog를 강제로 refresh하지 않는다.
                 if can_continue && matches!(state.session_state, SessionState::Idle) {
                     state.session_state = SessionState::Loading;
                     effects.push(ShellChromeEffect::LoadSessionCatalog {
@@ -177,7 +177,7 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::SessionsLoaded(result) => {
             state.session_state = match result {
                 Ok(catalog) => {
-                    // A fresh catalog resets browser focus so the first visible row is selected.
+                    // 새 catalog가 도착하면 browser focus를 첫 visible row로 되돌려 이전 catalog index가 새 목록을 벗어나지 않게 한다.
                     state.selected_session_index = 0;
                     SessionState::Ready(catalog)
                 }
@@ -185,7 +185,7 @@ pub fn reduce_shell_chrome(
             };
         }
         ShellChromeEvent::StartupOverlayShown => {
-            // Opening any non-exit overlay dismisses the exit prompt so the chrome has one focus owner.
+            // non-exit overlay를 열면 exit prompt를 닫아 shell chrome의 focus owner를 하나로 유지한다.
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Startup;
         }
@@ -227,7 +227,7 @@ pub fn reduce_shell_chrome(
             };
         }
         ShellChromeEvent::SessionsOverlayToggled { limit } => {
-            // Closing the session overlay is purely visual; opening may request the initial catalog.
+            // session overlay를 닫는 일은 시각적 상태 전이뿐이고, 여는 경우에만 필요하면 initial catalog load를 요청한다.
             if state.shell_overlay == ShellOverlay::Sessions {
                 state.shell_overlay = ShellOverlay::Hidden;
             } else {
@@ -237,7 +237,7 @@ pub fn reduce_shell_chrome(
             }
         }
         ShellChromeEvent::SupersessionOverlayToggled => {
-            // Supersession state is rendered from elsewhere, so toggling only changes chrome focus.
+            // supersession 세부 state는 다른 reducer/projection에서 render되므로 이 toggle은 shell focus만 바꾼다.
             if state.shell_overlay == ShellOverlay::Supersession {
                 state.shell_overlay = ShellOverlay::Hidden;
             } else {
