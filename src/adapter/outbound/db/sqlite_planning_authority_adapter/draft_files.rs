@@ -58,8 +58,18 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open authority-store draft stage transaction")?;
+        /*
+        draft staging은 active authority를 바로 바꾸지 않지만, operator에게는 "최근 초안이 있다"는
+        상태 변화로 보인다. metadata를 같은 transaction 안에서 먼저 갱신하면, 뒤의 파일 row 저장이
+        실패했을 때 last_draft_updated_at만 앞서가는 상태를 만들지 않는다.
+        */
         upsert_authority_metadata(&transaction, &location, "last_draft_updated_at")?;
         upsert_draft_entry(&transaction, draft_name)?;
+        /*
+        bulk stage는 patch merge가 아니라 replacement semantics다. 기존 파일을 남겨 두면
+        application 계층은 이번 요청에 포함하지 않은 오래된 active_path까지 같은 draft에 포함된
+        것으로 보게 되므로, 먼저 자식 row를 지우고 입력 slice만 다시 적재한다.
+        */
         transaction
             .execute(
                 "DELETE FROM staged_draft_files WHERE draft_name = ?1",
@@ -120,6 +130,11 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<PlanningDraftLoadRecord> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
+        /*
+        이 SELECT는 파일 본문을 읽는 query와 분리되어 있다. staged_drafts 부모 row가 존재하면
+        파일이 아직 0개인 초안도 유효한 draft set이고, 부모 row가 없으면 사용자 입력 이름이
+        잘못된 것이므로 adapter가 load error를 만들어야 한다.
+        */
         let draft_exists = connection
             .query_row(
                 "SELECT 1 FROM staged_drafts WHERE draft_name = ?1",
@@ -141,6 +156,11 @@ impl SqlitePlanningAuthorityAdapter {
                  ORDER BY active_path",
             )
             .with_context(|| format!("failed to read staged draft `{draft_name}`"))?;
+        /*
+        active_path 정렬은 DB 저장 순서와 독립적인 presentation contract다. 같은 draft를 TUI,
+        admin command, test snapshot이 읽어도 파일 목록이 흔들리지 않아야 사람이 diff를
+        검토할 수 있다.
+        */
         let rows = statement
             .query_map(params![draft_name], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -194,6 +214,11 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to open authority-store draft replace transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_draft_updated_at")?;
         upsert_draft_entry(&transaction, draft_name)?;
+        /*
+        충돌 키를 `(draft_name, active_path)`로 두면 같은 planning 파일 이름이라도 서로 다른
+        초안에서는 독립적으로 보관된다. 단일 파일 replace가 bulk draft 전체를 오염시키지 않는
+        이유가 이 composite key에 있다.
+        */
         transaction
             .execute(
                 "INSERT INTO staged_draft_files (draft_name, active_path, content)
