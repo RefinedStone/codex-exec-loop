@@ -1,87 +1,85 @@
 /*
- * Follow-up overlay UI state is deliberately separate from the ConversationViewModel
- * auto-follow policy. Planning init SimpleReview lets the operator edit max-auto-turns
- * as raw text; this reducer keeps that in-progress buffer from mutating runtime policy
- * until the control reducer accepts a commit.
+ * follow-up overlay UI state는 ConversationViewModel의 auto-follow policy와 의도적으로 분리되어 있다.
+ * Planning init SimpleReview는 operator가 max-auto-turns를 raw text로 편집하게 하므로,
+ * 이 reducer는 followup_controls가 commit을 승인하기 전까지 진행 중인 buffer가 runtime policy를 바꾸지 못하게 막는다.
  */
 
 #[derive(Debug, Default)]
-// Screen-local state for the inline max-auto-turns editor.
+// inline max-auto-turns editor가 key stream을 소유하는 동안만 의미가 있는 screen-local state다.
 pub(super) struct MaxAutoTurnsEditorState {
-    // When true, followup/controller routes Enter, Esc, Backspace, and text input here instead of global shortcuts.
+    // true이면 followup/controller가 Enter, Esc, Backspace, text input을 global shortcut 대신 이 editor로 보낸다.
     pub is_editing: bool,
-    // Raw user input is allowed to be empty or temporarily invalid; validation belongs to followup_controls on commit.
+    // raw user input은 비어 있거나 임시로 invalid일 수 있다. commit validation은 followup_controls가 맡는다.
     pub buffer: String,
 }
 
 #[derive(Debug, Default)]
-// Root overlay input state shared by controller, runtime sync, and planning review rendering.
+// controller, runtime sync, planning review rendering이 공유하는 root overlay input state다.
 pub(super) struct FollowupOverlayUiState {
-    // The planning simple-review max-auto-turns control reads this buffer and editing flag directly.
+    // planning simple-review max-auto-turns control은 이 buffer와 editing flag를 직접 읽어 inline editor를 그린다.
     pub max_auto_turns_editor: MaxAutoTurnsEditorState,
 }
 
 #[derive(Debug, Clone)]
 /*
- * FollowupOverlayUiEvent changes only presentation-owned editor state. Policy changes
- * flow through FollowupControlEvent first; successful control effects come back here
- * as sync/commit acknowledgements.
+ * FollowupOverlayUiEvent는 presentation-owned editor state만 바꾼다.
+ * 실제 policy change는 먼저 FollowupControlEvent를 통과하고, 성공한 control effect가 sync/commit acknowledgement로 다시 돌아온다.
  */
 pub(super) enum FollowupOverlayUiEvent {
-    // New conversation context closes the editor and replaces the buffer with that context's canonical label.
+    // 새 conversation context는 editor를 닫고 buffer를 그 context의 canonical label로 교체한다.
     ContentReset { max_auto_turns: String },
-    // External policy sync updates the display buffer only while the operator is not actively editing.
+    // 외부 policy sync는 operator가 편집 중이 아닐 때만 display buffer를 갱신한다.
     MaxAutoTurnsValueSynced { value: String },
-    // Opening the editor copies the current policy label into the raw editing buffer.
+    // editor open은 현재 policy label을 raw editing buffer의 기준값으로 복사한다.
     MaxAutoTurnsEditStarted { current_value: String },
-    // Commit acknowledgement closes the editor and shows the canonical label accepted by followup_controls.
+    // commit acknowledgement는 editor를 닫고 followup_controls가 승인한 canonical label을 보여 준다.
     MaxAutoTurnsEditCommitted { current_value: String },
-    // Cancel closes the editor without policy changes and restores the caller-provided current label.
+    // cancel은 policy 변경 없이 editor를 닫고 caller가 넘긴 현재 label로 되돌린다.
     MaxAutoTurnsEditCanceled { current_value: String },
-    // Typing appends raw text; numeric/infinite validation is intentionally deferred until commit.
+    // typing은 raw text만 추가한다. numeric/infinite validation은 commit 시점까지 의도적으로 미룬다.
     MaxAutoTurnsCharacterTyped { character: char },
-    // Backspace edits only the open buffer so closed overlays do not steal global Backspace behavior.
+    // backspace는 열린 buffer만 편집해 닫힌 overlay가 global Backspace behavior를 가로채지 않게 한다.
     MaxAutoTurnsBackspacePressed,
 }
 
-// Pure reducer for overlay-only editor state. NativeTuiApp owns the bridge between this state and conversation policy.
+// overlay-only editor state의 pure reducer다. NativeTuiApp이 이 state와 conversation policy 사이의 bridge를 소유한다.
 pub(super) fn reduce_followup_overlay_ui(
     mut state: FollowupOverlayUiState,
     event: FollowupOverlayUiEvent,
 ) -> FollowupOverlayUiState {
     match event {
         FollowupOverlayUiEvent::ContentReset { max_auto_turns } => {
-            // Context reset outranks in-progress text because a new draft/session has a different canonical policy value.
+            // context reset은 새 draft/session의 canonical policy value를 반영하므로 진행 중인 text보다 우선한다.
             state.max_auto_turns_editor = MaxAutoTurnsEditorState {
                 is_editing: false,
                 buffer: max_auto_turns,
             };
         }
         FollowupOverlayUiEvent::MaxAutoTurnsValueSynced { value } => {
-            // Do not overwrite active typing with runtime/control sync; that would discard uncommitted operator input.
+            // active typing을 runtime/control sync로 덮으면 uncommitted operator input을 버리게 되므로 닫힌 상태에서만 반영한다.
             if !state.max_auto_turns_editor.is_editing {
                 state.max_auto_turns_editor.buffer = value;
             }
         }
         FollowupOverlayUiEvent::MaxAutoTurnsEditStarted { current_value } => {
-            // Starting an edit snapshots the current policy label as the local editing baseline.
+            // edit 시작은 현재 policy label을 local editing baseline으로 snapshot한다.
             state.max_auto_turns_editor.is_editing = true;
             state.max_auto_turns_editor.buffer = current_value;
         }
         FollowupOverlayUiEvent::MaxAutoTurnsEditCommitted { current_value }
         | FollowupOverlayUiEvent::MaxAutoTurnsEditCanceled { current_value } => {
-            // Commit and cancel have the same UI shape here: editor closes and buffer returns to a canonical label.
+            // commit과 cancel은 이 reducer 안에서는 같은 UI shape다. editor를 닫고 buffer를 canonical label로 되돌린다.
             state.max_auto_turns_editor.is_editing = false;
             state.max_auto_turns_editor.buffer = current_value;
         }
         FollowupOverlayUiEvent::MaxAutoTurnsCharacterTyped { character } => {
-            // Stale key events after close are ignored so display-only buffer cannot be polluted.
+            // close 이후 도착한 stale key event는 무시해 display-only buffer가 오염되지 않게 한다.
             if state.max_auto_turns_editor.is_editing {
                 state.max_auto_turns_editor.buffer.push(character);
             }
         }
         FollowupOverlayUiEvent::MaxAutoTurnsBackspacePressed => {
-            // `pop` naturally no-ops on an empty buffer; the only guard needed is editor ownership.
+            // 빈 buffer에서 `pop`은 자연스럽게 no-op이므로 필요한 guard는 editor ownership뿐이다.
             if state.max_auto_turns_editor.is_editing {
                 state.max_auto_turns_editor.buffer.pop();
             }
@@ -97,7 +95,7 @@ mod tests {
 
     #[test]
     fn content_reset_syncs_max_auto_turns() {
-        // Content reset is the draft/session context-change contract: close the editor and show the new label.
+        // content reset은 draft/session context-change contract다. editor를 닫고 새 label을 보여 준다.
         let state = FollowupOverlayUiState::default();
 
         let reduced = reduce_followup_overlay_ui(
@@ -113,7 +111,7 @@ mod tests {
 
     #[test]
     fn max_auto_turns_editing_updates_buffer_and_backspace() {
-        // Typing stays in overlay state only; the conversation policy is not touched until followup_controls commits.
+        // typing은 overlay state에만 남는다. followup_controls가 commit하기 전에는 conversation policy를 건드리지 않는다.
         let state = FollowupOverlayUiState::default();
 
         let state = reduce_followup_overlay_ui(
@@ -135,7 +133,7 @@ mod tests {
 
     #[test]
     fn max_auto_turns_commit_exits_edit_mode_and_syncs_value() {
-        // Commit arrives only after the control reducer accepts the value, so the buffer should match its canonical label.
+        // commit은 control reducer가 값을 승인한 뒤에만 도착하므로 buffer는 canonical label과 같아야 한다.
         let state = FollowupOverlayUiState {
             max_auto_turns_editor: MaxAutoTurnsEditorState {
                 is_editing: true,
@@ -156,7 +154,7 @@ mod tests {
 
     #[test]
     fn max_auto_turns_sync_does_not_override_active_edit_buffer() {
-        // Runtime/control sync must not erase uncommitted operator input while the editor owns the key stream.
+        // editor가 key stream을 소유하는 동안 runtime/control sync가 uncommitted operator input을 지우면 안 된다.
         let state = FollowupOverlayUiState {
             max_auto_turns_editor: MaxAutoTurnsEditorState {
                 is_editing: true,
