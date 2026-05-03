@@ -24,11 +24,15 @@ use axum_extra::extract::CookieJar;
 use std::collections::HashMap;
 
 /*
- * pages.rs is the browser/form half of the planning admin inbound adapter. It renders Askama
- * templates, accepts classic form posts, and uses redirects or HTMX fragments as the response
- * contract. The JSON adapter in api.rs can pass typed bodies directly; this file has to normalize
- * browser-specific details such as csrf_token form fields, notice query strings, and dynamic
- * editor field names before handing requests to PlanningAdminFacadeService.
+ * pages.rs는 planning admin inbound adapter의 browser/form half다.
+ * Askama template render, classic form POST, redirect, HTMX fragment response처럼 browser transport에만 필요한
+ * 결정을 여기서 처리한다. api.rs는 typed JSON body를 바로 받을 수 있지만, 이 파일은 csrf_token form field,
+ * notice query string, dynamic editor field name 같은 browser-specific detail을 정리한 뒤에만
+ * PlanningAdminFacadeService로 넘긴다.
+ *
+ * 중요한 경계는 "HTML을 아는 곳"과 "planning을 판정하는 곳"의 분리다.
+ * pages.rs는 form field를 application request DTO로 옮기고 response shape을 고르지만,
+ * direction/task/draft의 유효성, authority mutation, workspace file write는 facade가 소유한다.
  */
 pub(super) async fn dashboard_page(
     State(state): State<AdminAppState>,
@@ -36,9 +40,10 @@ pub(super) async fn dashboard_page(
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * The dashboard is the overview bootstrap for human operators. It refreshes the CSRF cookie and
-     * pairs the service overview with the active workspace path so templates can show the same state
-     * that JSON clients receive from summary_api, but with nav and notice chrome added.
+     * dashboard는 human operator가 admin surface에 들어오는 bootstrap page다.
+     * CSRF cookie를 갱신하고 service overview에 active workspace path를 붙여 template context를 만든다.
+     * JSON client가 summary_api에서 받는 state와 같은 projection을 쓰지만, browser page에는 nav marker와 redirect notice가
+     * 추가된다.
      */
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let overview = state
@@ -64,9 +69,9 @@ pub(super) async fn directions_page(
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Direction editing needs both the compact overview and the management projection. Keeping both
-     * loads here lets the template render navigation badges from overview while using the richer
-     * management view for editable direction/task relationships.
+     * direction edit 화면은 compact overview와 management projection을 동시에 필요로 한다.
+     * overview는 navigation badge, runtime/doctor 상태, queue summary를 채우고, management view는 editable direction과
+     * task cross-reference를 제공한다. 둘을 handler에서 로드해 template이 service를 다시 호출하지 않게 한다.
      */
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let overview = state
@@ -96,7 +101,7 @@ pub(super) async fn tasks_page(
     jar: CookieJar,
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Tasks use the same management projection as directions, but keep their own nav and notices.
+    // task page도 direction page와 같은 management projection을 쓰지만 nav marker와 redirect notice target은 task flow로 분리한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let overview = state
         .facade
@@ -126,9 +131,10 @@ pub(super) async fn upsert_direction_page(
     Form(form): Form<DirectionMutationForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Browser forms keep every direction field as text. This adapter maps those fields into the
-     * application mutation request, but leaves id generation, state normalization, and authority
-     * document writes to the facade.
+     * browser form은 모든 direction field를 text로 운반한다.
+     * 이 adapter는 field name을 application mutation request의 field로 옮길 뿐, 빈 id의 create/update 해석,
+     * state normalization, success criteria/scope hint parsing, authority document write는 facade에 남긴다.
+     * mutation 뒤에는 post-redirect-get으로 돌아가 refresh/back-button이 같은 write를 반복하지 않게 한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
@@ -151,7 +157,7 @@ pub(super) async fn delete_direction_page(
     jar: CookieJar,
     Form(form): Form<IdDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
-    // The route supplies operation meaning; the shared IdDeleteForm only transports the selected id.
+    // route가 direction delete라는 operation 의미를 제공하고, shared IdDeleteForm은 선택된 id와 CSRF proof만 운반한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
         .facade
@@ -166,9 +172,10 @@ pub(super) async fn upsert_task_page(
     Form(form): Form<TaskMutationForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Task form strings intentionally pass through instead of being parsed here. The application
-     * layer has the direction graph, dependency vocabulary, and priority rules needed to interpret
-     * status, numeric priority text, dependency lists, and blockers consistently.
+     * task form string은 여기서 parse하지 않고 의도적으로 그대로 통과시킨다.
+     * status label, numeric priority text, dependency list, blocker list를 해석하려면 direction graph,
+     * dependency vocabulary, queue priority rule이 필요하고 그 정보는 application layer에 있다.
+     * pages.rs가 부분 파서를 갖지 않으면 browser form과 JSON/API mutation의 task semantics가 한 곳에 유지된다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
@@ -194,7 +201,7 @@ pub(super) async fn delete_task_page(
     jar: CookieJar,
     Form(form): Form<IdDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Task delete follows the same post-redirect-get shape as direction delete for browser safety.
+    // task delete도 direction delete와 같은 post-redirect-get shape를 써서 destructive POST가 browser refresh로 반복되지 않게 한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
         .facade
@@ -209,9 +216,9 @@ pub(super) async fn export_files_page(
     Form(form): Form<FileSyncForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * File sync forms have no payload beyond CSRF because the active planning workspace is implicit.
-     * Export prepares editable files from authority state; the redirect keeps refresh/back-button
-     * behavior from repeating the mutation.
+     * file sync form은 CSRF 외 operator payload가 없다.
+     * 대상은 항상 active planning workspace이고, export는 authority state를 editable file tree로 mirror한다.
+     * 이 mutation 역시 redirect로 끝내 browser refresh/back-button이 같은 export를 반복하지 않게 한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
@@ -226,7 +233,7 @@ pub(super) async fn apply_files_page(
     jar: CookieJar,
     Form(form): Form<FileSyncForm>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Apply is the inverse file-sync mutation: parse edited files, update authority, then redirect.
+    // apply는 file-sync의 반대 방향이다. edited file을 parse해 authority를 갱신하고 redirect로 browser mutation cycle을 닫는다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
         .facade
