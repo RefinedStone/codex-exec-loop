@@ -245,6 +245,12 @@ impl ParallelModeService {
             &git_repository,
             &planning,
         );
+        /*
+        Capability ordering is the operator reading order in the supersession
+        popup: repository primitives first, GitHub delivery next, planning
+        authority last. top_alert below intentionally reports the first non-ready
+        item in that dependency chain.
+        */
         let capabilities = vec![
             git_repository,
             git_worktree,
@@ -263,6 +269,11 @@ impl ParallelModeService {
         let snapshot =
             ParallelModeReadinessSnapshot::new(workspace_dir, readiness, capabilities, top_alert);
         if snapshot.allows_parallel_mode() {
+            /*
+            Recovery is best-effort because readiness is still a diagnostic path.
+            A failed recovery should be visible later through supervisor/distributor
+            snapshots, not turn a ready capability set into a readiness failure.
+            */
             let _ = self
                 .distributor_service
                 .recover_runtime_state(workspace_dir);
@@ -333,6 +344,11 @@ impl ParallelModeService {
             .count();
         let capacity = requested_count.min(idle_slot_count);
         let excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
+        /*
+        excluded_task_ids crosses two sources: live slot leases and distributor
+        queue records. It is kept as a returned field so the TUI can explain why
+        fewer tasks were dispatched than the planning queue appears to contain.
+        */
         let excluded = excluded_task_ids
             .iter()
             .map(|task_id| task_id.trim().to_string())
@@ -344,6 +360,11 @@ impl ParallelModeService {
                     .active_tasks
                     .iter()
                     .filter(|task| !excluded.contains(task.task_id.trim()))
+                    /*
+                    Capacity is applied after exclusion, not before. Otherwise a
+                    leased task near the front of the queue could consume one of
+                    the requested slots and hide a later dispatchable task.
+                    */
                     .take(capacity)
                     .cloned()
                     .collect::<Vec<_>>()
@@ -371,6 +392,12 @@ impl ParallelModeService {
             self.planning_authority.as_ref(),
             workspace_dir,
         ) {
+            /*
+            The blocker check is deliberately outside distributor_service. The
+            facade owns the public "one tick" contract and can return a blocked
+            result without mutating queue records when the integration worktree is
+            not safe to touch.
+            */
             return Ok(ParallelModeOrchestratorTickResult {
                 trigger,
                 blocked: true,
