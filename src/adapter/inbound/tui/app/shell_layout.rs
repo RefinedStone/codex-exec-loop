@@ -1,36 +1,36 @@
-// Test-only shell layout helpers mirror the production frame math used by overlays/base.rs.
-// They exist so rendering contract tests can assert scroll and height behavior without snapshot-string guessing.
+// test-only shell layout helper는 production renderer가 쓰는 frame math를 작게 복제한 계약 표면이다.
+// snapshot 문자열을 추측하지 않고도 rendering contract test가 scroll과 height behavior를 직접 검증하게 한다.
 #[cfg(test)]
 use ratatui::text::Line;
 
-// Reuse the real shell budgets so test projections move with production composer/footer constraints.
+// 실제 shell budget을 재사용해 test projection이 production composer/footer constraint와 함께 움직이게 한다.
 #[cfg(test)]
 use super::{
     MAX_COMPOSER_HEIGHT, MAX_SHELL_STATUS_HEIGHT, MIN_COMPOSER_HEIGHT, MIN_SHELL_STATUS_HEIGHT,
 };
 
-// Compute the scroll offset that keeps the newest transcript rows visible in a bounded viewport.
+// bounded viewport 안에서 최신 transcript row가 보이도록 scroll offset을 계산한다.
 #[cfg(test)]
 pub(super) fn build_conversation_scroll_offset(
     lines: &[Line<'static>],
     content_width: u16,
     visible_height: u16,
 ) -> u16 {
-    // No drawable width or height means there is no meaningful "latest row" window to align.
+    // 그릴 width나 height가 없으면 정렬할 "latest row" window도 없으므로 offset은 0이다.
     if content_width == 0 || visible_height == 0 {
         return 0;
     }
 
-    // Count physical rows after wrapping, not logical transcript entries, to match ratatui paragraph layout.
+    // ratatui paragraph layout과 맞추기 위해 logical transcript entry가 아니라 wrap 이후 physical row를 센다.
     let rendered_line_count = count_rendered_conversation_lines(lines, content_width);
     let visible_height = visible_height as usize;
     rendered_line_count
         .saturating_sub(visible_height)
-        // Ratatui scroll offsets are u16, so extremely long transcripts are clamped at the presentation boundary.
+        // ratatui scroll offset은 u16이므로 아주 긴 transcript는 presentation boundary에서 clamp한다.
         .min(u16::MAX as usize) as u16
 }
 
-// Reconstruct the transcript panel's rendered row count for contract tests.
+// contract test가 renderer를 우회해 transcript panel의 rendered row count를 재구성할 때 쓰는 helper다.
 #[cfg(test)]
 fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16) -> usize {
     if content_width == 0 {
@@ -39,24 +39,24 @@ fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16
 
     lines
         .iter()
-        // Line::width honors ratatui span display width, which is the unit the renderer wraps on.
+        // Line::width는 ratatui span display width를 따르며 renderer가 wrap하는 단위와 같다.
         .map(|line| count_wrapped_rows(line, content_width))
         .sum()
 }
 
-// Composer height is content rows plus chrome, clamped so long prompts do not consume the transcript.
+// composer height는 content row와 chrome의 합이고, 긴 prompt가 transcript 영역을 먹지 않도록 clamp한다.
 #[cfg(test)]
 pub(super) fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
     block_height_for_lines(lines, MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
 }
 
-// Footer/status uses the same block formula with its own budget because it carries denser runtime copy.
+// footer/status는 더 조밀한 runtime copy를 담으므로 같은 block formula를 쓰되 별도 budget으로 제한한다.
 #[cfg(test)]
 pub(super) fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
     block_height_for_lines(lines, MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
 }
 
-// Shared shell block formula: content lines plus two rows of panel chrome, bounded by the caller's budget.
+// shared shell block formula는 content line과 panel chrome 두 row를 더한 뒤 caller budget 안으로 제한한다.
 #[cfg(test)]
 pub(super) fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) -> u16 {
     lines
@@ -65,7 +65,7 @@ pub(super) fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_he
         .clamp(min_height as usize, max_height as usize) as u16
 }
 
-// Convert one styled logical line into the number of physical terminal rows it occupies.
+// styled logical line 하나가 차지하는 physical terminal row 수로 변환한다.
 #[cfg(test)]
 fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {
     if content_width == 0 {
@@ -73,7 +73,7 @@ fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {
     }
 
     let line_width = line.width();
-    // Empty logical lines still render as a blank row in the transcript paragraph.
+    // empty logical line도 transcript paragraph에서는 blank row 하나로 render된다.
     if line_width == 0 {
         return 1;
     }
@@ -81,14 +81,14 @@ fn count_wrapped_rows(line: &Line<'static>, content_width: u16) -> usize {
     line_width.div_ceil(content_width as usize)
 }
 
-// These tests lock the shell contract: transcript scrolling follows rendered rows after wrapping.
+// 이 test들은 transcript scrolling이 wrap 이후 rendered row를 따른다는 shell contract를 고정한다.
 #[cfg(test)]
 mod tests {
     use ratatui::text::Line;
 
     use super::{build_conversation_scroll_offset, count_rendered_conversation_lines};
 
-    // When transcript rows exceed the viewport, the offset discards the oldest rows first.
+    // transcript row가 viewport를 넘으면 offset은 오래된 row부터 버린다.
     #[test]
     fn conversation_scroll_offset_moves_to_latest_rows() {
         let lines = vec![
@@ -103,7 +103,7 @@ mod tests {
         assert_eq!(scroll_offset, 2);
     }
 
-    // A single long logical line can occupy several terminal rows and must affect scroll math.
+    // 긴 logical line 하나도 여러 terminal row를 차지할 수 있으므로 scroll math에 반영되어야 한다.
     #[test]
     fn conversation_scroll_offset_counts_wrapped_rows() {
         let lines = vec![Line::from("1234567890"), Line::from("tail")];
@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(scroll_offset, 2);
     }
 
-    // Zero-height areas appear during degenerate terminal sizes and must not underflow scroll math.
+    // degenerate terminal size에서는 zero-height area가 생길 수 있으므로 scroll math가 underflow하면 안 된다.
     #[test]
     fn conversation_scroll_offset_handles_zero_visible_height() {
         let lines = vec![Line::from("line-1")];
