@@ -14,6 +14,8 @@ use crate::domain::planning::{
  * task-authority envelope, result-output prompt, supporting file baseline을 받는다. 이 파일을 바꾸면 단순
  * 기본값 수정이 아니라 "planning이 처음 무엇을 권위 상태로 인정하는가"를 바꾸는 일이 된다.
  */
+// result-output prompt는 worker가 turn 결과를 설명하는 최소 보고 계약이다. 이 문구가 active workspace 파일로
+// seed되기 때문에 validation, runtime prompt, reset all이 모두 같은 "무엇을 완료로 보고할 것인가" 기준을 공유한다.
 const DEFAULT_RESULT_OUTPUT_MARKDOWN: &str = r#"# Result Output Prompt
 
 - Summarize the work you actually completed in this turn.
@@ -22,6 +24,8 @@ const DEFAULT_RESULT_OUTPUT_MARKDOWN: &str = r#"# Result Output Prompt
 "#;
 
 #[derive(Default, Clone)]
+// service 자체는 상태를 갖지 않는다. 상태 없음은 init/reset/test fixture가 같은 생성 규칙을 값 복사 없이 재사용하게 하는
+// 의도이며, bootstrap 결과의 차이는 오직 `PlanningBootstrapMode` 입력으로만 갈라진다.
 pub struct PlanningBootstrapService;
 
 /*
@@ -31,7 +35,9 @@ pub struct PlanningBootstrapService;
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningBootstrapMode {
+    // Detail mode는 schema-valid placeholder만 제공한다. operator가 project taxonomy를 직접 작성하는 흐름을 우선한다.
     Detail,
+    // Simple mode는 native-first 자동 후속 흐름을 즉시 사용할 수 있게 generic direction과 queue-idle prompt를 함께 만든다.
     Simple,
 }
 
@@ -74,6 +80,11 @@ impl PlanningBootstrapService {
         Self
     }
 
+    /*
+     * 모든 bootstrap caller가 이 method 하나로 산출물을 받는다.
+     * 여기서 file path, format version, queue-idle prompt 존재 여부를 함께 결정해야 init으로 만든 workspace와
+     * reset으로 되살린 workspace가 나중에 runtime prompt loader에서 같은 형태로 읽힌다.
+     */
     pub fn build_artifacts_for_mode(
         &self,
         mode: PlanningBootstrapMode,
@@ -104,6 +115,11 @@ impl PlanningBootstrapService {
     }
 }
 
+/*
+ * direction catalog seed는 queue projection의 출발점이다.
+ * task authority가 비어 있어도 direction catalog는 반드시 valid해야 한다. runtime은 이 catalog를 기준으로
+ * "지금 queue가 비었는지"뿐 아니라 "새 task가 어떤 방향에 속해야 하는지"를 판단한다.
+ */
 fn directions_for_mode(mode: PlanningBootstrapMode) -> DirectionCatalogDocument {
     match mode {
         PlanningBootstrapMode::Detail => DirectionCatalogDocument {
@@ -175,6 +191,7 @@ mod tests {
 
         // 이 assertion은 workspace init, authority seeding, reset, validation fixture가 공유하는 seed contract를
         // 고정한다. path/version이 흔들리면 여러 진입점의 bootstrap 결과가 동시에 달라진다.
+        // path는 adapter-facing 파일 contract이고 version은 domain parser contract라 둘을 같은 테스트에서 묶는다.
         assert!(artifacts.result_output_path.ends_with("result-output.md"));
         assert_eq!(artifacts.directions.version, PLANNING_FORMAT_VERSION);
         assert_eq!(artifacts.task_authority.version, PLANNING_FORMAT_VERSION);
@@ -188,6 +205,7 @@ mod tests {
 
         // Detail mode는 placeholder를 나중에 교체해야 하지만, 처음부터 manual editor에서 inspect 가능한 valid
         // direction catalog여야 한다.
+        // 즉 "아직 설계가 비어 있음"과 "schema가 깨짐"을 구분해야 doctor/init UX가 불필요한 repair로 흐르지 않는다.
         assert_eq!(directions.version, PLANNING_FORMAT_VERSION);
         assert_eq!(directions.directions.len(), 1);
         assert_eq!(directions.directions[0].state, DirectionState::Active);
@@ -201,6 +219,7 @@ mod tests {
 
         // Simple mode는 auto-follow lane을 보존해야 한다. 하나의 active direction, review-and-enqueue policy,
         // completed turn 뒤 follow-up work를 도출하는 prompt file이 함께 있어야 한다.
+        // 이 세 요소 중 하나라도 빠지면 queue가 비었을 때 runtime은 다음 작업을 제안할 근거를 잃는다.
         assert_eq!(directions.version, PLANNING_FORMAT_VERSION);
         assert_eq!(directions.directions.len(), 1);
         assert_eq!(directions.directions[0].id, "general-workstream");
