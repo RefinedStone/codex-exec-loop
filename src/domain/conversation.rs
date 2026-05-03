@@ -45,8 +45,13 @@ impl ConversationMessage {
         // app-server item id를 보존할 때 전달한다.
         item_id: Option<String>,
     ) -> Self {
-        // 생성 시점에는 debug_detail과 display_label을 비워 두고, 필요한 call-site가 builder
-        // method로 명시적으로 붙이게 한다. 기본 transcript row는 최소 정보만 갖는다.
+        /*
+         * The base constructor keeps transcript rows intentionally small: kind, text,
+         * phase, and item_id are the cross-layer contract shared by live stream
+         * reduction and snapshot replay. Debug details and display labels are opt-in
+         * builder additions so ordinary transcript rendering does not accidentally
+         * inherit adapter-specific decoration.
+         */
         Self {
             kind,
             text: text.into(),
@@ -58,13 +63,21 @@ impl ConversationMessage {
     }
 
     pub fn with_display_label(mut self, label: impl Into<String>) -> Self {
-        // builder style로 label을 붙여, message 생성 흐름은 유지하면서 renderer용 표시 이름만 보강한다.
+        /*
+         * Display labels are renderer hints, not new message kinds. Keeping them as a
+         * builder field lets adapters label tool/status rows more precisely while the
+         * TUI can still fall back to ConversationMessageKind for baseline styling.
+         */
         self.display_label = Some(label.into());
         self
     }
 
     pub fn with_debug_detail(mut self, detail: impl Into<String>) -> Self {
-        // debug detail은 일반 text와 별도 필드라, debug mode가 꺼져 있을 때 transcript 노이즈를 만들지 않는다.
+        /*
+         * Debug detail is separated from text because it is diagnostic context, not
+         * transcript content. This prevents replayed sessions and normal shell output
+         * from growing extra rows when debug mode is disabled.
+         */
         self.debug_detail = Some(detail.into());
         self
     }
@@ -151,7 +164,12 @@ impl ConversationRuntimeControlTruth {
         // interrupt capability이다.
         interrupt: ConversationControlSupport,
     ) -> Self {
-        // const constructor라 default/static context에서도 backend capability truth를 만들 수 있다.
+        /*
+         * The constructor is const so backend capability truth can live in defaults and
+         * static-style contexts. Approval and interrupt are deliberately independent
+         * because backends may support one control path natively while requiring manual
+         * handoff or no support for the other.
+         */
         Self {
             approval,
             interrupt,
@@ -159,8 +177,13 @@ impl ConversationRuntimeControlTruth {
     }
 
     pub const fn codex_app_server() -> Self {
-        // 현재 codex app-server flow는 approval을 native API로 직접 처리하지 않고 manual
-        // handoff copy로 안내하며, interrupt는 지원하지 않는 truth로 둔다.
+        /*
+         * The current codex app-server integration exposes conversation streaming and
+         * manual approval handoff copy, but it does not yet surface a native approval
+         * action in this domain truth. Interrupt is also marked unsupported here so UI
+         * controls do not promise a stop capability unless the adapter changes the
+         * contract explicitly.
+         */
         Self::new(
             ConversationControlSupport::ManualHandoff,
             ConversationControlSupport::Unsupported,
@@ -170,7 +193,11 @@ impl ConversationRuntimeControlTruth {
 
 impl Default for ConversationRuntimeControlTruth {
     fn default() -> Self {
-        // 별도 backend truth가 주입되지 않으면 native-first app-server flow를 기본값으로 삼는다.
+        /*
+         * Defaulting to codex_app_server keeps older call sites aligned with the native
+         * app-server path. Alternative backends must opt in by supplying their own
+         * truth instead of silently inheriting unsupported control affordances.
+         */
         Self::codex_app_server()
     }
 }
