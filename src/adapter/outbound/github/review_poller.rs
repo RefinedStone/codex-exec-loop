@@ -486,10 +486,10 @@ impl GithubReviewPollerAdapter {
         issue_comments: Vec<IssueCommentResponse>,
     ) -> GithubPullRequestActivitySnapshot {
         /*
-        GitHub splits PR activity across review submissions, inline review comments,
-        and issue comments. The domain service wants a single activity stream for
-        polling diffs, so this adapter merges endpoint-specific DTOs first and sorts
-        only after all event kinds have the same domain shape.
+        GitHub는 PR activity를 review submission, inline review comment, issue comment endpoint로 나눠 제공한다.
+        domain service는 이전 snapshot과 비교할 하나의 activity stream을 원하므로, adapter가 endpoint-specific DTO를 먼저
+        domain event shape로 합친다. sort는 모든 event kind가 같은 domain shape가 된 뒤에만 수행해 timestamp 기준 ordering을
+        endpoint 종류와 분리한다.
         */
         let mut events = reviews
             .into_iter()
@@ -522,9 +522,9 @@ impl GithubReviewPollerAdapter {
         review: PullRequestReviewResponse,
     ) -> Option<GithubPullRequestActivityEvent> {
         /*
-        Pending reviews have no submitted timestamp and are not public review activity
-        yet. Skipping them prevents the poller from announcing draft review state that
-        the PR timeline itself would not show to the operator.
+        pending review는 submitted timestamp가 없고 아직 public review activity가 아니다.
+        이를 건너뛰면 PR timeline 자체가 operator에게 보여주지 않는 draft review state를 poller가 새 활동처럼 알리는 일을 막는다.
+        submitted_at이 있는 review만 domain event가 된다.
         */
         let submitted_at = review.submitted_at?;
 
@@ -575,9 +575,9 @@ impl GithubReviewPollerPort for GithubReviewPollerAdapter {
         target: &GithubPullRequestTarget,
     ) -> Result<GithubPullRequestActivitySnapshot> {
         /*
-        Loading activity is intentionally a full refresh. The application service owns
-        diffing against the previous snapshot, while this adapter keeps each poll
-        stateless and reconstructs the authoritative PR timeline from GitHub.
+        activity load는 의도적으로 full refresh다.
+        이전 snapshot과의 diffing은 application service가 맡고, adapter는 각 poll을 stateless하게 유지한다.
+        매번 GitHub에서 PR header와 세 activity endpoint를 다시 읽어 authoritative PR timeline snapshot을 재구성한다.
         */
         let pull_request = self.fetch_pull_request_details(target)?;
         let reviews = self.fetch_pull_request_reviews(target)?;
@@ -594,10 +594,10 @@ impl GithubReviewPollerPort for GithubReviewPollerAdapter {
 }
 
 /*
-Private GitHub REST response DTOs.
+private GitHub REST response DTO들이다.
 
-These structs intentionally model only the fields needed to construct the domain snapshot. Keeping them private prevents
-GitHub's JSON names and nullable details from becoming application-layer contracts.
+이 struct들은 domain snapshot을 만들기 위해 필요한 field만 모델링한다.
+private로 유지하면 GitHub JSON field name, nullable detail, endpoint별 payload 차이가 application-layer contract로 새지 않는다.
 */
 #[derive(Debug, Clone, Deserialize)]
 struct PullRequestResponse {
