@@ -40,7 +40,12 @@ impl AppServerNotification {
     }
 
     pub(in crate::adapter::outbound::app_server) fn should_defer_to_turn_stream(&self) -> bool {
-        // These notifications may arrive while a request is waiting, but their semantics belong to the stream reducer.
+        /*
+         * These notification families are owned by the active turn reducer even when
+         * they arrive while a JSON-RPC request is waiting for its response. Deferring
+         * them keeps `turn/start` races from turning valid early deltas into generic
+         * connection warnings.
+         */
         self.method == "error"
             || self.method == "thread/status/changed"
             || self.method.starts_with("turn/")
@@ -48,7 +53,12 @@ impl AppServerNotification {
     }
 
     pub(in crate::adapter::outbound::app_server) fn warning_text(&self, context: &str) -> String {
-        // Dropped notifications are surfaced as runtime warnings with enough context to diagnose schema drift.
+        /*
+         * Dropped notifications are not silent because app-server schemas are still a
+         * moving boundary. The warning copy keeps method identity plus call-site
+         * context so diagnostics can distinguish stale-turn noise from actual schema
+         * drift.
+         */
         match self.method.as_str() {
             "configWarning" => self
                 .params
@@ -149,7 +159,11 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
             Ok(TurnNotificationHandling::Consumed)
         }
         "item/agentMessage/delta" => {
-            // Deltas are incremental text chunks; completed text is emitted later by item/completed.
+            /*
+             * Delta items update the live transcript only. The completed agent message
+             * is emitted by `item/completed`, so replay and final transcript state do
+             * not depend on reconstructing text from a possibly missing delta stream.
+             */
             if params.get("turnId").and_then(Value::as_str) != Some(turn_id) {
                 return Ok(TurnNotificationHandling::Dropped(
                     notification.warning_text("that did not match the active turn stream"),
@@ -177,7 +191,12 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
             Ok(TurnNotificationHandling::Consumed)
         }
         "item/completed" => {
-            // Completed items are the only place where final tool summaries and final assistant messages are emitted.
+            /*
+             * Completed items are the live stream's finalization point for transcript
+             * records and tool summaries. Planning changed-file tracking is recorded
+             * before UI fan-out so the later `turn/completed` event can carry the full
+             * turn-level planning refresh summary.
+             */
             if params.get("turnId").and_then(Value::as_str) != Some(turn_id) {
                 return Ok(TurnNotificationHandling::Dropped(
                     notification.warning_text("that did not match the active turn stream"),
@@ -197,7 +216,12 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
             bail!(message.to_string());
         }
         "turn/completed" => {
-            // turn/completed closes the stream and carries the planning-file path summary accumulated from fileChange items.
+            /*
+             * `turn/completed` is the only notification that may stop the read loop.
+             * It also transfers the side-band planning-file summary accumulated from
+             * earlier fileChange items, letting post-turn planning refresh run after
+             * the transcript has seen the complete app-server turn.
+             */
             let completed_thread_id = params.get("threadId").and_then(Value::as_str);
             let completed_turn_id = params
                 .get("turn")
@@ -269,7 +293,12 @@ pub(super) fn to_conversation_message(item: Value) -> Option<ConversationMessage
 }
 
 fn changed_planning_file_paths(item: &Value) -> Vec<String> {
-    // Only canonical planning runtime files should trigger planning refresh/repair follow-up after a turn completes.
+    /*
+     * Only canonical planning runtime files should trigger planning refresh/repair
+     * follow-up after a turn completes. The app-server may report repo-relative,
+     * absolute, or legacy-looking paths; canonical_active_planning_file_path is the
+     * single gate that keeps arbitrary file edits from waking planning automation.
+     */
     let mut paths = Vec::new();
 
     for path in changed_file_paths(item) {
@@ -282,7 +311,11 @@ fn changed_planning_file_paths(item: &Value) -> Vec<String> {
 }
 
 fn format_file_change_summary(item: &Value) -> String {
-    // Tool activity copy stays compact because it appears inline in the TUI live activity area.
+    /*
+     * Tool activity copy stays compact because it appears inline in the live TUI
+     * activity area. The detailed diff remains in the underlying app-server item;
+     * this summary is only a scan-friendly progress signal.
+     */
     let changes = item
         .get("changes")
         .and_then(Value::as_array)
@@ -348,7 +381,11 @@ fn extract_user_input_text(items: &[Value]) -> String {
 }
 
 fn changed_file_paths(item: &Value) -> Vec<String> {
-    // fileChange items can report both the original path and a move destination; both matter for planning-file tracking.
+    /*
+     * fileChange items can report both the original path and a move destination.
+     * Planning tracking has to inspect both because moving an active planning doc out
+     * of or into the canonical location is just as relevant as editing it in place.
+     */
     let mut paths = Vec::new();
 
     for change in item
@@ -384,7 +421,11 @@ fn parse_approval_review_event(
     thread_id: &str,
     turn_id: &str,
 ) -> Option<ConversationStreamEvent> {
-    // Approval review parsing is optional so unknown review payloads become warnings instead of breaking the whole turn.
+    /*
+     * Approval review parsing is intentionally optional. A malformed review payload
+     * should surface as a dropped-notification warning, while the surrounding tool
+     * execution and message stream continue reducing normally.
+     */
     if !matches!(
         notification.method(),
         "item/autoApprovalReview/started" | "item/autoApprovalReview/completed"
@@ -488,7 +529,12 @@ fn record_changed_planning_file_paths(
     item: Option<&Value>,
     changed_file_paths_for_turn: &mut Vec<String>,
 ) {
-    // Planning file tracking is side-band state used only when the same turn later emits TurnCompleted.
+    /*
+     * Planning file tracking is side-band state because fileChange tool activity is
+     * emitted before the turn is known to be complete. Holding only canonical paths
+     * here lets TurnCompleted remain the single post-turn trigger for planning
+     * refreshes.
+     */
     let Some(item) = item else {
         return;
     };
