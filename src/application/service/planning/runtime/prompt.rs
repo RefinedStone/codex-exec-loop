@@ -34,9 +34,8 @@ const MAX_PROPOSAL_SUMMARY_TITLES: usize = 2;
 
 #[derive(Clone)]
 pub struct PlanningPromptService {
-    // Workspace and repository ports are kept separate because runtime prompt
-    // loading combines two authority planes: operator-authored markdown files
-    // and DB-accepted planning authority.
+    // workspace port와 repository port는 분리해 둔다. runtime prompt loading은 operator-authored markdown file과
+    // DB-accepted planning authority라는 두 authority plane을 한 snapshot으로 합치기 때문이다.
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
@@ -55,11 +54,10 @@ pub enum PlanningRuntimeWorkspaceStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningRuntimeSnapshot {
     /*
-     * A snapshot is intentionally immutable outside this module.  Policy and UI
-     * code should observe derived facts, not recompute whether a workspace is
-     * invalid, actionable, repeated, or just proposal-only.  Keeping fields
-     * private preserves the relationship between status, queue head, prompt
-     * fragment, failure text, and authority signatures.
+     * snapshot은 이 모듈 밖에서 의도적으로 immutable하다.
+     * policy/UI code는 workspace가 invalid/actionable/repeated/proposal-only인지 다시 계산하지 않고,
+     * 이미 파생된 fact를 관찰해야 한다. field를 private으로 유지하면 status, queue head, prompt fragment,
+     * failure text, authority signature 사이의 관계가 깨지지 않는다.
      */
     workspace_present: bool,
     workspace_status: PlanningRuntimeWorkspaceStatus,
@@ -260,6 +258,7 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn with_auto_followup_pause_reason(&self, reason: impl Into<String>) -> Self {
+        // pause reason은 snapshot 자체의 read model을 보존한 채 auto-follow policy가 runtime-local block 사유만 덧붙이는 경로다.
         let mut snapshot = self.clone();
         snapshot.auto_followup_pause_reason = Some(reason.into());
         snapshot
@@ -271,6 +270,7 @@ impl PlanningRuntimeSnapshot {
         task_authority_signature: Option<u64>,
         queue_head_task_signature: Option<u64>,
     ) -> Self {
+        // test helper는 queue 반복 감지에 필요한 signature만 주입한다. production loader의 DB/workspace read path를 우회하기 위한 장치다.
         let mut snapshot = self.clone();
         snapshot.task_authority_signature = task_authority_signature;
         snapshot.queue_head_task_signature = queue_head_task_signature;
