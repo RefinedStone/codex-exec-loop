@@ -330,6 +330,7 @@ mod tests {
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     #[test]
     fn startup_loaded_auto_requests_sessions_when_ready() {
+        // startup 성공 직후에는 validated workspace로 recent session preload를 한 번 걸어 첫 화면 진입 비용을 줄인다.
         let state = ShellChromeState::new();
         let reduced = reduce_shell_chrome(
             state,
@@ -354,6 +355,7 @@ mod tests {
     }
     #[test]
     fn opening_sessions_overlay_requests_load_only_once() {
+        // session overlay open은 initial load trigger이지만, 이미 loading으로 전이된 catalog에 중복 effect를 더하지 않는다.
         let mut state = ShellChromeState::new();
         state.startup_state = StartupState::Ready(sample_startup_diagnostics());
         let first =
@@ -375,6 +377,7 @@ mod tests {
     }
     #[test]
     fn explicit_sessions_request_reloads_after_failure() {
+        // explicit request는 실패한 catalog를 복구하려는 사용자 의도이므로 Failed 상태에서도 reload effect를 허용한다.
         let mut state = ShellChromeState::new();
         state.startup_state = StartupState::Ready(sample_startup_diagnostics());
         state.session_state = SessionState::Failed("boom".to_string());
@@ -391,6 +394,7 @@ mod tests {
     }
     #[test]
     fn opening_sessions_overlay_while_startup_blocked_does_not_queue_load() {
+        // startup diagnostic이 continue를 막으면 overlay는 열 수 있어도 workspace-scoped session load는 queue하지 않는다.
         let mut state = ShellChromeState::new();
         state.exit_confirmation_state = ExitConfirmationState::Visible;
         state.startup_state = StartupState::Ready(sample_blocked_startup_diagnostics());
@@ -407,6 +411,7 @@ mod tests {
     }
     #[test]
     fn toggling_sessions_overlay_requests_load_only_when_opening() {
+        // toggle open은 load를 요청할 수 있지만, toggle close는 시각적 collapse라 IO effect를 만들지 않는다.
         let mut state = ShellChromeState::new();
         state.exit_confirmation_state = ExitConfirmationState::Visible;
         state.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -437,6 +442,7 @@ mod tests {
     }
     #[test]
     fn explicit_sessions_request_while_loading_does_not_duplicate_effect() {
+        // Loading 중 explicit reload는 in-flight request와 경쟁하지 않도록 no-op으로 접는다.
         let mut state = ShellChromeState::new();
         state.startup_state = StartupState::Ready(sample_startup_diagnostics());
         state.session_state = SessionState::Loading;
@@ -447,6 +453,7 @@ mod tests {
     }
     #[test]
     fn moving_selection_clamps_to_available_bounds() {
+        // session browser navigation은 list edge에서 wrap하지 않고 clamp되어 같은 row에 머문다.
         let mut state = ShellChromeState::new();
         state.session_state = SessionState::Ready(
             RecentSessions {
@@ -464,6 +471,7 @@ mod tests {
     }
     #[test]
     fn moving_selection_ignores_attach_only_catalog_without_browser_items() {
+        // attach-only catalog는 browser item이 없으므로 selection movement가 기존 index를 바꾸지 않는다.
         let mut state = ShellChromeState::new();
         state.session_state = SessionState::Ready(SessionCatalog::unsupported(
             SessionCatalogTier::AttachOnly,
@@ -478,6 +486,7 @@ mod tests {
     }
     #[test]
     fn showing_planning_init_overlay_hides_exit_confirmation() {
+        // planning init overlay가 focus owner가 되면 exit confirmation은 함께 보이지 않아야 한다.
         let mut state = ShellChromeState::new();
         state.exit_confirmation_state = ExitConfirmationState::Visible;
         let reduced = reduce_shell_chrome(state, ShellChromeEvent::PlanningInitOverlayShown);
@@ -491,6 +500,7 @@ mod tests {
     }
     #[test]
     fn showing_help_overlay_hides_exit_confirmation() {
+        // help overlay도 shell focus를 가져가므로 exit confirmation과 동시에 노출되지 않는다.
         let mut state = ShellChromeState::new();
         state.exit_confirmation_state = ExitConfirmationState::Visible;
         let reduced = reduce_shell_chrome(state, ShellChromeEvent::HelpOverlayShown);
@@ -504,6 +514,7 @@ mod tests {
     }
     #[test]
     fn toggling_supersession_overlay_hides_exit_confirmation() {
+        // supersession toggle은 별도 projection을 열더라도 shell chrome의 단일 focus owner 규칙을 따른다.
         let mut state = ShellChromeState::new();
         state.exit_confirmation_state = ExitConfirmationState::Visible;
         let reduced = reduce_shell_chrome(state, ShellChromeEvent::SupersessionOverlayToggled);
