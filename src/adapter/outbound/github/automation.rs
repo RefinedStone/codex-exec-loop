@@ -205,6 +205,12 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         branch_name: &str,
         force_with_lease: bool,
     ) -> Result<()> {
+        /*
+        Slot branches normally publish with upstream tracking so later operator
+        commands can use the branch name alone. Rebased distributor recovery uses
+        force-with-lease because it rewrites only the branch it just validated and
+        still protects against remote movement by another actor.
+        */
         if force_with_lease {
             run_git(
                 repo_root,
@@ -277,6 +283,11 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         repo_root: &str,
         pr_number: u64,
     ) -> Result<GithubAutomationPullRequest> {
+        /*
+        Inspect is the authoritative read path after creation fallback or later
+        delivery checks. It requests the same compact field set as PR lookup so
+        callers never observe different port shapes based on how the PR was found.
+        */
         let output = run_command(
             "bash",
             &[
@@ -295,10 +306,20 @@ impl GithubAutomationPort for GithubAutomationAdapter {
     }
 
     fn push_integration_branch(&self, repo_root: &str, branch_name: &str) -> Result<()> {
+        /*
+        Integration branches are already synthesized in the distributor worktree.
+        They are pushed without upstream setup because operators should continue
+        driving final integration through explicit branch/PR records.
+        */
         run_git(repo_root, &["push", DEFAULT_PUSH_REMOTE_NAME, branch_name])
     }
 
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()> {
+        /*
+        Close delegates to the RefinedStone wrapper instead of raw gh. That keeps
+        write identity, token selection, and repo-specific GitHub policy in the
+        same script used for creation and inspection.
+        */
         run_command(
             "bash",
             &[GITHUB_SCRIPT_PATH, "pr", "close", &pr_number.to_string()],
@@ -341,6 +362,11 @@ impl From<GithubPullRequestJson> for GithubAutomationPullRequest {
 }
 
 fn run_git(repo_root: &str, args: &[&str]) -> Result<()> {
+    /*
+    Git commands return unit because callers care about completed side effects.
+    On failure the helper expands stderr/stdout into the error so the distributor
+    can preserve the remote rejection or hook message in its recovery note.
+    */
     let output = run_process("git", args, repo_root)?;
     if output.status.success() {
         return Ok(());
@@ -380,6 +406,11 @@ fn run_command(program: &str, args: &[&str], repo_root: &str) -> Result<String> 
 }
 
 fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> {
+    /*
+    Non-interactive execution is mandatory for background parallel-mode delivery.
+    Disabling terminal prompts turns credential or network gaps into ordinary
+    command failures instead of hanging the supervisor lane.
+    */
     Command::new(program)
         .current_dir(repo_root)
         .args(args)
@@ -394,6 +425,11 @@ fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> 
 }
 
 fn command_error_detail(output: &Output) -> String {
+    /*
+    Most Git/GitHub failures explain themselves on stderr, but wrapper scripts may
+    normalize errors onto stdout. The fallback order keeps the highest-signal text
+    while still returning a stable message for silent exits.
+    */
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !stderr.is_empty() {
         return stderr;
@@ -407,6 +443,11 @@ fn command_error_detail(output: &Output) -> String {
 }
 
 fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
+    /*
+    `gh pr create` and the wrapper both commonly print the created PR URL. Parsing
+    only the final path segment keeps this as a narrow recovery path; structured
+    PR lookup remains the primary source of port data.
+    */
     output
         .trim()
         .rsplit('/')
