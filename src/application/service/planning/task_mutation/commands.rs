@@ -3,16 +3,15 @@ use serde::Deserialize;
 use crate::domain::planning::TaskStatus;
 
 /*
- * This module is the strict JSON command extractor for task mutations produced
- * by workers or LLM output.  The mutation service consumes typed create/update
- * commands only; legacy full task-authority documents are rejected so automated
- * responses cannot replace the accepted DB authority wholesale.
+ * worker/LLM output에서 task mutation command만 엄격하게 뽑아내는 JSON extractor다.
+ * mutation service는 typed create/update command만 소비하고, legacy full task-authority
+ * document는 거부한다. 자동 응답이 accepted DB authority 전체를 한 번에 교체하지 못하게
+ * 하고, 모든 변경을 command 단위 audit/revision 경로에 태우기 위한 경계다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskCreateInput {
-    // Optional fields intentionally mean "use service defaults" on create.
-    // The service applies actor, timestamps, priority defaults, and relation
-    // note fallback after direction validation.
+    // create의 optional field는 "service default 사용"이라는 뜻이다. actor, timestamp,
+    // priority default, relation note fallback은 direction validation 이후 service가 채운다.
     pub direction_id: Option<String>,
     pub direction_relation_note: Option<String>,
     pub title: String,
@@ -27,9 +26,8 @@ pub struct PlanningTaskCreateInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskUpdateInput {
-    // Optional fields intentionally mean "preserve existing value" on update.
-    // List fields are Option<Vec<_>> so callers can distinguish no change from
-    // explicitly clearing dependencies or blockers.
+    // update의 optional field는 "기존 값 유지"라는 뜻이다. list field를 Option<Vec<_>>로 둬
+    // no change와 dependency/blocker 명시적 clear를 구분한다.
     pub task_id: String,
     pub direction_id: Option<String>,
     pub direction_relation_note: Option<String>,
@@ -52,8 +50,8 @@ pub enum PlanningTaskMutationCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningTaskCommandExtraction {
     Commands(Vec<PlanningTaskMutationCommand>),
-    // Preserve rejected JSON for repair prompts.  The caller can show the model
-    // exactly what it emitted without re-parsing the original markdown.
+    // rejected JSON은 repair prompt 증거로 보존한다. caller가 원본 markdown을 다시 slicing하지 않고
+    // model이 실제로 낸 payload를 그대로 보여 줄 수 있게 한다.
     LegacyTaskAuthorityRejected(String),
     InvalidCommands {
         error: String,
@@ -62,8 +60,8 @@ pub enum PlanningTaskCommandExtraction {
     None,
 }
 
-// Serde-facing shapes are private and stricter than the service-facing inputs:
-// unknown fields fail extraction before any mutation logic runs.
+// serde-facing shape는 private이고 service-facing input보다 더 엄격하다. unknown field는 mutation
+// logic이 실행되기 전에 extraction 단계에서 실패한다.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PlanningTaskCommandsDocument {
@@ -119,10 +117,9 @@ struct PlanningTaskUpdateCommand {
 }
 
 pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtraction {
-    // Search likely JSON regions first, but keep the whole message as a final
-    // candidate so raw JSON replies work without code fences.  The first valid
-    // command document wins; the first invalid command document is retained only
-    // if no later valid one appears.
+    // 먼저 JSON 가능성이 높은 영역을 찾고, 마지막 후보로 전체 message도 시도한다. code fence가
+    // 없는 raw JSON reply도 동작해야 하기 때문이다. 첫 valid command document가 승리하고,
+    // invalid command document는 뒤에 valid candidate가 없을 때만 repair 증거로 남긴다.
     let mut first_invalid = None;
     for candidate in candidate_json_sections(message) {
         if candidate.trim().is_empty() {
@@ -131,8 +128,8 @@ pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtra
         let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) else {
             continue;
         };
-        // Old-style full task authority exports are dangerous here: accepting
-        // them would bypass create/update audit semantics and revision checks.
+        // old-style full task authority export는 이 경계에서 위험하다. 이를 허용하면 create/update
+        // audit semantics와 repository revision check를 우회해 ledger 전체를 교체할 수 있다.
         if value.get("task_authority").is_some()
             || (value.get("version").is_some() && value.get("tasks").is_some())
         {
@@ -141,9 +138,9 @@ pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtra
             return PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(rejected);
         }
         if value.get("planning_task_commands").is_some() {
-            // Keep the normalized rejected JSON alongside serde errors.  Repair
-            // prompts can point at unknown fields or unsupported versions
-            // without relying on brittle slices from the original response.
+            // serde error와 함께 normalized rejected JSON을 보존한다. repair prompt는 원본 응답의
+            // 깨지기 쉬운 slice가 아니라 pretty JSON을 기준으로 unknown field나 unsupported version을
+            // 지적할 수 있다.
             let rejected_json =
                 serde_json::to_string_pretty(&value).unwrap_or_else(|_| candidate.to_string());
             match serde_json::from_value::<PlanningTaskCommandsDocument>(value) {
@@ -183,9 +180,8 @@ pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtra
 
 impl From<PlanningTaskCommandEnvelope> for PlanningTaskMutationCommand {
     fn from(command: PlanningTaskCommandEnvelope) -> Self {
-        // Conversion strips the private serde envelope and leaves the service
-        // with operation-specific input structs.  Validation/defaulting remains
-        // downstream because it needs repository and catalog context.
+        // 변환은 private serde envelope를 벗기고 service가 쓰는 operation-specific input만 남긴다.
+        // validation/defaulting은 repository와 catalog context가 필요하므로 downstream mutation service에 남긴다.
         match command {
             PlanningTaskCommandEnvelope::CreateTask(command) => {
                 Self::CreateTask(PlanningTaskCreateInput {
@@ -221,9 +217,9 @@ impl From<PlanningTaskCommandEnvelope> for PlanningTaskMutationCommand {
 }
 
 fn candidate_json_sections(message: &str) -> Vec<&str> {
-    // Models often wrap commands in fenced blocks, but repair text can embed a
-    // bare object inside prose.  Collect both forms before trying the full
-    // message, avoiding a dependency on markdown parsing.
+    // model은 command를 fenced block으로 감싸는 경우가 많지만, repair text는 prose 안에 bare
+    // object를 넣기도 한다. markdown parser 의존성 없이 fenced/balanced/full message 후보를
+    // 모두 모아 extractor가 모델 출력 변형에 둔감하게 만든다.
     let mut sections = Vec::new();
     let mut remainder = message;
     while let Some(start) = remainder.find("```") {
@@ -242,9 +238,8 @@ fn candidate_json_sections(message: &str) -> Vec<&str> {
 }
 
 fn balanced_json_object_sections(message: &str) -> Vec<&str> {
-    // This scanner is intentionally small but string-aware.  It extracts
-    // balanced top-level objects from prose while ignoring braces inside JSON
-    // strings, which is enough for command repair without accepting fragments.
+    // 이 scanner는 작지만 JSON string을 인식한다. prose에서 balanced top-level object를 뽑되
+    // 문자열 안의 brace는 무시하므로, fragment를 command로 오인하지 않고 repair용 후보를 얻기에 충분하다.
     let mut sections = Vec::new();
     let mut start = None;
     let mut depth = 0usize;
