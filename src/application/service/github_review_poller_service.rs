@@ -594,7 +594,7 @@ mod tests {
         // 남았는지 명확히 확인한다.
         id: u64,
         // kind는 identity에 포함되는 activity 종류이다. review, review comment,
-        // issue comment가 같은 id를 가질 가능성까지 구분하는 데 필요한다.
+        // issue comment가 같은 id를 가질 가능성까지 구분하는 데 필요하다.
         kind: GithubPullRequestActivityKind,
         // submitted_at은 timestamp cursor와 정렬의 기준이다. 문자열이지만 ISO-8601 UTC
         // 형태라 lexicographic sort가 시간 순서와 일치한다.
