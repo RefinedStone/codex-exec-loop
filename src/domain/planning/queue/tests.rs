@@ -7,16 +7,15 @@ use crate::domain::planning::{
 };
 
 /*
- * Queue projection is the domain contract that converts accepted planning
- * authority into the next executable task list. These tests keep application
- * services from smuggling orchestration policy into the domain layer: the
- * service supplies accepted documents, and the queue decides ordering,
- * eligibility, skipped reasons, and invalid authority failures.
+ * queue projection은 accepted planning authority를 다음 executable task list로 바꾸는
+ * domain contract다. application service는 이미 승인된 direction/task 문서를 넘기고,
+ * queue domain은 ordering, eligibility, skipped reason, invalid authority failure만 판단한다.
+ * 이 테스트들은 orchestration policy가 domain layer로 새어 들어오지 않게 하는 방어선이다.
  */
 fn directions(states: &[(&str, DirectionState)]) -> DirectionCatalogDocument {
-    // Most tests vary only direction state. The remaining catalog fields still
-    // need realistic values because prompt-facing projections carry titles,
-    // summaries, success criteria, and scope hints through the same document.
+    // 대부분의 테스트는 direction state만 바꾼다. 그래도 prompt-facing projection이 title,
+    // summary, success criteria, scope hints를 같은 document에서 운반하므로 나머지 catalog
+    // field도 현실적인 값으로 채운다.
     DirectionCatalogDocument {
         version: 1,
         queue_idle: QueueIdleConfig::default(),
@@ -43,8 +42,8 @@ fn task(
     dynamic_priority_delta: i32,
     updated_at: &str,
 ) -> TaskDefinition {
-    // The fixture preserves all fields the production authority document owns,
-    // while exposing only the queue-sensitive knobs used by the tests below.
+    // production authority document가 가진 모든 field를 보존하되, 호출부에는 queue-sensitive
+    // knob인 status/priority/timestamp만 노출한다. fixture noise 없이 queue 정책만 읽히게 한다.
     TaskDefinition {
         id: id.to_string(),
         direction_id: direction_id.to_string(),
@@ -70,8 +69,8 @@ fn task(
 
 #[test]
 fn prefers_in_progress_tasks_before_ready_tasks() {
-    // A resumed task represents active operator intent, so it remains the queue
-    // head even when a ready task has a higher numeric priority.
+    // resumed task는 이미 시작된 operator intent를 뜻한다. ready task의 numeric priority가 더
+    // 높더라도 실행 중이던 일을 먼저 이어가야 하므로 queue head에 남는다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let task_authority = TaskAuthorityDocument {
@@ -132,9 +131,8 @@ fn prefers_in_progress_tasks_before_ready_tasks() {
 
 #[test]
 fn skips_tasks_when_direction_is_inactive_or_dependencies_are_unresolved() {
-    // Skipped tasks are not silently discarded. They stay visible with reasons
-    // so the TUI and planning worker can explain why only the runnable subset is
-    // eligible for the next handoff.
+    // skipped task는 조용히 버려지지 않는다. TUI와 planning worker가 왜 runnable subset만
+    // 다음 handoff 후보인지 설명할 수 있도록 reason과 함께 projection에 남긴다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[
         ("direction-a", DirectionState::Active),
@@ -231,9 +229,9 @@ fn skips_tasks_when_direction_is_inactive_or_dependencies_are_unresolved() {
 
 #[test]
 fn excludes_non_promotable_proposals_from_proposed_queue() {
-    // Proposed work is displayed only when it could be promoted by policy. A
-    // paused direction or unresolved dependency turns it into an explanatory
-    // skipped item instead of an operator-choice candidate.
+    // proposed work는 policy가 실제로 promote할 수 있을 때만 proposal queue에 보인다.
+    // paused direction이나 unresolved dependency가 있으면 operator-choice candidate가 아니라
+    // 설명 가능한 skipped item으로 내려간다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[
         ("direction-a", DirectionState::Active),
@@ -301,9 +299,8 @@ fn excludes_non_promotable_proposals_from_proposed_queue() {
 
 #[test]
 fn trims_direction_and_task_ids_for_queue_resolution() {
-    // Resolution trims ids for matching but keeps original task ids in the
-    // projection. That lets legacy or hand-authored documents remain resolvable
-    // without rewriting the accepted authority identity.
+    // resolution은 matching할 때 id를 trim하지만 projection에는 원래 task id를 보존한다.
+    // legacy/hand-authored 문서를 accepted authority identity rewrite 없이 해석하기 위한 절충이다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let mut runnable_task = task(
@@ -365,8 +362,8 @@ fn trims_direction_and_task_ids_for_queue_resolution() {
 
 #[test]
 fn breaks_priority_ties_with_oldest_update_time() {
-    // Combined priority decides the main rank. When two tasks tie, the older
-    // update wins to avoid starving work that has waited longer in the ledger.
+    // main rank는 combined priority가 결정한다. 동점이면 더 오래 ledger에 머문 작업을 굶기지
+    // 않기 위해 older updated_at이 앞선다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let task_authority = TaskAuthorityDocument {
@@ -413,9 +410,8 @@ fn breaks_priority_ties_with_oldest_update_time() {
 
 #[test]
 fn awaiting_user_blockers_clear_for_downstream_queue_tasks() {
-    // Awaiting-user blockers are informational gates for the operator, not hard
-    // dependencies for later automation. Downstream executable work may proceed
-    // once every non-user blocker is cleared.
+    // AwaitingUser blocker는 operator에게 보이는 informational gate이지 이후 automation을
+    // 막는 hard dependency가 아니다. user blocker 외의 blocker가 정리됐다면 downstream work는 진행할 수 있다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let mut blocked_task = task(
@@ -463,8 +459,8 @@ fn awaiting_user_blockers_clear_for_downstream_queue_tasks() {
 
 #[test]
 fn rejects_unknown_direction_references_instead_of_skipping_them() {
-    // A task pointing at a missing direction means the accepted authority graph
-    // is corrupt. Failing the build is safer than hiding the task as skipped.
+    // missing direction을 가리키는 task는 accepted authority graph 자체가 깨졌다는 신호다.
+    // 이를 skipped로 숨기기보다 build를 실패시켜 repair 경로가 authority 부패를 보게 한다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let task_authority = TaskAuthorityDocument {
@@ -493,9 +489,8 @@ fn rejects_unknown_direction_references_instead_of_skipping_them() {
 
 #[test]
 fn rejects_missing_dependency_references_instead_of_skipping_them() {
-    // Dependency ids form the graph used for runnable decisions. Missing nodes
-    // would make blocked/runnable classification guesswork, so the queue rejects
-    // the authority document before producing a projection.
+    // dependency id는 runnable decision에 쓰이는 graph edge다. missing node가 있으면
+    // blocked/runnable 분류가 추측이 되므로 projection을 만들기 전에 authority document를 거부한다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let mut blocked_task = task(
@@ -526,8 +521,8 @@ fn rejects_missing_dependency_references_instead_of_skipping_them() {
 
 #[test]
 fn rejects_invalid_updated_at_instead_of_silently_reordering() {
-    // Tie-breaking depends on timestamps. Invalid updated_at values therefore
-    // fail closed rather than falling back to input order or current time.
+    // tie-breaking은 timestamp에 의존한다. invalid updated_at을 input order나 current time으로
+    // 대체하면 ranking이 숨은 정책을 갖게 되므로 fail-closed로 처리한다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let task_authority = TaskAuthorityDocument {
@@ -556,9 +551,8 @@ fn rejects_invalid_updated_at_instead_of_silently_reordering() {
 
 #[test]
 fn rejects_multiple_in_progress_tasks_during_queue_build() {
-    // The queue can hand off only one active execution lane. Multiple
-    // in_progress records indicate ledger drift that orchestration must repair
-    // before the domain can choose a next task.
+    // queue는 하나의 active execution lane만 handoff할 수 있다. 여러 in_progress record는
+    // domain이 next task를 고르기 전에 orchestration이 repair해야 하는 ledger drift다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let task_authority = TaskAuthorityDocument {
