@@ -10,6 +10,13 @@ snapshot을 오염시키지 않는지 함께 확인하기 위해서다.
 #[test]
 fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
     let repo = TempGitRepo::new("distributor-rebase-provenance");
+
+    /*
+    force-push 실패 port를 먼저 주입한다. 이 시나리오는 local cherry-pick 통합 자체는
+    성공하지만 원격 갱신 단계가 실패하는 복합 경로다. 테스트가 확인하려는 핵심은
+    "이미 Done으로 통합된 queue record"와 "원격 push 실패 provenance"가 서로 섞이지
+    않는다는 점이다.
+    */
     let service = test_parallel_mode_service_with_github(Arc::new(
         FakeGithubAutomationPort::with_force_push_error("force-with-lease rejected"),
     ));
@@ -43,6 +50,12 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
     service
         .mark_workspace_official_completion_refreshing(&lease.worktree_path)
         .expect("ledger refreshing should be recorded");
+
+    /*
+    commit-ready 전이는 distributor queue의 source of truth를 만든다. 이후 prerelease
+    baseline을 일부러 전진시켜도 queue record의 commit_sha는 agent가 완료한 원래
+    commit을 계속 가리켜야 한다.
+    */
     service
         .mark_workspace_commit_ready(
             &lease.worktree_path,
@@ -59,6 +72,11 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
         .expect("queue record should exist");
     let original_commit_sha = original_queue_record.commit_sha;
 
+    /*
+    baseline 전진은 실제 운영에서 다른 PR이 먼저 prerelease에 들어간 상황을 재현한다.
+    agent commit과 충돌하지 않는 파일을 추가하므로 distributor는 rebase metadata 없이
+    cherry-pick으로 queue head를 통합할 수 있어야 한다.
+    */
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     fs::write(repo.repo_root.join("baseline.txt"), "baseline advanced\n")
         .expect("baseline file should be written");
@@ -83,6 +101,12 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
         .into_iter()
         .next()
         .expect("queue record should persist");
+
+    /*
+    성공 결과는 queue persistence와 supervisor projection을 함께 고정한다. record는
+    Done이지만 snapshot head는 idle이고, rebase provenance는 없어야 한다. 이 조합이
+    local integration 완료와 remote push 실패 표시를 분리한다.
+    */
     assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
     assert_eq!(queue_record.commit_sha, original_commit_sha);
     assert_eq!(queue_record.integration_state, "done");
@@ -111,6 +135,10 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         None,
     );
 
+    /*
+    conflict.txt는 baseline과 agent branch가 같은 path를 다르게 수정하도록 만든 고정점이다.
+    distributor 통합은 이 파일 하나만 보고도 operator recovery가 필요한 상태를 재현한다.
+    */
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     fs::write(repo.repo_root.join("conflict.txt"), "base\n")
         .expect("baseline conflict file should be written");
@@ -160,6 +188,11 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
 
+    /*
+    queue item 생성 뒤 baseline을 다시 전진시켜 cherry-pick conflict를 만든다. 이 순서가
+    중요하다. queue record는 agent commit을 이미 가리키고 있고, 그 뒤 integration branch의
+    현재 head만 바뀌어야 실제 distributor 충돌 경로와 같다.
+    */
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     fs::write(repo.repo_root.join("conflict.txt"), "baseline change\n")
         .expect("advanced baseline conflict file should be written");
@@ -183,6 +216,12 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         .into_iter()
         .next()
         .expect("blocked queue record should persist");
+
+    /*
+    queue record 검증은 persistence contract다. 실패를 transient notice로만 남기면 다음
+    supervisor refresh나 process retry가 원인을 잃는다. Blocked state, integration_note,
+    conflict_files가 모두 저장되어야 operator가 수동 복구를 이어갈 수 있다.
+    */
     assert_eq!(
         queue_record.queue_state,
         ParallelModeQueueItemState::Blocked
@@ -194,6 +233,12 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
     );
     assert_eq!(queue_record.integration_state, "blocked");
     assert_eq!(queue_record.conflict_files, vec!["conflict.txt"]);
+
+    /*
+    snapshot 검증은 TUI contract다. 같은 conflict 원인이 head summary, barrier state,
+    conflict file list, queue item, blocked detail에 일관되게 투영되어야 supersession
+    overlay가 복구 절차를 모호하지 않게 보여 준다.
+    */
     let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
     assert_eq!(snapshot.distributor.head_summary, "blocked");
     assert_eq!(snapshot.distributor.queue_depth(), 1);
@@ -234,6 +279,12 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         snapshot.distributor.head_rebase_provenance.is_none(),
         "failed rebase should not report successful rebase provenance"
     );
+
+    /*
+    GitHub operation log는 conflict가 통합 전 guard에서 잡힌 것이 아니라 PR 확보 이후
+    local integration 단계에서 잡힌 것을 증명한다. merge 이후 단계나 cleanup 단계가
+    실행되지 않아야 blocked queue를 operator가 그대로 복구할 수 있다.
+    */
     assert_eq!(
         operations
             .lock()
