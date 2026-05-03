@@ -1,8 +1,8 @@
 /*
- * Planning doctor is the read-only diagnostic surface for planning authority health.
- * Runtime prompt loading already knows how to seed missing authority, validate active planning files, and build
- * queue projections; this module translates that richer runtime snapshot into a compact report that CLI/TUI
- * callers can display and use for exit-code decisions.
+ * Planning doctor는 planning authority 상태를 읽기 전용으로 진단하는 표면이다.
+ * runtime prompt loading은 이미 누락 authority seed, active planning file 검증, queue projection 생성을
+ * 알고 있다. 이 모듈은 그 풍부한 runtime snapshot을 CLI/TUI caller가 표시하고 exit-code 판단에
+ * 사용할 수 있는 compact report로 낮춘다.
  */
 use crate::application::service::planning::runtime::prompt::PlanningPromptService;
 use crate::application::service::planning::runtime::prompt::{
@@ -10,14 +10,14 @@ use crate::application::service::planning::runtime::prompt::{
 };
 use crate::domain::text::compact_whitespace_detail;
 
-// Runtime validation currently tags missing required planning files with this prefix.
+// runtime validation은 현재 필수 planning file 누락을 이 prefix로 표시한다.
 const INCOMPLETE_PREFIX: &str = "planning files incomplete:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
- * Doctor state is an operator-facing projection, not a one-for-one runtime status.
- * The two ready states both exit successfully, but separating them lets the UI distinguish a healthy idle queue
- * from a healthy workspace with a concrete task ready to run.
+ * doctor state는 runtime status를 1:1로 노출하지 않는 operator-facing projection이다.
+ * 두 ready 상태는 모두 성공 exit이지만, 분리해 두면 UI가 healthy idle queue와 곧 실행할
+ * 구체적 task가 있는 healthy workspace를 구분할 수 있다.
  */
 pub enum PlanningDoctorState {
     Absent,
@@ -27,7 +27,7 @@ pub enum PlanningDoctorState {
     ReadyWithTask,
 }
 impl PlanningDoctorState {
-    // Labels are stable external strings used by CLI/API presentation layers.
+    // label은 CLI/API presentation layer가 쓰는 stable 외부 문자열이다.
     pub fn label(self) -> &'static str {
         match self {
             Self::Absent => "absent",
@@ -38,7 +38,7 @@ impl PlanningDoctorState {
         }
     }
 
-    // Absence is not an error because prompt loading may initialize default authority on inspection.
+    // prompt loading이 inspection 중 기본 authority를 초기화할 수 있으므로 absence는 error가 아니다.
     pub fn exit_code(self) -> i32 {
         match self {
             Self::Absent | Self::ReadyWithoutTask | Self::ReadyWithTask => 0,
@@ -49,9 +49,9 @@ impl PlanningDoctorState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
- * Compact report object returned to inbound adapters.
- * Fields stay private so presentation code must go through accessors and cannot accidentally depend on the
- * internal distinction between runtime snapshot fields and doctor-specific display fallbacks.
+ * inbound adapter로 반환되는 compact report 객체다.
+ * field를 private으로 두어 presentation code가 accessor를 거치게 한다. 그래야 runtime snapshot field와
+ * doctor 전용 display fallback 사이의 내부 구분에 adapter가 우연히 의존하지 않는다.
  */
 pub struct PlanningDoctorReport {
     planning_state: PlanningDoctorState,
@@ -63,7 +63,7 @@ pub struct PlanningDoctorReport {
     note: Option<String>,
 }
 impl PlanningDoctorReport {
-    // Used when the caller rejects a workspace path before runtime snapshot loading can produce a report.
+    // runtime snapshot loading이 report를 만들기 전에 caller가 workspace path를 거절했을 때 쓴다.
     pub fn path_issue(issue: String) -> Self {
         Self {
             planning_state: PlanningDoctorState::Invalid,
@@ -102,9 +102,9 @@ impl PlanningDoctorReport {
     }
 
     /*
-     * Project a runtime snapshot into the doctor report contract.
-     * Ready snapshots expose queue policy and summaries; incomplete/invalid snapshots suppress queue detail and
-     * preserve the runtime failure reason as the actionable issue.
+     * runtime snapshot을 doctor report 계약으로 projection한다.
+     * ready snapshot은 queue policy와 summary를 노출하고, incomplete/invalid snapshot은 queue detail을 숨긴 뒤
+     * runtime failure reason을 actionable issue로 보존한다.
      */
     fn from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Self {
         let planning_state = classify_doctor_state(snapshot);
@@ -142,7 +142,7 @@ impl PlanningDoctorReport {
     }
 }
 
-// Prefer the concrete active queue head; fall back to the snapshot's aggregate queue copy when no head exists.
+// 구체적인 active queue head를 우선하고, head가 없으면 snapshot의 aggregate queue copy로 후퇴한다.
 fn doctor_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
     snapshot
         .queue_head()
@@ -155,7 +155,7 @@ fn doctor_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
         .or_else(|| snapshot.queue_summary().map(str::to_string))
 }
 
-// Proposed task summary mirrors queue summary: show the first proposed task title before generic projection text.
+// proposed task summary는 queue summary처럼 generic projection text보다 첫 proposed task title을 먼저 보여 준다.
 fn doctor_proposal_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
     snapshot
         .queue_projection()
@@ -165,12 +165,12 @@ fn doctor_proposal_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String>
 }
 
 #[derive(Clone)]
-// Service wrapper keeps doctor inspection on the same runtime prompt loader path as worker prompt assembly.
+// service wrapper는 doctor inspection이 worker prompt assembly와 같은 runtime prompt loader path를 타게 한다.
 pub struct PlanningDoctorService {
     planning_prompt_service: PlanningPromptService,
 }
 impl PlanningDoctorService {
-    // Composition injects the prompt service so doctor and worker runtime snapshots cannot drift.
+    // composition이 prompt service를 주입해 doctor와 worker runtime snapshot이 서로 어긋나지 않게 한다.
     pub fn new(planning_prompt_service: PlanningPromptService) -> Self {
         Self {
             planning_prompt_service,
@@ -178,9 +178,9 @@ impl PlanningDoctorService {
     }
 
     /*
-     * Inspect a workspace by loading the runtime snapshot and degrading loader failures into invalid reports.
-     * This keeps CLI callers on a total function: path and IO problems become report data instead of panics or
-     * partially formatted errors.
+     * runtime snapshot을 load해 workspace를 inspect하고, loader failure는 invalid report로 낮춘다.
+     * 이렇게 하면 CLI caller는 total function을 호출하게 되고, path/IO 문제는 panic이나 부분 formatting error가
+     * 아니라 report data가 된다.
      */
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
         let snapshot = self
@@ -195,7 +195,7 @@ impl PlanningDoctorService {
     }
 }
 
-// Split incomplete from invalid by the validation prefix because runtime status only exposes both as Invalid.
+// runtime status는 둘 다 Invalid로만 노출하므로, validation prefix로 incomplete와 invalid를 나눈다.
 fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorState {
     match snapshot.workspace_status() {
         PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningDoctorState::Absent,
@@ -215,7 +215,7 @@ fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorSt
 }
 
 #[cfg(test)]
-// Tests cover the doctor service boundary because snapshot loading may seed default planning authority.
+// snapshot loading이 기본 planning authority를 seed할 수 있으므로, test는 doctor service 경계를 검증한다.
 mod tests {
     use std::sync::Arc;
 
@@ -225,7 +225,7 @@ mod tests {
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::domain::planning::PriorityQueueService;
 
-    // Temp workspace helper intentionally starts empty to exercise runtime bootstrap-through-inspection behavior.
+    // temp workspace helper는 runtime bootstrap-through-inspection 동작을 검증하려고 일부러 빈 상태로 시작한다.
     fn create_temp_workspace(label: &str) -> String {
         let unique = format!(
             "{}-{}",
@@ -240,7 +240,7 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
-    // Build the real service stack so the test covers filesystem loading and runtime validation together.
+    // 실제 service stack을 만들어 filesystem loading과 runtime validation을 함께 검증한다.
     fn doctor_service() -> PlanningDoctorService {
         let workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
         let validation_service = PlanningValidationService::new();
@@ -254,8 +254,8 @@ mod tests {
 
     #[test]
     /*
-     * Inspecting an uninitialized workspace seeds default DB authority through the runtime prompt service.
-     * Doctor therefore reports a healthy workspace without a ready task instead of the raw Uninitialized status.
+     * 초기화되지 않은 workspace를 inspect하면 runtime prompt service가 기본 DB authority를 seed한다.
+     * 그래서 doctor는 raw Uninitialized status 대신 ready task가 없는 healthy workspace로 보고한다.
      */
     fn inspect_workspace_seeds_default_authority_for_uninitialized_workspace() {
         let workspace_dir = create_temp_workspace("planning-doctor-absent");
