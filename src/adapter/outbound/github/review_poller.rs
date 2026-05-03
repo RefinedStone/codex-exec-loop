@@ -240,10 +240,9 @@ impl GithubReviewPollerAdapter {
     }
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
         /*
-        Credential files may contain trailing newlines or comments managed outside this
-        adapter. The poller only accepts the first non-empty line because the
-        RefinedStone credential contract stores exactly one usable GitHub credential
-        per lookup file.
+        credential file은 이 adapter 밖의 git/helper script가 관리하므로 trailing newline이나 빈 줄이 있을 수 있다.
+        poller는 첫 non-empty line만 credential로 인정한다.
+        RefinedStone credential contract는 lookup file 하나에 usable GitHub credential 한 줄만 둔다는 전제를 갖기 때문이다.
         */
         let contents = fs::read_to_string(path)?;
         contents
@@ -273,7 +272,7 @@ impl GithubReviewPollerAdapter {
                     .with_context(|| format!("failed to read {}", credential_path.display()));
             }
         };
-        // Windows credential file에는 여러 host credential이 있을 수 있으므로 RefinedStone/GitHub line만 선택한다.
+        // Windows credential file에는 여러 host credential이 섞일 수 있으므로 RefinedStone/GitHub line만 선택한다.
         Ok(contents.lines().map(str::trim).find_map(|line| {
             (line.starts_with("https://RefinedStone:") && line.contains("@github.com"))
                 .then(|| line.to_string())
@@ -305,10 +304,10 @@ impl GithubReviewPollerAdapter {
         current_user: &str,
     ) -> Result<Option<PathBuf>> {
         /*
-        WSL `$USER` commonly matches the Windows profile directory, but casing can
-        differ and directory scans can be blocked by permissions. This function first
-        records whether the direct path exists, then uses the scan only as a more
-        tolerant casing fallback.
+        WSL `$USER`는 보통 Windows profile directory 이름과 같지만 casing이 다를 수 있다.
+        또한 `/mnt/c/Users` scan이 permission 때문에 막힐 수 있다.
+        그래서 먼저 direct path 존재 여부를 기록하고, scan은 더 tolerant한 casing fallback으로만 사용한다.
+        scan이 막혀도 direct match가 있으면 credential fallback을 계속 살릴 수 있다.
         */
         let direct_match = users_root.join(current_user);
         let direct_match_exists = direct_match.is_dir();
@@ -322,7 +321,7 @@ impl GithubReviewPollerAdapter {
                     .with_context(|| format!("failed to read {}", users_root.display()));
             }
         };
-        // Windows user directory casing can differ from WSL `$USER`; case-insensitive scan preserves that fallback.
+        // Windows user directory casing은 WSL `$USER`와 다를 수 있으므로 case-insensitive scan으로 fallback을 보존한다.
         for entry in entries.flatten() {
             let entry_name = entry.file_name();
             if entry_name
@@ -341,7 +340,7 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
     fn parse_refinedstone_token(line: &str) -> Result<String> {
-        // credential line is shaped like `https://RefinedStone:<token>@github.com`; only the password slot becomes bearer token.
+        // credential line은 `https://RefinedStone:<token>@github.com` 형태다. bearer token으로 쓰는 값은 password slot뿐이다.
         let token = line
             .strip_prefix("https://RefinedStone:")
             .and_then(|value| value.split_once("@github.com").map(|(token, _)| token))
@@ -353,9 +352,9 @@ impl GithubReviewPollerAdapter {
     }
     fn encode_query_value(value: &str) -> String {
         /*
-        GitHub's head/base filters live in the query string, not the path. Branch names
-        can contain slash or other reserved characters, so encoding here protects the
-        `owner:branch` search expression without double-encoding endpoint paths.
+        GitHub의 head/base filter는 path가 아니라 query string에 들어간다.
+        branch 이름에는 slash나 reserved character가 들어갈 수 있으므로 여기서만 percent-encode한다.
+        endpoint path 자체는 이미 별도로 조립되므로 double-encoding하지 않는 것이 중요하다.
         */
         utf8_percent_encode(value, GITHUB_QUERY_ENCODE_SET).to_string()
     }
