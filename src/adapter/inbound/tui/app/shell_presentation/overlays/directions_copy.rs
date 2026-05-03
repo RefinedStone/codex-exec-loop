@@ -1,21 +1,22 @@
 /*
- * 학습 주석: directions_copy는 directions maintenance overlay의 copy deck이다. controller는
- * DirectionsMaintenanceOverlayView라는 작은 view-model만 만들고, 실제 문장과 key hint는 이 파일에
- * 모아 두어 상태 전환 로직이 UI 문구 변경에 끌려가지 않게 한다.
+ * directions_copy는 directions maintenance overlay의 wording boundary다. controller는
+ * DirectionsMaintenanceOverlayStep과 summary facts를 고르고, projection은 selectable rows를 만든다.
+ * 이 파일은 그 facts를 operator-facing 문장으로 바꿔 staged draft workflow, detail-doc repair,
+ * queue-idle prompt maintenance가 화면마다 같은 설명을 쓰게 한다.
  */
 use super::super::super::{AkraTheme, DetailDocConfirmChoice, Line};
 use super::super::option_lines::overlay_option_line;
 use super::DirectionsMaintenanceOverlayView;
 
-// 학습 주석: 모든 directions overlay가 같은 title prefix를 써서 shell chrome 안에서 한 기능군으로 보이게 한다.
+// 모든 step이 같은 title prefix를 공유해 overview, selection, confirm, editor가 하나의 maintenance 흐름으로 읽힌다.
 fn directions_title_line(suffix: &'static str) -> Line<'static> {
     AkraTheme::title_line("Directions Maintenance", suffix)
 }
 
 /*
- * 학습 주석: overview overlay는 directions catalog와 queue-idle prompt health를 한 화면에 압축한다.
- * 여기서 action copy는 "accepted state는 promote 전까지 변하지 않는다"는 authoring architecture를
- * 반복해서 보여 주며, operator가 raw file을 직접 고치기 전에 staged draft/editor 흐름으로 들어가게 한다.
+ * Overview는 directions authority scan과 queue-idle prompt health를 한 화면에 압축한다. 이 copy는
+ * accepted DB authority가 promote 전까지 바뀌지 않는다는 authoring contract를 반복해서 보여 주어,
+ * operator가 raw file을 직접 고치기보다 staged draft/editor 흐름으로 들어가게 한다.
  */
 pub(super) fn build_overview_overlay_view(
     missing_doc_count: usize,
@@ -34,9 +35,9 @@ pub(super) fn build_overview_overlay_view(
             ),
         ],
         /*
-         * 학습 주석: summary는 이 overlay가 inspector이면서도 editor 진입점임을 설명한다. accepted DB
-         * authority를 바로 바꾸지 않고 staged draft를 만들기 때문에, runtime prompt는 promote 전까지
-         * 기존 accepted state를 계속 본다.
+         * Summary는 이 overlay가 inspector이면서 editor 진입점임을 설명한다. staged draft를 만들 뿐
+         * accepted state를 바로 바꾸지 않으므로 runtime prompt와 worker queue는 promote 전까지 기존
+         * direction authority를 계속 본다.
          */
         summary_lines: vec![
             Line::from(
@@ -47,9 +48,9 @@ pub(super) fn build_overview_overlay_view(
             ),
         ],
         /*
-         * 학습 주석: parse error가 있으면 repair/detail actions를 막는다. controller가 invalid catalog를
-         * direction 단위로 신뢰할 수 없으므로, 먼저 prompt editor나 reload/manual repair 쪽으로 operator를
-         * 유도하는 presentation contract다.
+         * Parse error가 있으면 direction 단위 repair target을 신뢰할 수 없다. 그래서 detail-doc
+         * repair action은 막고, prompt editor/reload/manual repair 쪽으로 operator를 유도해 invalid
+         * catalog를 기준으로 새 supporting file을 만들지 않게 한다.
          */
         option_lines: vec![
             overlay_option_line(
@@ -74,7 +75,7 @@ pub(super) fn build_overview_overlay_view(
                 parse_error_summary.is_some(),
             ),
         ],
-        // 학습 주석: status는 health snapshot을 그대로 노출해 doctor/admin 경로와 같은 문제 수치를 보여 준다.
+        // Status는 service가 계산한 health snapshot을 그대로 노출해 doctor/admin 경로와 같은 문제 수치를 보여 준다.
         status_lines: vec![
             Line::from(format!(
                 "directions: {total_direction_count} total / {missing_doc_count} missing docs / {broken_doc_count} broken docs"
@@ -97,9 +98,9 @@ pub(super) fn build_overview_overlay_view(
 }
 
 /*
- * 학습 주석: detail-doc selection은 validation 결과에서 missing/broken mapping만 option으로 받은 뒤,
- * operator에게 어느 direction의 supporting file을 만들지 고르게 한다. 이 파일은 선택 목록을 계산하지
- * 않고 copy shell만 책임져 presentation layer의 역할을 좁게 유지한다.
+ * Detail-doc selection은 이미 projection이 고른 missing/broken mapping만 받아 화면 shell을 만든다.
+ * copy layer가 목록을 다시 계산하지 않기 때문에 selection movement, disabled action 판단, render rows가
+ * 같은 controller state를 source of truth로 유지한다.
  */
 pub(super) fn build_detail_doc_selection_overlay_view(
     option_lines: Vec<Line<'static>>,
@@ -113,9 +114,9 @@ pub(super) fn build_detail_doc_selection_overlay_view(
             ),
         ],
         /*
-         * 학습 주석: generated path copy는 supporting_files helper와 같은 convention을 사용자에게 드러낸다.
-         * file 생성과 catalog mapping 갱신이 함께 staged 된다는 점을 설명해 runtime prompt가 promote 후에만
-         * 새 detail doc을 참조한다는 경계를 유지한다.
+         * Generated path copy는 supporting_files helper와 같은 convention을 사용자에게 드러낸다.
+         * file 생성과 catalog mapping 갱신이 함께 staged 된다는 점을 말해, runtime prompt가 promote
+         * 후에만 새 detail doc을 참조한다는 경계를 유지한다.
          */
         summary_lines: vec![
             Line::from(
@@ -138,9 +139,9 @@ pub(super) fn build_detail_doc_selection_overlay_view(
 }
 
 /*
- * 학습 주석: confirm overlay는 selected direction을 실제 staged file mutation으로 넘기기 전 마지막
- * checkpoint다. 여기서 Yes/No만 고르게 만들어, accidental doc generation이 accepted directions catalog에
- * 직접 반영되지 않는 staged-edit workflow를 화면에서도 명확히 한다.
+ * Confirm overlay는 selected direction snapshot을 staged file mutation으로 넘기기 전 마지막 checkpoint다.
+ * 여기서 Yes/No만 남기면 accidental doc generation이 accepted catalog에 직접 반영되지 않고,
+ * controller가 pending direction id와 choice를 같은 상태에서 읽는 staged-edit workflow가 분명해진다.
  */
 pub(super) fn build_detail_doc_confirm_overlay_view(
     direction_title: &str,
@@ -154,14 +155,14 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
                 "Open a staged detail document for the selected direction and repair the mapping if needed?",
             ),
         ],
-        // 학습 주석: 확인 문구는 사람이 보는 제목과 결정적 생성 경로를 함께 보여 주어 staged 변경을 추적하기 쉽게 한다.
+        // 확인 문구는 사람이 보는 제목과 deterministic repair path를 함께 보여 staged 변경 추적을 쉽게 한다.
         summary_lines: vec![
             Line::from(format!("direction: {direction_title}")),
             Line::from(format!(
                 "default repair path: .codex-exec-loop/planning/directions/{direction_id}.md"
             )),
         ],
-        // 학습 주석: selected_choice는 controller state에서 온 값이라 키 이동과 render가 같은 선택 source를 본다.
+        // selected_choice는 controller state에서 온 값이라 키 이동, highlight, Enter behavior가 같은 source를 본다.
         option_lines: vec![
             overlay_option_line(
                 "1",
@@ -187,9 +188,9 @@ pub(super) fn build_detail_doc_confirm_overlay_view(
 }
 
 /*
- * 학습 주석: manual editor overlay는 directions draft editor가 화면을 장악할 때 shell overlay frame에
- * 남기는 최소 copy다. 실제 editing/rendering은 dedicated editor view가 맡고, 이 함수는 방향성 문구와
- * escape key만 제공해 presentation 책임을 분리한다.
+ * Manual editor step은 dedicated draft editor가 실제 buffer rendering과 save/validate 상태를 맡는다.
+ * 이 fallback view는 shell overlay contract를 채우는 최소 copy만 제공해, directions maintenance router가
+ * step마다 같은 DirectionsMaintenanceOverlayView shape를 유지하게 한다.
  */
 pub(super) fn build_manual_editor_overlay_view() -> DirectionsMaintenanceOverlayView {
     DirectionsMaintenanceOverlayView {
