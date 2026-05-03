@@ -24,6 +24,11 @@ pub(super) fn build_distributor_snapshot_from_context(
 ) -> ParallelModeDistributorSnapshot {
     let history = context.session_details.clone();
     let queue_records = context.distributor_queue_records.clone();
+    /*
+    queue_items는 화면에 직접 나갈 active record 목록이다. done/idle record를
+    여기서 제외해야 completion feed와 queue table이 서로 다른 질문에 답한다:
+    queue table은 "지금 막힌 head와 그 뒤 대기열", feed는 "최근 완료 파이프라인 흔적"이다.
+    */
     let queue_items = queue_records
         .iter()
         .filter(|record| record.queue_state.is_active())
@@ -31,6 +36,11 @@ pub(super) fn build_distributor_snapshot_from_context(
         .collect::<Vec<_>>();
     let completion_feed = build_distributor_completion_feed(&history);
     if let Some(queue_head) = active_distributor_queue_head(&queue_records) {
+        /*
+        active queue head가 있으면 session detail보다 우선한다. distributor는 head 하나만
+        전진시킬 수 있고, 뒤 queue item은 head 상태에 종속되므로 snapshot의 headline,
+        blocked detail, rebase provenance, orchestrator status를 모두 같은 record에서 뽑는다.
+        */
         return ParallelModeDistributorSnapshot::new(
             queue_items,
             completion_feed,
@@ -48,6 +58,11 @@ pub(super) fn build_distributor_snapshot_from_context(
         )
         .with_orchestrator_status(build_idle_orchestrator_status(context));
     };
+    /*
+    queue가 비었어도 마지막 session detail은 중요하다. agent가 reported_complete를 냈지만
+    ledger refresh가 아직 도는 중이거나, commit_ready가 만들어졌지만 enqueue 전이라면
+    operator는 queue table이 비어 있는 이유를 알아야 한다.
+    */
     let (head_summary, note) = match detail.state_label.as_str() {
         "reported_complete" => ("reported".to_string(), detail.latest_summary.clone()),
         "ledger_refreshing" => (
@@ -92,6 +107,11 @@ fn build_orchestrator_status(
     let matching_lease = matching_lease_for_queue_record(context, queue_head);
 
     ParallelModeOrchestratorStatus {
+        /*
+        queue_head label은 agent/task/state만 남긴다. branch, commit, integration note는
+        queue item row에 이미 있으므로 barrier line에서는 어떤 work unit이 제어권을
+        쥐고 있는지만 빠르게 읽히게 한다.
+        */
         queue_head: format!(
             "{} / {} / {}",
             queue_head.agent_id,
@@ -113,6 +133,10 @@ fn build_orchestrator_status(
 }
 fn build_idle_orchestrator_status(context: &PoolRuntimeContext) -> ParallelModeOrchestratorStatus {
     let mut status = ParallelModeOrchestratorStatus::idle();
+    /*
+    idle orchestrator도 integration worktree readiness를 덮어쓴다. queue가 비어 있는
+    동안 dirty branch를 먼저 고치면 다음 commit_ready가 들어왔을 때 즉시 처리할 수 있다.
+    */
     status.integration_worktree_readiness = inspect_integration_worktree_readiness(context);
     status
 }
@@ -120,6 +144,11 @@ fn orchestrator_barrier_state(
     queue_head: &ParallelModeDistributorQueueRecord,
     active_record_count: usize,
 ) -> String {
+    /*
+    barrier label은 queue state를 그대로 반복하지 않는다. blocked/failed는 recovery가
+    필요하다는 뜻이고, cleaning은 slot 반환이 남았다는 뜻이며, 여러 active record가
+    있으면 head가 뒤 작업을 의도적으로 잡고 있음을 표시한다.
+    */
     match queue_head.queue_state {
         ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => {
             "blocked".to_string()
@@ -215,11 +244,20 @@ fn active_distributor_queue_head(
         .find(|record| record.queue_state.is_active())
 }
 fn blocked_head_detail(record: &ParallelModeDistributorQueueRecord) -> Option<String> {
+    /*
+    blocked detail은 Blocked 상태에만 붙인다. 같은 integration_note라도 queued/pending
+    상태에서는 진행 설명일 수 있으므로, popup의 "blocked head" copy로 승격하지 않는다.
+    */
     (record.queue_state == ParallelModeQueueItemState::Blocked)
         .then(|| record.integration_note.clone())
 }
 
 fn rebase_provenance_label(record: &ParallelModeDistributorQueueRecord) -> Option<String> {
+    /*
+    original_commit_sha가 없으면 현재 commit을 원본으로 간주한다. 이렇게 하면 오래된
+    queue record도 provenance 없는 정상 record로 표시되고, 실제 rewrite가 있었던 경우만
+    short sha 전후 관계를 드러낸다.
+    */
     let original_commit_sha = record
         .original_commit_sha
         .as_deref()
@@ -309,6 +347,11 @@ fn latest_history_summary_across_records(
     history: &[ParallelModeAgentSessionDetailSnapshot],
     state_labels: &[&str],
 ) -> Option<String> {
+    /*
+    session history는 여러 agent에서 섞여 들어오므로 timestamp가 feed의 주 정렬 기준이다.
+    timestamp가 같은 테스트 fixture나 빠른 연속 이벤트에서는 summary를 tie-breaker로 써
+    snapshot 출력을 결정적으로 만든다.
+    */
     history
         .iter()
         .flat_map(|detail| detail.history.iter())
