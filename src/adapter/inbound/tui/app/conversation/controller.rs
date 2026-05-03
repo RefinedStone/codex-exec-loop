@@ -3,12 +3,12 @@ use super::super::{ConversationState, FollowupControlEvent, NativeTuiApp, Startu
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 /*
-Conversation controller owns the workspace boundary between shell startup, editable drafts, and resumed threads.
-The shell can learn a new cwd from startup diagnostics while a resumed thread may still belong to a different
-workspace, so planning snapshots are refreshed here instead of being recomputed ad hoc in render code.
+conversation controller는 shell startup, editable draft, resumed thread 사이의 workspace boundary를 소유한다.
+startup diagnostics가 shell cwd를 새로 알려 줄 수 있지만 resumed thread는 여전히 다른 workspace에 속할 수 있다.
+그래서 planning snapshot refresh를 render code의 ad hoc 계산으로 흩뜨리지 않고 이 controller 경계에 모아 둔다.
 */
 impl NativeTuiApp {
-    // Sync only local draft conversations to the shell workspace; attached sessions keep their own recorded cwd.
+    // local draft conversation만 shell workspace로 동기화한다. attached session은 기록된 cwd를 그대로 보존한다.
     pub(crate) fn sync_draft_shell_workspace(&mut self, workspace_directory: &str) {
         let should_refresh_draft = matches!(
             &self.conversation_state,
@@ -20,25 +20,25 @@ impl NativeTuiApp {
             return;
         }
 
-        // Follow-up controls own draft workspace state, so route the change through their reducer before refreshing planning.
+        // follow-up control도 draft workspace state를 들고 있으므로 planning refresh 전에 reducer를 통해 같은 cwd로 맞춘다.
         self.dispatch_followup_controls(FollowupControlEvent::DraftWorkspaceSynced {
             workspace_directory: workspace_directory.to_string(),
         });
         self.refresh_ready_conversation_planning_runtime_snapshot();
     }
 
-    // Shell workspace is startup diagnostics first, process cwd second; it is not necessarily the active thread workspace.
+    // shell workspace는 startup diagnostics를 우선하고 없으면 process cwd를 쓴다. active thread workspace와 항상 같지는 않다.
     pub(crate) fn current_workspace_directory(&self) -> String {
         match &self.startup_state {
             StartupState::Ready(diagnostics) => diagnostics.workspace_path.clone(),
             _ => std::env::current_dir()
                 .map(|path| path.display().to_string())
-                // Keep early rendering alive even in unusual test/runtime cwd failures; planning can surface "." as invalid.
+                // 특이한 test/runtime cwd failure에서도 early rendering은 살려 둔다. planning 쪽이 "." invalid 상태를 표시할 수 있다.
                 .unwrap_or_else(|_| ".".to_string()),
         }
     }
 
-    // Planning workspace follows the conversation when one exists, otherwise falls back to the shell workspace.
+    // planning workspace는 conversation이 있으면 그 thread/draft 기준을 따르고, 없으면 shell workspace로 fallback한다.
     pub(crate) fn planning_workspace_directory(&self) -> String {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => {
@@ -48,7 +48,7 @@ impl NativeTuiApp {
         }
     }
 
-    // Read planning runtime through the application service and fold IO/parse failures into an invalid snapshot.
+    // planning runtime은 application service로 읽고, IO/parse failure는 invalid snapshot으로 접어 presentation에 전달한다.
     pub(crate) fn load_planning_runtime_snapshot(
         &self,
         workspace_directory: &str,
@@ -58,16 +58,16 @@ impl NativeTuiApp {
             .load_runtime_snapshot_or_invalid(workspace_directory)
     }
 
-    // Refresh planning status for whatever workspace the active conversation currently claims.
+    // active conversation이 현재 주장하는 workspace에 맞춰 planning status cache를 갱신한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_snapshot(&mut self) {
-        // Own the selected path before mutable refresh to avoid borrowing self across the state replacement.
+        // state replacement 중 self를 계속 빌리지 않도록 선택된 path를 먼저 소유한다.
         let workspace_directory = self.planning_workspace_directory();
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
             &workspace_directory,
         );
     }
 
-    // Replace the Ready conversation's cached planning snapshot for a caller-selected workspace.
+    // caller가 고른 workspace에 대해 Ready conversation이 가진 cached planning snapshot을 교체한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
         &mut self,
         workspace_directory: &str,
@@ -75,14 +75,14 @@ impl NativeTuiApp {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        // The conversation owns the snapshot cache so render paths do not hit filesystem-backed planning services.
+        // conversation이 snapshot cache를 소유해야 render path가 filesystem-backed planning service를 직접 호출하지 않는다.
         conversation.replace_planning_runtime_snapshot(
             self.load_planning_runtime_snapshot(workspace_directory),
         );
         self.conversation_state = ConversationState::ready(conversation);
     }
 
-    // After opening a saved thread, surface its planning context so workspace mismatches are visible immediately.
+    // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.
     pub(crate) fn surface_resumed_session_planning_context(&mut self) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
