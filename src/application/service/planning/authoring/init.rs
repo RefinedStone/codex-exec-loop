@@ -21,16 +21,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /*
- * PlanningInitService owns the transition from bootstrap artifacts to an
- * operator-visible draft or an active planning workspace. It is deliberately
- * the place where workspace markdown files, DB direction authority, DB task
- * authority, and queue projection are written together after validation.
+ * PlanningInitService는 bootstrap artifact를 operator-visible draft 또는 active planning workspace로 전환하는
+ * 경계다. workspace markdown file, DB direction authority, DB task authority, queue projection이 서로 다른
+ * 저장소에 있지만, init/promotion에서는 validation 뒤 하나의 accepted planning state처럼 함께 써야 한다. 그래서
+ * 이 service가 staging, validation, active write, rollback, authority commit 순서를 모두 소유한다.
  */
 #[derive(Clone)]
 pub struct PlanningInitService {
-    // Workspace files store editable markdown, while repository authority stores
-    // accepted JSON state. The service coordinates both ports so init/promotion
-    // do not leave one side updated without the other.
+    // workspace file은 operator-editable markdown을 저장하고, repository authority는 accepted JSON state를 저장한다.
+    // init/promotion이 한쪽만 갱신한 상태로 끝나지 않게 두 port를 같은 service에서 조율한다.
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_bootstrap_service: PlanningBootstrapService,
     planning_validation_service: PlanningValidationService,
@@ -40,8 +39,8 @@ pub struct PlanningInitService {
 
 #[derive(Debug, Clone)]
 pub struct PlanningInitStageResult {
-    // Staging returns both location and validation state because the operator
-    // can inspect/fix a bootstrap draft before any active files are overwritten.
+    // staging 결과는 draft 위치와 validation state를 함께 돌려준다. active file을 덮어쓰기 전에 operator가 bootstrap
+    // draft를 열어 수정할 수 있어야 하기 때문이다.
     pub mode: PlanningBootstrapMode,
     pub draft_name: String,
     pub draft_directory: String,
@@ -55,8 +54,8 @@ impl PlanningInitStageResult {
         self.validation_report.is_valid()
     }
     pub fn status_text(&self) -> String {
-        // This compact status is used by command/TUI feedback, so it avoids
-        // embedding the full validation report in a one-line notification.
+        // compact status는 command/TUI feedback용 한 줄 문구다. 전체 validation report는 별도 surface가 보여 주고,
+        // 여기서는 mode/draft/files/validity만 빠르게 확인할 수 있게 한다.
         format!(
             "planning init staged / mode: {} / draft: {} / files: {} / validation: {}",
             match self.mode {
@@ -76,9 +75,8 @@ impl PlanningInitStageResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningDraftEditorFile {
-    // active_path is the eventual workspace target; staged_path is the draft
-    // copy. Keeping both visible prevents the editor from confusing isolation
-    // with the final active file.
+    // active_path는 최종 workspace target이고 staged_path는 draft copy다. 둘을 같이 노출해야 editor가 지금 고치는
+    // 격리 사본과 나중에 promotion될 active file을 혼동하지 않는다.
     pub active_path: String,
     pub staged_path: String,
     pub body: String,
@@ -86,8 +84,8 @@ pub struct PlanningDraftEditorFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningDraftEditorSession {
-    // The manual editor sees only operator-editable files, but validation is
-    // computed against the full staged draft directory.
+    // manual editor는 operator-editable file만 본다. 하지만 validation은 전체 staged draft directory를 기준으로
+    // 계산되어 숨겨진 supporting file 누락도 promotion 전에 드러난다.
     pub draft_name: String,
     pub draft_directory: String,
     pub editable_files: Vec<PlanningDraftEditorFile>,
@@ -102,8 +100,8 @@ pub struct PlanningDraftSaveResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningDraftPromoteResult {
-    // promoted_file_count is zero when validation fails; callers can show that
-    // the draft was checked but no active workspace state was changed.
+    // validation이 실패하면 promoted_file_count는 0이다. caller는 시도 자체는 정상 처리됐지만 active workspace
+    // state가 바뀌지 않았다는 사실을 operator에게 보여 줄 수 있다.
     pub draft_name: String,
     pub promoted_file_count: usize,
     pub validation_report: PlanningValidationReport,
@@ -111,8 +109,8 @@ pub struct PlanningDraftPromoteResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningWorkspaceInitResult {
-    // Direct init writes bootstrap files immediately, unlike staging. The paths
-    // list gives operators an exact record of what was created.
+    // direct init은 staging과 달리 bootstrap file을 즉시 active workspace에 쓴다. created_paths는 operator가
+    // 실제 생성된 planning-relative path를 감사할 수 있게 하는 기록이다.
     pub mode: PlanningBootstrapMode,
     pub created_file_count: usize,
     pub created_paths: Vec<String>,
@@ -125,8 +123,8 @@ impl PlanningInitService {
         planning_bootstrap_service: PlanningBootstrapService,
         planning_validation_service: PlanningValidationService,
     ) -> Self {
-        // Test construction uses a noop authority repository so unit tests can
-        // focus on workspace draft behavior without a DB-backed planning store.
+        // test constructor는 noop authority repository를 사용한다. unit test가 DB-backed planning store 없이 workspace
+        // draft behavior와 validation 흐름에 집중하게 하기 위한 축약 경로다.
         Self::with_task_repository(
             planning_workspace_port,
             planning_bootstrap_service,
@@ -142,9 +140,8 @@ impl PlanningInitService {
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
-        // Production composition injects all boundaries explicitly. That keeps
-        // bootstrap, validation, repository commits, and queue projection
-        // replaceable in adapter tests.
+        // production composition은 모든 boundary를 명시적으로 주입한다. bootstrap, validation, repository commit,
+        // queue projection을 adapter test에서 갈아 끼울 수 있게 하는 조립 지점이다.
         Self {
             planning_workspace_port,
             planning_bootstrap_service,
@@ -155,8 +152,8 @@ impl PlanningInitService {
     }
 
     pub fn stage_simple_mode_draft(&self, workspace_dir: &str) -> Result<PlanningInitStageResult> {
-        // Simple mode stages a queue-idle-ready bootstrap without touching
-        // active planning files or accepted DB authority.
+        // Simple mode staging은 queue-idle-ready bootstrap을 draft에만 만든다. active planning file과 accepted DB
+        // authority는 건드리지 않아 operator가 auto-follow baseline을 검토한 뒤 promotion을 결정할 수 있다.
         self.stage_draft(workspace_dir, PlanningBootstrapMode::Simple)
     }
 
@@ -164,8 +161,8 @@ impl PlanningInitService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningDraftEditorSession> {
-        // The manual editor starts from Detail bootstrap so the operator can
-        // replace placeholder direction taxonomy before promotion.
+        // manual editor는 Detail bootstrap에서 시작한다. operator가 placeholder direction taxonomy를 실제 project
+        // taxonomy로 바꾼 뒤 promotion할 수 있게 하기 위한 authoring-first 경로다.
         self.stage_editor_session(workspace_dir, PlanningBootstrapMode::Detail)
     }
 
@@ -174,8 +171,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         draft_name: &str,
     ) -> Result<PlanningDraftEditorSession> {
-        // Loading a draft recomputes validation from staged files rather than
-        // trusting stale validation from the original stage result.
+        // draft load는 원래 stage result의 validation을 믿지 않고 staged file에서 다시 계산한다. editor save가
+        // 반복될 수 있으므로 session view는 항상 현재 draft body 기준이어야 한다.
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(workspace_dir, draft_name)?;
@@ -186,9 +183,8 @@ impl PlanningInitService {
             editable_files: loaded
                 .staged_files
                 .into_iter()
-                // Manual init only exposes result-output today; authority JSON
-                // is committed through validated bootstrap structs, not edited
-                // as arbitrary draft text.
+                // manual init은 현재 result-output만 editor에 노출한다. authority JSON은 free-form text가 아니라
+                // validated bootstrap struct에서 commit되므로, 이 surface에서 임의 JSON 편집을 허용하지 않는다.
                 .filter(|file| is_operator_editable_draft_path(file.active_path.as_str()))
                 .map(|file| PlanningDraftEditorFile {
                     active_path: file.active_path,
@@ -201,8 +197,8 @@ impl PlanningInitService {
     }
 
     pub fn has_planning_workspace(&self, workspace_dir: &str) -> Result<bool> {
-        // Active workspace detection is file-based because older workspaces may
-        // predate DB authority snapshots.
+        // active workspace 탐지는 file 기반이다. 오래된 workspace는 DB authority snapshot보다 먼저 만들어졌을 수 있어
+        // repository 상태만 보면 이미 존재하는 planning workspace를 놓칠 수 있다.
         Ok(self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?
@@ -210,8 +206,8 @@ impl PlanningInitService {
     }
 
     pub fn has_planning_candidate_workspace(&self, workspace_dir: &str) -> Result<bool> {
-        // Candidate detection checks staged/generated planning files used by
-        // the init overlay before a full active workspace exists.
+        // candidate 탐지는 full active workspace 이전에 init overlay가 만든 staged/generated planning file을 찾는다.
+        // UI가 "초기화 가능"과 "이미 후보 draft가 있음"을 구분하는 데 쓰인다.
         Ok(self
             .planning_workspace_port
             .load_planning_workspace_candidate_files(workspace_dir)?
@@ -221,8 +217,8 @@ impl PlanningInitService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceInitResult> {
-        // Direct simple init is the non-editor path: validate bootstrap, write
-        // files, then seed accepted authority and queue projection.
+        // direct simple init은 editor를 거치지 않는 빠른 경로다. bootstrap을 검증한 뒤 file을 쓰고, accepted authority와
+        // queue projection을 seed한다.
         self.initialize_workspace(workspace_dir, PlanningBootstrapMode::Simple)
     }
 
@@ -232,8 +228,8 @@ impl PlanningInitService {
         draft_name: &str,
         files: &[PlanningDraftEditorFile],
     ) -> Result<PlanningDraftSaveResult> {
-        // Save replaces only files posted by the editor, reloads the draft, and
-        // reports validation without promoting anything.
+        // save는 editor가 보낸 file만 staged copy에서 교체한다. 그 뒤 draft를 다시 읽어 validation을 보고하지만
+        // active workspace로 promote하지는 않는다.
         let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
         Ok(PlanningDraftSaveResult {
             draft_name: draft_name.to_string(),
@@ -246,8 +242,8 @@ impl PlanningInitService {
         draft_name: &str,
         files: &[PlanningDraftEditorFile],
     ) -> Result<PlanningDraftPromoteResult> {
-        // Promotion from the editor first persists the latest edited bodies into
-        // the draft directory, then runs the same promotion path as staged drafts.
+        // editor promotion은 먼저 최신 editor body를 draft directory에 저장한 뒤 staged draft promotion과 같은 경로를
+        // 탄다. save와 promote가 서로 다른 validation source를 보지 않게 하는 흐름이다.
         let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
         self.promote_loaded_draft(workspace_dir, draft_name, loaded)
     }
@@ -256,8 +252,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         draft_name: &str,
     ) -> Result<PlanningDraftPromoteResult> {
-        // Non-editor promotion is used by admin flows that have already staged
-        // a complete draft and only need the validated active-state transition.
+        // non-editor promotion은 이미 complete draft를 stage한 admin flow가 검증된 active-state transition만 필요할 때
+        // 사용한다. editor body merge 없이 loaded draft를 그대로 promotion한다.
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(workspace_dir, draft_name)?;
@@ -269,9 +265,8 @@ impl PlanningInitService {
         draft_name: &str,
         files: &[PlanningDraftEditorFile],
     ) -> Result<PlanningDraftLoadRecord> {
-        // Editor save operates on staged copies only. The active path tells the
-        // workspace adapter which draft file to replace without touching the
-        // corresponding active workspace file.
+        // editor save는 staged copy만 수정한다. active_path는 workspace adapter가 draft directory 안에서 대응 file을
+        // 찾는 key로 쓰이며, 같은 path의 active workspace file은 건드리지 않는다.
         for file in files {
             self.planning_workspace_port.replace_planning_draft_file(
                 workspace_dir,
@@ -291,9 +286,8 @@ impl PlanningInitService {
         draft_name: &str,
         loaded: PlanningDraftLoadRecord,
     ) -> Result<PlanningDraftPromoteResult> {
-        // Promotion is intentionally validation-gated. Invalid drafts return a
-        // normal result with zero promoted files so the UI can show validation
-        // details without treating the attempt as an infrastructure failure.
+        // promotion은 validation-gated다. invalid draft는 error가 아니라 promoted_file_count 0인 정상 결과를 돌려
+        // UI가 infrastructure failure처럼 보이지 않고 validation detail을 그대로 보여 줄 수 있게 한다.
         let validation_result = self.validate_loaded_draft_result(workspace_dir, &loaded)?;
         let validation_report = validation_result.report.clone();
         if !validation_report.is_valid() {
@@ -315,9 +309,8 @@ impl PlanningInitService {
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid staged draft queue build failed: {error}"))?;
-        // Keep a pre-promotion snapshot for every active file that will be
-        // replaced. If a later workspace or authority write fails, these bodies
-        // are the rollback source of truth.
+        // 교체될 active file마다 pre-promotion snapshot을 저장한다. 뒤에서 workspace write나 authority write가 실패하면
+        // 이 body들이 rollback source of truth가 된다.
         let mut previous_active_files = HashMap::new();
         for file in &loaded.staged_files {
             previous_active_files.insert(
@@ -328,9 +321,8 @@ impl PlanningInitService {
         }
         let mut applied_paths = Vec::with_capacity(loaded.staged_files.len());
         let promote_result = (|| -> Result<()> {
-            // Workspace files are written before DB authority so the committed
-            // authority never points to missing active markdown in the success
-            // path. Rollback handles partial workspace writes below.
+            // workspace file을 DB authority보다 먼저 쓴다. 성공 경로에서는 committed authority가 missing active markdown을
+            // 가리키지 않아야 하기 때문이다. partial workspace write는 아래 rollback이 처리한다.
             for file in &loaded.staged_files {
                 self.planning_workspace_port
                     .replace_planning_workspace_file(
@@ -341,9 +333,8 @@ impl PlanningInitService {
                 applied_paths.push(file.active_path.clone());
             }
             self.commit_direction_authority_from_bootstrap(workspace_dir, directions)?;
-            // Draft promotion is an operator authority rewrite: it replaces an
-            // accepted planning snapshot after validation instead of applying
-            // incremental task commands.
+            // draft promotion은 operator authority rewrite다. incremental task command를 적용하는 것이 아니라,
+            // validation이 끝난 accepted planning snapshot을 통째로 교체한다.
             self.planning_task_repository_port
                 .commit_task_authority_snapshot(
                     workspace_dir,
@@ -356,10 +347,8 @@ impl PlanningInitService {
             Ok(())
         })();
         if let Err(error) = promote_result {
-            // Only workspace file writes are rolled back here; if DB authority
-            // write failed after workspace replacement, restoring active files
-            // returns the file layer to the last known state and surfaces the
-            // original authority error.
+            // 여기서 rollback하는 대상은 workspace file write다. DB authority write가 workspace replacement 뒤 실패하면
+            // active file layer를 마지막으로 알던 상태로 되돌리고, 원래 authority error를 그대로 표면화한다.
             if let Err(rollback_error) = self.restore_promoted_active_state(
                 workspace_dir,
                 &applied_paths,
@@ -387,9 +376,8 @@ impl PlanningInitService {
         applied_paths: &[String],
         previous_active_files: &HashMap<String, Option<String>>,
     ) -> Result<()> {
-        // Roll back in reverse write order so repeated paths behave like a stack
-        // of replacements, even though normal drafts should contain unique
-        // active paths.
+        // rollback은 write 역순으로 수행한다. 정상 draft는 unique active path를 가져야 하지만, 중복 path가 들어와도
+        // replacement stack처럼 되돌아가게 하는 방어적 순서다.
         for active_path in applied_paths.iter().rev() {
             self.planning_workspace_port
                 .replace_planning_workspace_file(
@@ -407,9 +395,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         mode: PlanningBootstrapMode,
     ) -> Result<PlanningInitStageResult> {
-        // Staging materializes bootstrap files into an isolated draft directory.
-        // It is the reversible path used before an operator commits to making
-        // those files active.
+        // staging은 bootstrap file을 isolated draft directory에 materialize한다. operator가 active file로 만들기 전에
+        // 검토하고 고칠 수 있는 reversible path다.
         let bootstrap = self.prepare_bootstrap_workspace(mode);
         let draft_name = build_bootstrap_draft_name(Utc::now());
         let stage_record = self.planning_workspace_port.stage_planning_draft_files(
@@ -431,8 +418,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         mode: PlanningBootstrapMode,
     ) -> Result<PlanningDraftEditorSession> {
-        // Editor sessions are a thin composition: stage the bootstrap draft,
-        // then reload it through the common draft-view projection.
+        // editor session은 얇은 composition이다. bootstrap draft를 stage한 뒤 common draft-view projection으로 다시
+        // load해, 새로 만든 draft와 기존 draft load가 같은 session shape를 갖게 한다.
         let staged = self.stage_draft(workspace_dir, mode)?;
         self.load_manual_editor_session(workspace_dir, &staged.draft_name)
     }
@@ -452,8 +439,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         loaded: &PlanningDraftLoadRecord,
     ) -> Result<crate::domain::planning::PlanningValidationResult> {
-        // Draft validation uses accepted direction authority when available,
-        // with Detail bootstrap as a fallback for first-time manual drafts.
+        // draft validation은 accepted direction authority가 있으면 그것을 사용하고, 첫 manual draft처럼 아직 authority가
+        // 없으면 Detail bootstrap으로 fallback한다.
         let directions = self
             .planning_task_repository_port
             .load_direction_authority_snapshot(workspace_dir)?
@@ -463,18 +450,16 @@ impl PlanningInitService {
                     .build_artifacts_for_mode(PlanningBootstrapMode::Detail)
                     .directions
             });
-        // The staged map is the only source for editable/supporting file bodies.
-        // Active workspace files are intentionally ignored so a draft must be
-        // internally complete before promotion.
+        // staged map은 editable/supporting file body의 유일한 source다. active workspace file은 의도적으로 무시해
+        // draft가 promotion 전에 내부적으로 complete한지 검증한다.
         let staged_file_map = loaded
             .staged_files
             .iter()
             .map(|file| (file.active_path.as_str(), file.body.as_str()))
             .collect::<HashMap<_, _>>();
         let task_authority_json = default_empty_task_authority_json();
-        // Manual bootstrap drafts do not expose task authority editing; use an
-        // empty valid authority document to validate direction/result-output and
-        // supporting-file references.
+        // manual bootstrap draft는 task authority editing을 노출하지 않는다. direction/result-output과 supporting-file
+        // reference를 검증하기 위해 empty valid authority document를 중립 입력으로 사용한다.
         let mut result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions: &directions,
@@ -489,8 +474,8 @@ impl PlanningInitService {
             self.planning_validation_service
                 .validate_direction_supporting_files(
                     directions,
-                    // Supporting docs are considered present only when staged
-                    // with the draft, which catches incomplete bootstrap plans.
+                    // supporting doc은 draft에 stage되어 있을 때만 present로 본다. bootstrap plan이 supporting path를
+                    // 가리키면서 실제 file을 포함하지 않는 경우를 여기서 잡아낸다.
                     |path| staged_file_map.contains_key(path),
                     &mut result.report,
                 );
@@ -502,8 +487,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         mode: PlanningBootstrapMode,
     ) -> Result<PlanningWorkspaceInitResult> {
-        // Direct init refuses to run over an existing active workspace. Reset or
-        // draft promotion should handle intentional replacement.
+        // direct init은 기존 active workspace 위에서 실행되지 않는다. 의도적인 교체는 reset이나 draft promotion이
+        // 담당해야 하며, init은 "처음 만드는" 경로로 남긴다.
         if self.has_planning_workspace(workspace_dir)? {
             anyhow::bail!(
                 "planning workspace already exists; reset or reuse the existing workspace instead"
@@ -511,8 +496,8 @@ impl PlanningInitService {
         }
         let bootstrap = self.prepare_bootstrap_workspace(mode);
         if !bootstrap.validation_report.is_valid() {
-            // Fail fast before writing any file or authority state. Bootstrap
-            // validation errors are operator-actionable configuration problems.
+            // file이나 authority state를 쓰기 전에 fail-fast한다. bootstrap validation error는 operator가 고쳐야 하는
+            // configuration 문제이므로 partial write를 남기지 않는다.
             let first_error = bootstrap
                 .validation_report
                 .errors()
@@ -521,8 +506,8 @@ impl PlanningInitService {
                 .unwrap_or_else(|| "planning bootstrap validation failed".to_string());
             anyhow::bail!("planning bootstrap validation failed: {first_error}");
         }
-        // File writes come before authority commits so accepted authority never
-        // references missing bootstrap markdown when initialization succeeds.
+        // initialization 성공 경로에서 accepted authority가 missing bootstrap markdown을 가리키지 않도록 file write를
+        // authority commit보다 먼저 수행한다.
         for file in &bootstrap.files {
             self.planning_workspace_port
                 .replace_planning_workspace_file(
@@ -548,15 +533,14 @@ impl PlanningInitService {
         })
     }
     fn prepare_bootstrap_workspace(&self, mode: PlanningBootstrapMode) -> BootstrapWorkspacePlan {
-        // Convert the pure bootstrap artifact set into the concrete workspace
-        // plan that both staging and direct init consume.
+        // pure bootstrap artifact set을 staging과 direct init이 공통으로 소비하는 concrete workspace plan으로 바꾼다.
+        // 이 함수가 두 경로의 validation 기준을 하나로 묶는다.
         let artifacts = self
             .planning_bootstrap_service
             .build_artifacts_for_mode(mode);
         let task_authority_json = serde_json::to_string(&artifacts.task_authority)
             .expect("bootstrap task authority should serialize");
-        // Validate the exact documents that would be committed to accepted
-        // authority, before adding any draft-specific path metadata.
+        // draft-specific path metadata를 붙이기 전에 accepted authority로 commit될 정확한 문서 조합을 검증한다.
         let mut validation_result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions: &artifacts.directions,
@@ -565,9 +549,8 @@ impl PlanningInitService {
             },
         );
         if let Some(directions) = validation_result.directions.as_ref() {
-            // Supplemental files are the only supporting files available during
-            // bootstrap validation; this catches direction catalogs that point
-            // to detail docs or prompt files not included in the seed plan.
+            // bootstrap validation 중 사용할 수 있는 supporting file은 supplemental_files뿐이다. direction catalog가
+            // seed plan에 없는 detail doc이나 prompt file을 가리키는 경우를 여기서 잡는다.
             let staged_supporting_paths = artifacts
                 .supplemental_files
                 .iter()
@@ -580,8 +563,8 @@ impl PlanningInitService {
                     &mut validation_result.report,
                 );
         }
-        // Only workspace-backed files enter the draft/active file list. The DB
-        // authority documents stay in structured fields below.
+        // workspace-backed file만 draft/active file list에 들어간다. DB authority document는 아래 structured field에
+        // 남겨 free-form markdown write 경로와 섞이지 않게 한다.
         let mut files = vec![PlanningDraftFileRecord {
             active_path: artifacts.result_output_path,
             body: artifacts.result_output_markdown,
@@ -600,9 +583,8 @@ impl PlanningInitService {
         workspace_dir: &str,
         directions: &DirectionCatalogDocument,
     ) -> Result<()> {
-        // Bootstrap and draft promotion both replace accepted direction
-        // authority after validation, so they do not use optimistic revision
-        // checks from an editor session.
+        // bootstrap과 draft promotion은 validation 뒤 accepted direction authority를 교체하는 system-owned rewrite다.
+        // editor session의 optimistic revision check를 사용하지 않는 이유다.
         self.planning_task_repository_port
             .commit_direction_authority_snapshot(
                 workspace_dir,
@@ -619,15 +601,14 @@ impl PlanningInitService {
         directions: &DirectionCatalogDocument,
         task_authority: &TaskAuthorityDocument,
     ) -> Result<()> {
-        // Queue projection is derived at the same boundary as task authority so
-        // accepted task state and scheduler-facing projection remain consistent.
+        // queue projection은 task authority와 같은 boundary에서 파생한다. accepted task state와 scheduler-facing
+        // projection이 서로 다른 시점의 데이터를 보지 않게 하기 위해서다.
         let queue_projection = self
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
-        // Bootstrap seeds a complete system-owned authority snapshot. It
-        // intentionally bypasses task-level mutation commands, which only handle
-        // incremental changes.
+        // bootstrap은 complete system-owned authority snapshot을 seed한다. task-level mutation command는 incremental
+        // change용이므로 이 초기화 경로에서는 의도적으로 우회한다.
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
                 workspace_dir,
@@ -642,8 +623,8 @@ impl PlanningInitService {
 }
 
 struct BootstrapWorkspacePlan {
-    // Internal plan keeps workspace files and DB authority documents together
-    // after validation but before either staging or direct initialization.
+    // internal plan은 validation 이후, staging 또는 direct initialization 이전의 workspace file과 DB authority
+    // document를 함께 보관한다.
     files: Vec<PlanningDraftFileRecord>,
     directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
@@ -651,15 +632,14 @@ struct BootstrapWorkspacePlan {
 }
 
 fn is_operator_editable_draft_path(active_path: &str) -> bool {
-    // The manual init editor is intentionally narrow. Authority JSON is derived
-    // from bootstrap structs and validation, not edited as free-form text.
+    // manual init editor는 의도적으로 좁다. authority JSON은 bootstrap struct와 validation에서 파생되며,
+    // free-form text로 편집하지 않는다.
     matches!(active_path, RESULT_OUTPUT_FILE_PATH)
 }
 
 fn default_empty_task_authority_json() -> String {
-    // Validation needs a task-authority document even when this surface is only
-    // editing directions/result-output. Empty versioned authority is the neutral
-    // document for that check.
+    // 이 surface가 direction/result-output만 편집하더라도 validation에는 task-authority document가 필요하다. 빈
+    // versioned authority가 그 검사에 대한 neutral document다.
     serde_json::to_string(&TaskAuthorityDocument {
         version: PLANNING_FORMAT_VERSION,
         tasks: Vec::new(),
@@ -668,8 +648,8 @@ fn default_empty_task_authority_json() -> String {
 }
 
 fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
-    // Timestamp plus nanoseconds keeps concurrently staged bootstrap drafts
-    // distinct while still making their creation time visible to operators.
+    // timestamp와 nanoseconds를 함께 써서 동시에 stage된 bootstrap draft를 구분한다. 동시에 operator가 생성 시각을
+    // 이름에서 바로 볼 수 있게 한다.
     format!(
         "bootstrap-{}Z-{:09}",
         now.format("%Y%m%dT%H%M%S"),
@@ -682,8 +662,8 @@ mod tests {
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
     #[test]
     fn operator_editable_draft_paths_exclude_task_authority_artifacts() {
-        // Guard the UI boundary: only result-output belongs in the manual
-        // bootstrap editor until structured authority editing exists here.
+        // UI boundary를 고정한다. structured authority editing이 이 surface에 추가되기 전까지 manual bootstrap
+        // editor에는 result-output만 들어가야 한다.
         assert!(is_operator_editable_draft_path(RESULT_OUTPUT_FILE_PATH));
         assert!(!is_operator_editable_draft_path(
             ".codex-exec-loop/planning/direction-authority"
