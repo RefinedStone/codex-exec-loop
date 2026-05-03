@@ -12,10 +12,12 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 /*
- * admin_api is the local HTTP adapter for planning administration. It owns the
- * transport concerns: loopback binding, CLI server args, route registration,
- * CSRF boundaries, and HTML/JSON handler wiring. Planning policy stays in
- * PlanningAdminFacadeService so handlers can remain thin DTO translators.
+ * admin_api는 planning administration을 로컬 HTTP surface로 노출하는 inbound adapter다.
+ * loopback bind, CLI server argument, route table, CSRF boundary, HTML/JSON handler wiring은 이
+ * 모듈의 transport 책임이다. 반대로 queue/direction/task/draft의 의미, workspace mutation policy,
+ * authority-store write rule은 PlanningAdminFacadeService 아래 application layer에 남긴다.
+ * 그래서 이 파일은 "어떤 URL이 어떤 transport contract로 facade를 호출하는가"만 설명하고,
+ * planning 자체의 판정은 직접 복제하지 않는다.
  */
 mod api;
 mod forms;
@@ -31,8 +33,11 @@ const DEFAULT_PORT: u16 = 18442;
 
 #[derive(Clone)]
 struct AdminAppState {
-    // Axum clones this state per handler; keep it to the shared facade so the
-    // HTTP layer does not grow its own planning cache or mutation policy.
+    /*
+     * Axum은 handler마다 state를 clone한다.
+     * 여기에는 Arc facade만 두어 HTTP layer가 별도 planning cache나 mutation policy를 갖지 못하게 한다.
+     * HTML page handler와 JSON API handler가 같은 facade instance를 바라보므로 두 surface의 상태 해석도 함께 묶인다.
+     */
     facade: Arc<PlanningAdminFacadeService>,
 }
 
@@ -52,10 +57,10 @@ where
     let args = parse_args(args)?;
 
     /*
-     * The admin surface is intentionally workspace-relative. Canonicalizing the
-     * cwd before building outbound ports gives every page/API mutation the same
-     * repository identity, including when the command is launched through a
-     * symlinked path.
+     * admin surface는 의도적으로 현재 workspace에 묶인다.
+     * outbound port를 만들기 전에 cwd를 canonicalize하면 symlink로 실행된 경우에도 page/API mutation이 같은
+     * repository identity를 기준으로 planning file과 sqlite authority를 해석한다.
+     * 이 값이 facade의 workspace_dir로 들어가므로, 이후 handler는 request마다 cwd를 다시 읽지 않는다.
      */
     let workspace_dir = std::env::current_dir()
         .context("failed to resolve current directory for admin server")?
@@ -82,10 +87,14 @@ where
 
 fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
     /*
-     * This is the composition root for the standalone admin server. The
-     * repository-scoped filesystem adapter and sqlite authority are shared
-     * through PlanningServices so browser pages and JSON APIs observe the same
-     * queue, directions, and draft state.
+     * standalone admin server의 composition root다.
+     * app-server worker, sqlite planning authority, filesystem workspace adapter를 여기서 조립해
+     * PlanningServices와 PlanningAdminFacadeService에 주입한다. browser page와 JSON API는 이 결과 facade만 공유하므로
+     * queue, direction, draft state를 서로 다른 adapter instance에서 따로 읽는 drift가 생기지 않는다.
+     *
+     * FilesystemPlanningWorkspaceAdapter는 repo-scoped store를 함께 받는다.
+     * active planning authority가 git worktree 외부 integration checkout에 있을 수 있기 때문에, admin server의 파일 작업도
+     * candidate workspace와 authoritative store를 facade 규칙에 맞춰 구분해야 한다.
      */
     let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
         "codex-exec-loop-native",
@@ -112,10 +121,10 @@ fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
 
 fn build_router(state: AdminAppState) -> Router {
     /*
-     * Keep the browser routes and API routes registered in one table because
-     * they expose the same planning operations through different transport
-     * contracts: form/redirect handlers in pages.rs, JSON/header-CSRF handlers
-     * in api.rs.
+     * browser route와 API route를 하나의 table에 둔다.
+     * 두 surface는 같은 planning operation을 노출하지만 transport contract가 다르다.
+     * pages.rs는 form field, redirect, HTMX fragment를 다루고 api.rs는 JSON body와 x-csrf-token header를 다룬다.
+     * route registration을 한곳에 모으면 새 operation을 추가할 때 HTML/JSON 양쪽 노출 여부를 같은 diff에서 검토할 수 있다.
      */
     Router::new()
         .route("/", get(pages::dashboard_page))
@@ -179,7 +188,7 @@ fn build_router(state: AdminAppState) -> Router {
 }
 
 fn parse_reset_target(target: &str) -> std::result::Result<PlanningResetTarget, StatusCode> {
-    // HTML forms and JSON callers share this parser so reset semantics cannot drift.
+    // HTML form과 JSON caller가 reset vocabulary를 공유해 queue/directions/all 의미가 route별로 갈라지지 않게 한다.
     match target.trim().to_ascii_lowercase().as_str() {
         "queue" => Ok(PlanningResetTarget::Queue),
         "directions" => Ok(PlanningResetTarget::Directions),
@@ -192,7 +201,11 @@ fn parse_args<I>(args: I) -> Result<AdminServerArgs>
 where
     I: IntoIterator<Item = String>,
 {
-    // Keep server parsing local to avoid coupling this debug/admin surface to the main CLI parser.
+    /*
+     * admin server argument parsing은 이 debug/admin surface 안에 둔다.
+     * 메인 CLI parser와 결합하면 실험적 admin-only flag가 일반 실행 경로의 contract처럼 굳어질 수 있으므로,
+     * 여기서는 port와 help만 받아 standalone server bootstrap에 필요한 최소 surface를 유지한다.
+     */
     let mut parsed = AdminServerArgs { port: DEFAULT_PORT };
     let mut args = args.into_iter();
 
@@ -218,6 +231,6 @@ where
 }
 
 async fn shutdown_signal() {
-    // Ctrl-C is enough for the local-only admin server; axum drains in-flight work above.
+    // local-only admin server는 Ctrl-C를 유일한 shutdown signal로 삼고, in-flight drain은 axum serve layer에 맡긴다.
     let _ = tokio::signal::ctrl_c().await;
 }
