@@ -1,60 +1,78 @@
-// 학습 주석: planning controller 하위 모듈의 공통 event, overlay step, key code, NativeTuiApp 타입을
-// 가져옵니다. 이 파일은 key router라 여러 UI state와 app effect entrypoint를 함께 다룹니다.
+/*
+ * Planning-init overlay input is a step-aware key router. The UI state owns
+ * wizard selection and breadcrumbs, while this controller translates terminal
+ * keys into either local UI-state moves or app-level planning actions such as
+ * staging, promoting, opening maintenance surfaces, and entering draft editor
+ * mode.
+ */
 use super::*;
 
 impl NativeTuiApp {
     pub(crate) fn handle_planning_init_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        // 학습 주석: planning init overlay는 작은 wizard입니다. 같은 키라도 현재 step에 따라
-        // queue overlay 이동, mode 선택, detail 선택, editor 입력으로 의미가 달라지므로 step을 먼저 나눕니다.
+        /*
+         * The same key means different things in each wizard step, so route by
+         * step before route by key. Returning true at the end tells the outer
+         * shell router that the planning overlay owns the key stream while it
+         * is visible.
+         */
         match self.planning_init_overlay_ui_state.step() {
             PlanningInitOverlayStep::ExistingWorkspace => match key.code {
-                // 학습 주석: 기존 planning workspace가 이미 있으면 Enter는 새 init 대신 queue overlay로 이동합니다.
+                /*
+                 * Existing workspace mode is an inspection/redirect screen:
+                 * Enter and Q leave setup and move to queue inspection because
+                 * there is already a planning workspace to operate.
+                 */
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     self.close_shell_overlay();
                     self.show_queue_overlay();
                 }
-                // 학습 주석: Q도 queue로 이동하는 빠른 경로입니다. Shift는 uppercase 입력을 위해 허용합니다.
                 KeyCode::Char('q') | KeyCode::Char('Q')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.close_shell_overlay();
                     self.show_queue_overlay();
                 }
-                // 학습 주석: 기존 workspace에서도 direction catalog 관리는 별도 overlay로 열 수 있어야 합니다.
+                /*
+                 * Direction catalog maintenance remains available even when
+                 * setup is skipped; it is the supported path for editing
+                 * workspace instructions without reinitializing planning.
+                 */
                 KeyCode::Char('d') | KeyCode::Char('D')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.close_shell_overlay();
                     self.show_directions_maintenance_overlay();
                 }
-                // 학습 주석: 나머지 키는 existing workspace 안내 화면에서 소비하지만 상태는 바꾸지 않습니다.
+                // Other keys are consumed to keep global shortcuts from firing while the overlay is focused.
                 _ => {}
             },
             PlanningInitOverlayStep::ModeSelection => match key.code {
-                // 학습 주석: 위/k는 simple/detail mode selection cursor를 위로 이동합니다.
+                // Vim/arrow navigation only moves the cursor; it does not stage a draft.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                     self.planning_init_overlay_ui_state.move_mode_selection(-1)
                 }
-                // 학습 주석: 아래/j는 mode selection cursor를 아래로 이동합니다.
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                     self.planning_init_overlay_ui_state.move_mode_selection(1)
                 }
-                // 학습 주석: A는 simple mode를 직접 선택합니다. 이 선택은 아직 draft 생성이 아니라 UI cursor 변경입니다.
+                // Letter shortcuts set the same selection cursor used by Enter, preserving one execution path.
                 KeyCode::Char('a') | KeyCode::Char('A')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
                         .select_mode(PlanningInitModeSelection::Simple)
                 }
-                // 학습 주석: B는 detail mode를 직접 선택합니다.
                 KeyCode::Char('b') | KeyCode::Char('B')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
                         .select_mode(PlanningInitModeSelection::Detail)
                 }
-                // 학습 주석: Enter는 선택된 mode를 실행합니다. simple은 바로 draft staging으로 가고,
-                // detail은 manual/LLM-assisted detail 선택 단계로 한 번 더 들어갑니다.
+                /*
+                 * Enter is the first point where mode selection becomes an
+                 * operation. Simple mode immediately stages a generated draft;
+                 * detail mode opens another selection step because it needs a
+                 * concrete authoring backend.
+                 */
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     match self.planning_init_overlay_ui_state.selected_mode() {
                         PlanningInitModeSelection::Simple => {
@@ -65,44 +83,47 @@ impl NativeTuiApp {
                         }
                     }
                 }
-                // 학습 주석: 알 수 없는 키는 mode selection 화면 안에서 조용히 소비합니다.
+                // Unknown keys are consumed inside this focused wizard step without changing state.
                 _ => {}
             },
             PlanningInitOverlayStep::DetailSelection => match key.code {
-                // 학습 주석: Backspace/Left는 detail selection에서 mode selection으로 돌아가는 breadcrumb 역할입니다.
+                /*
+                 * Back navigation respects the UI state's breadcrumb logic:
+                 * from first-run detail selection it returns to mode choice,
+                 * while from simple review it returns to the staged review.
+                 */
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
                     .planning_init_overlay_ui_state
                     .return_from_detail_selection(),
-                // 학습 주석: 위/k는 manual/LLM-assisted detail cursor를 위로 이동합니다.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
                     .planning_init_overlay_ui_state
                     .move_detail_selection(-1),
-                // 학습 주석: 아래/j는 detail cursor를 아래로 이동합니다.
                 KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                     self.planning_init_overlay_ui_state.move_detail_selection(1)
                 }
-                // 학습 주석: A는 manual detail authoring을 선택합니다.
+                // Letter shortcuts select an authoring backend; they do not open the editor until Enter.
                 KeyCode::Char('a') | KeyCode::Char('A')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
                         .select_detail(PlanningInitDetailSelection::Manual)
                 }
-                // 학습 주석: B는 LLM-assisted detail을 선택하지만, 현재는 아직 실행 path가 막혀 있습니다.
                 KeyCode::Char('b') | KeyCode::Char('B')
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
                         .select_detail(PlanningInitDetailSelection::LlmAssisted)
                 }
-                // 학습 주석: Enter는 detail selection을 실행합니다. manual은 editor를 열고, LLM-assisted는
-                // unsupported status를 conversation input 상태로 표시합니다.
+                /*
+                 * Manual detail opens the planning draft editor through the
+                 * service/controller path. LLM-assisted mode is visible in the
+                 * selector but still disabled, so it reports status without
+                 * leaving the overlay or discarding the selection context.
+                 */
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     match self.planning_init_overlay_ui_state.selected_detail() {
                         PlanningInitDetailSelection::Manual => self.open_planning_manual_editor(),
                         PlanningInitDetailSelection::LlmAssisted => {
-                            // 학습 주석: 미지원 경로도 overlay를 닫지 않고 status_text만 갱신해 사용자가
-                            // manual path로 다시 선택할 수 있게 합니다.
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
                                     status_text:
@@ -113,23 +134,28 @@ impl NativeTuiApp {
                         }
                     }
                 }
-                // 학습 주석: 나머지 키는 detail selection 안에서 소비합니다.
                 _ => {}
             },
             PlanningInitOverlayStep::SimpleReview => {
-                // 학습 주석: SimpleReview는 생성된 simple draft를 승격하거나, detail/manual editor로 확장하거나,
-                // auto-follow limit을 편집하는 확인 단계입니다.
+                /*
+                 * SimpleReview is a post-stage confirmation surface. It can
+                 * promote the generated draft, branch into detail/manual
+                 * authoring, or hand focus to the max-auto-turns inline editor.
+                 */
                 match key.code {
-                    // 학습 주석: Enter는 기본 action인 simple draft promote입니다.
+                    // Enter follows the primary review action: promote the staged simple draft if validation allows it.
                     KeyCode::Enter if key.modifiers.is_empty() => {
                         self.promote_simple_mode_planning_draft()
                     }
-                    // 학습 주석: D는 simple review에서 detail selection으로 다시 열어 advanced draft authoring을 선택하게 합니다.
+                    /*
+                     * Detail authoring from simple review keeps the staged
+                     * simple draft as context but reopens the detail selector
+                     * so the operator can choose a richer authoring path.
+                     */
                     KeyCode::Char('d') | KeyCode::Char('D')
                         if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                     {
                         self.planning_init_overlay_ui_state.open_detail_selection();
-                        // 학습 주석: step 전환과 함께 status_text를 갱신해 footer/header가 현재 선택 맥락을 설명합니다.
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
                                 status_text:
@@ -138,30 +164,36 @@ impl NativeTuiApp {
                             },
                         );
                     }
-                    // 학습 주석: Ctrl+L은 simple review 안의 max auto turns inline editor를 시작합니다.
+                    // Ctrl-L transfers key ownership to the follow-up max-auto-turns inline editor.
                     KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
                         self.start_max_auto_turns_edit()
                     }
-                    // 학습 주석: Ctrl+E는 simple draft를 manual editor로 열어 사용자가 생성된 내용을 수정하게 합니다.
+                    // Ctrl-E opens the generated simple draft in the shared manual editor core for direct edits.
                     KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
                         self.open_simple_mode_planning_editor()
                     }
-                    // 학습 주석: Ctrl+P는 Enter와 같은 promote action을 명시적으로 실행하는 shortcut입니다.
+                    // Ctrl-P is the explicit promotion shortcut, matching Enter's primary action.
                     KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
                         self.promote_simple_mode_planning_draft()
                     }
-                    // 학습 주석: 다른 키는 SimpleReview 화면에서 별도 effect 없이 소비합니다.
                     _ => {}
                 }
             }
             PlanningInitOverlayStep::ManualEditor => {
-                // 학습 주석: manual editor는 닫기 확인 상태가 있을 수 있으므로, 일반 editor 입력보다
-                // close-confirmation key handling이 먼저 키를 가져가야 합니다.
+                /*
+                 * Close confirmation owns keys before normal editing. Without
+                 * this priority, Esc/Enter could mutate the draft or promote it
+                 * while the UI is asking the operator to confirm a risky close.
+                 */
                 if self.handle_planning_manual_editor_close_confirmation_key(key) {
                     return true;
                 }
-                // 학습 주석: 그 외 key는 공통 draft editor handler로 넘깁니다. save/promote callback만
-                // planning init manual editor용 함수로 주입해 editor core를 재사용합니다.
+                /*
+                 * The draft editor core is shared by planning-init manual
+                 * editing and directions maintenance. Injecting save/promote
+                 * callbacks here keeps text navigation/editing reusable while
+                 * preserving planning-init-specific service actions.
+                 */
                 self.handle_draft_editor_key(
                     key,
                     Self::save_planning_manual_editor,
