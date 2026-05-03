@@ -10,13 +10,12 @@ use super::super::{
 };
 
 /*
- * inline_layout.rs is the low-level geometry layer for both inline shell mode and popup overlays.
- * Higher modules decide which presentation lines exist; this file decides how many terminal rows
- * those lines may occupy, where bottom-anchored tails land, and whether a textarea cursor can be
- * safely placed inside the current frame.
+ * inline_layout.rs는 inline shell mode와 popup overlay가 공유하는 low-level geometry layer다.
+ * 상위 module이 어떤 presentation line을 보여 줄지 정하고, 이 파일은 그 line이 차지할 terminal row 수,
+ * bottom-anchored tail 위치, textarea cursor를 현재 frame 안에 둘 수 있는지를 결정한다.
  */
 const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
-// Replay mode mirrors recent transcript in the tail, so it needs more rows than a normal prompt tail.
+// replay mode는 tail에 최근 transcript를 mirror하므로 일반 prompt tail보다 더 많은 row가 필요하다.
 const MAX_INLINE_REPLAY_TAIL_HEIGHT: u16 = 12;
 
 pub(super) fn build_inline_terminal_flow_layout(
@@ -25,10 +24,9 @@ pub(super) fn build_inline_terminal_flow_layout(
     tail_lines: &[Line<'_>],
 ) -> Rc<[Rect]> {
     /*
-     * The inline shell is a two-band frame: transcript/live content above, prompt/status tail below.
-     * Hidden-overlay mode grants the tail more room because the tail is the primary interaction
-     * surface. Inspection/confirmation modes cap the tail tightly so overlay content can replace the
-     * transcript area without being pushed off small terminals.
+     * inline shell은 위쪽 transcript/live content와 아래쪽 prompt/status tail로 나뉜 two-band frame이다.
+     * hidden-overlay mode에서는 tail이 primary interaction surface라 더 많은 공간을 준다.
+     * inspection/confirmation mode에서는 작은 terminal에서도 overlay content가 밀려나지 않도록 tail을 작게 제한한다.
      */
     let tail_max_height =
         if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
@@ -54,7 +52,7 @@ pub(super) fn build_inline_terminal_flow_layout(
 }
 
 pub(super) fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
-    // Inline inspection panels reserve one title row and at least one body row, then cap by caller.
+    // inline inspection panel은 title row 하나와 최소 body row 하나를 예약한 뒤 caller가 준 상한으로 자른다.
     lines
         .len()
         .saturating_add(1)
@@ -63,7 +61,7 @@ pub(super) fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 
 }
 
 fn inline_body_height(lines: &[Line<'_>], width: u16, max_height: u16) -> u16 {
-    // Body height is based on rendered rows, not logical lines, so wrapped text reserves enough space.
+    // body height는 logical line이 아니라 rendered row 기준이라 wrap된 text도 필요한 공간을 확보한다.
     count_rendered_inline_rows(lines, width)
         .max(1)
         .min(max_height as usize) as u16
@@ -71,8 +69,8 @@ fn inline_body_height(lines: &[Line<'_>], width: u16, max_height: u16) -> u16 {
 
 pub(super) fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
     /*
-     * Tail bodies are bottom-anchored. When the prompt/status text is shorter than its available
-     * region, stale rows above it remain available for transcript replay instead of blank padding.
+     * tail body는 bottom-anchored다.
+     * prompt/status text가 가용 영역보다 짧으면 위쪽 row를 blank padding으로 쓰지 않고 transcript replay에 남겨 둔다.
      */
     let body_height = inline_body_height(lines, area.width, area.height);
     let y = area.y + area.height.saturating_sub(body_height);
@@ -98,7 +96,7 @@ fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usize {
 }
 
 pub(super) fn split_inline_section(area: Rect) -> Rc<[Rect]> {
-    // Shared title/body split used by inline overlays so every panel keeps the same visual rhythm.
+    // inline overlay가 공유하는 title/body split으로 모든 panel이 같은 visual rhythm을 유지한다.
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
@@ -112,7 +110,7 @@ pub(super) fn render_inline_section(
     lines: Vec<Line<'static>>,
     trim: bool,
 ) {
-    // Render a titled panel without borders; inline inspection uses whitespace and titles as chrome.
+    // inline inspection은 whitespace와 title을 chrome으로 쓰므로 border 없는 titled panel을 render한다.
     let section_layout = split_inline_section(area);
     frame.render_widget(
         Paragraph::new(vec![title.style(AkraTheme::title())]),
@@ -132,9 +130,8 @@ pub(super) fn render_inline_body(
 
 pub(super) fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: Option<(u16, u16)>) {
     /*
-     * Cursor offsets are local to a textarea/body area, but ratatui wants absolute frame
-     * coordinates. Clamp within the local area first, then reject positions that still fall outside
-     * the actual terminal frame because overlays can compute areas that are clipped to zero rows.
+     * cursor offset은 textarea/body area 기준 local 좌표지만 ratatui는 absolute frame 좌표를 요구한다.
+     * 먼저 local area 안에서 clamp하고, overlay 계산 결과가 zero row로 잘릴 수 있으므로 실제 terminal frame 밖 좌표는 버린다.
      */
     let Some((cursor_x, cursor_y)) = offset else {
         return;
@@ -165,7 +162,7 @@ pub(super) fn render_inline_scrolled_section(
     lines: Vec<Line<'static>>,
     scroll_offset: u16,
 ) {
-    // Scrolled sections are used for editor-style panels where preserving leading whitespace matters.
+    // scrolled section은 leading whitespace 보존이 중요한 editor-style panel에서 사용한다.
     let section_layout = split_inline_section(area);
     frame.render_widget(
         Paragraph::new(vec![title.style(AkraTheme::title())]),
@@ -180,7 +177,7 @@ pub(super) fn render_inline_scrolled_section(
 }
 
 pub(super) fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    // Some presentation builders return title + body together; layout callers need only the body rows.
+    // 일부 presentation builder는 title과 body를 함께 반환하므로 layout caller는 body row만 꺼내 쓴다.
     if !header_lines.is_empty() {
         header_lines.remove(0);
     }
@@ -189,8 +186,8 @@ pub(super) fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec
 
 pub(super) fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
     /*
-     * Popup overlays ask for percentages, but callers may pass values above 100 while adjusting
-     * designs. Clamp before splitting so ratatui never receives invalid percentage constraints.
+     * popup overlay는 percent 기반 영역을 요청하지만 design 조정 중 caller가 100을 넘는 값을 줄 수 있다.
+     * split 전에 clamp해 ratatui가 invalid percentage constraint를 받지 않게 한다.
      */
     let horizontal_percent = horizontal_percent.min(100);
     let vertical_percent = vertical_percent.min(100);
