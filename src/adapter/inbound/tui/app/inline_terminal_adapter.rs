@@ -33,6 +33,11 @@ use self::history_flush::{HistoryFlushResult, HistoryFlushState};
 pub(super) fn terminal_options_for_render_mode(
     render_mode: InlineHistoryRenderMode,
 ) -> TerminalOptions {
+    /*
+     * Both inline history modes keep the live tail in ratatui's inline viewport.
+     * The difference is whether historical rows are also emitted to the host
+     * scrollback, so viewport height stays fixed across modes.
+     */
     let viewport = match render_mode {
         InlineHistoryRenderMode::HostScrollback => Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
         InlineHistoryRenderMode::ViewportReplay => Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
@@ -65,6 +70,11 @@ fn draw_inline_transaction<B: InlineResizeBackend>(
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<(), B::Error> {
+    /*
+     * A transaction first reconciles durable history and geometry, then redraws
+     * only if the visible tail may differ. This keeps every terminal tick cheap
+     * when no stream text, history insertion, overlay, or resize changed state.
+     */
     if sync_inline_viewport(terminal, runtime, inline_terminal)? {
         draw_inline_frame(terminal, runtime, inline_terminal)?;
     }
@@ -77,6 +87,11 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<(), B::Error> {
     if !inline_terminal.viewport.back_buffer_trustworthy {
+        /*
+         * Inline viewport content is not a full-screen alternate buffer. Once
+         * scrollback insertion or resize may have shifted visible rows, clearing
+         * before draw prevents stale glyphs from surviving under shorter frames.
+         */
         clear_inline_viewport(terminal)?;
     }
 
@@ -101,6 +116,11 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     result?;
     let terminal_size = terminal.size()?;
     let cursor_position = terminal.get_cursor_position()?;
+    /*
+     * ratatui reports the actual frame area used for this draw. Recording that
+     * area with the post-draw cursor position is what makes the next transaction
+     * able to decide whether the back buffer is still trustworthy.
+     */
     inline_terminal.mark_frame_drawn(terminal_size, drawn_viewport_area, cursor_position);
     Ok(())
 }
@@ -120,6 +140,11 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         let app = runtime.app_mut();
         (app.inline_history_render_mode, app.history_insert_mode)
     };
+    /*
+     * Autoresize can itself move the inline viewport. It happens before history
+     * flush so the flush logic knows how many visible rows fit in the current
+     * terminal, not the previous frame's dimensions.
+     */
     autoresize_inline_viewport(terminal)?;
     let terminal_size = terminal.size()?;
     let viewport_area = current_viewport_area(terminal);
@@ -132,16 +157,31 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         viewport_area,
     )?;
     if visible_history_adjusted {
+        /*
+         * Fitting history to a smaller viewport may insert or remove visible
+         * scrollback rows above the live tail. Even if the tail signature is the
+         * same, the existing back buffer no longer proves what is on screen.
+         */
         inline_terminal.invalidate_back_buffer();
     }
 
     let current_lines = current_inline_history_lines(runtime.app_mut());
     let writes_host_scrollback = render_mode.writes_host_scrollback();
     let history_sync = if writes_host_scrollback {
+        /*
+         * HostScrollback mode writes only the history delta. The tail frame stays
+         * in the inline viewport so the operator can scroll back through durable
+         * transcript rows without duplicating the live status panel.
+         */
         inline_terminal
             .history_flush
             .sync(terminal, &current_lines, insert_mode)?
     } else {
+        /*
+         * ViewportReplay keeps transcript rows inside ratatui rendering. The
+         * flush state still remembers the line set so switching back to host
+         * scrollback does not replay old history as if it were new.
+         */
         inline_terminal
             .history_flush
             .remember_without_flush(&current_lines);
@@ -182,13 +222,27 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
+        /*
+         * Startup banner wins over conversation history because before the first
+         * ready conversation the scrollback should explain boot diagnostics, not
+         * show an empty transcript placeholder.
+         */
         return startup_banner_lines;
     }
     match &app.conversation_state {
         ConversationState::Ready(conversation) => {
             if app.planner_shows_debug_details() {
+                /*
+                 * Debug mode recomputes lines from messages because the cached
+                 * conversation lines deliberately omit diagnostic annotations.
+                 */
                 format_conversation_lines_with_debug(&conversation.messages, true)
             } else {
+                /*
+                 * Normal mode reuses cached conversation lines; inline rendering
+                 * runs every tick, so avoiding reformat work keeps terminal input
+                 * latency predictable.
+                 */
                 conversation.cached_conversation_lines.clone()
             }
         }
@@ -210,6 +264,11 @@ impl InlineTerminalState {
         viewport_area: Rect,
         cursor_position: Position,
     ) {
+        /*
+         * Screen size changes invalidate the viewport even if ratatui reports
+         * the same inline area for one tick. Terminal emulators can keep cursor
+         * position stable while wrapping rows differently after a resize.
+         */
         let terminal_resized = self
             .viewport
             .last_known_screen_size
@@ -315,6 +374,11 @@ impl TerminalViewportState {
         viewport_area: Rect,
         cursor_position: Position,
     ) {
+        /*
+         * Marking a frame drawn is the only path that restores trust. Recording
+         * viewport geometry without a draw only observes the terminal; it does
+         * not prove the visible cells match our tail-frame signature.
+         */
         self.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         self.back_buffer_trustworthy = true;
     }
@@ -340,6 +404,11 @@ impl FrameCacheState {
             return true;
         }
 
+        /*
+         * The signature stores rendered lines, not source messages. That makes
+         * cache invalidation follow the exact text ratatui will paint after
+         * wrapping, planning status projection, and terminal-width decisions.
+         */
         let next_signature = InlineTailFrameSignature {
             terminal_width,
             terminal_height,
