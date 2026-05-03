@@ -7,9 +7,10 @@ use super::QueueOverlayView;
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     /*
-     * 학습 주석: queue overlay는 planning runtime snapshot을 사람이 훑기 쉬운 5개 column(header/summary/queue/proposal/note)
-     * view model로 접습니다. 이 파일은 도메인 판단을 다시 하지 않고, 이미 계산된 queue projection과 snapshot label을
-     * shell popup의 제한된 줄 수와 폭에 맞게 압축하는 presentation adapter입니다.
+     * Queue overlay는 PlanningRuntimeSnapshot을 popup renderer가 바로 배치할 수 있는
+     * header/summary/queue/proposal/note/key section으로 낮춘다. PriorityQueueService가 이미
+     * active/proposed/skipped 분류와 rank를 계산했으므로, 이 파일은 queue 의미를 재판단하지 않고
+     * 좁은 popup 폭에 맞춰 title/detail을 압축하는 presentation adapter로 남는다.
      */
     let header_lines = vec![
         AkraTheme::title_line("Planning Queue", " / shell inspection"),
@@ -19,7 +20,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     match &app.conversation_state {
         ConversationState::Loading => QueueOverlayView {
             header_lines,
-            // 학습 주석: Loading 상태에서는 planning snapshot이 아직 없으므로 모든 section을 "준비 전" copy로 고정합니다.
+            /*
+             * Conversation이 아직 load 중이면 planning snapshot 자체가 없다. 이 상태에서 queue/proposal
+             * section을 추측하지 않고 "thread load 뒤 가능" copy로 고정해 stale planning data처럼 보이지 않게 한다.
+             */
             summary_lines: vec![Line::from("status: loading conversation planning state")],
             queue_lines: vec![Line::from(
                 "Queue inspection becomes available after the thread loads.",
@@ -30,7 +34,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         },
         ConversationState::Failed(message) => QueueOverlayView {
             header_lines,
-            // 학습 주석: conversation load 실패는 planning failure와 다르므로 queue 자체를 추측하지 않고 load error만 노출합니다.
+            /*
+             * Conversation load 실패는 planning queue failure와 다르다. queue snapshot을 만들 수 없는 상태라
+             * queue 자체를 empty로 오해시키지 않고 load error와 recovery action만 보여 준다.
+             */
             summary_lines: vec![Line::from("status: conversation unavailable")],
             queue_lines: vec![Line::from(
                 "Queue inspection is unavailable while the conversation failed to load.",
@@ -45,10 +52,13 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             key_lines: build_queue_overlay_key_lines(),
         },
         ConversationState::Ready(conversation) => {
-            // 학습 주석: Ready conversation만 planning snapshot을 갖고, popup은 이 snapshot의 read model만 소비합니다.
+            // Ready conversation만 runtime snapshot을 갖는다. popup은 여기서 read model을 빌려 presentation copy만 만든다.
             let snapshot = &conversation.planning_runtime_snapshot;
             let queue_projection = snapshot.queue_projection();
-            // 학습 주석: 새 projection이 있으면 active queue 전체 preview를 쓰고, 없으면 legacy queue_head로 한 줄 fallback합니다.
+            /*
+             * 새 queue projection이 있으면 active task preview 전체를 보여 준다. 오래된 snapshot이나
+             * compatibility path처럼 projection이 없을 때만 legacy queue_head 한 줄로 fallback한다.
+             */
             let queue_lines = queue_projection
                 .map(|queue_projection| {
                     build_queue_task_lines(
@@ -67,7 +77,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                         "No executable tasks in the current planning queue.",
                     )],
                 });
-            // 학습 주석: proposals는 실행 queue와 다른 lane이라 별도 section으로 두어 promote intent를 유도합니다.
+            /*
+             * Proposed tasks는 실행 가능한 active queue가 아니라 operator가 promote할 수 있는 lane이다.
+             * 별도 section으로 분리해 "다음 실행"과 "승격 후보"가 같은 우선순위처럼 읽히지 않게 한다.
+             */
             let proposal_lines = queue_projection
                 .map(|queue_projection| {
                     build_queue_task_lines(
@@ -87,7 +100,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     }
                 });
 
-            // 학습 주석: summary는 popup 첫 시선에 필요한 next/queue/proposal 상태만 한 줄로 합칩니다.
+            /*
+             * Summary는 popup 첫 시선에 필요한 next/queue/proposal 상태만 한 줄로 합친다. 상세 row를
+             * 읽기 전에 현재 next task, queue health, proposal lane 유무를 빠르게 확인하게 하는 headline이다.
+             */
             let mut summary_segments = Vec::new();
             if let Some(queue_head) = snapshot.queue_head() {
                 summary_segments.push(format!(
@@ -115,12 +131,15 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 ));
             }
             if summary_segments.is_empty() {
-                // 학습 주석: queue/proposal 요약이 모두 없으면 preview status가 popup의 가장 압축된 상태 설명입니다.
+                // queue/proposal 요약이 모두 없을 때는 snapshot의 preview status가 가장 압축된 상태 설명이다.
                 summary_segments.push(format!("status: {}", snapshot.preview_status_label()));
             }
             let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
 
-            // 학습 주석: note section은 operator가 바로 조치할 수 있는 pause/failure/planner host 정보를 우선 배치합니다.
+            /*
+             * Note section은 actionability 순서로 채운다. auto-followup pause와 failure reason은 queue row보다
+             * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planner host detail은 그 다음 진단이다.
+             */
             let mut note_lines = Vec::new();
             if let Some(detail) = snapshot.auto_followup_pause_reason() {
                 note_lines.push(Line::from(format!(
@@ -160,7 +179,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             if note_lines.is_empty() {
                 note_lines.push(Line::from("No planner notices or skipped queue items."));
             } else {
-                // 학습 주석: popup height를 보호하기 위해 note는 가장 먼저 모은 두 줄만 보여 줍니다.
+                // popup height를 보호하기 위해 가장 중요한 두 줄만 남긴다. 상세 진단은 shell status/notice panel에 남아 있다.
                 note_lines.truncate(2);
             }
 
@@ -191,7 +210,10 @@ fn build_queue_task_lines(
         return vec![Line::from(empty_message.to_string())];
     }
 
-    // 학습 주석: queue/proposal row는 rank, 상태, combined priority, title만 남겨 popup scan 비용을 낮춥니다.
+    /*
+     * Popup row는 rank, status, combined priority, title만 남긴다. dependency/blocker 설명은 domain
+     * projection의 rank_reasons에 있지만 popup에서는 한 줄 scan 비용이 더 중요해 상세 원인은 생략한다.
+     */
     let mut lines = Vec::new();
     for task in tasks.iter().take(max_visible_tasks) {
         lines.push(Line::from(format!(
@@ -217,7 +239,10 @@ fn build_queue_task_lines(
 fn build_skipped_queue_note_line(
     skipped_tasks: &[PriorityQueueSkippedTask],
 ) -> Option<Line<'static>> {
-    // 학습 주석: skipped list 전체 대신 첫 reason과 개수만 보여 queue가 왜 줄어든 것처럼 보이는지 설명합니다.
+    /*
+     * Skipped tasks는 active queue에서 빠졌기 때문에 전체 목록보다 "왜 줄어든 것처럼 보이는가"가 중요하다.
+     * 첫 reason과 총 개수만 note로 보여 주고, 자세한 개별 skip 원인은 full planning projection에 남긴다.
+     */
     let first_skipped = skipped_tasks.first()?;
     Some(Line::from(format!(
         "skipped tasks: {} / {}",
