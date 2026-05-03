@@ -278,9 +278,13 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         files: &[PlanningDraftFileRecord],
     ) -> Result<PlanningDraftStageRecord> {
         /*
-         * Staging writes proposed planning files under a draft namespace instead of mutating active authority.
-         * Repo-scoped stores implement the same contract for git-backed slots; direct mode writes staged files
-         * into `.codex-exec-loop/planning/drafts/<draft_name>`.
+         * staging은 active authority를 직접 mutate하지 않고 proposed planning file을 draft namespace 아래에 쓴다.
+         * service 입장에서는 "이 draft_name에 어떤 active file 후보가 준비되었는가"만 중요하고,
+         * git-backed slot인지 direct filesystem workspace인지는 adapter가 감춘다.
+         *
+         * 먼저 active_path를 canonical planning namespace로 맞춘다.
+         * 이렇게 해야 repo-scoped store와 direct mode가 서로 다른 physical staging location을 쓰더라도
+         * PlanningDraftStageRecord의 active_path vocabulary는 promotion/load UI에서 하나로 유지된다.
          */
         let canonical_files = files
             .iter()
@@ -331,7 +335,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         draft_name: &str,
     ) -> Result<PlanningDraftLoadRecord> {
-        // Loading drafts uses the same sort order for repo-scoped and direct filesystem modes so UI ordering stays stable.
+        /*
+         * draft load는 staged proposal을 review/promotion UI가 그릴 read model로 되돌린다.
+         * repo-scoped mode와 direct mode의 저장 위치는 다르지만 sort order는 같은 helper를 써서 UI ordering을 안정화한다.
+         * known planning file이 먼저 오면 operator가 핵심 prompt/result file을 매번 같은 위치에서 확인할 수 있다.
+         */
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             let mut loaded = store.load_repo_scoped_draft_files(workspace_dir, draft_name)?;
             loaded.staged_files.sort_by(|left, right| {
@@ -363,7 +371,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         active_path: &str,
         body: &str,
     ) -> Result<String> {
-        // Draft replacement edits staged proposal content only; active planning files are untouched until promotion.
+        /*
+         * draft replacement는 staged proposal content만 편집한다.
+         * active planning file은 promotion 전까지 untouched로 남아야 validation 실패나 operator 취소가 authority state를
+         * 오염시키지 않는다. return 값은 실제 staged path라서 UI/debug surface가 "어디를 썼는가"를 보여줄 수 있다.
+         */
         let active_path = Self::canonical_draft_active_path(active_path)?;
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             return store.replace_repo_scoped_draft_file(
