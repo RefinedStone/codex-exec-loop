@@ -4,10 +4,9 @@ use super::shell_presentation::{build_inline_live_transcript_lines, build_inline
 use super::*;
 
 /*
- * This file is the ratatui frame boundary for the native inline shell. The
- * presentation layer builds Line-based read models, inline_layout decides how
- * the frame is split, and this module applies the layering order: base inline
- * conversation, optional inline inspection, then the exit-confirmation modal.
+ * 이 파일은 native inline shell의 ratatui frame boundary다.
+ * presentation layer가 Line 기반 read model을 만들고, inline_layout이 frame 분할을 정하면,
+ * 이 module은 base inline conversation, 선택적 inline inspection, exit confirmation modal 순서로 layer를 적용한다.
  */
 #[path = "shell_rendering/inline_inspection.rs"]
 mod inline_inspection;
@@ -30,12 +29,10 @@ use inline_layout::{
 use popup_frame::draw_exit_confirmation;
 
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
-    // Keep the prepare signature aligned with draw so future frontend modes can
-    // specialize pre-render state without adding a second entrypoint.
+    // prepare signature를 draw와 맞춰 두면, 나중에 frontend mode별 pre-render state가 필요해도 entrypoint를 늘리지 않는다.
     let _ = mode;
-    // Manual editor overlays need a render-area-aware scroll sync. Other
-    // overlays do not own a textarea cursor and should not mutate editor state
-    // during a normal frame.
+    // manual editor overlay만 render area를 알아야 scroll을 맞출 수 있다.
+    // 다른 overlay는 textarea cursor를 소유하지 않으므로 일반 frame에서 editor state를 바꾸면 안 된다.
     let directions_editor_open = app.shell_overlay == ShellOverlay::DirectionsMaintenance
         && app.directions_maintenance_overlay_ui_state.step()
             == DirectionsMaintenanceOverlayStep::ManualEditor;
@@ -44,14 +41,12 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
     if !directions_editor_open && !planning_editor_open {
         return;
     }
-    // The editor lives inside the inspection area, whose height depends on the
-    // current tail. Rebuild the same layout inputs draw will use and derive the
-    // textarea viewport height from layout[0].
+    // editor는 inspection area 안에 있고, 그 높이는 현재 tail에 따라 달라진다.
+    // draw가 사용할 layout 입력을 그대로 다시 만들어 layout[0]에서 textarea viewport 높이를 산출한다.
     let tail_view = build_inline_tail_view(app, area.width);
     let inspection_area = build_inline_terminal_flow_layout(app, area, &tail_view.lines)[0];
-    // The editor chrome consumes fixed rows for title, tabs, validation/status,
-    // and borders. Keep a small lower bound so tiny terminals still keep cursor
-    // math well-defined.
+    // editor chrome은 title, tabs, validation/status, borders로 고정 row를 소비한다.
+    // 아주 작은 terminal에서도 cursor 계산이 정의되도록 작은 하한을 유지한다.
     let editor_content_height = inspection_area
         .height
         .saturating_sub(14)
@@ -63,24 +58,21 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
-    // The current native shell has one renderer, but preserving mode here keeps
-    // app runtime and shell frontend abstractions coupled through one boundary.
+    // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
     let frame_area = frame.area();
-    // Tail view contains both status/prompt lines and cursor offset. The same
-    // tail height also drives the inline inspection/body split.
+    // tail view는 status/prompt line과 cursor offset을 함께 담는다.
+    // 같은 tail 높이가 inline inspection/body 분할 기준도 된다.
     let tail_view = build_inline_tail_view(app, frame_area.width);
     let live_transcript_lines = build_inline_live_transcript_lines(app);
     let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_view.lines);
 
     draw_inline_conversation_shell(frame, app, tail_view, live_transcript_lines, &layout);
-    // Inline inspection is drawn after the base shell so overlays can replace
-    // the top body while leaving the anchored prompt/status tail intact.
+    // inline inspection은 base shell 뒤에 그려 overlay가 고정된 prompt/status tail은 두고 상단 body만 대체하게 한다.
     if app.shell_overlay != ShellOverlay::Hidden {
         draw_inline_shell_inspection(frame, app, layout[0]);
     }
-    // Exit confirmation is modal over every shell/overlay state and therefore
-    // must be the final draw operation.
+    // exit confirmation은 모든 shell/overlay state 위의 modal이므로 마지막 draw operation이어야 한다.
     if app.is_exit_confirmation_visible() {
         draw_exit_confirmation(frame);
     }
@@ -93,31 +85,27 @@ fn draw_inline_conversation_shell(
     live_transcript_lines: Vec<Line<'static>>,
     layout: &Rc<[Rect]>,
 ) {
-    // Always clear the complete frame first. Otherwise a narrower overlay or a
-    // shorter tail can leave stale cells in the terminal buffer.
+    // 더 좁은 overlay나 더 짧은 tail이 terminal buffer에 stale cell을 남기지 않도록 항상 전체 frame을 먼저 지운다.
     let frame_area = frame.area();
     frame.render_widget(Clear, frame_area);
-    // The hidden-overlay path is the normal conversation shell. It bypasses the
-    // inspection layout so the transcript can fill all space above the tail.
+    // hidden-overlay path는 일반 conversation shell이다.
+    // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-        // Some presentation states, such as startup banners, deliberately own
-        // the full frame from the top and should not be bottom-anchored.
+        // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
             render_inline_body(frame, frame_area, tail_view.lines, false);
             set_cursor_if_visible(frame, frame_area, tail_view.prompt_cursor_offset);
             return;
         }
-        // In the standard shell, tail height is measured first, then live
-        // transcript lines are clipped into the space above it.
+        // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_area = inline_body_render_area(frame_area, &tail_view.lines);
         render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
         render_inline_body(frame, tail_area, tail_view.lines, false);
         set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
         return;
     }
-    // With any overlay/modal active, layout[0] is reserved for inspection and
-    // layout[1] keeps the tail anchored below it. The exit modal is still drawn
-    // outside this function so it can cover both regions.
+    // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
+    // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
     render_inline_body(
         frame,
         inline_body_render_area(layout[1], &tail_view.lines),
@@ -132,14 +120,12 @@ fn render_inline_live_transcript(
     tail_area: Rect,
     live_transcript_lines: Vec<Line<'static>>,
 ) {
-    // No transcript lines, or no vertical space above the tail, means there is
-    // nothing useful to render in the live region.
+    // transcript line이 없거나 tail 위의 vertical space가 없으면 live region에 그릴 유효 내용이 없다.
     if live_transcript_lines.is_empty() || tail_area.y <= frame_area.y {
         return;
     }
-    // The live container is everything from frame top to the row before the
-    // prompt tail. The inner render area is bottom-aligned so recent output sits
-    // closest to the prompt.
+    // live container는 frame 상단부터 prompt tail 직전 row까지다.
+    // inner render area를 bottom-align해 최신 출력이 prompt에 가장 가깝게 앉게 한다.
     let live_container = Rect::new(
         frame_area.x,
         frame_area.y,
@@ -151,10 +137,10 @@ fn render_inline_live_transcript(
 }
 
 #[cfg(test)]
-// Contract tests pin overlay layout, inline tail behavior, and viewport replay.
+// contract test는 overlay layout, inline tail behavior, viewport replay를 고정한다.
 #[path = "shell_rendering_contract_tests.rs"]
 mod contract_tests;
 #[cfg(test)]
-// Snapshot tests lock representative shell frames across runtime states.
+// snapshot test는 runtime state별 대표 shell frame을 고정한다.
 #[path = "shell_rendering_tests.rs"]
 mod tests;
