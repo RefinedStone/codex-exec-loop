@@ -520,7 +520,12 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<()> {
-        // Removal accepts files or directories because planning artifacts can be individual files or draft trees.
+        /*
+         * removal은 file과 directory를 모두 받는다.
+         * planning artifact는 단일 prompt file일 수도 있고 draft/rejected tree처럼 directory일 수도 있기 때문이다.
+         * path normalization을 먼저 수행하고 repo-scoped mode에서는 authority store에 위임해 direct filesystem 삭제가
+         * integration checkout authority를 우회하지 않게 한다.
+         */
         let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
@@ -551,7 +556,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         active_path: &str,
         body: &str,
     ) -> Result<String> {
-        // Rejected proposals are copied into a named archive so the operator can recover or inspect them later.
+        /*
+         * rejected proposal은 named archive 아래에 복사해 operator가 나중에 복구하거나 실패 원인을 조사할 수 있게 한다.
+         * archive root는 active workspace root 기준이다. candidate slot이 사라져도 rejection record는 authority 쪽에 남아야 한다.
+         * active_path 전체를 보존하지 않고 file name만 쓰는 이유는 rejected archive가 proposal snapshot의 leaf file 모음이기 때문이다.
+         */
         let archive_directory = self.rejected_directory(workspace_dir, archive_name);
         fs::create_dir_all(&archive_directory)
             .with_context(|| format!("failed to create {}", archive_directory.display()))?;
@@ -572,7 +581,11 @@ fn write_optional_workspace_file(
     relative_path: &str,
     body: Option<&str>,
 ) -> Result<()> {
-    // Shared helper for record-shaped writes: Some writes after creating parents, None deletes the old file if present.
+    /*
+     * record-shaped write helper다.
+     * PlanningWorkspaceLoadRecord의 Option field 의미를 filesystem operation으로 옮긴다.
+     * Some은 parent directory를 만든 뒤 body를 쓰고, None은 이전 round-trip에서 남은 stale file을 제거한다.
+     */
     let path = workspace_root.join(relative_path);
     match body {
         Some(body) => {
@@ -602,7 +615,11 @@ mod tests {
 
     #[test]
     fn workspace_load_record_excludes_task_authority_artifacts() {
-        // Task authority is DB-backed now; filesystem workspace load should only round-trip prompt file content.
+        /*
+         * task authority는 이제 DB-backed이고 filesystem workspace record가 소유하지 않는다.
+         * 이 테스트는 commit/load round-trip이 result output prompt file만 포함하고, 과거 raw task authority artifact를
+         * record shape에 다시 끌어들이지 않는지 고정한다.
+         */
         let workspace =
             std::env::temp_dir().join(format!("codex-exec-loop-fs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workspace);
