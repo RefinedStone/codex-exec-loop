@@ -120,6 +120,11 @@ impl GithubAutomationAdapter {
         }
 
         let auth_status = if which::which("gh").is_ok() {
+            /*
+            Prefer gh when it exists because operators can repair that state with standard
+            `gh auth login` tooling. The command is still silenced because capability
+            inspection feeds a compact readiness board, not an interactive diagnostic log.
+            */
             Command::new("gh")
                 .current_dir(repo_root)
                 .args(["auth", "status"])
@@ -128,6 +133,11 @@ impl GithubAutomationAdapter {
                 .env("GIT_TERMINAL_PROMPT", "0")
                 .status()
         } else {
+            /*
+            The repo wrapper is the supported fallback for this project. It lets CI or
+            local machines without gh still use the same RefinedStone credential path
+            that write operations use below.
+            */
             Command::new("bash")
                 .current_dir(repo_root)
                 .args([GITHUB_SCRIPT_PATH, "auth", "status"])
@@ -183,6 +193,11 @@ impl GithubAutomationAdapter {
             ],
             repo_root,
         )?;
+        /*
+        PR lookup intentionally requests only the compact fields the application port
+        exposes. That prevents later code from branching on GitHub-only details that
+        would be unavailable if another provider-backed automation adapter were added.
+        */
         let pull_requests = serde_json::from_str::<Vec<GithubPullRequestJson>>(&output)
             .with_context(|| {
                 format!("failed to parse `gh pr list` output while locating `{head_branch}`")
@@ -248,6 +263,11 @@ impl GithubAutomationPort for GithubAutomationAdapter {
             return Ok(existing);
         }
 
+        /*
+        Creation is side-effectful, but the function's public contract is "ensure".
+        A caller retrying after a timeout should receive the existing PR instead of
+        creating duplicate review surfaces for the same branch pair.
+        */
         let create_output = run_command(
             "bash",
             &[
@@ -266,10 +286,20 @@ impl GithubAutomationPort for GithubAutomationAdapter {
             repo_root,
         )?;
 
+        /*
+        Re-query after creation rather than trusting stdout. The wrapper may print a URL,
+        a future structured payload, or nothing useful; GitHub itself is the source of
+        truth for the PR number/base/head/draft fields returned to the distributor.
+        */
         if let Some(existing) = self.find_open_pull_request(repo_root, base_branch, head_branch)? {
             return Ok(existing);
         }
         if let Some(pr_number) = parse_pull_request_number_from_url(&create_output) {
+            /*
+            URL parsing is a recovery path for the common CLI success shape. It still
+            routes through inspect_pull_request so the returned value goes through the
+            same JSON-to-port mapping as ordinary lookup.
+            */
             return self.inspect_pull_request(repo_root, pr_number);
         }
 
@@ -350,6 +380,11 @@ struct GithubPullRequestJson {
 
 impl From<GithubPullRequestJson> for GithubAutomationPullRequest {
     fn from(value: GithubPullRequestJson) -> Self {
+        /*
+        This conversion is the membrane between GitHub's camelCase JSON and the
+        application port's provider-neutral record. Keeping it here avoids leaking
+        GitHub field names into distributor or readiness code.
+        */
         GithubAutomationPullRequest::new(
             value.number,
             value.url,
@@ -381,6 +416,11 @@ fn run_git(repo_root: &str, args: &[&str]) -> Result<()> {
 }
 
 fn run_git_stdout(repo_root: &str, args: &[&str]) -> Result<String> {
+    /*
+    Git stdout callers are read-only capability/inspection paths. Reusing run_command
+    gives them the same non-interactive environment and rich failure context as GitHub
+    wrapper invocations.
+    */
     run_command("git", args, repo_root)
 }
 
@@ -450,6 +490,11 @@ fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
     */
     output
         .trim()
+        /*
+        Only the final slash-delimited segment is parsed. Query strings or non-URL
+        wrapper chatter will fail to parse and fall back to the structured lookup error
+        instead of producing a misleading PR number.
+        */
         .rsplit('/')
         .next()
         .and_then(|value| value.parse::<u64>().ok())
