@@ -1,16 +1,20 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::PlanningValidationService;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
     PlanningFileKind, PlanningWorkspaceFiles, QueueIdleConfig, QueueIdlePolicy,
 };
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * These tests pin the application validation boundary used by draft promotion, runtime snapshots,
+ * proposal promotion, doctor, and reset flows.
+ * They intentionally exercise PlanningValidationService through PlanningWorkspaceFiles so each case proves
+ * the same report codes that adapters show to operators, instead of testing domain validators in isolation.
+ */
+
+// Shared successful result-output contract; individual tests replace it only when they target markdown rules.
 fn valid_result_output_markdown() -> &'static str {
     r#"# Result Output Prompt
 
@@ -19,55 +23,38 @@ fn valid_result_output_markdown() -> &'static str {
 "#
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+/*
+ * Minimal direction catalog for semantic validation cases.
+ * The helper keeps direction ids explicit so each task-authority fixture can show whether it is testing a
+ * missing relation, an LLM-authored relation note, or graph invariants against a known direction.
+ */
 fn test_directions(direction_id: &str) -> DirectionCatalogDocument {
     DirectionCatalogDocument {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         version: PLANNING_FORMAT_VERSION,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         queue_idle: QueueIdleConfig::default(),
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: vec![DirectionDefinition {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             id: direction_id.to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             title: "Direction A".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             summary: "Keep task updates aligned.".to_string(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             success_criteria: vec!["Only aligned tasks enter the authority.".to_string()],
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             scope_hints: Vec::new(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             detail_doc_path: String::new(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             state: DirectionState::Active,
         }],
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Bootstrap output is the golden baseline: generated detail-mode artifacts must pass the same validator.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn bootstrap_artifacts_validate_successfully() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let task_authority_json = serde_json::to_string(&artifacts.task_authority)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("bootstrap task authority should serialize");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: &task_authority_json,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: &artifacts.result_output_markdown,
     });
 
@@ -76,19 +63,13 @@ fn bootstrap_artifacts_validate_successfully() {
     assert!(result.task_authority.is_some());
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Cross-document semantics: every task must stay attached to a known direction catalog entry.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_unknown_direction_references() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = test_directions("product-direction");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -111,7 +92,6 @@ fn rejects_unknown_direction_references() {
     }
   ]
 }"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
@@ -122,19 +102,13 @@ fn rejects_unknown_direction_references() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// LLM-authored work needs an explicit relation note so later operators can audit why it belongs to a direction.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_llm_tasks_without_relation_notes() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = test_directions("direction-a");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -157,7 +131,6 @@ fn rejects_llm_tasks_without_relation_notes() {
     }
   ]
 }"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
@@ -168,19 +141,13 @@ fn rejects_llm_tasks_without_relation_notes() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Queue graph semantics reject dependency loops before runtime queue projection chooses executable work.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_dependency_cycles() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = test_directions("direction-a");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -220,7 +187,6 @@ fn rejects_dependency_cycles() {
     }
   ]
 }"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
@@ -231,26 +197,17 @@ fn rejects_dependency_cycles() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Version checks happen through semantic validation even when the JSON shape itself is minimal.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_unsupported_task_authority_version_without_schema_validation() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{
   "version": 2
 }"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
@@ -261,22 +218,14 @@ fn rejects_unsupported_task_authority_version_without_schema_validation() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Serde shape validation rejects unknown task fields before semantic checks can treat them as accepted authority.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_unknown_task_authority_fields() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -300,7 +249,6 @@ fn rejects_unknown_task_authority_fields() {
     }
   ]
 }"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
@@ -311,22 +259,18 @@ fn rejects_unknown_task_authority_fields() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+/*
+ * Multiple domain invariants should accumulate in one report.
+ * This protects editor and CLI callers from a fix-one-error-at-a-time loop when task state, dependency,
+ * blocker, and in-progress rules are all broken in the same authority document.
+ */
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_conflicting_done_relationships_and_multiple_in_progress_tasks() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{
   "version": 1,
   "tasks": [
@@ -383,7 +327,6 @@ fn rejects_conflicting_done_relationships_and_multiple_in_progress_tasks() {
     }
   ]
 }"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
@@ -406,27 +349,17 @@ fn rejects_conflicting_done_relationships_and_multiple_in_progress_tasks() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// result-output.md must start with a heading because prompt assembly and admin previews read it as a section.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_result_output_without_heading() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let task_authority_json = serde_json::to_string(&artifacts.task_authority)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("bootstrap task authority should serialize");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: &task_authority_json,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: "Summarize the completed work.",
     });
 
@@ -437,27 +370,17 @@ fn rejects_result_output_without_heading() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Placeholder markers are warnings: the document may still be usable, but operators should see edit residue.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn warns_on_result_output_placeholders() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let task_authority_json = serde_json::to_string(&artifacts.task_authority)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("bootstrap task authority should serialize");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: &task_authority_json,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: r#"# Result Output Prompt
 
 - TODO: replace this guidance before relying on it.
@@ -471,27 +394,17 @@ fn warns_on_result_output_placeholders() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// A blank result-output contract is a hard error because runtime completion copy would have no instruction.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_blank_result_output_prompt() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let bootstrap_service = PlanningBootstrapService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let artifacts = bootstrap_service.build_artifacts_for_mode(PlanningBootstrapMode::Detail);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let task_authority_json = serde_json::to_string(&artifacts.task_authority)
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("bootstrap task authority should serialize");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &artifacts.directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: &task_authority_json,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: "   ",
     });
 
@@ -501,34 +414,27 @@ fn rejects_blank_result_output_prompt() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+/*
+ * Supporting-file validation is separate from validate_workspace_files.
+ * These path tests first prove the authority documents parse, then run the extra filesystem-aware check so
+ * sandbox failures are attributed to the direction supporting-file contract rather than JSON semantics.
+ */
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut directions = test_directions("direction-a");
     directions.directions[0].detail_doc_path =
         ".codex-exec-loop/planning/directions_backup/direction-a.md".to_string();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{"version":1,"tasks":[]}"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
     assert!(result.is_valid(), "{:?}", result.report.issues);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut report = result.report;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = result
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .directions
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("directions should parse for supporting file validation");
     validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
     assert!(report.errors().iter().any(|issue| {
@@ -536,34 +442,22 @@ fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_detail_doc_paths_with_parent_dir_components() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut directions = test_directions("direction-a");
     directions.directions[0].detail_doc_path =
         ".codex-exec-loop/planning/directions/../direction-a.md".to_string();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{"version":1,"tasks":[]}"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
     assert!(result.is_valid(), "{:?}", result.report.issues);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut report = result.report;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = result
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .directions
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("directions should parse for supporting file validation");
     validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
     assert!(report.errors().iter().any(|issue| {
@@ -571,38 +465,25 @@ fn rejects_detail_doc_paths_with_parent_dir_components() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// Queue-idle prompt paths use the prompts sandbox, distinct from detail-doc direction files.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut directions = test_directions("direction-a");
     directions.queue_idle = QueueIdleConfig {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         policy: QueueIdlePolicy::ReviewAndEnqueue,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         prompt_path: ".codex-exec-loop/planning/prompts_backup/queue-idle-review.md".to_string(),
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{"version":1,"tasks":[]}"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
     assert!(result.is_valid(), "{:?}", result.report.issues);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut report = result.report;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = result
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .directions
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("directions should parse for supporting file validation");
     validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
     assert!(report.errors().iter().any(|issue| {
@@ -611,38 +492,24 @@ fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
     }));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn rejects_queue_idle_prompt_paths_with_parent_dir_components() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let validation_service = PlanningValidationService::new();
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut directions = test_directions("direction-a");
     directions.queue_idle = QueueIdleConfig {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         policy: QueueIdlePolicy::ReviewAndEnqueue,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         prompt_path: ".codex-exec-loop/planning/prompts/../queue-idle-review.md".to_string(),
     };
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         directions: &directions,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         task_authority_json: r#"{"version":1,"tasks":[]}"#,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         result_output_markdown: valid_result_output_markdown(),
     });
 
     assert!(result.is_valid(), "{:?}", result.report.issues);
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut report = result.report;
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions = result
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .directions
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .expect("directions should parse for supporting file validation");
     validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
     assert!(report.errors().iter().any(|issue| {
