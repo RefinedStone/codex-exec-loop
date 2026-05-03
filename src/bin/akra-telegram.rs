@@ -1,7 +1,13 @@
-// 학습 주석: telegram binary는 Telegram inbound adapter만 띄우는 얇은 프로세스 wrapper입니다.
-// 실제 bot 설정 읽기와 실행은 adapter의 `run_from_env()`가 담당합니다.
+/*
+ * telegram bin은 TUI를 거치지 않고 Telegram inbound adapter만 실행하는 control-plane wrapper다.
+ * adapter 쪽에서 token/config, allow-list, planning control facade를 조립하므로 이 파일은
+ * process-level 오류 출력과 exit code 변환만 책임진다.
+ */
 fn main() {
-    // 학습 주석: bot runner가 정상 종료하면 code 0을, 환경/실행 오류를 반환하면 stderr 출력 후 code 1을 사용합니다.
+    /*
+     * run_from_env()는 local workspace에 묶인 planning control service를 만들고 long-polling loop를
+     * 시작한다. bootstrap 오류와 runner 오류는 모두 anyhow chain으로 올라오므로 여기서 한 번만 출력한다.
+     */
     let exit_code = match codex_exec_loop_native::adapter::inbound::telegram_bot::run_from_env() {
         Ok(()) => 0,
         Err(error) => {
@@ -10,6 +16,6 @@ fn main() {
         }
     };
 
-    // 학습 주석: supervisor나 shell script가 bot bootstrap 실패를 감지하도록 프로세스 종료 코드를 명시합니다.
+    // Telegram runner를 감시하는 shell/supervisor가 실패를 숫자 계약 하나로 판단하게 한다.
     std::process::exit(exit_code);
 }
