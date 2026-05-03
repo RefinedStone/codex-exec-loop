@@ -130,6 +130,11 @@ pub(super) fn build_inline_tail_lines_with_context(
                 .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
                 .map(|summary| compact_inline_summary_label(&summary));
 
+            /*
+            The first three lines form the always-visible health header. They avoid
+            expensive detail expansion and reserve later rows for planning, worker,
+            transcript, and notice detail that may appear only in specific states.
+            */
             lines.push(build_ready_status_ribbon_line(
                 conversation,
                 plan_mode_indicator,
@@ -148,6 +153,12 @@ pub(super) fn build_inline_tail_lines_with_context(
             lines.push(Line::from(parallel_mode_summary_line(app)));
 
             if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(app) {
+                /*
+                Parallel alerts sit immediately after the summary line because they
+                can block dispatch even when the rest of the conversation is ready.
+                Placing them before planning detail keeps slot/recovery issues from
+                being buried below queue copy.
+                */
                 lines.push(Line::from(parallel_mode_alert_line));
             }
             if let Some(working_line) =
@@ -156,6 +167,12 @@ pub(super) fn build_inline_tail_lines_with_context(
                 lines.push(working_line);
             }
             if let Some(planning_projection) = planning_status_projection.as_ref() {
+                /*
+                The planning projection is already budgeted for inline detail limits.
+                Tail copy preserves its order: summary first, queue framing next,
+                notices last. That mirrors the popup/status surfaces without making
+                this compact renderer know planning service enum internals.
+                */
                 if let Some(planning_line) = planning_projection.summary_line.as_deref() {
                     lines.push(Line::from(planning_line.to_string()));
                 }
@@ -250,6 +267,11 @@ fn build_recent_transcript_summary_lines(
 fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&ConversationMessage> {
     // Ignore tool/status noise first; fall back to status rows only when there is no
     // user/assistant content so viewport replay still gives the operator context.
+    /*
+    The reverse/take/reverse pattern keeps selection cheap while preserving chronological
+    display order. Tail replay should read like the last two human-visible messages,
+    not like an implementation stack.
+    */
     let mut recent_messages = conversation
         .messages
         .iter()
@@ -261,6 +283,11 @@ fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&Conv
         .take(2)
         .collect::<Vec<_>>();
     if recent_messages.is_empty() {
+        /*
+        Status rows are fallback context, not first-choice transcript content. They
+        become useful for startup/loading streams where app-server has emitted
+        lifecycle messages but no user or assistant text yet.
+        */
         recent_messages = conversation
             .messages
             .iter()
@@ -348,6 +375,11 @@ fn build_inline_startup_screen_lines_with_context(
 fn build_inline_startup_overlay_tail_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
+    /*
+    Compact startup tail is deliberately a single operational axis row. It is used
+    while overlays or buffered input need vertical space, so detailed diagnostics
+    stay available through inspection instead of crowding the prompt.
+    */
     vec![Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
         ratatui::text::Span::raw(format!(
@@ -398,6 +430,10 @@ fn startup_axis_status(shell_action_availability: ShellActionAvailability) -> &'
 
 fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {
     let Some(conversation) = context.ready_conversation() else {
+        /*
+        Without a ready conversation there is no input buffer to inspect, so the
+        starter copy must be generic and safe for loading/failed startup states.
+        */
         return "start with a task, file path, or bug summary";
     };
     if conversation.input_buffer.trim().is_empty() {
@@ -496,6 +532,11 @@ fn build_inline_ready_prompt_lines(
     if conversation.auto_follow_state.has_live_activity()
         && conversation.input_state.can_submit_now()
     {
+        /*
+        Auto follow-up activity can make the shell appear idle enough to type into,
+        but Enter would race the continuation. This line keeps the buffered prompt
+        visible while making the idle gate explicit.
+        */
         lines.push(Line::from(
             "buffered prompt  |  auto follow-up busy  |  Enter when idle",
         ));
@@ -507,6 +548,12 @@ fn build_inline_ready_prompt_lines(
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Pending,
         ) if conversation.startup_submit_armed => {
+            /*
+            The startup-armed path means Enter was already accepted while startup
+            was pending. Editing the buffer should cancel that queued send, so the
+            hint names the cancellation behavior instead of repeating normal send
+            guidance.
+            */
             "queued until startup is ready  |  editing cancels the queued send"
         }
         (
