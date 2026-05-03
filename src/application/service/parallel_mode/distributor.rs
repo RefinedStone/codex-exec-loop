@@ -176,6 +176,11 @@ impl ParallelModeDistributorService {
             .github_automation
             .inspect_capabilities(&resolution.context.repo_root);
         let timestamp = current_timestamp();
+        /*
+        The queue record freezes the source commit at enqueue time. Delivery may
+        later rebase or rewrite commit_sha, while original_commit_sha preserves
+        provenance for supervisor snapshots and operator recovery messages.
+        */
         let record = ParallelModeDistributorQueueRecord {
             queue_item_id: distributor_queue_item_id(&resolution.lease, &timestamp),
             queue_order_key: queue_order_key_from_timestamp(&timestamp),
@@ -205,6 +210,11 @@ impl ParallelModeDistributorService {
             enqueued_at: timestamp.clone(),
             updated_at: timestamp,
         };
+        /*
+        Queue persistence happens before session detail is marked merge_queued.
+        If the history write fails, the durable queue item still exists and the
+        next supervisor snapshot can reconstruct distributor state from authority.
+        */
         write_distributor_queue_record(
             self.planning_authority.as_ref(),
             &resolution.context.repo_root,
@@ -240,6 +250,11 @@ impl ParallelModeDistributorService {
             return Ok(Vec::new());
         };
         let head = &mut records[head_index];
+        /*
+        Done records stay in the durable trace, so "first not Done" is the queue
+        head. This preserves historical ordering while still preventing later
+        queued work from jumping ahead of a blocked or cleaning item.
+        */
         if matches!(
             head.queue_state,
             ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed
@@ -321,6 +336,11 @@ impl ParallelModeDistributorService {
         for index in 0..context.distributor_queue_records.len() {
             let mut record = context.distributor_queue_records[index].clone();
             let matching_lease = matching_lease_for_queue_record(&context, &record).cloned();
+            /*
+            Recovery runs the narrow, non-destructive fixes before broader state
+            classification. A clean mismatched checkout or known retryable block
+            can become Queued again without inspecting PR/integration state.
+            */
             recover_mismatched_slot_worktree(
                 self.planning_authority.as_ref(),
                 &context.repo_root,
@@ -343,6 +363,11 @@ impl ParallelModeDistributorService {
                     | ParallelModeQueueItemState::Blocked
                     | ParallelModeQueueItemState::Failed
             ) {
+                /*
+                Terminal or operator-owned states are left alone. Blocked/Failed
+                records need human recovery, while Done/Idle should not be
+                rewritten by restart heuristics.
+                */
                 continue;
             }
             if !Path::new(&record.worktree_path).exists() {
@@ -363,6 +388,11 @@ impl ParallelModeDistributorService {
                 &record.branch_name,
                 DISTRIBUTOR_INTEGRATION_BRANCH,
             ) {
+                /*
+                Integration proof outranks remote PR status. Once the source
+                branch is already contained in prerelease, recovery should move
+                toward cleanup rather than reopening GitHub delivery questions.
+                */
                 recover_integrated_queue_record(
                     self.planning_authority.as_ref(),
                     &context,
@@ -377,6 +407,11 @@ impl ParallelModeDistributorService {
                     .github_automation
                     .inspect_pull_request(&context.repo_root, pr_number)
             {
+                /*
+                PR inspection is opportunistic recovery data. A fetch failure is
+                ignored here so transient GitHub outages do not turn an otherwise
+                processable queue record into a fresh block.
+                */
                 record.pull_request_url = Some(pull_request.url.clone());
                 if !pull_request.state.eq_ignore_ascii_case("open") {
                     let _ = block_distributor_queue_record(
