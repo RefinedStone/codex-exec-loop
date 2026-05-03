@@ -224,10 +224,10 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         force_with_lease: bool,
     ) -> Result<()> {
         /*
-        Slot branches normally publish with upstream tracking so later operator
-        commands can use the branch name alone. Rebased distributor recovery uses
-        force-with-lease because it rewrites only the branch it just validated and
-        still protects against remote movement by another actor.
+        slot branch는 보통 upstream tracking과 함께 publish한다.
+        이후 operator나 recovery command가 remote/refspec을 다시 입력하지 않고 branch 이름만 사용할 수 있게 하기 위해서다.
+        rebased distributor recovery는 자신이 방금 검증한 branch만 rewrite하므로 force-with-lease를 쓴다.
+        force push가 필요하지만, 다른 actor가 remote를 이동시킨 경우에는 lease가 실패해 안전하게 멈춘다.
         */
         if force_with_lease {
             run_git(
@@ -248,11 +248,12 @@ impl GithubAutomationPort for GithubAutomationAdapter {
     }
 
     /*
-    Ensure semantics keep PR creation retry-safe.
+    ensure semantics는 PR creation을 retry-safe하게 만든다.
 
-    The adapter checks for an existing open PR before creating one, then checks again after creation. The second lookup is
-    deliberate: GitHub may return a URL, the wrapper may normalize output, or a concurrent actor may have created the PR
-    between calls. Falling back to URL parsing is only the final recovery path.
+    adapter는 create 전에 같은 base/head open PR을 먼저 찾고, create 뒤에도 다시 찾는다.
+    두 번째 lookup은 의도적이다. wrapper stdout은 URL일 수도 있고 future structured payload일 수도 있으며,
+    두 호출 사이에 concurrent actor가 같은 PR을 만들 수도 있다. GitHub의 현재 PR 상태를 다시 읽는 것이 source of truth다.
+    URL parsing은 그 다음의 recovery path일 뿐이다.
     */
     fn ensure_pull_request(
         &self,
@@ -267,9 +268,9 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         }
 
         /*
-        Creation is side-effectful, but the function's public contract is "ensure".
-        A caller retrying after a timeout should receive the existing PR instead of
-        creating duplicate review surfaces for the same branch pair.
+        create는 side-effectful이지만 public contract는 "ensure"다.
+        timeout이나 transient wrapper failure 뒤 caller가 재시도해도 같은 branch pair에 중복 review surface를 만들지 않고
+        기존 PR record를 받아야 한다.
         */
         let create_output = run_command(
             "bash",
@@ -290,18 +291,17 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         )?;
 
         /*
-        Re-query after creation rather than trusting stdout. The wrapper may print a URL,
-        a future structured payload, or nothing useful; GitHub itself is the source of
-        truth for the PR number/base/head/draft fields returned to the distributor.
+        creation stdout을 신뢰하지 않고 다시 query한다.
+        wrapper는 URL을 출력할 수도, 나중에 structured payload를 출력할 수도, 유용한 값을 출력하지 않을 수도 있다.
+        distributor에 돌려줄 number/base/head/draft field의 source of truth는 GitHub에 다시 조회한 JSON이다.
         */
         if let Some(existing) = self.find_open_pull_request(repo_root, base_branch, head_branch)? {
             return Ok(existing);
         }
         if let Some(pr_number) = parse_pull_request_number_from_url(&create_output) {
             /*
-            URL parsing is a recovery path for the common CLI success shape. It still
-            routes through inspect_pull_request so the returned value goes through the
-            same JSON-to-port mapping as ordinary lookup.
+            URL parsing은 흔한 CLI success shape를 위한 recovery path다.
+            그래도 inspect_pull_request를 통과시켜 ordinary lookup과 같은 JSON-to-port mapping으로 반환 값을 만든다.
             */
             return self.inspect_pull_request(repo_root, pr_number);
         }
@@ -317,9 +317,8 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         pr_number: u64,
     ) -> Result<GithubAutomationPullRequest> {
         /*
-        Inspect is the authoritative read path after creation fallback or later
-        delivery checks. It requests the same compact field set as PR lookup so
-        callers never observe different port shapes based on how the PR was found.
+        inspect는 creation fallback이나 이후 delivery check에서 쓰는 authoritative read path다.
+        PR lookup과 같은 compact field set을 요청하므로, caller는 PR을 어떤 경로로 찾았는지와 무관하게 같은 port shape를 본다.
         */
         let output = run_command(
             "bash",
@@ -340,18 +339,17 @@ impl GithubAutomationPort for GithubAutomationAdapter {
 
     fn push_integration_branch(&self, repo_root: &str, branch_name: &str) -> Result<()> {
         /*
-        Integration branches are already synthesized in the distributor worktree.
-        They are pushed without upstream setup because operators should continue
-        driving final integration through explicit branch/PR records.
+        integration branch는 이미 distributor worktree에서 합성된 결과다.
+        upstream setup 없이 push하는 이유는 최종 integration이 계속 explicit branch/PR record를 통해 진행되어야 하기 때문이다.
+        slot branch처럼 operator의 일상 작업 branch로 취급하지 않는다.
         */
         run_git(repo_root, &["push", DEFAULT_PUSH_REMOTE_NAME, branch_name])
     }
 
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()> {
         /*
-        Close delegates to the RefinedStone wrapper instead of raw gh. That keeps
-        write identity, token selection, and repo-specific GitHub policy in the
-        same script used for creation and inspection.
+        close는 raw `gh` 대신 RefinedStone wrapper에 위임한다.
+        PR 생성/조회와 같은 script를 쓰면 write identity, token selection, repo-specific GitHub policy가 한 경계에 머문다.
         */
         run_command(
             "bash",
