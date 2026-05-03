@@ -15,6 +15,12 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
  * 실행하는 세부 orchestration은 app-server adapter 본체가 구현한다.
  */
 pub(crate) trait PlanningThreadLauncher: Send + Sync {
+    /*
+     * The launcher owns the app-server side effects: creating a hidden thread,
+     * sending the prompt, and forwarding raw stream events. The planning worker
+     * adapter below only sees the normalized ConversationStreamEvent stream so
+     * the application port remains independent from JSON-RPC and thread setup.
+     */
     fn run_hidden_planning_thread(
         &self,
         workspace_directory: &str,
@@ -59,18 +65,35 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut changed_planning_file_paths = Vec::new();
         let mut failure_message = None;
 
+        /*
+         * A launch error means no reliable stream exists to drain. Once launch
+         * succeeds, later failures should arrive as ConversationStreamEvent::Failed
+         * so the reducer can still consume any earlier context before returning.
+         */
         stream_result?;
 
         // sender가 drop될 때까지 hidden thread event를 drain해 마지막 completed message와 turn summary를 채택한다.
         for event in rx.iter() {
             match event {
                 ConversationStreamEvent::AgentMessageCompleted { text, .. } => {
+                    /*
+                     * Deltas are intentionally ignored; a completed message is
+                     * the stable unit that worker orchestration can quote in
+                     * logs or validation summaries without replaying stream
+                     * fragments.
+                     */
                     final_agent_message = Some(text);
                 }
                 ConversationStreamEvent::TurnCompleted {
                     changed_planning_file_paths: paths,
                     ..
                 } => {
+                    /*
+                     * TurnCompleted is the only event that carries the planning
+                     * file change summary reduced by the app-server adapter. It
+                     * replaces any earlier value because a hidden worker turn has
+                     * one authoritative completion boundary.
+                     */
                     changed_planning_file_paths = paths;
                 }
                 ConversationStreamEvent::AttachmentObserved { .. }
@@ -81,6 +104,11 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 | ConversationStreamEvent::ToolActivity { .. }
                 | ConversationStreamEvent::ApprovalReviewUpdated { .. } => {}
                 ConversationStreamEvent::Failed { message } => {
+                    /*
+                     * Keep draining after seeing a failure so channel closure
+                     * remains the synchronization point. The final response below
+                     * still treats any failure event as a hard worker error.
+                     */
                     failure_message = Some(message);
                 }
             }
@@ -129,7 +157,12 @@ mod tests {
             prompt: &str,
             event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
         ) -> Result<()> {
-            // fake launcher는 호출 인자를 기록한 뒤 준비된 event를 같은 channel로 흘려 adapter 축약 로직만 고립한다.
+            /*
+             * The fake records launch input before sending events. That gives
+             * the success test coverage for both halves of the port contract:
+             * request forwarding into the hidden thread and stream reduction out
+             * of it.
+             */
             self.calls
                 .lock()
                 .expect("calls lock should succeed")
@@ -203,7 +236,11 @@ mod tests {
 
     #[test]
     fn run_planning_session_returns_error_when_stream_reports_failure() {
-        // 실패 event는 성공 response에 섞지 않고 service caller가 처리할 anyhow error로 승격한다.
+        /*
+         * Failed events are promoted to anyhow errors instead of being mixed into
+         * a successful response. Worker orchestration then follows its repair or
+         * retry path rather than trusting a partial planning update.
+         */
         let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
             events: vec![ConversationStreamEvent::Failed {
                 message: "planner crashed".to_string(),
