@@ -20,6 +20,12 @@ pub(super) enum HistoryInsertionMode {
     NewlineFallback,
 }
 impl HistoryInsertionMode {
+    /*
+     * Runtime selection is intentionally adapter-local. The application state
+     * only decides that committed history should move to host scrollback; this
+     * module decides which terminal escape strategy is safe for the current
+     * environment.
+     */
     pub(super) fn from_environment() -> Self {
         Self::from_env_and_terminal_values(
             std::env::var(super::HISTORY_INSERT_MODE_ENV_VAR)
@@ -63,6 +69,13 @@ impl HistoryInsertionAdapter {
     pub(super) fn new(mode: HistoryInsertionMode) -> Self {
         Self { mode }
     }
+
+    /*
+     * Tests use the high-level insert path to exercise row counting and escape
+     * emission together. Production callers can pass precomputed rendered_rows
+     * from history flush state, avoiding a second paragraph render when the
+     * pending history window already knows its row cost.
+     */
     #[cfg(test)]
     pub(super) fn insert<B: Backend>(
         self,
@@ -84,7 +97,11 @@ impl HistoryInsertionAdapter {
             return Ok(());
         }
         let cursor = terminal.get_cursor_position()?;
-        // Insertion is a side effect on host history; cursor position must remain shell-owned.
+        /*
+         * History insertion is a side effect on host scrollback, not a shell
+         * cursor move. Both strategies temporarily move the backend cursor, so
+         * the public contract restores the shell-owned cursor afterward.
+         */
         let result = match self.mode {
             HistoryInsertionMode::StandardScrollRegion => {
                 insert_with_standard_scroll_region(terminal, lines, rendered_rows)
@@ -101,7 +118,11 @@ impl HistoryInsertionAdapter {
     }
 }
 
-// The standard path delegates the hard part to the backend's insert-before support.
+/*
+ * The standard path delegates the hard part to ratatui's insert-before support.
+ * That keeps wrapping, wide-cell handling, and scroll-region escape generation
+ * inside the backend abstraction when the terminal supports it correctly.
+ */
 fn insert_with_standard_scroll_region<B: Backend>(
     terminal: &mut Terminal<B>,
     lines: &[Line<'static>],
@@ -131,7 +152,11 @@ fn insert_with_newline_fallback<B: Backend>(
     let overflow_pending_rows = pending_rows.saturating_sub(viewport_top);
     let staging_rows = viewport_top.max(1);
     let mut source_y = 0;
-    // Overflow rows must be scrolled first so existing shell rows are preserved below them.
+    /*
+     * Overflow rows are the prefix that cannot fit between terminal top and the
+     * inline viewport. They must be appended first from the bottom so existing
+     * shell rows stay below the staged history instead of being overwritten.
+     */
     while source_y < overflow_pending_rows {
         let rows_this_chunk = (overflow_pending_rows - source_y).min(staging_rows);
         let destination_y = viewport_top.saturating_sub(rows_this_chunk);
@@ -148,7 +173,11 @@ fn insert_with_newline_fallback<B: Backend>(
     terminal.backend_mut().flush()
 }
 
-// append_lines scrolls from the current cursor row, so park it at the bottom.
+/*
+ * append_lines scrolls from the current cursor row. Parking the cursor at the
+ * terminal bottom turns append_lines into "create host-scrollback rows" instead
+ * of "insert rows inside the live inline viewport".
+ */
 fn scroll_terminal_from_bottom<B: Backend>(
     terminal: &mut Terminal<B>,
     terminal_height: u16,
@@ -165,7 +194,11 @@ fn scroll_terminal_from_bottom<B: Backend>(
     terminal.backend_mut().append_lines(row_count)
 }
 
-// Draw one staged buffer row at a time to keep wide/hidden cells identical to ratatui output.
+/*
+ * Draw one staged buffer row at a time. The source buffer is produced by
+ * ratatui Paragraph, so copying cells through a one-row diff preserves hidden
+ * wide-character continuation cells instead of turning them into visible spaces.
+ */
 fn draw_buffer_rows_at<B: Backend>(
     terminal: &mut Terminal<B>,
     buffer: &Buffer,
@@ -205,6 +238,11 @@ fn restore_cursor<B: Backend>(
     terminal: &mut Terminal<B>,
     cursor: Position,
 ) -> Result<(), B::Error> {
+    /*
+     * Terminal resize can race with history insertion in tests and real TUI
+     * redraws. Clamp instead of trusting the saved cursor so restoring after a
+     * shrink does not ask the backend to move outside the current frame.
+     */
     let size = terminal.size()?;
     if size.width == 0 || size.height == 0 {
         return Ok(());
@@ -217,6 +255,11 @@ fn restore_cursor<B: Backend>(
 }
 
 pub(super) fn count_rendered_history_rows(lines: &[Line<'static>], width: u16) -> usize {
+    /*
+     * The row count must match the buffer that will later be inserted. Counting
+     * plain lines is not enough because prompt history includes long URLs, tabs,
+     * CJK width, and ratatui wrapping behavior.
+     */
     if width == 0 || lines.is_empty() {
         return 0;
     }
@@ -235,6 +278,11 @@ fn rendered_history_buffer_with_height<'a>(
     height: u16,
     text: impl Into<Text<'a>>,
 ) -> Buffer {
+    /*
+     * This buffer is the single source for fallback insertion. The area starts at
+     * y=0 even though rows will later be drawn at viewport-relative positions;
+     * draw_buffer_rows_at performs that coordinate translation explicitly.
+     */
     let area = Rect {
         x: 0,
         y: 0,
@@ -285,6 +333,11 @@ fn rendered_history_height(width: u16, lines: &[Line<'static>]) -> usize {
 }
 
 fn conservative_history_row_capacity(lines: &[Line<'static>]) -> usize {
+    /*
+     * line.width() is an upper bound for wrapped rows when width is at least one.
+     * It can over-allocate, but the sentinel probe below trims the actual height
+     * without risking truncation of wide or wrapped content.
+     */
     lines.iter().map(|line| line.width().max(1)).sum::<usize>()
 }
 fn sentinel_line() -> Line<'static> {
