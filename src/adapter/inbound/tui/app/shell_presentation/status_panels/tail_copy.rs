@@ -41,6 +41,12 @@ pub(super) fn build_inline_tail_lines_with_context(
 ) -> Vec<Line<'static>> {
     let plan_mode_indicator = current_plan_mode_indicator(app);
 
+    /*
+    Planning projection is computed before state branching because both the ready
+    tail and prompt affordance lines need the same compact limits. Keeping this
+    projection renderer-adjacent prevents lower application services from knowing
+    about terminal row budgets.
+    */
     let planning_status_projection = context.ready_conversation().map(|conversation| {
         build_planning_status_surface_projection(
             app,
@@ -73,6 +79,11 @@ pub(super) fn build_inline_tail_lines_with_context(
     let mut lines = Vec::new();
     match context.conversation_state {
         ShellConversationState::Loading => {
+            /*
+            Loading and failed states still render a full tail because the inline
+            terminal layout needs stable prompt/status rows even before a thread
+            snapshot exists. These branches avoid conversation-only helpers.
+            */
             lines.push(Line::from(plan_mode_prefixed_spans(
                 format!(
                     "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
@@ -106,6 +117,12 @@ pub(super) fn build_inline_tail_lines_with_context(
             lines.push(Line::from(format!("status: {message}")));
         }
         ShellConversationState::Ready(conversation) => {
+            /*
+            Ready-state ordering is intentionally dense: identity and turn status
+            first, then operator health signals, parallel/planning summaries,
+            worker detail, recent transcript context, and finally notices. This
+            mirrors how operators scan the tail while a turn is active.
+            */
             let warning_summary = compact_inline_summary_label(
                 &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
             );
@@ -178,6 +195,12 @@ fn build_ready_status_ribbon_line(
     conversation: &ConversationViewModel,
     plan_mode_indicator: PlanModeIndicatorView,
 ) -> Line<'static> {
+    /*
+    The ribbon is the single-line state index for the ready shell. It carries
+    thread identity, turn lifecycle, input readiness, auto-follow policy, and
+    completion progress so downstream lines can focus on details instead of
+    repeating the same labels.
+    */
     Line::from(plan_mode_prefixed_spans(
         format!(
             "Akra  |  thread: {}  |  turn: {}  |  input: {}  |  auto: {}  |  done: {}",
@@ -195,6 +218,11 @@ fn build_recent_transcript_summary_lines(
     render_mode: InlineHistoryRenderMode,
     conversation: &ConversationViewModel,
 ) -> Vec<Line<'static>> {
+    /*
+    Recent transcript mirroring is only needed for render modes that do not keep
+    host scrollback visible. The tail becomes a small continuity buffer, so it
+    selects human-authored user/assistant content before falling back to status.
+    */
     if !render_mode.mirrors_recent_transcript_in_tail() {
         return Vec::new();
     }
@@ -248,6 +276,11 @@ fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&Conv
 fn build_inline_startup_screen_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
 ) -> Vec<Line<'static>> {
+    /*
+    The startup masthead is allowed to be taller than the steady-state tail
+    because no transcript exists yet. Once the operator starts typing, callers
+    switch to the compact startup overlay tail to keep the prompt close to hand.
+    */
     let mut lines = startup_masthead_lines();
     lines.push(Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
@@ -378,6 +411,11 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     shell_action_availability: ShellActionAvailability,
 ) -> Vec<Line<'static>> {
+    /*
+    Prompt copy is separated from the status body because layout code also uses
+    this function to compute cursor offsets. Loading/failed states get static
+    affordance rows; ready state delegates to the input-aware branch below.
+    */
     match context.conversation_state {
         ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
         ShellConversationState::Failed(message) => {
@@ -399,6 +437,11 @@ fn build_inline_ready_prompt_lines(
     // Empty prompt copy prioritizes what blocks or enables the next Enter press.
     // Buffered prompt copy instead explains what will happen to the typed text.
     if conversation.input_buffer.is_empty() {
+        /*
+        Empty-buffer copy is command guidance rather than content preview. It
+        must explain whether Enter can send immediately, is gated by startup, or
+        is blocked by a running/paused automation state.
+        */
         if let Some(status_line) = auto_follow_prompt_status_line(conversation, true) {
             lines.push(Line::from(status_line));
             return lines;
@@ -428,6 +471,11 @@ fn build_inline_ready_prompt_lines(
     }
 
     if conversation.inline_shell_command_palette_state.is_active() {
+        /*
+        Palette copy takes precedence over raw command parsing because the
+        operator is navigating an already-open menu; showing parse hints here
+        would fight with Up/Down/Enter semantics.
+        */
         lines.push(Line::from(
             "command: palette  |  Up/Down move  |  Enter choose  |  Esc close",
         ));
@@ -436,6 +484,11 @@ fn build_inline_ready_prompt_lines(
     }
 
     if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
+        /*
+        Parsed shell commands get a dedicated hint line before generic prompt
+        guidance. That keeps destructive or overlay-opening commands legible
+        while the text is still just buffered input.
+        */
         lines.push(Line::from(format!("command: {}", command.buffered_hint())));
         return lines;
     }
