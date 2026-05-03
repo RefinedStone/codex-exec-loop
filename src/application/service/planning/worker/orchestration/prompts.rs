@@ -8,10 +8,9 @@ use crate::application::service::prompt_component::PromptDocument;
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 
 /*
- * These builders define the prompt contract for the model-backed planning
- * worker. Each variant starts from the same DB authority sections and mutation
- * schema, then adds the policy that tells the worker how to interpret the
- * latest main-session evidence for that specific orchestration path.
+ * 이 builder들은 model-backed planning worker가 받는 prompt contract를 정의한다.
+ * 모든 variant는 같은 DB authority section과 mutation schema에서 시작하고, orchestration path별로
+ * 최신 main-session evidence를 어떻게 해석할지 알려 주는 policy만 덧붙인다.
  */
 pub(super) fn build_planning_queue_refresh_prompt(
     latest_user_message: Option<&str>,
@@ -19,9 +18,8 @@ pub(super) fn build_planning_queue_refresh_prompt(
     previous_handoff_task: Option<&PlanningTaskHandoff>,
     authority_context: &PlanningWorkerAuthorityPromptContext,
 ) -> String {
-    // Queue refresh is the normal post-turn path: accepted DB authority comes
-    // first, model-visible tool syntax comes next, and volatile chat evidence is
-    // appended only after those stronger sources.
+    // queue refresh는 일반 post-turn 경로다. accepted DB authority를 먼저 놓고, model-visible tool syntax를
+    // 그 다음에 둔 뒤, volatile chat evidence는 더 강한 source 뒤에만 붙인다.
     let builder = add_worker_authority_context_sections(
         PromptDocument::builder("planning-worker-refresh").lines("role", worker_role_lines()),
         authority_context,
@@ -45,9 +43,8 @@ pub(super) fn build_planning_queue_idle_derive_prompt(
     queue_idle_prompt_markdown: &str,
     authority_context: &PlanningWorkerAuthorityPromptContext,
 ) -> String {
-    // Queue-idle review runs when no task is active. It deliberately frames the
-    // worker as an evaluator so a confident main-session answer cannot suppress
-    // missing validation or unmet DB success criteria.
+    // queue-idle review는 active task가 없을 때 실행된다. worker를 의도적으로 evaluator로 framing해,
+    // 자신감 있는 main-session answer가 missing validation이나 충족되지 않은 DB success criteria를 덮지 못하게 한다.
     let builder = add_worker_authority_context_sections(
         PromptDocument::builder("planning-worker-queue-idle-review")
             .lines("role", worker_role_lines()),
@@ -76,9 +73,8 @@ pub(super) fn build_planning_official_completion_prompt(
     contract: &PlanningOfficialCompletionRefreshContract,
     authority_context: &PlanningWorkerAuthorityPromptContext,
 ) -> String {
-    // Official completion is a ledger refresh, not a generic queue sweep. The
-    // serialized payload is the completion report, while worktree_path remains
-    // provenance and must not become the planning-tool workspace.
+    // official completion은 generic queue sweep이 아니라 ledger refresh다. serialized payload는 completion report이고,
+    // worktree_path는 provenance로만 남아야 하며 planning-tool workspace가 되면 안 된다.
     let serialized_contract = serialize_official_completion_refresh_contract(contract);
     let contract_block = format!("```json\n{serialized_contract}\n```");
     let builder = add_worker_authority_context_sections(
@@ -102,13 +98,13 @@ pub(super) fn build_planning_official_completion_prompt(
 fn serialize_official_completion_refresh_contract(
     contract: &PlanningOfficialCompletionRefreshContract,
 ) -> String {
-    // The domain contract owns this shape; prompt rendering only gives it a
-    // stable JSON envelope so tests can lock the model-facing payload.
+    // 이 shape의 owner는 domain contract다. prompt rendering은 model-facing payload를 테스트로 고정할 수 있도록
+    // stable JSON envelope만 제공한다.
     serde_json::to_string_pretty(&contract)
         .expect("official completion refresh contract should serialize")
 }
 
-/* Refresh policies keep the worker from treating each turn as a blank slate. */
+/* refresh policy는 worker가 매 turn을 빈 slate처럼 취급하지 못하게 하는 최소 기억 장치다. */
 fn queue_refresh_policy_rules() -> Vec<String> {
     vec![
         "Use planning context, latest operator request, and latest main-session reply together."
@@ -126,10 +122,9 @@ fn queue_refresh_policy_rules() -> Vec<String> {
 }
 
 /*
- * Queue-idle policies are stricter than refresh policies because an empty queue
- * can otherwise look like completion. The worker must compare the reply against
- * accepted direction criteria and create one narrow follow-up when evidence is
- * still incomplete.
+ * queue-idle policy는 refresh policy보다 더 엄격하다.
+ * 빈 queue는 쉽게 "완료"처럼 보이기 때문이다. worker는 reply를 accepted direction criteria와 비교하고,
+ * evidence가 아직 불완전하면 좁은 follow-up 하나를 만들어야 한다.
  */
 fn queue_idle_review_policy_rules() -> Vec<String> {
     vec![
@@ -148,8 +143,7 @@ fn queue_idle_review_policy_rules() -> Vec<String> {
 }
 
 fn queue_idle_final_decision_rules() -> Vec<String> {
-    // These rules appear after the operator prompt and main reply, so they win
-    // over older queue-idle wording embedded in persisted direction text.
+    // 이 rule들은 operator prompt와 main reply 뒤에 배치된다. persisted direction text 안의 오래된 queue-idle 문구보다 우선한다.
     vec![
         "These rules are the final authority for the queue-idle decision, even if older direction copy or queue-idle prompt text says otherwise."
             .to_string(),
@@ -165,8 +159,8 @@ fn queue_idle_final_decision_rules() -> Vec<String> {
 }
 
 fn official_completion_policy_rules() -> Vec<String> {
-    // The worker reconciles a parallel-agent report back into the official DB
-    // ledger; provenance fields explain origin without changing the ledger task.
+    // worker는 parallel-agent report를 official DB ledger로 되돌려 맞춘다. provenance field는 출처를 설명할 뿐
+    // ledger task의 의미를 바꾸지 않는다.
     vec![
         "Completion payload is an unofficial agent report until this ledger refresh succeeds."
             .to_string(),
@@ -182,8 +176,7 @@ fn official_completion_policy_rules() -> Vec<String> {
 }
 
 fn queue_advancement_rules() -> Vec<String> {
-    // A refresh only counts as useful when it changes the executable queue head
-    // or narrows the current task with new evidence.
+    // refresh는 executable queue head를 바꾸거나 current task를 새 evidence로 좁힐 때만 의미 있는 진행으로 본다.
     vec![
         "Do not repeat the same queue head unchanged.".to_string(),
         "If the same task remains queue head, update scope, description, priority_reason, title, status, or updated_at from the latest evidence."
@@ -193,8 +186,7 @@ fn queue_advancement_rules() -> Vec<String> {
 }
 
 fn worker_handoff(task: &PlanningTaskHandoff) -> PlanningPromptHandoff<'_> {
-    // Prompt sections need the compact handoff identity, not scheduling fields
-    // such as direction_id or combined_priority.
+    // prompt section에는 compact handoff identity만 필요하다. direction_id나 combined_priority 같은 scheduling field는 제외한다.
     PlanningPromptHandoff {
         task_id: task.task_id.as_str(),
         task_title: task.task_title.as_str(),
@@ -216,8 +208,8 @@ mod tests {
 
     #[test]
     fn refresh_prompt_embeds_db_authority_contract() {
-        // This test locks the shared worker contract: DB authority sections,
-        // planning-tool syntax, and the guard against returning raw authority.
+        // 이 test는 shared worker contract를 고정한다. DB authority section, planning-tool syntax,
+        // raw authority 반환 금지 guard가 한 prompt에 함께 있어야 한다.
         let authority_context = PlanningWorkerAuthorityPromptContext {
             status_lines: vec![
                 "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
@@ -260,8 +252,8 @@ mod tests {
 
     #[test]
     fn queue_idle_prompt_renders_evaluator_policy() {
-        // The queue-idle prompt must keep evaluator rules after the main reply
-        // so they can override stale or optimistic completion language.
+        // queue-idle prompt는 evaluator rule을 main reply 뒤에 유지해야 한다.
+        // 그래야 stale하거나 낙관적인 completion language를 override할 수 있다.
         let authority_context = PlanningWorkerAuthorityPromptContext {
             status_lines: vec![
                 "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
@@ -304,8 +296,7 @@ mod tests {
 
     #[test]
     fn official_completion_prompt_keeps_parallel_worktree_out_of_tool_workspace() {
-        // Parallel completion payloads include their source worktree, but the
-        // planning-tool command still runs from the official app workspace.
+        // parallel completion payload에는 source worktree가 들어 있지만, planning-tool command는 여전히 official app workspace에서 실행된다.
         let authority_context = PlanningWorkerAuthorityPromptContext {
             status_lines: vec![
                 "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
