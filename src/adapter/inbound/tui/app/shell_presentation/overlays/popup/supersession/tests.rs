@@ -57,6 +57,11 @@ fn distributor_lines_render_blocked_head_and_rebase_provenance() {
 fn distributor_lines_omit_duplicate_note_when_blocked_detail_matches() {
     // The snapshot exposes both a generic note and structured blocked-head detail.
     // When they are identical, the popup should show the stronger label once.
+    /*
+    This protects the narrow popup from repeating a long recovery message twice.
+    The stronger "blocked head" label carries operator intent, while "note" is
+    only useful when it adds different queue context.
+    */
     let detail = "rebased branch `akra-agent/slot-1/task-one` could not be force-pushed: rejected";
     let snapshot = ParallelModeDistributorSnapshot::new(
         vec![ParallelModeDistributorQueueItem::new(
@@ -91,6 +96,11 @@ fn distributor_lines_render_head_marker_and_humanized_queue_state_labels() {
     */
     let snapshot = ParallelModeDistributorSnapshot::new(
         vec![
+            /*
+            The first item is intentionally pr_pending rather than blocked. That
+            proves the "current" marker belongs to queue order, not only to error
+            states, and keeps GitHub wait states visible as active head work.
+            */
             ParallelModeDistributorQueueItem::new(
                 "agent-1",
                 "Task One",
@@ -190,6 +200,11 @@ fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
         ParallelModeSupervisorState::Supervise,
         "/tmp/workspace",
         ParallelModePoolBoardSnapshot::new(0, "/tmp/pool", "idle", Vec::new()),
+        /*
+        Roster and detail deliberately disagree on the lifecycle phase: the roster
+        row uses the agent-facing reported state, while the selected detail has
+        already advanced to commit_ready. The popup must preserve both perspectives.
+        */
         ParallelModeAgentRosterSnapshot::new(
             vec![ParallelModeAgentRosterEntry::new(
                 "agent-1",
@@ -220,6 +235,11 @@ fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
                 "official ledger refresh succeeded",
                 Some("commit-ready result accepted into distributor queue".to_string()),
                 vec![
+                    /*
+                    History rows keep the chronological bridge from agent report
+                    to official ledger acceptance. The assertions below pin both
+                    state-label humanization and ordering-sensitive copy.
+                    */
                     ParallelModeAgentSessionHistoryEntry::new(
                         "reported_complete",
                         "2026-04-17T00:01:00Z",
@@ -272,6 +292,11 @@ fn roster_and_detail_lines_surface_missing_slot_worktree_health() {
     let snapshot = ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/workspace",
+        /*
+        The pool board is the only source of worktree health. The agent session
+        below still looks running, so this fixture proves the popup joins pool
+        reconciliation data back onto roster and detail rows.
+        */
         ParallelModePoolBoardSnapshot::new(
             3,
             "/tmp/pool",
