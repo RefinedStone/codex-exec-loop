@@ -8,18 +8,18 @@ use crate::domain::planning::{
 };
 
 /*
- * These tests pin the application validation boundary used by draft promotion, runtime snapshots,
- * proposal promotion, doctor, and reset flows.
- * They intentionally exercise PlanningValidationService through PlanningWorkspaceFiles so each case proves
- * the same report codes that adapters show to operators, instead of testing domain validators in isolation.
+ * 이 테스트 묶음은 draft promotion, runtime snapshot, proposal promotion, doctor, reset이
+ * 공유하는 application validation boundary를 고정한다. domain validator를 직접 호출하지 않고
+ * `PlanningWorkspaceFiles`를 통해 `PlanningValidationService`를 통과시키는 이유는 adapter가
+ * operator에게 보여 주는 report code와 동일한 표면을 검증하기 위해서다.
  */
 
-// Shared successful result-output contract; individual tests replace it only when they target markdown rules.
+// 공통 성공 fixture는 result-output 계약을 의도적으로 단조롭게 유지한다. task-authority 테스트가
+// unrelated markdown noise가 아니라 자신이 만든 JSON/semantic 조건 때문에만 실패하게 한다.
 fn valid_result_output_markdown() -> &'static str {
     /*
-     * Keep the shared prompt valid and intentionally boring. Task-authority
-     * tests should fail only on the JSON or cross-document condition they set
-     * up, not on result-output markdown noise from an unrelated fixture.
+     * worker completion summary의 최소 계약만 포함한다. heading과 instruction line이 모두
+     * 있어서 markdown validator를 통과하지만, placeholder나 path 정책과 엮이지 않는다.
      */
     r#"# Result Output Prompt
 
@@ -29,9 +29,9 @@ fn valid_result_output_markdown() -> &'static str {
 }
 
 /*
- * Minimal direction catalog for semantic validation cases.
- * The helper keeps direction ids explicit so each task-authority fixture can show whether it is testing a
- * missing relation, an LLM-authored relation note, or graph invariants against a known direction.
+ * semantic validation fixture용 최소 direction catalog다. direction id를 호출부가 명시하게
+ * 둔 이유는 각 task-authority JSON이 missing relation, LLM provenance, graph invariant 중
+ * 무엇을 검증하는지 direction 이름만 봐도 드러나게 하려는 것이다.
  */
 fn test_directions(direction_id: &str) -> DirectionCatalogDocument {
     DirectionCatalogDocument {
@@ -49,13 +49,13 @@ fn test_directions(direction_id: &str) -> DirectionCatalogDocument {
     }
 }
 
-// Bootstrap output is the golden baseline: generated detail-mode artifacts must pass the same validator.
+// bootstrap output은 golden baseline이다. detail-mode가 생성한 최초 planning authority도
+// promotion/doctor/runtime과 같은 validator를 통과해야 이후 흐름의 기본 전제가 성립한다.
 #[test]
 fn bootstrap_artifacts_validate_successfully() {
     /*
-     * Bootstrap artifacts are the first planning files many workspaces ever see.
-     * Running them through the public service catches drift between generated
-     * defaults and the stricter validator used later by promotion and doctor.
+     * 많은 workspace에서 bootstrap artifact가 첫 authority 문서가 된다. public service로
+     * 직접 검증해 generated default와 나중에 쓰이는 엄격한 validation gate 사이의 drift를 잡는다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -73,14 +73,13 @@ fn bootstrap_artifacts_validate_successfully() {
     assert!(result.task_authority.is_some());
 }
 
-// Cross-document semantics: every task must stay attached to a known direction catalog entry.
+// cross-document semantic: 모든 task는 catalog에 존재하는 direction에 붙어 있어야 한다.
 #[test]
 fn rejects_unknown_direction_references() {
     /*
-     * This is a workspace-level check, not a JSON-shape check: the task document
-     * is parseable, but the direction catalog cannot explain where the work
-     * belongs. Operators need the TaskAuthority issue code so they know which
-     * authority file to edit.
+     * JSON shape는 유효하지만 direction catalog가 workstream 소속을 설명하지 못하는
+     * workspace-level 실패다. issue file_kind가 TaskAuthority로 남아야 operator가 어떤
+     * authority 관계를 고쳐야 하는지 알 수 있다.
      */
     let validation_service = PlanningValidationService::new();
     let directions = test_directions("product-direction");
@@ -118,13 +117,13 @@ fn rejects_unknown_direction_references() {
     }));
 }
 
-// LLM-authored work needs an explicit relation note so later operators can audit why it belongs to a direction.
+// LLM-authored work는 나중에 operator가 direction 소속 이유를 감사할 수 있도록 relation note가 필요하다.
 #[test]
 fn rejects_llm_tasks_without_relation_notes() {
     /*
-     * User-authored fixtures elsewhere may leave relation notes empty, but LLM
-     * proposals need provenance text. This test keeps that stricter policy tied
-     * to actor/source semantics rather than a blanket non-empty string rule.
+     * user-authored task는 다른 경로에서 relation note가 비어 있을 수 있지만, LLM proposal은
+     * provenance text가 필요하다. 이 fixture는 단순 non-empty 문자열 규칙이 아니라
+     * actor/source semantics에 묶인 stricter policy임을 고정한다.
      */
     let validation_service = PlanningValidationService::new();
     let directions = test_directions("direction-a");
@@ -162,13 +161,13 @@ fn rejects_llm_tasks_without_relation_notes() {
     }));
 }
 
-// Queue graph semantics reject dependency loops before runtime queue projection chooses executable work.
+// queue graph semantic은 runtime queue projection이 executable work를 고르기 전에 dependency loop를 막는다.
 #[test]
 fn rejects_dependency_cycles() {
     /*
-     * The runtime queue builder assumes validation has already ruled out cycles.
-     * A two-node loop is the smallest fixture that proves graph traversal runs
-     * after parsing and before queue projection can mark either task executable.
+     * runtime queue builder는 validation이 cycle을 이미 제거했다고 가정한다. 두 노드 loop는
+     * parsing 이후, queue projection 이전에 graph traversal이 실행된다는 점을 증명하는
+     * 가장 작은 fixture다.
      */
     let validation_service = PlanningValidationService::new();
     let directions = test_directions("direction-a");
@@ -223,14 +222,13 @@ fn rejects_dependency_cycles() {
     }));
 }
 
-// Version checks happen through semantic validation even when the JSON shape itself is minimal.
+// version check는 JSON shape가 최소 형태여도 semantic validation의 독립 code로 보고된다.
 #[test]
 fn rejects_unsupported_task_authority_version_without_schema_validation() {
     /*
-     * A minimal `{version: 2}` payload avoids task-field noise and proves version
-     * compatibility is reported as its own semantic code. That distinction lets
-     * repair tools decide whether to migrate the document or ask for manual
-     * schema repair.
+     * `{version: 2}`만 둔 payload는 task field noise를 제거한다. version compatibility가
+     * 자체 semantic code로 보고되어야 repair tool이 migration 대상인지 수동 schema repair
+     * 대상인지 구분할 수 있다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -250,13 +248,13 @@ fn rejects_unsupported_task_authority_version_without_schema_validation() {
     }));
 }
 
-// Serde shape validation rejects unknown task fields before semantic checks can treat them as accepted authority.
+// serde shape validation은 semantic check가 accepted authority로 취급하기 전에 unknown field를 거부한다.
 #[test]
 fn rejects_unknown_task_authority_fields() {
     /*
-     * Unknown fields are rejected at parse time so future or misspelled authority
-     * keys cannot be silently ignored. The expected code stays coarse because
-     * adapters only need to tell the operator that JSON decoding failed.
+     * unknown field는 parse time에 막아 future key나 오탈자 authority key가 조용히 무시되지
+     * 않게 한다. adapter에는 JSON decoding 실패라는 coarse code만 필요하므로 세부 serde
+     * message를 별도 contract로 만들지 않는다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -297,16 +295,15 @@ fn rejects_unknown_task_authority_fields() {
 }
 
 /*
- * Multiple domain invariants should accumulate in one report.
- * This protects editor and CLI callers from a fix-one-error-at-a-time loop when task state, dependency,
- * blocker, and in-progress rules are all broken in the same authority document.
+ * 여러 domain invariant는 하나의 report에 누적되어야 한다. task state, dependency,
+ * blocker, in-progress rule이 같은 authority 문서에서 동시에 깨졌을 때 editor/CLI가
+ * 한 번에 하나씩만 고치는 반복 루프에 빠지지 않게 하는 계약이다.
  */
 #[test]
 fn rejects_conflicting_done_relationships_and_multiple_in_progress_tasks() {
     /*
-     * This document intentionally violates several independent invariants in a
-     * single pass. The validator must keep accumulating report entries so a TUI
-     * or CLI repair screen can show the whole damage map at once.
+     * 이 문서는 여러 독립 invariant를 의도적으로 동시에 깨뜨린다. validator는 첫 실패에서
+     * 멈추지 않고 report entry를 계속 쌓아 TUI/CLI repair 화면이 전체 손상 지도를 보여 주게 한다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -391,13 +388,12 @@ fn rejects_conflicting_done_relationships_and_multiple_in_progress_tasks() {
     }));
 }
 
-// result-output.md must start with a heading because prompt assembly and admin previews read it as a section.
+// result-output.md는 prompt assembly와 admin preview가 section으로 읽으므로 heading으로 시작해야 한다.
 #[test]
 fn rejects_result_output_without_heading() {
     /*
-     * A non-blank paragraph is still invalid here: prompt assembly treats the
-     * file as a named markdown section, so the heading is part of the runtime
-     * contract rather than presentation polish.
+     * 빈 문서가 아니어도 heading 없는 paragraph는 invalid다. prompt assembly가 이 파일을
+     * named markdown section으로 다루기 때문에 heading은 표시 장식이 아니라 runtime contract다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -417,13 +413,13 @@ fn rejects_result_output_without_heading() {
     }));
 }
 
-// Placeholder markers are warnings: the document may still be usable, but operators should see edit residue.
+// placeholder marker는 warning이다. 문서는 사용할 수 있지만 operator에게 편집 잔여물을 보여 줘야 한다.
 #[test]
 fn warns_on_result_output_placeholders() {
     /*
-     * Placeholder text should not block runtime startup if the rest of the
-     * workspace is sound. Keeping this as a warning lets doctor/admin surfaces
-     * surface cleanup advice without making generated workspaces unusable.
+     * 나머지 workspace가 정상이라면 placeholder text만으로 runtime startup을 막지 않는다.
+     * warning으로 유지해 doctor/admin surface가 cleanup advice를 보여 주면서도 generated
+     * workspace를 unusable 상태로 만들지 않게 한다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -446,13 +442,13 @@ fn warns_on_result_output_placeholders() {
     }));
 }
 
-// A blank result-output contract is a hard error because runtime completion copy would have no instruction.
+// 빈 result-output contract는 runtime completion copy가 따를 instruction이 없으므로 hard error다.
 #[test]
 fn rejects_blank_result_output_prompt() {
     /*
-     * Blank content is stricter than a placeholder warning because the worker
-     * would have no completion-output instructions to follow. The fixture uses
-     * spaces to prove trimming happens before the hard-error decision.
+     * blank content는 placeholder warning보다 엄격하다. worker가 따를 completion-output
+     * instruction 자체가 없기 때문이다. space-only fixture로 hard-error 판단 전에 trim이
+     * 적용됨을 고정한다.
      */
     let bootstrap_service = PlanningBootstrapService::new();
     let validation_service = PlanningValidationService::new();
@@ -472,16 +468,16 @@ fn rejects_blank_result_output_prompt() {
 }
 
 /*
- * Supporting-file validation is separate from validate_workspace_files.
- * These path tests first prove the authority documents parse, then run the extra filesystem-aware check so
- * sandbox failures are attributed to the direction supporting-file contract rather than JSON semantics.
+ * supporting-file validation은 `validate_workspace_files`와 분리되어 있다. path 테스트들은 먼저
+ * authority document가 parse/semantic validation을 통과함을 보인 뒤 filesystem-aware check를
+ * 추가로 실행한다. 그래야 sandbox failure가 JSON semantics가 아니라 direction supporting-file
+ * contract의 문제로 attribution된다.
  */
 #[test]
 fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
     /*
-     * Prefix text is not enough for sandbox validation. A sibling directory such
-     * as `directions_backup` must not pass just because the string starts with
-     * the approved `.codex-exec-loop/planning/directions` characters.
+     * sandbox validation은 문자열 prefix만 보지 않는다. `directions_backup` 같은 sibling directory가
+     * 승인된 `.codex-exec-loop/planning/directions` 문자로 시작한다는 이유만으로 통과하면 안 된다.
      */
     let validation_service = PlanningValidationService::new();
     let mut directions = test_directions("direction-a");
@@ -507,9 +503,8 @@ fn rejects_detail_doc_paths_that_only_match_prefix_textually() {
 #[test]
 fn rejects_detail_doc_paths_with_parent_dir_components() {
     /*
-     * Parent traversal is rejected even when the normalized path might land back
-     * near the expected tree. The authority document should contain clean,
-     * reviewable relative paths rather than relying on filesystem resolution.
+     * parent traversal은 정규화 후 예상 tree 근처로 돌아올 수 있어도 거부된다. authority 문서는
+     * filesystem resolution에 기대지 않는 깨끗하고 review 가능한 relative path를 담아야 한다.
      */
     let validation_service = PlanningValidationService::new();
     let mut directions = test_directions("direction-a");
@@ -532,13 +527,13 @@ fn rejects_detail_doc_paths_with_parent_dir_components() {
     }));
 }
 
-// Queue-idle prompt paths use the prompts sandbox, distinct from detail-doc direction files.
+// queue-idle prompt path는 detail-doc direction file과 다른 prompts sandbox를 사용한다.
 #[test]
 fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
     /*
-     * Queue-idle prompts live under the prompt sandbox, not the direction-detail
-     * sandbox. This mirrors the detail-doc prefix test so both path families use
-     * component-aware checks instead of starts_with-style filtering.
+     * queue-idle prompt는 direction-detail sandbox가 아니라 prompt sandbox 아래에 산다.
+     * detail-doc prefix 테스트와 같은 형태로 두 path family가 모두 starts_with 방식이 아닌
+     * component-aware 검사를 쓴다는 점을 고정한다.
      */
     let validation_service = PlanningValidationService::new();
     let mut directions = test_directions("direction-a");
@@ -567,9 +562,9 @@ fn rejects_queue_idle_prompt_paths_that_only_match_prefix_textually() {
 #[test]
 fn rejects_queue_idle_prompt_paths_with_parent_dir_components() {
     /*
-     * Queue-idle automation can run without a human selecting a task, so its
-     * prompt path gets the same traversal guard as direction detail docs. The
-     * test keeps the policy local to supporting-file validation.
+     * queue-idle automation은 사람이 task를 직접 고르지 않아도 실행될 수 있다. 따라서 prompt
+     * path도 direction detail doc과 같은 traversal guard를 받으며, 이 테스트는 그 정책이
+     * supporting-file validation 경계에 머문다는 점을 보여 준다.
      */
     let validation_service = PlanningValidationService::new();
     let mut directions = test_directions("direction-a");
