@@ -6,23 +6,23 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use rand::RngCore;
 
-// Shared double-submit token name for both browser pages and JSON mutations.
+// browser page와 JSON mutation이 함께 쓰는 double-submit token cookie 이름이다.
 const CSRF_COOKIE_NAME: &str = "akra_admin_csrf";
 
-// Build redirect targets that carry operator notices without trusting callers to remember URI escaping.
+// caller가 URI escaping을 기억한다고 믿지 않고, operator notice를 담은 redirect target을 여기서 조립한다.
 pub(super) fn notice_location(path: &str, notice: &str) -> String {
     format!("{path}?notice={}", encode_uri_component(notice))
 }
 
-// Conservative component escaping for notices that may include paths, spaces, or service error text.
+// notice에는 path, 공백, service error text가 들어갈 수 있으므로 conservative component escaping을 적용한다.
 pub(super) fn encode_uri_component(value: &str) -> String {
     utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
 }
 
 /*
- * Ensure the local admin session has a CSRF token and return the value for templates or JSON bootstrap.
- * The admin API has no server-side session store, so pages, HTMX calls, and JSON handlers all use the
- * same cookie-backed double-submit token instead of maintaining per-form server state.
+ * local admin session에 CSRF token이 있는지 보장하고, template/JSON bootstrap이 쓸 값을 반환한다.
+ * admin API에는 server-side session store가 없으므로 page, HTMX call, JSON handler 모두 per-form server state 대신
+ * 같은 cookie-backed double-submit token을 사용한다.
  */
 pub(super) fn ensure_csrf_cookie(jar: CookieJar) -> (CookieJar, String) {
     if let Some(existing) = jar
@@ -35,15 +35,15 @@ pub(super) fn ensure_csrf_cookie(jar: CookieJar) -> (CookieJar, String) {
     let token = new_csrf_token();
     let cookie = Cookie::build((CSRF_COOKIE_NAME, token.clone()))
         .path("/")
-        // Lax fits local admin navigation/forms while reducing cross-site subrequest attachment.
+        // Lax는 local admin navigation/form에 충분하고, cross-site subrequest에 cookie가 붙는 범위를 줄인다.
         .same_site(SameSite::Lax)
-        // JSON/HTMX clients mirror the cookie into x-csrf-token, so JavaScript must be able to read it.
+        // JSON/HTMX client가 cookie 값을 x-csrf-token으로 mirror해야 하므로 JavaScript가 읽을 수 있어야 한다.
         .http_only(false)
         .build();
     (jar.add(cookie), token)
 }
 
-// Verify classic HTML form mutations against the shared cookie value.
+// classic HTML form mutation을 shared cookie 값과 비교해 검증한다.
 pub(super) fn verify_form_csrf(
     jar: &CookieJar,
     token: &str,
@@ -52,7 +52,7 @@ pub(super) fn verify_form_csrf(
         .get(CSRF_COOKIE_NAME)
         .map(|cookie| cookie.value().to_string())
         .ok_or(StatusCode::FORBIDDEN)?;
-    // This local-only admin surface uses a direct comparison; internet-facing deployment would need timing-safe review.
+    // 이 local-only admin surface는 direct comparison을 사용한다. internet-facing 배포라면 timing-safe 검토가 필요하다.
     if cookie_value == token {
         Ok(())
     } else {
@@ -60,7 +60,7 @@ pub(super) fn verify_form_csrf(
     }
 }
 
-// Verify JSON/HTMX mutations that reflect the cookie token through x-csrf-token.
+// cookie token을 x-csrf-token header로 반사하는 JSON/HTMX mutation을 검증한다.
 pub(super) fn verify_header_csrf(
     jar: &CookieJar,
     headers: &HeaderMap,
@@ -69,7 +69,7 @@ pub(super) fn verify_header_csrf(
         .get(CSRF_COOKIE_NAME)
         .map(|cookie| cookie.value().to_string())
         .ok_or(StatusCode::FORBIDDEN)?;
-    // Missing, non-UTF8, and mismatched header values all collapse to forbidden to avoid leaking failure detail.
+    // missing, non-UTF8, mismatch header 값은 모두 forbidden으로 접어 실패 세부를 노출하지 않는다.
     let header_value = headers
         .get("x-csrf-token")
         .and_then(|value| value.to_str().ok())
@@ -81,22 +81,22 @@ pub(super) fn verify_header_csrf(
     }
 }
 
-// Generate an opaque token that is safe to echo through cookie, hidden form field, and request header.
+// cookie, hidden form field, request header를 통해 echo해도 되는 opaque token을 만든다.
 fn new_csrf_token() -> String {
     let mut bytes = [0_u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-// Detect the exact HTMX request marker before choosing fragment rendering over full-page responses.
+// full-page response 대신 fragment rendering을 선택하기 전에 정확한 HTMX request marker를 확인한다.
 pub(super) fn is_htmx_request(headers: &HeaderMap) -> bool {
     headers
         .get("hx-request")
-        // Only HTMX's standard lowercase true enters the fragment path; variants fall back to full pages.
+        // HTMX의 표준 lowercase true만 fragment path로 들어간다. 다른 변형은 full page로 fallback한다.
         .is_some_and(|value| value == HeaderValue::from_static("true"))
 }
 
-// Render full admin pages and propagate CookieJar mutations such as a freshly issued CSRF cookie.
+// full admin page를 render하고, 새로 발급된 CSRF cookie 같은 CookieJar mutation을 함께 전달한다.
 pub(super) fn render_html<T: Template>(
     jar: CookieJar,
     template: T,
@@ -105,7 +105,7 @@ pub(super) fn render_html<T: Template>(
     Ok((jar, Html(body)).into_response())
 }
 
-// Render HTMX fragments without cookie mutations; callers use this after page bootstrap established CSRF.
+// HTMX fragment는 cookie mutation 없이 render한다. caller는 page bootstrap이 CSRF를 설정한 뒤 이 helper를 쓴다.
 pub(super) fn render_fragment<T: Template>(
     template: T,
 ) -> std::result::Result<Response, StatusCode> {
@@ -113,7 +113,7 @@ pub(super) fn render_fragment<T: Template>(
     Ok(Html(body).into_response())
 }
 
-// Common inbound error adapter: keep detailed diagnostics server-side and expose only a 500 response.
+// 공통 inbound error adapter다. 자세한 diagnostic은 server-side에 남기고 외부에는 500 response만 노출한다.
 pub(super) fn internal_server_error(error: impl Into<anyhow::Error>) -> StatusCode {
     eprintln!("admin server error: {:#}", error.into());
     StatusCode::INTERNAL_SERVER_ERROR
