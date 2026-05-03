@@ -32,10 +32,10 @@ use self::supporting_files::{
 };
 
 /*
- * Direction maintenance sits between DB-backed direction authority and
- * workspace-backed markdown files. The catalog names each supporting file, but
- * the file bodies live in the planning workspace, so this service keeps
- * mapping, staging, validation, and operator summaries aligned.
+ * direction maintenance는 DB-backed direction authority와 workspace-backed markdown file 사이에 놓인 authoring
+ * boundary다. catalog는 supporting file path만 알고 있고, 실제 detail doc/prompt body는 planning workspace에
+ * 있다. 이 service는 그 둘을 같은 contract처럼 다루기 위해 mapping repair, editor staging, validation, operator
+ * summary를 한 흐름으로 맞춘다.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectionsSupportingFileStatus {
@@ -45,8 +45,8 @@ pub enum DirectionsSupportingFileStatus {
 }
 impl DirectionsSupportingFileStatus {
     pub fn label(self) -> &'static str {
-        // These labels are presentation-facing status atoms; the admin and TUI
-        // surfaces use them to summarize whether repair is needed.
+        // label은 admin/TUI가 supporting file 상태를 짧게 보여 주는 presentation-facing atom이다. domain enum 이름을
+        // 그대로 노출하지 않고 "unset/ready/broken"으로 고정해 route/template 쪽 표시 계약을 안정화한다.
         match self {
             Self::MissingMapping => "unset",
             Self::Ready => "ready",
@@ -59,8 +59,8 @@ impl DirectionsSupportingFileStatus {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectionsMaintenanceDirectionSummary {
-    // Summary rows intentionally avoid full direction bodies. The maintenance
-    // surface only needs identity plus supporting-file health.
+    // summary row는 full direction body를 의도적으로 피한다. directions page는 operator가 어떤 detail doc을 고쳐야
+    // 하는지 판단하는 목록이라 identity와 supporting-file health만 필요하다.
     pub id: String,
     pub title: String,
     pub detail_doc_path: Option<String>,
@@ -68,8 +68,8 @@ pub struct DirectionsMaintenanceDirectionSummary {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectionsMaintenanceSummary {
-    // This projection is the admin checklist: per-direction detail docs,
-    // aggregate repair counts, and the queue-idle prompt mapping.
+    // 이 projection은 admin checklist다. direction별 detail doc 상태, aggregate repair count, queue-idle prompt
+    // mapping을 한 번에 내려 operator가 repair/editor 진입점을 고를 수 있게 한다.
     pub directions: Vec<DirectionsMaintenanceDirectionSummary>,
     pub missing_detail_doc_count: usize,
     pub broken_detail_doc_count: usize,
@@ -80,17 +80,16 @@ pub struct DirectionsMaintenanceSummary {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueIdleReviewContext {
-    // Runtime queue-idle review reads normalized prompt markdown from here. The
-    // policy still comes from authority, so disabling review does not require
-    // deleting the supporting prompt file.
+    // runtime queue-idle review는 여기서 normalized prompt markdown을 읽는다. policy는 여전히 authority에서 오므로,
+    // review를 끄는 일과 supporting prompt file을 삭제하는 일은 분리된다.
     pub policy: QueueIdlePolicy,
     pub prompt_path: Option<String>,
     pub prompt_markdown: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningDoctorOutcome {
-    // Doctor output separates authority mapping repair from workspace file
-    // creation so operator feedback can explain which layer changed.
+    // doctor output은 authority mapping repair와 workspace file creation을 분리해 기록한다. operator feedback이
+    // "catalog path를 고쳤는가"와 "실제 markdown file을 만들었는가"를 구분해서 설명할 수 있게 하기 위함이다.
     pub repaired_detail_doc_mappings: usize,
     pub created_detail_doc_files: usize,
     pub repaired_queue_idle_prompt_mapping: bool,
@@ -99,8 +98,8 @@ pub struct PlanningDoctorOutcome {
 }
 impl PlanningDoctorOutcome {
     pub fn applied_fix_count(&self) -> usize {
-        // The coarse count is for status copy; validation_report carries the
-        // deeper post-repair contract state.
+        // coarse count는 status copy용이다. post-repair contract의 자세한 상태는 validation_report가 담으므로,
+        // 여기서는 몇 가지 자동 repair가 적용됐는지만 합산한다.
         self.repaired_detail_doc_mappings
             + self.created_detail_doc_files
             + usize::from(self.repaired_queue_idle_prompt_mapping)
@@ -109,8 +108,8 @@ impl PlanningDoctorOutcome {
 }
 #[derive(Clone)]
 pub struct PlanningDirectionsService {
-    // Workspace port owns markdown bodies, repository port owns direction
-    // authority, and validation binds the two views into one coherent contract.
+    // workspace port는 markdown body를 소유하고, repository port는 direction authority를 소유한다. validation은
+    // 두 view를 하나의 coherent planning contract로 묶는다.
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     planning_validation_service: PlanningValidationService,
@@ -124,8 +123,8 @@ impl PlanningDirectionsService {
         priority_queue_service: PriorityQueueService,
     ) -> Self {
         Self {
-            // The seed service prevents each direction-maintenance entrypoint
-            // from duplicating "make planning usable before reading it" logic.
+            // seed service는 direction-maintenance entrypoint마다 "읽기 전에 planning을 usable하게 만들기" 로직을
+            // 복제하지 않게 한다. summary/editor/runtime context가 모두 같은 default authority baseline에서 시작한다.
             authority_seed_service: PlanningAuthoritySeedService::new(
                 planning_workspace_port.clone(),
                 planning_task_repository_port.clone(),
@@ -139,8 +138,8 @@ impl PlanningDirectionsService {
     }
 
     fn load_direction_catalog(&self, workspace_dir: &str) -> Result<DirectionCatalogDocument> {
-        // Direction maintenance can be the first planning feature a workspace
-        // touches, so reads always pass through default-authority seeding.
+        // direction maintenance가 workspace에서 처음 사용하는 planning 기능일 수 있다. 그래서 catalog read는 항상
+        // default-authority seeding을 먼저 통과해 missing direction authority를 normal startup state로 복구한다.
         self.authority_seed_service
             .ensure_default_authority(workspace_dir)?;
         self.planning_task_repository_port
@@ -153,8 +152,8 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         directions: &DirectionCatalogDocument,
     ) -> Result<()> {
-        // Direction edits commit only the catalog. Supporting markdown bodies
-        // stay in workspace drafts and are promoted by the shared draft flow.
+        // direction edit는 catalog만 commit한다. supporting markdown body는 workspace draft에 남고 shared draft
+        // promotion flow가 active file로 옮긴다. path authority와 body authority를 한 commit에 섞지 않는 경계다.
         match self
             .planning_task_repository_port
             .commit_direction_authority_snapshot(
@@ -172,9 +171,8 @@ impl PlanningDirectionsService {
     }
 
     pub fn load_summary(&self, workspace_dir: &str) -> Result<DirectionsMaintenanceSummary> {
-        // Summary loading performs health checks without opening every body:
-        // configured paths must live under the expected planning directories
-        // and resolve through the workspace port.
+        // summary loading은 모든 body를 열어 보여 주기보다 health check에 집중한다. configured path가 expected
+        // planning directory 아래에 있는지, workspace port로 실제 읽을 수 있는지 검사해 repair 필요성을 판단한다.
         let catalog = self.load_direction_catalog(workspace_dir)?;
         let queue_idle_prompt_path =
             trimmed_non_empty(catalog.queue_idle.prompt_path.as_str()).map(str::to_string);
@@ -187,8 +185,8 @@ impl PlanningDirectionsService {
             .directions
             .into_iter()
             .map(|direction| {
-                // Trimmed ids/titles keep read-only projections clean without
-                // mutating direction authority during summary rendering.
+                // id/title은 trim해서 read-only projection을 깨끗하게 만든다. summary rendering 중 authority를 mutate하지
+                // 않으면서도 admin 목록에는 불필요한 공백이 보이지 않게 한다.
                 let detail_doc_path =
                     trimmed_non_empty(direction.detail_doc_path.as_str()).map(str::to_string);
                 let detail_doc_status = self.supporting_file_status(
@@ -204,8 +202,8 @@ impl PlanningDirectionsService {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        // Missing means authority has no path; broken means a configured path
-        // is invalid or the referenced workspace file cannot be loaded.
+        // Missing은 authority에 path가 없다는 뜻이고, broken은 configured path가 invalid하거나 referenced workspace
+        // file을 읽을 수 없다는 뜻이다. 둘을 나눠야 admin이 mapping 생성과 file 생성/수정을 다른 action으로 보여 준다.
         let missing_detail_doc_count = directions
             .iter()
             .filter(|direction| {
@@ -233,8 +231,8 @@ impl PlanningDirectionsService {
         &self,
         workspace_dir: &str,
     ) -> Result<QueueIdleReviewContext> {
-        // Runtime review tolerates an absent prompt body by returning None, but
-        // still exposes authority policy/path for orchestration decisions.
+        // runtime review는 prompt body 부재를 None으로 낮춘다. 그래도 authority policy/path는 그대로 노출해
+        // orchestration이 "review disabled"와 "review enabled but prompt missing"을 구분할 수 있게 한다.
         let directions = self.load_direction_catalog(workspace_dir)?;
         let prompt_path =
             trimmed_non_empty(directions.queue_idle.prompt_path.as_str()).map(str::to_string);
@@ -253,9 +251,8 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         direction_id: &str,
     ) -> Result<PlanningDraftEditorSession> {
-        // Opening a detail-doc editor may first repair the catalog path. The
-        // chosen path is committed to authority, while the markdown body is
-        // staged as a workspace file for validation and later promotion.
+        // detail-doc editor를 열 때 catalog path를 먼저 repair할 수 있다. 선택된 path는 direction authority에 commit하고,
+        // markdown body는 validation과 later promotion을 위해 workspace draft file로 stage한다.
         let mut workspace = self.load_complete_workspace(workspace_dir)?;
         let selected_direction = workspace
             .directions
@@ -273,8 +270,7 @@ impl PlanningDirectionsService {
         workspace
             .extra_files
             .retain(|file| file.active_path != detail_doc_path);
-        // Replace any loaded copy so the draft contains the resolver-selected
-        // detail file exactly once.
+        // resolver가 선택한 detail file이 draft에 정확히 한 번만 들어가도록 이미 load된 copy를 교체한다.
         workspace.extra_files.push(PlanningDraftFileRecord {
             active_path: detail_doc_path.clone(),
             body: detail_doc_body,
@@ -287,8 +283,8 @@ impl PlanningDirectionsService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningDraftEditorSession> {
-        // Queue-idle prompt editing follows the same split: authority stores
-        // the prompt path, workspace draft files store the editable markdown.
+        // queue-idle prompt editing도 같은 split을 따른다. authority는 prompt path를 저장하고, workspace draft file은
+        // operator가 편집할 markdown body를 저장한다.
         let mut workspace = self.load_complete_workspace(workspace_dir)?;
         let (prompt_path, prompt_body) = self.resolve_queue_idle_prompt_editor_target(
             workspace_dir,
@@ -299,8 +295,8 @@ impl PlanningDirectionsService {
         workspace
             .extra_files
             .retain(|file| file.active_path != prompt_path);
-        // Normalized/default prompt content is staged so the editor opens with
-        // a meaningful review contract even when the active file is missing.
+        // active file이 없거나 legacy copy여도 editor가 의미 있는 review contract로 열리도록 normalized/default prompt
+        // content를 stage한다.
         workspace.extra_files.push(PlanningDraftFileRecord {
             active_path: prompt_path.clone(),
             body: prompt_body,
@@ -315,9 +311,8 @@ impl PlanningDirectionsService {
         source: ActiveDirectionsWorkspace,
         editable_paths: &[String],
     ) -> Result<PlanningDraftEditorSession> {
-        // Specialized maintenance drafts carry result-output plus every loaded
-        // supporting file, but only editable_paths are exposed to the UI. The
-        // hidden files are present so validation sees a full planning picture.
+        // specialized maintenance draft는 result-output과 load된 supporting file 전체를 담지만, UI에는 editable_paths만
+        // 노출한다. 숨겨진 파일은 validation이 전체 planning picture를 볼 수 있게 하는 context다.
         let draft_name = build_maintenance_draft_name();
         let mut files = vec![PlanningDraftFileRecord {
             active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
@@ -353,8 +348,9 @@ impl PlanningDirectionsService {
     }
 
     fn load_complete_workspace(&self, workspace_dir: &str) -> Result<ActiveDirectionsWorkspace> {
-        // Build the source snapshot for editor drafts by joining authoritative
-        // directions, result-output markdown, and referenced supporting files.
+        // editor draft의 source snapshot은 authoritative directions, result-output markdown, referenced supporting
+        // files를 합쳐 만든다. 이 aggregate는 active workspace를 그대로 복사하는 것이 아니라 editor가 검증 가능한
+        // draft를 만들기 위한 임시 view다.
         self.authority_seed_service
             .ensure_default_authority(workspace_dir)?;
         let workspace = self
@@ -382,8 +378,8 @@ impl PlanningDirectionsService {
                 .filter_map(|direction| trimmed_non_empty(direction.detail_doc_path.as_str()))
                 .map(str::to_string),
         );
-        // Missing supporting files are omitted here. The resolver for the
-        // selected editor target can create an empty/default staged body later.
+        // missing supporting file은 여기서 생략한다. 선택된 editor target의 resolver가 나중에 empty/default staged body를
+        // 만들 수 있으므로, source snapshot 단계에서 없는 파일을 암묵적으로 생성하지 않는다.
         for supporting_path in supporting_paths {
             if let Some(body) =
                 self.load_supporting_file_best_effort(workspace_dir, &supporting_path)
@@ -402,8 +398,8 @@ impl PlanningDirectionsService {
         directions: &DirectionCatalogDocument,
         loaded: &PlanningDraftLoadRecord,
     ) -> Result<PlanningValidationReport> {
-        // Validate staged supporting files before active workspace files so an
-        // in-progress draft can fix broken mappings before promotion.
+        // staged supporting file을 active workspace file보다 먼저 검증한다. in-progress draft가 broken mapping을 고치는
+        // 중이라면 promotion 전 validation이 staged fix를 반영해야 한다.
         let staged_file_map = loaded
             .staged_files
             .iter()
@@ -417,8 +413,8 @@ impl PlanningDirectionsService {
                     .load_optional_planning_file(workspace_dir, RESULT_OUTPUT_FILE_PATH)?
                     .unwrap_or_default()
             };
-        // This editor does not modify task authority. A minimal valid document
-        // is enough to run direction/result-output validation in isolation.
+        // 이 editor는 task authority를 수정하지 않는다. direction/result-output validation을 독립적으로 돌리기 위해
+        // minimal valid task authority document만 사용한다.
         let mut result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions,
@@ -445,8 +441,8 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         relative_path: &str,
     ) -> Option<String> {
-        // Supporting file reads are advisory here; callers convert absence into
-        // explicit status, fallback body, or validation diagnostics.
+        // supporting file read는 여기서 advisory다. caller가 absence를 explicit status, fallback body, validation
+        // diagnostic 중 어떤 의미로 낮출지 결정한다.
         self.planning_workspace_port
             .load_optional_planning_file(workspace_dir, relative_path)
             .ok()
@@ -459,8 +455,8 @@ impl PlanningDirectionsService {
         configured_path: Option<&str>,
         required_prefix: &str,
     ) -> DirectionsSupportingFileStatus {
-        // A mapped supporting file is healthy only when it stays inside the
-        // expected planning directory and resolves through the workspace port.
+        // mapped supporting file은 expected planning directory 안에 있고 workspace port로 읽힐 때만 healthy다. path
+        // prefix validation과 file existence를 같이 보는 이유다.
         let Some(path) = configured_path else {
             return DirectionsSupportingFileStatus::MissingMapping;
         };
@@ -483,8 +479,8 @@ impl PlanningDirectionsService {
         direction_id: &str,
         configured_path: Option<&str>,
     ) -> Result<(String, String)> {
-        // Preserve a valid configured path even when the file is absent; an
-        // empty staged body lets the operator create the missing document.
+        // valid configured path는 file이 없어도 보존한다. empty staged body를 열어 주면 operator가 missing document를
+        // 같은 path에 새로 만들 수 있다.
         if let Some(path) = configured_path
             .filter(|path| is_valid_planning_markdown_path(path, PLANNING_DIRECTION_DOCS_DIRECTORY))
         {
@@ -497,8 +493,7 @@ impl PlanningDirectionsService {
                 Err(_) => {}
             }
         }
-        // Invalid or absent mappings fall back to the deterministic detail-doc
-        // path used by doctor/admin repair flows.
+        // invalid/absent mapping은 doctor/admin repair flow와 같은 deterministic detail-doc path로 fallback한다.
         let fallback_path = default_direction_detail_doc_path(direction_id);
         let fallback_body = self
             .load_supporting_file_best_effort(workspace_dir, &fallback_path)
@@ -511,8 +506,8 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         configured_path: Option<&str>,
     ) -> Result<(String, String)> {
-        // Preserve a valid configured prompt path and normalize loaded content
-        // into the canonical queue-idle review prompt shape.
+        // valid configured prompt path는 보존하되, loaded content는 canonical queue-idle review prompt shape로
+        // normalize한다. legacy file authority copy가 runtime으로 새지 않게 하는 repair 지점이다.
         if let Some(path) = configured_path
             .filter(|path| is_valid_planning_markdown_path(path, PLANNING_PROMPTS_DIRECTORY))
         {
@@ -535,8 +530,8 @@ impl PlanningDirectionsService {
                 Err(_) => {}
             }
         }
-        // The fallback path/body aligns Simple-mode bootstrap, doctor repair,
-        // and queue-idle runtime review on the same default prompt contract.
+        // fallback path/body는 Simple-mode bootstrap, doctor repair, queue-idle runtime review를 같은 default prompt
+        // contract에 맞춘다.
         let fallback_path = DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string();
         let fallback_body = self
             .load_supporting_file_best_effort(workspace_dir, &fallback_path)
@@ -546,8 +541,8 @@ impl PlanningDirectionsService {
 }
 
 struct ActiveDirectionsWorkspace {
-    // Internal aggregate used only while staging a maintenance draft. It joins
-    // authority and workspace bodies long enough to create a consistent draft.
+    // maintenance draft를 stage하는 동안만 쓰는 internal aggregate다. consistent draft를 만들 수 있을 만큼만 authority와
+    // workspace body를 결합한다.
     directions: DirectionCatalogDocument,
     result_output_markdown: String,
     extra_files: Vec<PlanningDraftFileRecord>,
