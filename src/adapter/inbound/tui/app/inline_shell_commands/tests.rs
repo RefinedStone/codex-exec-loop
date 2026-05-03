@@ -1,13 +1,14 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
 use super::{
     InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState, RESET_USAGE,
 };
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+/* Inline shell commands are typed directly into the prompt, so these tests pin
+ * both parser compatibility and the short copy that appears before execution.
+ * The aliases stay broad for operator muscle memory, but suggestions and help
+ * deliberately expose only canonical forms.
+ */
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn parse_recognizes_supported_aliases() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let cases = [
         (":diag", Some((InlineShellCommand::Diagnostics, None))),
         (
@@ -71,139 +72,99 @@ fn parse_recognizes_supported_aliases() {
         ("  :help  ", Some((InlineShellCommand::Help, None))),
         (":unknown", None),
     ];
-
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for (input, expected) in cases {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let parsed = InlineShellCommandInput::parse(input)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(|command| (command.command(), command.argument().map(str::to_string)));
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let expected = expected.map(|(command, argument)| (command, argument.map(str::to_string)));
         assert_eq!(parsed, expected, "{input}");
     }
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn suggestions_show_all_commands_for_colon_only() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let suggestions = InlineShellCommand::suggestions(":");
 
     assert_eq!(
         suggestions,
         vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Diagnostics,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Parallel,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Sessions,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Queue,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Directions,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Task,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Turns,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Stop,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Doctor,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Init,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::PlanningInit,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Reset,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::NewDraft,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Help,
         ]
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn suggestions_filter_by_prefix() {
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":p"),
         vec![
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::Parallel,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommand::PlanningInit
         ]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":q"),
         vec![InlineShellCommand::Queue]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":do"),
         vec![InlineShellCommand::Doctor]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":i"),
         vec![InlineShellCommand::Init]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":re"),
         vec![InlineShellCommand::Reset]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":st"),
         vec![InlineShellCommand::Stop]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":t"),
         vec![InlineShellCommand::Task, InlineShellCommand::Turns]
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestions(":tu"),
         vec![InlineShellCommand::Turns]
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn suggestion_prefix_only_stays_active_while_typing_command_name() {
+    // Argument text disables palette filtering so values like task titles or reset
+    // confirmations are not treated as command-name prefixes.
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestion_prefix(":planning"),
         Some(":planning".to_string())
     );
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestion_prefix("  :p"),
         Some(":p".to_string())
     );
     assert_eq!(InlineShellCommand::suggestion_prefix(":turns "), None);
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::suggestion_prefix(":planning doctor"),
         None
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn palette_state_keeps_selected_command_when_input_refines() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
     assert!(state.move_selection(10));
@@ -220,13 +181,10 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn completion_text_uses_canonical_argument_ready_command_forms() {
     assert_eq!(InlineShellCommand::Diagnostics.completion_text(), ":diag");
     assert_eq!(
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommand::PlanningInit.completion_text(),
         ":planning"
     );
@@ -239,11 +197,8 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn help_status_uses_short_overlay_status() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let help = InlineShellCommandInput::parse(":help").expect("help command should parse");
 
     assert_eq!(
@@ -252,19 +207,12 @@ fn help_status_uses_short_overlay_status() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn help_entries_use_renderable_command_forms() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let rendered = InlineShellCommand::help_entries()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .iter()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .map(|entry| format!("{} - {}", entry.usage, entry.detail))
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .collect::<Vec<_>>()
-        // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
         .join("\n");
 
     assert!(rendered.contains(":diag - diagnostics"));
@@ -276,13 +224,12 @@ fn help_entries_use_renderable_command_forms() {
     assert!(!rendered.contains(InlineShellCommand::command_list_line()));
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
+// The following hint tests protect operator-facing copy at the point where a
+// command is still buffered. Invalid arguments should explain the supported shape
+// before the user commits the command with Enter.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn planning_command_hint_is_argument_aware() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let doctor = InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
 
     assert_eq!(
@@ -295,15 +242,10 @@ fn planning_command_hint_is_argument_aware() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn directions_command_hint_is_argument_aware() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let plain = InlineShellCommandInput::parse(":directions").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let invalid =
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommandInput::parse(":directions later").expect("command should parse");
 
     assert_eq!(
@@ -316,13 +258,9 @@ fn directions_command_hint_is_argument_aware() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn queue_command_hint_is_argument_aware() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let plain = InlineShellCommandInput::parse(":queue").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let invalid = InlineShellCommandInput::parse(":queue later").expect("command should parse");
 
     assert_eq!(
@@ -335,21 +273,13 @@ fn queue_command_hint_is_argument_aware() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn parallel_command_hint_is_argument_aware() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let plain = InlineShellCommandInput::parse(":parallel").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let on = InlineShellCommandInput::parse(":parallel on").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let off = InlineShellCommandInput::parse(":parallel off").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let dispatch =
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommandInput::parse(":parallel dispatch").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let invalid = InlineShellCommandInput::parse(":parallel later").expect("command should parse");
 
     assert_eq!(
@@ -374,13 +304,9 @@ fn parallel_command_hint_is_argument_aware() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn doctor_and_init_command_hints_use_lifecycle_language() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let doctor = InlineShellCommandInput::parse(":doctor").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let init = InlineShellCommandInput::parse(":init").expect("command should parse");
 
     assert_eq!(
@@ -393,23 +319,14 @@ fn doctor_and_init_command_hints_use_lifecycle_language() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn reset_command_hint_is_argument_aware() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let plain = InlineShellCommandInput::parse(":reset").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let queue = InlineShellCommandInput::parse(":reset queue").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions =
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommandInput::parse(":reset directions").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let directions_confirm =
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
         InlineShellCommandInput::parse(":reset directions confirm").expect("command should parse");
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
     let invalid = InlineShellCommandInput::parse(":reset wrong").expect("command should parse");
 
     assert_eq!(plain.buffered_hint(), RESET_USAGE);
@@ -431,11 +348,10 @@ fn reset_command_hint_is_argument_aware() {
     );
 }
 
-// 학습 주석: `#[...]` 속성은 바로 뒤의 항목에 메타데이터를 붙여 파생 구현, 조건부 컴파일, 테스트 동작 등을 지정합니다.
 #[test]
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
 fn execution_status_stays_alias_neutral() {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // Execution status is shown after dispatch, so it describes the action instead of
+    // echoing whichever alias the operator typed.
     let cases = [
         (":diag", Some("opened diagnostics inspection")),
         (":sessions", Some("opened recent sessions inspection")),
@@ -448,12 +364,8 @@ fn execution_status_stays_alias_neutral() {
         (":stop", None),
         (":reset queue", None),
     ];
-
-    // 학습 주석: 반복문은 컬렉션이나 조건을 기준으로 같은 처리를 여러 번 수행할 때 사용합니다.
     for (input, expected) in cases {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let command =
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             InlineShellCommandInput::parse(input).expect("inline shell command should parse");
         assert_eq!(command.execution_status().as_deref(), expected);
     }
