@@ -16,19 +16,19 @@ use crate::domain::planning::{
 };
 
 /*
- * Projection code is the adapter-like part of the admin application service:
- * domain documents and runtime snapshots enter here, and route/template shaped
- * view models leave here. Keeping this translation centralized prevents admin
- * handlers from learning domain enum labels, queue preview limits, or form
- * text-joining rules.
+ * admin projection은 application service 안에 있지만 성격은 adapter에 가깝다. domain 문서와 runtime
+ * snapshot은 업무 규칙을 담은 원본이고, 여기서 나가는 값은 route/template/json client가 바로 소비하는
+ * 화면 계약이다. enum label, queue preview limit, textarea join 방식 같은 표시 규칙을 이 파일에 모아두면
+ * admin handler가 domain 구조를 직접 해석하지 않고 "읽기/쓰기 use case 호출"에만 집중할 수 있다.
  */
 pub(super) fn map_management_view(
     directions: &DirectionCatalogDocument,
     task_authority: &TaskAuthorityDocument,
     default_direction_id: &str,
 ) -> PlanningAdminManagementView {
-    // Direction ids are trimmed for the count join to match queue resolution
-    // behavior, while the original ids are preserved in the editable rows.
+    // task count는 direction id를 trim한 값으로 합산한다. queue resolution도 공백을 제거한 id로 연결을
+    // 판단하므로, admin 화면의 "이 direction에 몇 개 task가 붙었는가"가 runtime 판단과 어긋나지 않는다.
+    // 다만 editable row에는 원문 id를 유지해 operator가 실제 문서에 들어 있는 값을 그대로 볼 수 있게 한다.
     let mut task_counts = BTreeMap::<&str, usize>::new();
     for task in &task_authority.tasks {
         *task_counts.entry(task.direction_id.trim()).or_default() += 1;
@@ -36,8 +36,9 @@ pub(super) fn map_management_view(
 
     PlanningAdminManagementView {
         default_direction_id: default_direction_id.to_string(),
-        // Multi-value direction fields become newline blocks because the admin
-        // management form edits them as text areas, not nested JSON controls.
+        // success criteria와 scope hints는 domain에서는 Vec<String>이지만 admin form에서는 textarea 하나로
+        // 편집된다. newline join 정책을 projection에 고정해 두면 form submit parser와 round-trip 표현이 같은
+        // 규칙을 공유하고, template 쪽이 domain collection 구조를 알 필요가 없다.
         directions: directions
             .directions
             .iter()
@@ -55,8 +56,8 @@ pub(super) fn map_management_view(
                     .unwrap_or_default(),
             })
             .collect(),
-        // Task dependency lists use the same newline representation so a submit
-        // can round-trip through the mutation parser without losing order.
+        // task dependency/blocker 목록도 같은 newline 표현을 쓴다. 순서가 유지되는 text block으로 내보내야
+        // operator가 dependency를 재정렬하거나 삭제한 뒤 submit했을 때 mutation parser가 같은 순서를 복원한다.
         tasks: task_authority
             .tasks
             .iter()
@@ -78,8 +79,8 @@ pub(super) fn map_management_view(
 }
 
 pub(super) fn map_doctor_report(report: &PlanningDoctorReport) -> PlanningAdminDoctorSummary {
-    // Doctor reports already aggregate system health; this mapper only freezes
-    // labels into the admin response contract.
+    // doctor report는 workspace 건강 상태를 이미 service 쪽에서 집계한 결과다. projection은 추가 판단을 하지
+    // 않고 label/string 형태만 고정해 admin response contract가 domain enum 변경에 직접 흔들리지 않게 한다.
     PlanningAdminDoctorSummary {
         planning_state: report.planning_state().label().to_string(),
         queue_idle_policy: report.queue_idle_policy().map(str::to_string),
@@ -94,8 +95,8 @@ pub(super) fn map_doctor_report(report: &PlanningDoctorReport) -> PlanningAdminD
 pub(super) fn map_runtime_snapshot(
     snapshot: &PlanningRuntimeSnapshot,
 ) -> PlanningAdminRuntimeSummary {
-    // Queue projection is optional during startup or broken states. The overview
-    // still renders runtime status while falling back to empty queue lists.
+    // queue projection은 startup 중이거나 workspace가 깨진 상태에서는 없을 수 있다. 그래도 admin overview는
+    // runtime status label/detail을 표시해야 하므로 queue 영역만 empty list로 낮추고 snapshot 자체는 유지한다.
     let queue_preview = snapshot.queue_projection().map(map_queue_preview);
     PlanningAdminRuntimeSummary {
         workspace_present: snapshot.workspace_present(),
@@ -118,8 +119,9 @@ pub(super) fn map_runtime_snapshot(
 pub(super) fn map_directions_summary(
     summary: DirectionsMaintenanceSummary,
 ) -> PlanningAdminDirectionsSummaryView {
-    // Maintenance summary owns file-system checks; the admin view adds only
-    // labels and needs_attention flags for route/template branching.
+    // maintenance summary는 detail doc 존재 여부와 queue idle prompt 상태 같은 filesystem 검사를 이미 수행한
+    // 값이다. admin view는 template branch에 필요한 label과 needs_attention flag만 얹어, UI가 service enum의
+    // 내부 의미를 다시 계산하지 않게 한다.
     PlanningAdminDirectionsSummaryView {
         missing_detail_doc_count: summary.missing_detail_doc_count,
         broken_detail_doc_count: summary.broken_detail_doc_count,
@@ -144,8 +146,9 @@ pub(super) fn map_directions_summary(
 pub(super) fn map_validation_report(
     report: &PlanningValidationReport,
 ) -> PlanningAdminValidationView {
-    // The report remains the validation authority. Counts are duplicated here so
-    // admin clients can render badges without reclassifying issue severities.
+    // validation report 자체가 오류/경고 판정의 authority다. projection은 severity를 재해석하지 않고 count만
+    // 중복 계산해 badge 렌더링을 돕는다. 이렇게 하면 admin client가 issue list를 다시 순회하며 error/warning
+    // 분류 규칙을 복제하지 않아도 된다.
     let error_count = report
         .issues
         .iter()
@@ -164,7 +167,8 @@ pub(super) fn map_validation_report(
             .issues
             .iter()
             .map(|issue| PlanningAdminValidationIssueView {
-                // Keep string values stable for templates and any JSON clients.
+                // severity/file kind는 template class와 JSON client가 의존하는 작은 문자열 계약이다. domain enum
+                // 이름을 그대로 노출하지 않고 여기서 lower-case label로 고정해 외부 표시 계약을 안정화한다.
                 severity: match issue.severity {
                     PlanningValidationSeverity::Error => "error".to_string(),
                     PlanningValidationSeverity::Warning => "warning".to_string(),
@@ -182,9 +186,8 @@ pub(super) fn map_validation_report(
 }
 
 pub(super) fn map_queue_preview(snapshot: &PriorityQueueProjection) -> PlanningAdminQueuePreview {
-    // The overview needs a compact operational preview, not the full queue. Five
-    // rows keeps the page scannable while the queue head carries detailed rank
-    // reasons for the active handoff.
+    // overview는 전체 queue dump가 아니라 운영자가 지금 볼 compact preview만 필요하다. 다섯 줄 제한은 화면을
+    // 스캔 가능한 크기로 유지하고, 실제 handoff 판단에 필요한 rank reason은 queue_head에만 자세히 남긴다.
     PlanningAdminQueuePreview {
         queue_summary: match snapshot.next_task.as_ref() {
             Some(task) => format!("now: {}", task.task_title.trim()),
