@@ -1,12 +1,16 @@
-// 학습 주석: 기본 binary는 사용하지 않는 코드가 생기면 즉시 컴파일 오류로 막습니다.
-// 실행 진입점이 얇기 때문에 dead_code를 허용하면 실제로 연결되지 않은 bootstrap 코드를 놓치기 쉽습니다.
+/*
+ * 기본 package binary는 실제 실행 조립을 library crate로 넘기는 가장 얇은 wrapper다.
+ * 이 층에서 dead_code를 막아 두면 bin target만 빌드될 때도 끊어진 bootstrap 경로가 조용히
+ * 남지 않는다. 구체적인 CLI/TUI 분기는 codex_exec_loop_native::run()이 맡는다.
+ */
 #![deny(dead_code)]
 
-// 학습 주석: 기본 실행 파일의 역할은 library crate의 `run()`을 호출하고 OS 종료 코드로 변환하는 것입니다.
-// 실제 TUI/app-server 흐름은 library 쪽에 두어 bin과 테스트 가능한 application code를 분리합니다.
 fn main() {
-    // 학습 주석: `run()`이 성공하면 application이 결정한 종료 코드를 그대로 사용합니다.
-    // 실패하면 anyhow error chain을 stderr에 출력하고 일반 실패 코드 1로 바꿉니다.
+    /*
+     * library run()은 CLI subcommand가 이미 처리한 종료 코드와 기본 TUI 정상 종료를 같은 i32
+     * 계약으로 돌려준다. anyhow 오류는 여기서만 stderr와 process failure로 바꿔, 하위 계층이
+     * 출력 정책 대신 오류 context 축적에 집중하게 한다.
+     */
     let exit_code = match codex_exec_loop_native::run() {
         Ok(exit_code) => exit_code,
         Err(error) => {
@@ -15,6 +19,6 @@ fn main() {
         }
     };
 
-    // 학습 주석: Rust의 `main`은 i32를 직접 반환하지 않으므로 명시적으로 프로세스를 종료해 shell에 결과를 전달합니다.
+    // Shell, supervisor, test harness가 같은 방식으로 결과를 보도록 wrapper가 최종 exit code를 확정한다.
     std::process::exit(exit_code);
 }
