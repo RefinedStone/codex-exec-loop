@@ -24,10 +24,8 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::widgets::List;
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
-// Exit confirmation is the only popup-frame renderer used by the live shell
-// path now that most inspection surfaces render inline. It still clears a
-// centered area so the confirmation behaves like a modal over either startup or
-// conversation chrome.
+// exit confirmation은 inspection surface 대부분이 inline으로 이동한 뒤에도 live shell path가 쓰는 유일한 popup-frame renderer다.
+// centered area를 먼저 지워 startup chrome과 conversation chrome 어느 쪽 위에서도 modal처럼 보이게 한다.
 pub(super) fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     let popup_area = centered_rect(42, 22, frame.area());
     frame.render_widget(Clear, popup_area);
@@ -46,9 +44,8 @@ pub(super) fn draw_exit_confirmation(frame: &mut Frame<'_>) {
     frame.render_widget(popup, popup_area);
 }
 
-// The remaining renderers are test-only adapters around shell_presentation view
-// models. Snapshot and contract tests use them to keep the old popup layout
-// comparable while production code exercises the inline shell surfaces.
+// 나머지 renderer는 shell_presentation view model을 감싸는 test-only adapter다.
+// production code는 inline shell surface를 쓰지만, snapshot/contract test는 이 경계로 legacy popup layout 비교 가능성을 유지한다.
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn draw_framed_conversation_shell(
@@ -90,9 +87,8 @@ pub(super) fn draw_framed_conversation_shell(
         .wrap(Wrap { trim: false });
     frame.render_widget(input, input_area);
 
-    // Popup snapshots should only show the prompt cursor when no modal or
-    // inspection overlay owns focus. This mirrors the live inline renderer's
-    // cursor ownership rule.
+    // popup snapshot은 modal이나 inspection overlay가 focus를 소유하지 않을 때만 prompt cursor를 보여야 한다.
+    // live inline renderer의 cursor ownership rule과 같은 조건이다.
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
         let input_content_area = AkraTheme::panel_inner(input_area);
         set_cursor_if_visible(
@@ -155,8 +151,7 @@ pub(super) fn draw_startup_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     );
 }
 
-// Session snapshots preserve the legacy two-column popup: navigable list on the
-// left, selected-session detail on the right, then warnings and keys below.
+// session snapshot은 왼쪽 navigable list, 오른쪽 selected-session detail, 아래 warning/key 영역으로 된 legacy two-column popup을 보존한다.
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
@@ -203,9 +198,8 @@ pub(super) fn draw_session_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp
     );
 }
 
-// Supersession diagnostics pack capability readiness, pool board, live roster,
-// selected slot detail, and distributor queue state into one popup so contract
-// tests can catch regressions across the parallel-mode control surface.
+// supersession diagnostics는 capability readiness, pool board, live roster, selected slot detail, distributor queue state를 한 popup에 압축한다.
+// parallel-mode control surface 전반의 회귀를 contract test가 한 화면에서 잡을 수 있게 하는 구성이다.
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiApp) {
@@ -299,9 +293,8 @@ pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiAp
     );
 }
 
-// Planning init either renders the option picker or delegates to the draft
-// editor step. Keeping the branch here lets tests drive the same view-state
-// transition as the controller without depending on live terminal input.
+// planning init은 option picker를 직접 render하거나 draft editor step으로 위임한다.
+// 이 branch를 renderer 경계에 남겨 test가 live terminal input 없이도 controller와 같은 view-state 전이를 구동하게 한다.
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
@@ -359,9 +352,8 @@ pub(super) fn draw_planning_init_overlay(frame: &mut Frame<'_>, app: &mut Native
     );
 }
 
-// The draft editor popup keeps file selection and text editing visible at once.
-// Cursor placement is computed from the presentation view so tests verify the
-// same scroll/cursor projection used by inline planning inspection.
+// draft editor popup은 file selection과 text editing을 동시에 보이게 유지한다.
+// cursor placement는 presentation view에서 계산해 inline planning inspection과 같은 scroll/cursor projection을 test가 검증하게 한다.
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn draw_planning_draft_editor_overlay(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
