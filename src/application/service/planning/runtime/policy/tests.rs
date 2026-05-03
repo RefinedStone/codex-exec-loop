@@ -7,9 +7,9 @@ use super::{
 use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
 use crate::domain::planning::{PlanningWorkspaceState, PriorityQueueTask, TaskStatus};
 
-// The fixture mirrors the smallest actionable queue head the runtime policy
-// needs: a ready task with direction authority and ranking metadata.  Tests use
-// this instead of a full catalog so failures stay focused on policy projection.
+// runtime policy가 필요로 하는 가장 작은 actionable queue head fixture다. direction authority와
+// ranking metadata를 가진 ready task만 만들고 full catalog는 만들지 않아, 실패 원인이
+// queue construction이 아니라 policy projection 자체에 머물게 한다.
 fn queue_head() -> PriorityQueueTask {
     PriorityQueueTask {
         rank: 1,
@@ -25,17 +25,17 @@ fn queue_head() -> PriorityQueueTask {
 }
 
 /*
- * Auto follow-up is intentionally narrower than "planning is valid".  These
- * scenarios protect the queue-driven contract: no generated continuation unless
- * the snapshot has an actionable queue head that has not already been handed off.
+ * auto follow-up 허용 조건은 "planning이 valid하다"보다 좁다. snapshot에 아직 handoff되지
+ * 않은 actionable queue head가 있을 때만 generated continuation을 만든다는 queue-driven
+ * 계약을 이 테스트 묶음이 고정한다.
  */
 #[test]
 fn builtin_next_task_blocks_when_planning_is_uninitialized() {
     /*
-    Uninitialized planning files have no queue authority at all. The policy maps
-    that to the same actionable-queue gate as an empty ready workspace so callers
-    do not special-case bootstrap state as permission to generate a task.
-    */
+     * uninitialized planning file은 queue authority 자체가 없다. policy는 이를 empty ready
+     * workspace와 같은 actionable-queue gate로 접어, caller가 bootstrap 전 상태를 task 생성
+     * 허가처럼 특수 처리하지 못하게 한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::uninitialized();
     let decision = service.decide_auto_follow(&snapshot);
@@ -57,10 +57,10 @@ fn builtin_next_task_blocks_when_planning_is_uninitialized() {
 #[test]
 fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
     /*
-    Proposal summaries are advisory inventory, not executable queue heads. This
-    protects the main prompt path from treating promotable ideas as already
-    authorized work while still preserving the proposal detail in the preview.
-    */
+     * proposal summary는 advisory inventory이지 executable queue head가 아니다. main prompt
+     * path가 promote 가능한 아이디어를 이미 승인된 작업으로 취급하지 않게 막으면서도, preview에는
+     * proposal detail을 남겨 operator가 다음 행동을 볼 수 있게 한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -88,9 +88,9 @@ fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
 #[test]
 fn builtin_next_task_blocks_ready_no_task_state_without_existing_proposals() {
     /*
-    ReadyNoTask without proposals is the quiet idle case: valid planning files
-    exist, but no direction-owned task can be handed to the next assistant turn.
-    */
+     * proposal도 없는 ReadyNoTask는 조용한 idle case다. planning file은 valid하지만 다음
+     * assistant turn에 넘길 direction-owned task가 없다는 점을 automation gate가 표현한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -116,6 +116,10 @@ fn builtin_next_task_blocks_ready_no_task_state_without_existing_proposals() {
 
 #[test]
 fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
+    /*
+     * uninitialized snapshot의 preview detail도 actionable queue head 요구를 설명해야 한다.
+     * 이 회귀는 queue/proposal이 모두 없을 때 caller가 빈 detail을 받아 TUI 안내를 잃지 않게 한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::uninitialized();
     let decision = service.decide_auto_follow(&snapshot);
@@ -142,10 +146,10 @@ fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
 #[test]
 fn repeated_queue_head_blocks_queue_driven_automation() {
     /*
-    The pause reason comes from the prompt snapshot after a handoff. Keeping it
-    as a hard block prevents the runtime loop from repeatedly continuing the same
-    queue head when planning refresh has not advanced.
-    */
+     * pause reason은 handoff 이후 prompt snapshot에서 온다. 이를 hard block으로 유지해야
+     * planning refresh가 queue head를 진전시키지 못한 상황에서 runtime loop가 같은 task를
+     * 반복 continuation하지 않는다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
@@ -164,6 +168,10 @@ fn repeated_queue_head_blocks_queue_driven_automation() {
 
 #[test]
 fn builtin_next_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
+    /*
+     * queue idle 상태에서는 proposal이 있어도 main refresh prompt를 만들지 않는다. proposal을
+     * 실행하려면 먼저 promote/queue intent를 거쳐 authority에 반영되어야 한다는 정책을 반복 확인한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -183,10 +191,10 @@ fn builtin_next_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
 #[test]
 fn ready_queue_head_uses_continue_mode() {
     /*
-    This is the only positive auto-follow path: a valid snapshot with an actual
-    queue head becomes a continuation prompt. No proposal or idle policy can reach
-    this branch without first being promoted into queue_head.
-    */
+     * 유일한 positive auto-follow path다. 실제 queue head가 있는 valid snapshot만 continuation
+     * prompt로 변환된다. proposal이나 idle policy는 먼저 queue_head로 promote되지 않으면 이
+     * branch에 도달할 수 없다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
@@ -203,12 +211,16 @@ fn ready_queue_head_uses_continue_mode() {
 }
 
 /*
- * Summary projection deliberately overlays live runtime state onto the static
- * snapshot.  A ready planning file can still render as executing or repairing
- * because the TUI is describing the current app, not just file validity.
+ * summary projection은 정적인 snapshot 위에 live runtime state를 덮어쓴다. planning file이
+ * ready여도 현재 앱이 turn 실행 중이거나 repair 중이면 TUI는 file validity보다 현재 실행 상태를
+ * 우선해서 보여 줘야 한다.
  */
 #[test]
 fn summary_view_marks_running_ready_planning_as_executing() {
+    /*
+     * queue head가 있는 ready snapshot도 running turn overlay가 있으면 Executing으로 보인다.
+     * status_label의 stale 표현은 planning authority가 아니라 현재 turn 결과를 기다리는 상태임을 나타낸다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
@@ -233,10 +245,10 @@ fn summary_view_marks_running_ready_planning_as_executing() {
 #[test]
 fn summary_view_keeps_proposal_summary_when_present() {
     /*
-    Proposal context survives summary projection even when the queue is idle.
-    The TUI needs that detail for review affordances, while automation still
-    remains blocked by the missing queue head tests above.
-    */
+     * queue가 idle이어도 proposal context는 summary projection에서 살아남는다. TUI는 review
+     * affordance를 위해 이 정보를 필요로 하지만, automation은 위의 missing queue head 테스트처럼
+     * 계속 block되어야 한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -261,10 +273,9 @@ fn summary_view_keeps_proposal_summary_when_present() {
 #[test]
 fn summary_view_prefers_repair_failure_when_present() {
     /*
-    Live repair errors outrank the snapshot's validation text. That ordering keeps
-    the visible failure tied to the most recent automatic repair attempt rather
-    than an older file-load diagnostic.
-    */
+     * live repair error는 snapshot validation text보다 우선한다. visible failure가 오래된
+     * file-load diagnostic이 아니라 가장 최근 automatic repair attempt에 묶이게 하기 위한 순서다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot =
         PlanningRuntimeSnapshot::invalid("planning validation failed: task authority".to_string());
@@ -284,17 +295,16 @@ fn summary_view_prefers_repair_failure_when_present() {
 }
 
 /*
- * The compact status surfaces are used in constrained TUI regions and command
- * diagnostics.  These assertions pin the lossy formatting rules that keep
- * repair attempts, queue state, proposals, and actionable queue labels readable.
+ * compact status surface는 좁은 TUI footer와 command diagnostic에서 쓰인다. 이 assertion들은
+ * repair attempt, queue state, proposal, actionable queue label을 짧은 문자열로 줄이는
+ * lossy formatting 규칙을 고정한다.
  */
 #[test]
 fn summary_line_compacts_repair_queue_and_proposal_details() {
     /*
-    The footer line deliberately mixes repair progress with compact queue and
-    proposal fragments. This regression keeps all three signals present after
-    truncation because each explains a different next action.
-    */
+     * footer line은 repair progress, compact queue, proposal fragment를 일부러 한 줄에 섞는다.
+     * 각 segment가 서로 다른 next action을 설명하므로 truncation 이후에도 세 신호가 모두 남아야 한다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -331,10 +341,10 @@ fn summary_line_compacts_repair_queue_and_proposal_details() {
 #[test]
 fn status_projection_uses_queue_head_label_when_actionable_work_exists() {
     /*
-    Expanded status projection changes the prefix when a real queue head exists.
-    Consumers can then render "planning queue head" as an actionable label instead
-    of parsing queue_summary text to infer whether work is available.
-    */
+     * expanded status projection은 실제 queue head가 있을 때 prefix를 바꾼다. consumer는
+     * queue_summary 문자열을 파싱해 work availability를 추론하지 않고, "planning queue head"를
+     * actionable label로 바로 렌더링할 수 있다.
+     */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
