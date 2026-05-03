@@ -15,8 +15,9 @@ snapshot으로 바꾸는 outbound boundary다. 이 테스트 파일은 네트워
 
 #[test]
 fn parses_refinedstone_credential_lines() {
-    // credential file에는 Git remote URL처럼 생긴 한 줄이 들어온다. adapter는 URL 전체를 저장하지
-    // 않고 Basic-auth password 위치의 token만 curl bearer token으로 사용한다.
+    // credential file에는 Git remote URL처럼 생긴 한 줄이 들어온다. adapter는 이 URL 전체를 저장하지 않고,
+    // Basic-auth password 위치의 token만 curl bearer token으로 승격한다. 이 테스트는 credential format이 바뀌었을 때
+    // token extraction boundary가 바로 실패하도록 고정한다.
     let token = GithubReviewPollerAdapter::parse_refinedstone_token(
         "https://RefinedStone:abc123@github.com",
     )
@@ -29,6 +30,7 @@ fn parses_refinedstone_credential_lines() {
 fn parses_repository_full_name_from_github_ssh_origin() {
     // production repo origin은 SSH 형식일 수 있다. poller는 이 값을 GitHub API endpoint의
     // `{owner}/{repo}` segment로 바꿔야 PR lookup과 activity fetch를 수행할 수 있다.
+    // SSH transport detail은 local git 경계에서 끝나고 domain target에는 repository identity만 남는다.
     let repository =
         GithubReviewPollerAdapter::parse_repository_full_name("git@github.com:acme/widgets.git")
             .expect("repository should parse");
@@ -39,7 +41,8 @@ fn parses_repository_full_name_from_github_ssh_origin() {
 #[test]
 fn parses_repository_full_name_from_github_https_origin() {
     // HTTPS origin도 같은 repository identity로 정규화한다. git transport 방식이 달라도 review polling
-    // domain target은 같은 `owner/repo` 문자열이어야 한다.
+    // domain target은 같은 `owner/repo` 문자열이어야 한다. 이 테스트는 SSH/HTTPS 차이가 GitHub REST path 조립으로
+    // 새지 않게 하는 normalization contract를 잠근다.
     let repository = GithubReviewPollerAdapter::parse_repository_full_name(
         "https://github.com/acme/widgets.git",
     )
@@ -51,7 +54,8 @@ fn parses_repository_full_name_from_github_https_origin() {
 #[test]
 fn encodes_branch_head_filter_for_pull_request_lookup() {
     // GitHub PR search의 `head` query는 `owner:branch` 형태인데 agent branch에는 slash가 들어간다.
-    // 이 값을 percent-encode하지 않으면 branch lookup이 다른 query로 해석된다.
+    // 이 값을 percent-encode하지 않으면 branch lookup이 다른 query로 해석된다. path segment가 아니라 query value만
+    // encode한다는 경계를 테스트한다.
     let encoded =
         GithubReviewPollerAdapter::encode_query_value("RefinedStone:feature/native-shell");
 
@@ -76,7 +80,7 @@ fn resolves_windows_home_for_current_user_case_insensitively() {
 #[test]
 fn parses_pull_request_locator_response_json() {
     // branch-to-PR lookup endpoint는 PR number만 필요하다. locator response를 작게 유지하면 이후 full
-    // PR fetch와 activity fetch를 명확히 분리할 수 있다.
+    // PR fetch와 activity fetch를 명확히 분리할 수 있다. list endpoint의 DTO가 full PR payload에 결합되지 않게 하는 fixture다.
     let body = r#"[{ "number": 64 }]"#;
 
     let response: Vec<PullRequestLocatorResponse> =
@@ -89,7 +93,8 @@ fn parses_pull_request_locator_response_json() {
 #[test]
 fn parses_pull_request_response_json() {
     // full PR response는 snapshot header를 구성하는 title/url/head/base만 추출한다. adapter가 GitHub
-    // payload 전체에 결합되지 않도록 필요한 field subset만 deserialize한다.
+    // payload 전체에 결합되지 않도록 필요한 field subset만 deserialize한다. GitHub가 다른 field를 추가해도 domain snapshot
+    // contract가 커지지 않는지 확인한다.
     let body = r#"{
             "title": "Add review polling",
             "html_url": "https://github.com/acme/widgets/pull/42",
@@ -110,7 +115,7 @@ fn parses_pull_request_response_json() {
 fn maps_and_sorts_review_activity_across_response_types() {
     // GitHub는 PR conversation을 issue comments, review comments, review submissions 세 endpoint로
     // 나눠 제공한다. poller snapshot은 operator가 시간순으로 읽을 수 있도록 이 응답들을 하나의 activity
-    // list로 합친다.
+    // list로 합친다. 동일 timestamp에서는 domain sort policy가 결정한 순서를 따르므로 endpoint별 수집 순서가 UI 순서가 되지 않는다.
     let target = GithubPullRequestTarget::new("acme/widgets", 42);
     let pull_request: PullRequestResponse = GithubReviewPollerAdapter::parse_json(
         r#"{
@@ -189,7 +194,8 @@ fn maps_and_sorts_review_activity_across_response_types() {
 #[test]
 fn skips_pending_reviews_without_submitted_timestamp() {
     // pending review는 아직 GitHub conversation에 공개되지 않은 draft 상태다. submitted_at이 없는
-    // review를 snapshot에서 제외해야 operator에게 미공개 draft가 새 활동처럼 보이지 않는다.
+    // review를 snapshot에서 제외해야 operator에게 미공개 draft가 새 활동처럼 보이지 않는다. 이 테스트는 GitHub nullable
+    // timestamp가 domain event eligibility를 결정한다는 규칙을 고정한다.
     let target = GithubPullRequestTarget::new("acme/widgets", 42);
     let pull_request: PullRequestResponse = GithubReviewPollerAdapter::parse_json(
         r#"{
@@ -227,7 +233,7 @@ fn skips_pending_reviews_without_submitted_timestamp() {
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
     // Windows-home test는 실제 user directory를 건드리지 않아야 하므로 현재 epoch timestamp를 붙인
-    // process-local temp root를 만들어 fixture 충돌을 피한다.
+    // process-local temp root를 만들어 fixture 충돌을 피한다. filesystem fallback 테스트가 host 환경을 오염시키지 않게 하는 helper다.
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after unix epoch")
