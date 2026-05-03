@@ -15,14 +15,14 @@ use crate::domain::planning::{
 use std::sync::Arc;
 
 /*
- * These tests exercise the mutation service through its repository port rather
- * than isolated helpers.  That keeps the fixture close to the real app-server
- * path: load authority snapshots, apply a preview or command batch, rebuild the
- * queue projection, and commit through optimistic planning revisions.
+ * 이 테스트들은 helper를 직접 때리지 않고 repository port를 통해 mutation service를 검증한다.
+ * fixture를 실제 app-server 경로에 가깝게 유지하려는 의도다. authority snapshot을 load하고,
+ * preview 또는 command batch를 적용한 뒤 queue projection을 재계산하고, optimistic planning
+ * revision으로 commit하는 흐름 전체를 고정한다.
  */
 fn workspace(label: &str) -> String {
-    // The in-memory/noop repository is keyed by workspace string, so include the
-    // process id to keep parallel test processes from sharing authority state.
+    // in-memory/noop repository는 workspace string을 key로 쓴다. process id를 붙여 병렬 test
+    // process가 authority state를 공유하지 않게 한다.
     format!(
         "/tmp/akra-planning-task-mutation-test-{label}-{}",
         std::process::id()
@@ -32,8 +32,8 @@ fn repo() -> Arc<NoopPlanningTaskRepositoryPort> {
     Arc::new(NoopPlanningTaskRepositoryPort)
 }
 fn directions() -> DirectionCatalogDocument {
-    // A single active direction is enough to prove the mutation layer can pick
-    // defaults and still run real direction validation.
+    // active direction 하나면 mutation layer의 default direction 선택과 실제 direction validation을
+    // 동시에 검증하기 충분하다.
     DirectionCatalogDocument {
         version: PLANNING_FORMAT_VERSION,
         queue_idle: QueueIdleConfig::default(),
@@ -49,9 +49,8 @@ fn directions() -> DirectionCatalogDocument {
     }
 }
 fn task(id: &str, status: TaskStatus) -> TaskDefinition {
-    // Baseline tasks intentionally have user audit fields and stable timestamps;
-    // update tests can then prove exactly which fields a mutation is allowed to
-    // touch.
+    // baseline task는 의도적으로 user audit field와 stable timestamp를 가진다. update 테스트가
+    // mutation이 건드릴 수 있는 field와 보존해야 하는 field를 정확히 구분할 수 있게 한다.
     TaskDefinition {
         id: id.to_string(),
         direction_id: "general-workstream".to_string(),
@@ -76,9 +75,8 @@ fn seed(
     task_authority: TaskAuthorityDocument,
 ) {
     /*
-     * Seeding goes through the same repository commit APIs used by production
-     * code.  Clearing first prevents a reused workspace key from hiding revision
-     * or snapshot leakage between tests.
+     * seed도 production code가 쓰는 repository commit API를 통과한다. 먼저 clear하는 이유는
+     * 재사용된 workspace key가 test 사이 revision/snapshot leakage를 숨기지 못하게 하기 위해서다.
      */
     repo.clear_direction_authority_snapshot(workspace).unwrap();
     repo.clear_task_authority_snapshot(workspace).unwrap();
@@ -108,10 +106,9 @@ fn seed(
 #[test]
 fn user_preview_and_llm_create_share_defaults_and_audit() {
     /*
-     * User previews and LLM command commits enter through different public
-     * methods, but both must share task defaults, direction fallback, and audit
-     * attribution.  This catches drift between the TUI preview path and the
-     * worker-response command path.
+     * user preview와 LLM command commit은 서로 다른 public method로 들어오지만 task default,
+     * direction fallback, audit attribution은 같아야 한다. TUI preview path와 worker-response
+     * command path 사이의 drift를 잡는 회귀다.
      */
     let repo = repo();
     let workspace = workspace("shared-defaults");
@@ -151,8 +148,8 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
     assert_eq!(preview.task.created_by, TaskActor::User);
     assert_eq!(preview.task.last_updated_by, TaskActor::User);
 
-    // The LLM path persists through apply_commands, so inspect the repository
-    // snapshot instead of only trusting the returned commit summary.
+    // LLM path는 apply_commands를 통해 실제 persistence까지 간다. returned commit summary만
+    // 믿지 않고 repository snapshot을 읽어 audit field가 저장됐는지 확인한다.
     let result = service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
@@ -194,9 +191,8 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
 #[test]
 fn update_preserves_unspecified_fields() {
     /*
-     * Update commands are partial patches.  The regression guarded here is
-     * accidentally treating omitted fields as empty replacements while still
-     * updating audit identity for a real changed field.
+     * update command는 partial patch다. 누락 field를 빈 replacement로 오해하지 않으면서,
+     * 실제 변경된 field가 있을 때 audit identity만 갱신하는지 검증한다.
      */
     let repo = repo();
     let workspace = workspace("preserve-update");
@@ -240,7 +236,7 @@ fn update_preserves_unspecified_fields() {
         .unwrap()
         .unwrap();
     let updated = &snapshot.task_authority.tasks[0];
-    // Only the supplied patch fields and audit fields should move.
+    // 제공된 patch field와 audit field만 움직여야 한다.
     assert_eq!(updated.title, "Updated title");
     assert_eq!(updated.description, "Existing task");
     assert_eq!(updated.status, TaskStatus::Blocked);
@@ -251,9 +247,9 @@ fn update_preserves_unspecified_fields() {
 #[test]
 fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
     /*
-     * No-op updates are common when an LLM repeats already-applied intent.  The
-     * service should report the addressed task id for correlation, but it must
-     * not create a new planning revision or rewrite audit timestamps.
+     * LLM이 이미 적용된 intent를 반복하면 no-op update가 흔히 나온다. service는 correlation을
+     * 위해 addressed task id를 보고하되, 새 planning revision을 만들거나 audit timestamp를
+     * 다시 쓰면 안 된다.
      */
     let repo = repo();
     let workspace = workspace("noop-update");
@@ -308,9 +304,8 @@ fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
 #[test]
 fn oversized_worker_command_batch_is_rejected_before_mutation() {
     /*
-     * The command budget protects the authority document from large worker
-     * responses.  This case proves the limit is enforced before any per-command
-     * builder or repository commit can run.
+     * command budget은 큰 worker response가 authority document를 과도하게 바꾸지 못하게 막는다.
+     * 이 case는 per-command builder나 repository commit이 실행되기 전에 limit이 적용됨을 검증한다.
      */
     let repo = repo();
     let workspace = workspace("command-budget");
@@ -355,8 +350,8 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
 }
 #[test]
 fn legacy_task_authority_is_rejected_by_extractor() {
-    // Full task-authority rewrites are intentionally rejected; workers may only
-    // send the narrow command envelope that the mutation service validates.
+    // full task-authority rewrite는 의도적으로 거부된다. worker는 mutation service가 검증하는
+    // 좁은 command envelope만 보낼 수 있다.
     let message = r#"```json
 {"task_authority":{"version":1,"tasks":[]}}
 ```"#;
@@ -369,9 +364,8 @@ fn legacy_task_authority_is_rejected_by_extractor() {
 #[test]
 fn unknown_command_fields_and_delete_ops_are_invalid() {
     /*
-     * The command schema is strict on purpose: callers cannot smuggle ids into
-     * create commands, and destructive task deletion is outside this mutation
-     * boundary.
+     * command schema는 의도적으로 엄격하다. caller가 create command에 id를 몰래 넣을 수 없고,
+     * destructive task deletion은 이 mutation boundary 밖에 있다.
      */
     let unknown_field = r#"{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"x","id":"forbidden"}]}}"#;
     let delete_op = r#"{"planning_task_commands":{"version":1,"commands":[{"op":"delete_task","task_id":"task-1"}]}}"#;
@@ -387,8 +381,8 @@ fn unknown_command_fields_and_delete_ops_are_invalid() {
 }
 #[test]
 fn invalid_command_extraction_preserves_rejected_payload_for_repair() {
-    // Invalid payloads keep their rejected JSON so the surrounding prompt/repair
-    // flow can show the worker exactly what failed schema validation.
+    // invalid payload는 rejected JSON을 보존한다. 주변 prompt/repair 흐름이 worker에게 schema
+    // validation 실패 대상을 정확히 보여 줄 수 있게 하기 위해서다.
     let wrapped_command = r#"{"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Queue follow-up"}}]}}"#;
     let extraction = extract_planning_task_commands(wrapped_command);
 
@@ -404,9 +398,9 @@ fn invalid_command_extraction_preserves_rejected_payload_for_repair() {
 #[test]
 fn extractor_accepts_balanced_json_embedded_in_markdown_text() {
     /*
-     * Worker responses often include prose around JSON.  The extractor must
-     * isolate the balanced command object without requiring a fenced block, or
-     * useful task commands would be dropped from ordinary model output.
+     * worker response는 JSON 주변에 prose를 포함하는 경우가 많다. extractor는 fenced block을
+     * 요구하지 않고 balanced command object를 분리해야 ordinary model output의 유효 command를
+     * 놓치지 않는다.
      */
     let message = r#"Updated planning commands:
 {"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Write review response"}]}}
@@ -426,9 +420,8 @@ Summary: one task added."#;
 #[test]
 fn terminal_status_change_is_rejected() {
     /*
-     * Terminal tasks are historical records.  Once a task is Done/Cancelled,
-     * later worker output cannot reopen or recategorize it through the generic
-     * update path.
+     * terminal task는 historical record다. task가 Done/Cancelled가 된 뒤에는 이후 worker
+     * output이 generic update path로 reopen하거나 다른 terminal 상태로 재분류할 수 없다.
      */
     let repo = repo();
     let workspace = workspace("terminal-regression");
