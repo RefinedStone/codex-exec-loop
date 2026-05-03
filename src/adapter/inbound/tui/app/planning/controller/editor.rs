@@ -69,9 +69,19 @@ impl NativeTuiApp {
         else {
             return;
         };
+        /*
+         * The draft name is copied out before collecting buffers because save mutates
+         * editor state below. The service call must target the session that was open
+         * when Ctrl+S was pressed, not any later overlay state.
+         */
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
         let workspace_directory = self.planning_workspace_directory();
+        /*
+         * collect_editable_files converts UI buffers back into service records. This
+         * controller does not inspect file bodies; validation and path ownership stay
+         * inside planning workspace services.
+         */
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
         let status_text = match self.planning.workspace.save_draft_editor_files(
             &workspace_directory,
@@ -123,6 +133,11 @@ impl NativeTuiApp {
         else {
             return;
         };
+        /*
+         * Directions save uses the same staged draft namespace as planning-init save,
+         * so the active draft name is captured before status copy or validation state
+         * can be replaced by the save result.
+         */
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
         let workspace_directory = self.planning_workspace_directory();
@@ -181,6 +196,11 @@ impl NativeTuiApp {
             &draft_name,
             &editable_files,
         );
+        /*
+         * Runtime snapshot refresh happens even on blocked promotion. A validation
+         * failure may still update editor validation state or planning status copy, and
+         * the inline footer should reflect that latest attempt immediately.
+         */
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
             &workspace_directory,
         );
@@ -190,6 +210,11 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state
                     .apply_save_result(result.validation_report.clone());
                 if result.promoted_file_count == 0 {
+                    /*
+                     * Zero promoted files is a service-level "not accepted" outcome, not
+                     * a controller exception. Keep the editor open with fresh validation
+                     * so the operator can repair the same buffers.
+                     */
                     format!(
                         "planning draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
                         result.draft_name,
@@ -236,6 +261,11 @@ impl NativeTuiApp {
             &draft_name,
             &editable_files,
         );
+        /*
+         * Directions promotion also refreshes the ready conversation snapshot because
+         * changing direction detail docs or queue-idle prompt can alter queue/runtime
+         * guidance shown outside the directions overlay.
+         */
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
             &workspace_directory,
         );
@@ -255,6 +285,11 @@ impl NativeTuiApp {
                         }
                     )
                 } else {
+                    /*
+                     * A successful directions promotion returns to the maintenance overview
+                     * instead of closing to the shell. That overview is the user's context
+                     * for the direction catalog they just edited.
+                     */
                     self.present_directions_maintenance_overview(
                         format!(
                             "directions draft promoted / draft: {} / files: {} / planning context refreshed",
@@ -281,6 +316,11 @@ impl NativeTuiApp {
         match self.planning_draft_editor_ui_state.request_close() {
             PlanningDraftEditorCloseRequest::CloseImmediately => self.close_shell_overlay(),
             PlanningDraftEditorCloseRequest::ConfirmationRequired(risk) => {
+                /*
+                 * First close attempt only arms confirmation and reports the risk. The UI
+                 * state keeps the pending risk so the next Enter can close without
+                 * recalculating after unrelated rendering or cursor movement.
+                 */
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: planning_manual_editor_close_warning_status(risk),
                 });
@@ -303,6 +343,10 @@ impl NativeTuiApp {
                     "directions editor closed".to_string(),
                 ),
             PlanningDraftEditorCloseRequest::ConfirmationRequired(risk) => {
+                /*
+                 * Directions close confirmation uses directions-specific copy because the
+                 * consequence is returning to maintenance, not just hiding planning init.
+                 */
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: directions_manual_editor_close_warning_status(risk),
                 });
@@ -339,6 +383,11 @@ impl NativeTuiApp {
     }
 
     fn close_directions_manual_editor_without_prompt(&mut self, status_text: String) {
+        /*
+         * All non-prompt directions exits flow through the overview presenter. This
+         * centralizes the reset/reload behavior that makes the file list and status
+         * lines match the just-saved or just-discarded draft state.
+         */
         self.present_directions_maintenance_overview(status_text, true);
     }
 
@@ -378,6 +427,11 @@ impl NativeTuiApp {
                 true
             }
             _ => {
+                /*
+                 * Any other key cancels the confirmation and falls through. This lets
+                 * normal editor navigation or typing resume immediately without a stale
+                 * modal close prompt intercepting later keys.
+                 */
                 self.planning_draft_editor_ui_state
                     .clear_close_confirmation();
                 false
@@ -420,6 +474,11 @@ impl NativeTuiApp {
                 true
             }
             _ => {
+                /*
+                 * Directions confirmation follows the same fallthrough rule as planning
+                 * init so shared editor muscle memory stays consistent across both entry
+                 * points.
+                 */
                 self.planning_draft_editor_ui_state
                     .clear_close_confirmation();
                 false
