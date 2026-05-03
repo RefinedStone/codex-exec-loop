@@ -28,10 +28,9 @@ use self::helpers::{
 };
 
 /*
- * This service is the write-side gateway for planning tasks.  It keeps every
- * caller, from the TUI user flow to worker/LLM command extraction, on the same
- * authority-document path so optimistic revisions, queue projection rebuilds,
- * and audit attribution cannot diverge by entry point.
+ * planning task의 write-side gateway다. TUI user flow, runtime intake, worker/LLM command
+ * extraction이 모두 같은 authority-document path를 통과하게 만든다. 이 경계를 통일해야
+ * optimistic revision, queue projection rebuild, audit attribution이 entry point별로 갈라지지 않는다.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningTaskMutationSource {
@@ -40,9 +39,8 @@ pub enum PlanningTaskMutationSource {
     System,
 }
 impl PlanningTaskMutationSource {
-    // Domain audit records store actor identity, while task-id generation needs
-    // a stable slug.  Keeping both mappings here prevents helper code from
-    // guessing how an inbound mutation should be attributed.
+    // domain audit record는 actor identity를 저장하고, task-id generation은 stable slug가 필요하다.
+    // 두 mapping을 source enum 가까이에 두면 helper code가 inbound mutation attribution을 추측하지 않는다.
     fn actor(self) -> TaskActor {
         match self {
             Self::User => TaskActor::User,
@@ -61,8 +59,8 @@ impl PlanningTaskMutationSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskMutationRequest {
     pub workspace_directory: String,
-    // Source and source_turn_id travel with each command batch so create and
-    // update operations share the same audit semantics.
+    // source/source_turn_id는 command batch 전체와 함께 이동한다. create와 update가 같은
+    // actor/provenance 규칙으로 audit field를 채우게 하려는 요청 단위 metadata다.
     pub source: PlanningTaskMutationSource,
     pub source_turn_id: Option<String>,
     pub commands: Vec<PlanningTaskMutationCommand>,
@@ -76,14 +74,14 @@ pub struct PlanningTaskCreatePreviewRequest {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskCreatePreview {
-    // The original request is retained so the preview can be committed later
-    // without rebuilding an approximate command envelope in the inbound layer.
+    // 원본 request를 보존해 inbound layer가 나중에 approximate command envelope를 재구성하지 않고
+    // preview 그대로 commit할 수 있게 한다.
     pub request: PlanningTaskCreatePreviewRequest,
     pub task: TaskDefinition,
     pub direction_title: String,
     pub generated_at: DateTime<Utc>,
-    // If a previewed id collides during commit, the service advances the suffix
-    // but keeps generated_at stable so retries remain deterministic.
+    // preview된 id가 commit 중 충돌하면 service는 suffix만 전진시키고 generated_at은 유지한다.
+    // 이렇게 해야 retry id가 시간 흐름이 아니라 충돌 횟수에만 반응한다.
     pub collision_suffix: Option<u32>,
     pub observed_planning_revision: i64,
     pub queue_head: Option<PriorityQueueTask>,
@@ -91,8 +89,8 @@ pub struct PlanningTaskCreatePreview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskMutationCommitResult {
     pub committed_planning_revision: i64,
-    // queue_head comes from the freshly rebuilt projection, not from a stale
-    // caller-side cache, which keeps the TUI next-task view aligned with disk.
+    // queue_head는 caller cache가 아니라 방금 재계산한 projection에서 온다. commit 직후 TUI의
+    // next-task view가 저장된 authority와 같은 상태를 보게 하기 위한 응답 값이다.
     pub queue_head: Option<PriorityQueueTask>,
     pub task_authority_changed: bool,
     pub applied_command_count: usize,
@@ -117,8 +115,8 @@ impl PlanningTaskMutationService {
         &self,
         request: PlanningTaskCreatePreviewRequest,
     ) -> Result<PlanningTaskCreatePreview> {
-        // Preview uses the same builder and validation as commit.  The only
-        // skipped step is writing the authority snapshot.
+        // preview는 commit과 같은 builder/validation을 사용하고 authority snapshot write만 생략한다.
+        // 사용자가 보는 preview가 commit 가능하지 않은 별도 객체가 되지 않게 하는 구조다.
         let context = self.load_context(&request.workspace_directory)?;
         self.preview_create_task_with_authority(
             request,
@@ -150,8 +148,8 @@ impl PlanningTaskMutationService {
             .unwrap_or_else(|| task.direction_id.clone());
         let mut next_task_authority = task_authority.clone();
         next_task_authority.tasks.push(task.clone());
-        // The preview is only useful if the resulting authority document would
-        // validate and produce a queue projection the app can display.
+        // preview는 결과 authority document가 실제로 validation을 통과하고 app이 표시할 queue projection을
+        // 만들 수 있을 때만 의미가 있다.
         let queue_projection = self.validate_and_project(directions, &next_task_authority)?;
         Ok(PlanningTaskCreatePreview {
             request,
@@ -170,10 +168,9 @@ impl PlanningTaskMutationService {
         let mut observed_revision = preview.observed_planning_revision;
         let mut next_suffix = preview.collision_suffix;
         /*
-         * A preview may race with another writer.  On the first attempt the
-         * original task is preserved; after a revision conflict the task id is
-         * regenerated against the latest authority snapshot to avoid colliding
-         * with newly committed work.
+         * preview는 다른 writer와 race할 수 있다. 첫 시도는 사용자가 확인한 원래 task를 보존하고,
+         * revision conflict 이후에는 최신 authority snapshot을 기준으로 task id를 다시 계산한다.
+         * 새로 commit된 work와 충돌하지 않게 하면서도 generated_at은 preview 시각에 묶어 둔다.
          */
         for _ in 0..=MAX_REVISION_CONFLICT_RETRIES {
             let context = self.load_context(&preview.request.workspace_directory)?;
@@ -218,9 +215,8 @@ impl PlanningTaskMutationService {
                     current_planning_revision,
                     ..
                 } => {
-                    // Revision conflicts imply the authority set may have
-                    // changed, so the next loop both observes the new revision
-                    // and tries the next collision suffix.
+                    // revision conflict는 authority set이 바뀌었을 수 있다는 뜻이다. 다음 loop는
+                    // 새 revision을 관찰하고 collision suffix도 한 단계 올려 같은 id 재시도를 피한다.
                     observed_revision = current_planning_revision;
                     next_suffix = increment_suffix(next_suffix);
                 }
@@ -233,16 +229,16 @@ impl PlanningTaskMutationService {
         &self,
         request: PlanningTaskMutationRequest,
     ) -> Result<PlanningTaskMutationCommitResult> {
-        // Worker responses are bounded before touching the repository so a bad
-        // extraction cannot produce an oversized authority rewrite.
+        // worker response는 repository를 건드리기 전에 command 수를 제한한다. extractor가 나쁜
+        // batch를 넘겨도 oversized authority rewrite로 이어지지 않게 하는 선행 guard다.
         if request.commands.len() > MAX_TASK_MUTATION_COMMANDS {
             bail!(
                 "planning task mutation accepts at most {MAX_TASK_MUTATION_COMMANDS} command(s) per worker response"
             );
         }
         if request.commands.is_empty() {
-            // Empty command batches still refresh the caller's revision and
-            // queue head, but they never create a no-op commit.
+            // empty command batch도 caller가 최신 revision과 queue head를 관찰하게 하지만,
+            // no-op commit은 만들지 않는다.
             let context = self.load_context(&request.workspace_directory)?;
             let queue_projection =
                 self.validate_and_project(&context.directions, &context.task_authority)?;
@@ -255,9 +251,8 @@ impl PlanningTaskMutationService {
             });
         }
         let mut observed_revision = None;
-        // Command batches are rebuilt from the latest authority on each retry;
-        // this keeps create ids, update guards, and queue projection in one
-        // consistent snapshot before the optimistic commit.
+        // command batch는 retry마다 최신 authority에서 다시 적용된다. create id, update guard,
+        // queue projection이 optimistic commit 직전 하나의 일관된 snapshot에서 계산되게 한다.
         for _ in 0..=MAX_REVISION_CONFLICT_RETRIES {
             let context = self.load_context(&request.workspace_directory)?;
             observed_revision = Some(context.task_planning_revision);
@@ -271,8 +266,8 @@ impl PlanningTaskMutationService {
             let queue_projection =
                 self.validate_and_project(&context.directions, &next_task_authority)?;
             if !application.changed {
-                // Updates that normalize to the current task definition report
-                // their inspected ids but avoid rewriting the authority file.
+                // 현재 task definition과 같게 normalize되는 update는 inspected id를 보고하되
+                // authority file은 다시 쓰지 않는다.
                 return Ok(PlanningTaskMutationCommitResult {
                     committed_planning_revision: context.task_planning_revision,
                     queue_head: queue_projection.next_task,
@@ -305,8 +300,8 @@ impl PlanningTaskMutationService {
         )
     }
     fn load_context(&self, workspace_directory: &str) -> Result<PlanningTaskMutationContext> {
-        // Direction and task authorities are loaded together because task
-        // validation depends on direction ids and the current planning format.
+        // task validation은 direction id와 현재 planning format에 의존하므로 direction/task
+        // authority를 같은 context로 읽는다.
         let direction_snapshot = self
             .planning_task_repository_port
             .load_direction_authority_snapshot(workspace_directory)?
@@ -345,8 +340,8 @@ impl PlanningTaskMutationService {
         let mut committed_task_ids = Vec::new();
         let mut changed = false;
         for command in &request.commands {
-            // The in-memory authority document is the single mutation target.
-            // Validation and persistence happen after the whole batch applies.
+            // in-memory authority document가 유일한 mutation target이다. batch 전체를 적용한 뒤
+            // validation과 persistence를 실행해 중간 상태가 repository에 보이지 않게 한다.
             match command {
                 PlanningTaskMutationCommand::CreateTask(input) => {
                     let task = self.build_unique_task(
@@ -373,8 +368,8 @@ impl PlanningTaskMutationService {
                         task_authority,
                         updated_at,
                     )?;
-                    // Include the addressed id even when the update is a no-op;
-                    // callers can still correlate which command was inspected.
+                    // update가 no-op이어도 addressed id를 포함한다. caller는 어떤 command가
+                    // 검사됐는지 correlation할 수 있다.
                     committed_task_ids.push(input.task_id.trim().to_string());
                     changed |= updated;
                 }
@@ -395,8 +390,8 @@ impl PlanningTaskMutationService {
         starting_suffix: Option<u32>,
     ) -> Result<TaskDefinition> {
         let mut suffix = starting_suffix;
-        // Task ids are content/time/source derived.  The bounded suffix loop is
-        // only a collision escape hatch, not an unbounded allocation strategy.
+        // task id는 content/time/source에서 파생된다. bounded suffix loop는 collision escape hatch일 뿐,
+        // 무한 allocation 전략이 아니다.
         for _ in 0..MAX_COLLISION_SUFFIX_ATTEMPTS {
             let task = self.build_task(
                 input,
@@ -423,8 +418,8 @@ impl PlanningTaskMutationService {
         collision_suffix: Option<u32>,
     ) -> Result<TaskDefinition> {
         let title = required_text(&input.title, "task title")?.to_string();
-        // A missing description intentionally falls back to title so generated
-        // tasks remain displayable in compact queue surfaces.
+        // description이 없으면 의도적으로 title을 fallback으로 쓴다. generated task가 compact queue
+        // surface에서도 최소한 표시 가능한 설명을 갖게 하기 위해서다.
         let description = input
             .description
             .as_deref()
@@ -446,8 +441,8 @@ impl PlanningTaskMutationService {
                 "task `{title}` must include priority_reason when dynamic_priority_delta is non-zero"
             );
         }
-        // Every field is normalized before entering the authority document, so
-        // later updates can compare structural equality for no-op detection.
+        // authority document에 들어가기 전 모든 field를 normalize한다. 이후 update path가 structural
+        // equality만으로 no-op 여부를 판단할 수 있게 하려는 전처리다.
         Ok(TaskDefinition {
             id: build_task_id(source, generated_at, &title, collision_suffix),
             direction_id: direction.id.trim().to_string(),
@@ -490,9 +485,8 @@ impl PlanningTaskMutationService {
         let previous_task = task.clone();
 
         /*
-         * Update commands are partial patches.  Optional fields that are absent
-         * preserve the existing value, while present fields run through the same
-         * trimming, direction, priority, and terminal-status guards as creates.
+         * update command는 partial patch다. absent optional field는 기존 값을 보존하고,
+         * present field는 create와 같은 trimming, direction, priority, terminal-status guard를 통과한다.
          */
         if let Some(direction_id) = input.direction_id.as_deref() {
             let direction = find_direction(direction_id, directions)?;
@@ -500,8 +494,8 @@ impl PlanningTaskMutationService {
             if input.direction_relation_note.is_none()
                 && task.direction_relation_note.trim().is_empty()
             {
-                // Direction moves get a default relation note only when the
-                // caller did not provide one and the current note is blank.
+                // direction move의 default relation note는 caller가 note를 제공하지 않았고 현재 note가
+                // blank일 때만 채운다. 기존 audit 설명을 불필요하게 덮어쓰지 않기 위해서다.
                 task.direction_relation_note = default_relation_note(None, direction);
             }
         }
@@ -566,8 +560,8 @@ impl PlanningTaskMutationService {
         task_authority: &TaskAuthorityDocument,
         queue_projection: &PriorityQueueProjection,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
-        // The repository port owns compare-and-swap semantics; this layer passes
-        // the already validated task authority plus its matching queue projection.
+        // compare-and-swap semantics는 repository port가 소유한다. 이 layer는 이미 검증된
+        // task authority와 그에 대응하는 queue projection을 함께 넘긴다.
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
                 workspace_directory,
@@ -581,20 +575,20 @@ impl PlanningTaskMutationService {
 }
 #[derive(Debug, Clone)]
 struct PlanningTaskMutationContext {
-    // Loaded authority documents and the revision observed with task authority.
+    // load된 authority document와 task authority를 읽을 때 관찰한 planning revision이다.
     directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
     task_planning_revision: i64,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PlanningTaskMutationApplication {
-    // ids are reported separately from changed so no-op updates remain visible.
+    // id 목록은 changed 여부와 별도로 보고한다. no-op update도 어떤 task를 검사했는지 보이게 한다.
     committed_task_ids: Vec<String>,
     changed: bool,
 }
 #[derive(Debug, Clone, Copy)]
 struct PlanningTaskAuthorityView<'a> {
-    // A compact read-only pair for id allocation and direction validation.
+    // id allocation과 direction validation에 필요한 read-only authority 묶음이다.
     directions: &'a DirectionCatalogDocument,
     task_authority: &'a TaskAuthorityDocument,
 }
