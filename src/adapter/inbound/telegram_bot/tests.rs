@@ -30,7 +30,12 @@ struct FakePlanningControlSurface;
 
 impl PlanningControlSurface for FakePlanningControlSurface {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
-        // The status fixture includes a queue head because /status copy is expected to surface it.
+        /*
+         * Keep this snapshot intentionally small but not empty. Telegram status
+         * replies are read outside the TUI, so the queue head title is the
+         * easiest durable signal that the inbound adapter reached the shared
+         * planning-control service instead of rendering a Telegram-only stub.
+         */
         Ok(PlanningControlStatusSnapshot {
             workspace_dir: "/tmp/repo".to_string(),
             planning_state: "ready".to_string(),
@@ -54,6 +59,11 @@ impl PlanningControlSurface for FakePlanningControlSurface {
     }
 
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
+        /*
+         * Reset tests do not need file IO; they need proof that Telegram target
+         * words have already been mapped into the same PlanningResetTarget labels
+         * used by admin and TUI control surfaces.
+         */
         Ok(PlanningControlResetOutcome {
             target: target.label().to_string(),
             rewritten_paths: vec!["DB task authority".to_string()],
@@ -73,6 +83,12 @@ impl PlanningControlSurface for FlakyPlanningControlSurface {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         let call = self.load_calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
+            /*
+             * The first status call simulates a service-layer failure after
+             * parsing and authorization have already succeeded. The runner must
+             * convert that into one failed reply without poisoning the next
+             * update in the same Telegram batch.
+             */
             bail!("temporary planning failure");
         }
         FakePlanningControlSurface.load_status_snapshot()
@@ -84,7 +100,11 @@ impl PlanningControlSurface for FlakyPlanningControlSurface {
 
 #[derive(Default)]
 struct FakeTelegramBotPort {
-    // Stored in reverse-pop order so tests can stage sequential poll failures and updates cheaply.
+    /*
+     * Stored in reverse-pop order so each test can script a poll transcript
+     * without an async runtime or real Telegram HTTP state. That keeps offset
+     * assertions focused on runner behavior rather than mock bookkeeping.
+     */
     poll_errors: Mutex<Vec<anyhow::Error>>,
     updates: Mutex<Vec<Vec<TelegramUpdate>>>,
     // Captured send requests are the observable side effect for runner tests.
@@ -123,7 +143,11 @@ fn build_runner(allowed_chat_ids: &[i64]) -> (Arc<FakeTelegramBotPort>, Telegram
         gateway.clone(),
         PlanningControlService::new(Arc::new(FakePlanningControlSurface)),
         TelegramBotPolicy::new(allowed_chat_ids.iter().copied().collect()),
-        // Single update per poll keeps offset and recovery assertions precise.
+        /*
+         * A limit of one mirrors the narrowest long-poll batch. The runner still
+         * uses production offset logic, but tests can tell whether a retry held
+         * or advanced the cursor after exactly one update.
+         */
         1,
         false,
         Duration::ZERO,
@@ -134,6 +158,11 @@ fn build_runner(allowed_chat_ids: &[i64]) -> (Arc<FakeTelegramBotPort>, Telegram
 // Parser tests protect the user-facing chat grammar before service dispatch is involved.
 #[test]
 fn parse_message_accepts_plan_status_command_with_bot_mention() {
+    /*
+     * Group chats append the bot username to slash commands. This case protects
+     * the normalization step that strips `@AkraBot` before the adapter maps
+     * `/plan status` onto the shared planning Status command.
+     */
     let parsed = parse_message(Some("/plan@AkraBot status"));
 
     assert_eq!(
@@ -146,6 +175,11 @@ fn parse_message_accepts_plan_status_command_with_bot_mention() {
 
 #[test]
 fn parse_message_reports_usage_for_reset_without_target() {
+    /*
+     * `/reset` is destructive enough that Telegram must reject an omitted target
+     * at the parser boundary. The application service should never receive a
+     * best-guess reset command from ambiguous chat text.
+     */
     let parsed = parse_message(Some("/reset"));
 
     assert_eq!(
@@ -158,6 +192,11 @@ fn parse_message_reports_usage_for_reset_without_target() {
 
 #[test]
 fn parse_message_rejects_reset_with_extra_arguments() {
+    /*
+     * Extra words after a reset target often mean the operator thought another
+     * scope or confirmation was available. Returning usage text is safer than
+     * silently accepting a partial destructive command.
+     */
     let parsed = parse_message(Some("/reset queue now"));
 
     assert_eq!(
@@ -170,6 +209,11 @@ fn parse_message_rejects_reset_with_extra_arguments() {
 
 #[test]
 fn parse_message_rejects_reset_alias_with_extra_arguments() {
+    /*
+     * Alias commands skip the generic `/reset <target>` parser path, so this
+     * regression case keeps shorthand reset commands equally strict about
+     * accepting no trailing chat text.
+     */
     let parsed = parse_message(Some("/reset_queue now"));
 
     assert_eq!(
@@ -181,6 +225,11 @@ fn parse_message_rejects_reset_alias_with_extra_arguments() {
 // Allowlist tests are security-sensitive: unauthorized chats must receive setup guidance, not data.
 #[test]
 fn runner_rejects_unauthorized_chat_with_current_chat_id() {
+    /*
+     * An empty allowlist is treated as "not configured", not "allow everyone".
+     * The reply must reveal only the current chat id and environment key so an
+     * operator can complete setup without leaking workspace status or queue data.
+     */
     let (_gateway, runner) = build_runner(&[]);
     let reply = runner
         .handle_message(&TelegramInboundMessage {
@@ -197,6 +246,11 @@ fn runner_rejects_unauthorized_chat_with_current_chat_id() {
 
 #[test]
 fn runner_executes_planning_command_for_allowed_chat() {
+    /*
+     * The queue title assertion proves the allowed path crosses the adapter
+     * boundary and executes PlanningControlService. Checking only a generic
+     * heading would miss a regression that returned static Telegram help text.
+     */
     let (_gateway, runner) = build_runner(&[42]);
     let reply = runner
         .handle_message(&TelegramInboundMessage {
@@ -213,6 +267,11 @@ fn runner_executes_planning_command_for_allowed_chat() {
 
 #[test]
 fn help_reply_mentions_whoami_without_allowlist() {
+    /*
+     * Help remains open because it is the bootstrap surface for remote setup.
+     * `/whoami` must be visible here so an operator can discover the exact chat
+     * id before any privileged planning command is accepted.
+     */
     let (_gateway, runner) = build_runner(&[]);
     let reply = runner
         .handle_message(&TelegramInboundMessage {
@@ -230,6 +289,11 @@ fn help_reply_mentions_whoami_without_allowlist() {
 // Config tests cover precedence: process env overrides file values, flags add explicit chat IDs.
 #[test]
 fn parse_args_reads_token_and_chat_ids_from_environment_and_flags() {
+    /*
+     * CLI chat ids are additive so a one-off operator can be allowed without
+     * rewriting the local env file. The token still comes from the environment
+     * because the flag parser should not require secrets in shell history.
+     */
     let args = parse_args_with_environment(
         [
             "--allow-chat-id".to_string(),
@@ -254,6 +318,11 @@ fn parse_args_reads_token_and_chat_ids_from_environment_and_flags() {
 
 #[test]
 fn load_environment_from_sources_merges_config_file_and_process_env() {
+    /*
+     * Process env wins over config file content for both token and allowlist.
+     * That lets deployment wrappers rotate credentials or narrow access without
+     * editing the user's persistent Telegram config file.
+     */
     let environment = load_environment_from_sources(
         Some(
             r#"
@@ -274,6 +343,11 @@ fn load_environment_from_sources_merges_config_file_and_process_env() {
 fn apply_environment_file_reads_token_and_allowlist() {
     let mut environment = TelegramBotEnvironment::default();
 
+    /*
+     * The file parser accepts shell-like `export` and quoted values because the
+     * default config path is meant to be hand-edited. Unknown keys stay ignored
+     * so users can keep notes or future settings in the same file.
+     */
     apply_environment_file(
         &mut environment,
         r#"
@@ -292,6 +366,11 @@ fn apply_environment_file_reads_token_and_allowlist() {
 // Poll-loop tests keep the bot alive across transport and per-message failures.
 #[test]
 fn run_poll_cycle_keeps_loop_alive_after_poll_error() {
+    /*
+     * A failed getUpdates call cannot advance the cursor; otherwise Telegram
+     * could drop a command the bot never saw. Returning the previous offset is
+     * the retry contract for transient network or API errors.
+     */
     let (gateway, runner) = build_runner(&[42]);
     gateway
         .poll_errors
@@ -305,6 +384,11 @@ fn run_poll_cycle_keeps_loop_alive_after_poll_error() {
 
 #[test]
 fn process_updates_continues_after_individual_message_failure() {
+    /*
+     * Batch processing isolates each message. The first update exercises the
+     * failure reply path, and the second proves the runner keeps draining the
+     * batch instead of letting one bad planning call block later chat commands.
+     */
     let gateway = Arc::new(FakeTelegramBotPort::default());
     let runner = TelegramBotRunner::new(
         gateway.clone(),
@@ -318,6 +402,7 @@ fn process_updates_continues_after_individual_message_failure() {
     );
 
     runner.process_updates(&[
+        // Same chat and same command isolate the variable to service call order.
         TelegramUpdate {
             update_id: 1,
             message: Some(TelegramInboundMessage {
