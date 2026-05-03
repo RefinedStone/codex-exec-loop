@@ -14,10 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /*
- * The CLI adapter is the non-TUI entrypoint for operational commands. It keeps
- * argument parsing and process exit codes at the edge, then delegates real work
- * through application services and outbound adapters so the same planning and
- * parallel-mode contracts are used by the TUI, admin API, and automation tools.
+ * CLI adapter는 operational command를 위한 non-TUI entrypoint다.
+ * argument parsing과 process exit code는 edge에 남기고, 실제 작업은 application service와 outbound adapter로 위임한다.
+ * 그래서 TUI, admin API, automation tool이 같은 planning/parallel-mode 계약을 공유한다.
  */
 mod reports;
 
@@ -26,8 +25,7 @@ use self::reports::{
     render_init_report, render_json_line, render_reset_report,
 };
 
-// Usage strings are kept beside the dispatcher because they are both help copy
-// and the exact error messages returned for arity mistakes.
+// usage string은 help copy이면서 arity mistake에 대한 정확한 error message다. dispatcher 옆에 두어 route와 copy가 함께 바뀌게 한다.
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
 const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
@@ -48,7 +46,7 @@ where
     T: Into<OsString>,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
-    // Returning None means the native TUI should continue booting; every handled subcommand exits.
+    // None 반환은 native TUI가 계속 booting해야 한다는 뜻이다. 처리된 subcommand는 모두 explicit exit code를 돌린다.
     match args.as_slice() {
         [] => Ok(None),
         [flag] if is_help_flag(flag) => {
@@ -63,7 +61,7 @@ where
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
             Ok(Some(0))
         }
-        // Long-running async services own their own parsing after the first command token.
+        // long-running async service는 첫 command token 뒤의 parsing을 각자 소유한다.
         [command] if is_admin_command(command) => Ok(Some(run_admin_server(&[])?)),
         [command, rest @ ..] if is_admin_command(command) => Ok(Some(run_admin_server(rest)?)),
         [command] if is_telegram_command(command) => Ok(Some(run_telegram_bot(&[])?)),
@@ -76,7 +74,7 @@ where
         [command, workspace] if command == OsStr::new("init") => {
             Ok(Some(run_init(Some(workspace.as_os_str()), stdout)?))
         }
-        // Planning maintenance commands accept an optional workspace and otherwise use cwd.
+        // planning maintenance command는 optional workspace를 받고, 없으면 cwd를 사용한다.
         [command, target] if command == OsStr::new("reset") => {
             Ok(Some(run_reset(target.as_os_str(), None, stdout)?))
         }
@@ -99,7 +97,7 @@ where
         [command, workspace] if command == OsStr::new("parallel-tick") => Ok(Some(
             run_parallel_tick(Some(workspace.as_os_str()), stdout)?,
         )),
-        // Arity-specific branches keep the unsupported-command error for truly unknown commands.
+        // arity-specific branch를 먼저 두어 unsupported-command error가 정말 unknown command에만 쓰이게 한다.
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
         }
@@ -137,7 +135,7 @@ fn is_planning_tool_command(command: &OsStr) -> bool {
 }
 
 fn run_admin_server(args: &[OsString]) -> Result<i32> {
-    // The admin API is async, while CLI dispatch is synchronous for simple testability.
+    // admin API는 async이고 CLI dispatch는 테스트하기 쉬운 synchronous 표면이다. 여기서 runtime을 만들어 경계를 맞춘다.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -186,7 +184,7 @@ fn run_planning_tool(
     workspace_arg: Option<&OsStr>,
     stdout: &mut impl Write,
 ) -> Result<i32> {
-    // The planning tool is intentionally script/LLM-oriented: contract prints schema, run consumes stdin.
+    // planning tool은 의도적으로 script/LLM 지향이다. contract는 schema를 출력하고 run은 stdin payload를 소비한다.
     let planning = build_production_planning_services();
     match subcommand.to_str() {
         Some("contract") => {
@@ -197,7 +195,7 @@ fn run_planning_tool(
             let workspace_path = resolve_workspace_path(workspace_arg)?;
             let workspace_label = workspace_path.display().to_string();
             let result = run_planning_tool_request(&planning, &workspace_path);
-            // Tool callers expect structured failure output rather than an anyhow backtrace.
+            // tool caller는 anyhow backtrace보다 structured failure output을 기대한다.
             match result {
                 Ok(response) => {
                     render_json_line(stdout, &response)?;
@@ -233,7 +231,7 @@ fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> 
     let workspace_label = workspace_path.display().to_string();
 
     writeln!(stdout, "workspace: {workspace_label}")?;
-    // This command is the manual/cron-friendly driver for the same distributor queue the TUI supervises.
+    // 이 command는 TUI가 supervise하는 같은 distributor queue를 수동/cron 환경에서 tick하는 driver다.
     match service.process_distributor_queue(&workspace_label) {
         Ok(notices) if notices.is_empty() => {
             writeln!(stdout, "parallel distributor queue idle")?;
@@ -258,7 +256,7 @@ fn run_planning_tool_request(
 ) -> Result<PlanningTaskToolResponse> {
     validate_workspace_path(workspace_path).map_err(anyhow::Error::msg)?;
     let mut request_json = String::new();
-    // Stdin keeps request size and quoting independent from shell argument parsing.
+    // stdin을 쓰면 request 크기와 quoting이 shell argument parsing에서 독립된다.
     std::io::stdin()
         .read_to_string(&mut request_json)
         .context("failed to read planning-tool JSON request from stdin")?;
@@ -280,7 +278,7 @@ fn resolve_workspace_path(workspace_arg: Option<&OsStr>) -> Result<PathBuf> {
     } else {
         current_dir.join(requested)
     };
-    // Existing paths are canonicalized for stable reports; future paths stay absolute for diagnostics.
+    // existing path는 stable report를 위해 canonicalize하고, 아직 없는 future path는 diagnostic용 absolute path로 유지한다.
     if absolute.exists() {
         absolute
             .canonicalize()
@@ -307,7 +305,7 @@ fn validate_workspace_path(workspace_path: &Path) -> Result<(), String> {
 }
 
 fn build_production_planning_services() -> PlanningServices {
-    // All planning CLI commands share the repo-scoped authority store used by the native client.
+    // 모든 planning CLI command는 native client가 쓰는 repo-scoped authority store를 공유한다.
     let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
@@ -324,7 +322,7 @@ fn build_production_planning_services() -> PlanningServices {
 }
 
 fn build_production_parallel_mode_service() -> ParallelModeService {
-    // Parallel tick needs both GitHub automation and local git/worktree runtime ports.
+    // parallel tick은 GitHub automation과 local git/worktree runtime port를 모두 필요로 한다.
     ParallelModeService::new(
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
         Arc::new(GithubAutomationAdapter::new()),
@@ -341,7 +339,7 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     let report = planning
         .workspace
         .inspect_workspace(workspace_path.to_string_lossy().as_ref());
-    // Report shaping stays in the CLI adapter so application services remain UI-neutral.
+    // report shaping은 CLI adapter에 남긴다. application service가 UI-neutral하게 유지되게 하기 위해서다.
     DoctorReport::from_service_report(workspace_label, report)
 }
 
@@ -356,7 +354,7 @@ fn initialize_workspace(workspace_path: &Path) -> InitReport {
         .initialize_simple_workspace(workspace_path.to_string_lossy().as_ref())
     {
         Ok(result) => {
-            // Include the runtime snapshot so init output immediately shows queue/direction state.
+            // init output이 즉시 queue/direction state를 보여 주도록 runtime snapshot을 함께 포함한다.
             let snapshot = planning
                 .runtime
                 .load_runtime_snapshot_or_invalid(workspace_path.to_string_lossy().as_ref());
@@ -382,7 +380,7 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
 }
 
 fn parse_reset_target(target: &OsStr) -> Result<PlanningResetTarget> {
-    // Accept human CLI spelling but map into the application reset contract at the boundary.
+    // 사람이 입력하는 CLI spelling을 받되, boundary에서 application reset contract로 매핑한다.
     match target
         .to_string_lossy()
         .trim()
