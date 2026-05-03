@@ -22,10 +22,10 @@ use crate::domain::planning::{
 };
 
 /*
- * Runtime intake turns a user prompt into a task-authority mutation in two phases.
- * `prepare_task_intake` loads validated planning authority, generates a draft task, and asks the mutation service
- * for a preview. `commit_task_intake` later commits that exact preview so the observed planning revision guards
- * against stale UI confirmation.
+ * runtime intake는 user prompt를 task-authority mutation으로 바꾸는 two-phase flow다. `prepare_task_intake`는
+ * validated planning authority를 읽고 draft task를 생성한 뒤 mutation service에 preview를 요청한다.
+ * `commit_task_intake`는 나중에 그 exact preview를 commit해, preview 때 관찰한 planning revision이 stale UI
+ * confirmation을 막는 guard로 작동하게 한다.
  */
 
 mod draft;
@@ -36,7 +36,7 @@ pub use self::draft::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Inbound request from `:task`-style runtime intake surfaces.
+// `:task` 스타일 runtime intake surface에서 들어오는 inbound request다.
 pub struct PlanningTaskIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
@@ -46,7 +46,7 @@ pub struct PlanningTaskIntakeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Generated task plus display context retained for preview and later commit fallback.
+// generated task와 preview/commit fallback에 필요한 display context를 함께 보관한다.
 pub struct PlanningTaskIntakeDraft {
     pub task: TaskDefinition,
     pub direction_title: String,
@@ -56,7 +56,7 @@ pub struct PlanningTaskIntakeDraft {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Prepared proposal is the stable handoff between preview UI and the eventual commit action.
+// prepared proposal은 preview UI와 eventual commit action 사이의 stable handoff다.
 pub struct PlanningTaskIntakeProposal {
     pub request: PlanningTaskIntakeRequest,
     pub draft: PlanningTaskIntakeDraft,
@@ -67,7 +67,7 @@ pub struct PlanningTaskIntakeProposal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Commit result translates the lower-level mutation result into runtime-intake terminology.
+// commit result는 lower-level mutation result를 runtime-intake terminology로 바꾼 결과다.
 pub struct PlanningTaskIntakeCommitResult {
     pub committed_task_id: String,
     pub committed_planning_revision: i64,
@@ -76,13 +76,13 @@ pub struct PlanningTaskIntakeCommitResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Validation errors keep a machine-readable code for tests and a user-facing message for adapters.
+// validation error는 test가 볼 machine-readable code와 adapter가 보여 줄 user-facing message를 같이 가진다.
 pub struct PlanningTaskIntakeValidationError {
     pub code: &'static str,
     pub message: String,
 }
 impl PlanningTaskIntakeValidationError {
-    // Local constructor keeps every intake validation failure on the same code/message shape.
+    // local constructor는 모든 intake validation failure가 같은 code/message shape를 갖게 한다.
     fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -90,14 +90,14 @@ impl PlanningTaskIntakeValidationError {
         }
     }
 
-    // Public service methods return anyhow errors, but tests assert the structured validation code directly.
+    // public service method는 anyhow error를 반환하지만, test는 structured validation code를 직접 검증한다.
     fn into_anyhow(self) -> anyhow::Error {
         anyhow!("{}", self.message)
     }
 }
 
 #[derive(Clone, Default)]
-// Stateless validator for generated drafts before they are handed to the mutation preview layer.
+// generated draft가 mutation preview layer로 넘어가기 전 검사하는 stateless validator다.
 pub struct PlanningTaskIntakeValidationService;
 impl PlanningTaskIntakeValidationService {
     pub fn new() -> Self {
@@ -105,9 +105,9 @@ impl PlanningTaskIntakeValidationService {
     }
 
     /*
-     * Validate the generated draft against accepted direction/task authority.
-     * This catches generator mistakes before mutation preview: blank fields, inactive or unknown directions,
-     * priority bounds, duplicate ids, and dependency/blocker links that do not point to existing tasks.
+     * generated draft를 accepted direction/task authority에 맞춰 검증한다. mutation preview 전 generator mistake를 잡는
+     * 단계이며, blank field, inactive/unknown direction, priority bound, duplicate id, existing task를 가리키지
+     * 않는 dependency/blocker link를 여기서 차단한다.
      */
     pub fn validate_draft(
         &self,
@@ -190,9 +190,9 @@ impl PlanningTaskIntakeValidationService {
 
 #[derive(Clone)]
 /*
- * Intake service coordinates authority seeding, workspace validation, draft generation, mutation preview, and
- * final commit. It deliberately reuses PlanningTaskMutationService so :task intake follows the same DB authority
- * path as worker-produced planning_task_commands.
+ * intake service는 authority seeding, workspace validation, draft generation, mutation preview, final commit을
+ * 조율한다. 의도적으로 PlanningTaskMutationService를 재사용해 `:task` intake가 worker-produced
+ * planning_task_commands와 같은 DB authority path를 따르게 한다.
  */
 pub struct PlanningTaskIntakeService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -203,7 +203,7 @@ pub struct PlanningTaskIntakeService {
     draft_generator: Arc<dyn PlanningTaskDraftGenerator>,
 }
 impl PlanningTaskIntakeService {
-    // Production constructor uses the local deterministic draft generator.
+    // production constructor는 local deterministic draft generator를 사용한다.
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
@@ -219,7 +219,7 @@ impl PlanningTaskIntakeService {
         )
     }
 
-    // Tests can inject a generator while retaining the same seeding and mutation collaborators.
+    // test는 generator만 주입하고 seeding/mutation collaborator는 같은 흐름으로 유지할 수 있다.
     pub fn with_generator(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
@@ -247,9 +247,8 @@ impl PlanningTaskIntakeService {
     }
 
     /*
-     * Build a previewable task proposal without mutating authority.
-     * The mutation preview layer owns collision handling and revision capture, so the draft returned here is the
-     * post-preview task rather than the raw generator output.
+     * authority를 mutate하지 않고 preview 가능한 task proposal을 만든다. collision handling과 revision capture는
+     * mutation preview layer가 소유하므로, 여기서 반환하는 draft는 raw generator output이 아니라 post-preview task다.
      */
     pub fn prepare_task_intake(
         &self,
@@ -294,7 +293,7 @@ impl PlanningTaskIntakeService {
         })
     }
 
-    // Commit the preview captured during prepare; no draft is regenerated during confirmation.
+    // prepare 중 capture된 preview를 commit한다. confirmation 단계에서는 draft를 다시 생성하지 않는다.
     pub fn commit_task_intake(
         &self,
         proposal: &PlanningTaskIntakeProposal,
@@ -315,9 +314,8 @@ impl PlanningTaskIntakeService {
     }
 
     /*
-     * Load the authority context required for intake.
-     * Default authority is seeded first for newly initialized workspaces, then file-backed result-output and
-     * DB-backed direction/task authority are validated together before a draft can be generated.
+     * intake에 필요한 authority context를 load한다. 새로 초기화된 workspace를 위해 default authority를 먼저 seed하고,
+     * 그 다음 file-backed result-output과 DB-backed direction/task authority를 함께 validate한 뒤에만 draft를 생성한다.
      */
     fn load_intake_context(
         &self,
@@ -397,14 +395,14 @@ impl PlanningTaskIntakeService {
 }
 
 #[derive(Debug, Clone)]
-// Validated authority snapshot plus the revision observed by the preview layer.
+// preview layer가 관찰한 revision과 validated authority snapshot을 함께 담는 내부 context다.
 struct PlanningTaskIntakeContext {
     directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
     task_planning_revision: i64,
 }
 
-// Surface a missing required active planning file with a repair-oriented message.
+// required active planning file 누락을 repair-oriented message로 표면화한다.
 fn required_workspace_body<'a>(
     _workspace_record: &'a PlanningWorkspaceLoadRecord,
     path: &'static str,
@@ -417,7 +415,7 @@ fn required_workspace_body<'a>(
     })
 }
 
-// Map validation wording to the most useful doctor guidance without leaking validator internals to adapters.
+// validation wording을 adapter에 validator 내부 구조를 노출하지 않는 doctor guidance로 낮춘다.
 fn task_intake_repair_guidance(first_failure: &str) -> &'static str {
     if first_failure.contains("references unknown direction_id") {
         return "Next action: run :doctor to inspect direction authority.";
@@ -434,7 +432,7 @@ fn task_intake_repair_guidance(first_failure: &str) -> &'static str {
     "Next action: run :doctor to inspect the workspace."
 }
 
-// Generated dependency and blocker links may reference only existing tasks, never the draft itself.
+// generated dependency/blocker link는 existing task만 가리킬 수 있고 draft 자기 자신은 가리킬 수 없다.
 fn validate_task_link(
     link_kind: &'static str,
     task_id: &str,
@@ -463,7 +461,7 @@ fn validate_task_link(
     Ok(())
 }
 
-// Convert the generated draft into the mutation service input shape.
+// generated draft를 mutation service input shape로 변환한다.
 fn create_input_from_draft(draft: &PlanningTaskIntakeDraft) -> PlanningTaskCreateInput {
     PlanningTaskCreateInput {
         direction_id: Some(draft.task.direction_id.clone()),
@@ -479,7 +477,7 @@ fn create_input_from_draft(draft: &PlanningTaskIntakeDraft) -> PlanningTaskCreat
     }
 }
 
-// Use the mutation preview task because it may include collision suffixes or normalized mutation defaults.
+// mutation preview task를 사용한다. preview 결과에는 collision suffix나 normalized mutation default가 반영될 수 있다.
 fn draft_from_mutation_preview(
     request: &PlanningTaskIntakeRequest,
     preview: &PlanningTaskCreatePreview,
@@ -493,7 +491,7 @@ fn draft_from_mutation_preview(
     }
 }
 
-// Preview lines are compact human-readable confirmation copy for CLI/TUI surfaces.
+// preview line은 CLI/TUI surface가 보여 줄 compact human-readable confirmation copy다.
 fn build_preview_lines(draft: &PlanningTaskIntakeDraft) -> Vec<String> {
     vec![
         format!("title: {}", draft.task.title.trim()),
@@ -519,7 +517,7 @@ fn build_preview_lines(draft: &PlanningTaskIntakeDraft) -> Vec<String> {
 }
 
 #[cfg(test)]
-// Shared fixtures are public to sibling intake tests, keeping generator and validator expectations aligned.
+// shared fixture는 sibling intake test에 공개해 generator와 validator expectation을 맞춘다.
 pub(super) mod tests {
     use chrono::{TimeZone, Utc};
 
@@ -533,7 +531,7 @@ pub(super) mod tests {
         TaskAuthorityDocument,
     };
 
-    // Two active directions let generator tests verify default direction selection without inactive noise.
+    // active direction 두 개를 두어 generator test가 inactive noise 없이 default direction selection을 검증하게 한다.
     pub(super) fn directions() -> DirectionCatalogDocument {
         DirectionCatalogDocument {
             version: 1,
@@ -561,7 +559,7 @@ pub(super) mod tests {
         }
     }
 
-    // Minimal intake request fixture with stable turn metadata.
+    // stable turn metadata를 가진 minimal intake request fixture다.
     pub(super) fn request(prompt: &str) -> PlanningTaskIntakeRequest {
         PlanningTaskIntakeRequest {
             workspace_directory: "/tmp/workspace".to_string(),
@@ -573,7 +571,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    // Validator test pins the most important pre-preview guardrails in one compact fixture.
+    // validator test는 가장 중요한 pre-preview guardrail을 하나의 compact fixture에 고정한다.
     fn validation_rejects_blank_prompt_duplicate_ids_and_priority_bounds() {
         let directions = directions();
         let existing_request = request("Existing task");
