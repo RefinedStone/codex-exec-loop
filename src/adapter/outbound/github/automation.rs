@@ -361,10 +361,10 @@ impl GithubAutomationPort for GithubAutomationAdapter {
 }
 
 /*
-Subset of the GitHub PR JSON used by this adapter.
+GitHub PR JSON 중 이 adapter가 필요한 subset만 모델링한 private DTO다.
 
-The external field names intentionally stay in this private DTO. The `From` implementation below is the only mapping
-point into the application port type.
+external field name은 여기 private type 안에 가둔다. application port record로 넘어가는 유일한 지점은 아래 `From`
+implementation이며, 그 밖의 distributor/readiness code는 GitHub GraphQL/CLI JSON spelling을 알 필요가 없다.
 */
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestJson {
@@ -382,9 +382,8 @@ struct GithubPullRequestJson {
 impl From<GithubPullRequestJson> for GithubAutomationPullRequest {
     fn from(value: GithubPullRequestJson) -> Self {
         /*
-        This conversion is the membrane between GitHub's camelCase JSON and the
-        application port's provider-neutral record. Keeping it here avoids leaking
-        GitHub field names into distributor or readiness code.
+        이 conversion은 GitHub camelCase JSON과 application port의 provider-neutral record 사이 membrane이다.
+        mapping을 여기 고정하면 distributor나 readiness code가 `baseRefName` 같은 provider field에 직접 의존하지 않는다.
         */
         GithubAutomationPullRequest::new(
             value.number,
@@ -399,9 +398,10 @@ impl From<GithubPullRequestJson> for GithubAutomationPullRequest {
 
 fn run_git(repo_root: &str, args: &[&str]) -> Result<()> {
     /*
-    Git commands return unit because callers care about completed side effects.
-    On failure the helper expands stderr/stdout into the error so the distributor
-    can preserve the remote rejection or hook message in its recovery note.
+    git command helper는 성공 시 unit을 반환한다.
+    caller가 필요한 것은 side effect가 완료됐다는 사실이고, stdout payload가 아니다.
+    실패 시 stderr/stdout을 error context로 확장해 distributor가 remote rejection, hook failure, auth failure 메시지를
+    recovery note에 보존할 수 있게 한다.
     */
     let output = run_process("git", args, repo_root)?;
     if output.status.success() {
@@ -418,18 +418,19 @@ fn run_git(repo_root: &str, args: &[&str]) -> Result<()> {
 
 fn run_git_stdout(repo_root: &str, args: &[&str]) -> Result<String> {
     /*
-    Git stdout callers are read-only capability/inspection paths. Reusing run_command
-    gives them the same non-interactive environment and rich failure context as GitHub
-    wrapper invocations.
+    git stdout caller는 capability/inspection 같은 read-only path다.
+    run_command를 재사용해 GitHub wrapper invocation과 같은 non-interactive environment와 실패 context를 제공한다.
+    이 통일 덕분에 git origin/branch lookup 실패도 PR automation 실패와 같은 방식으로 상위에 전달된다.
     */
     run_command("git", args, repo_root)
 }
 
 /*
-Run a command and return trimmed stdout only on success.
+command를 실행하고 성공한 경우에만 trimmed stdout을 반환한다.
 
-All GitHub automation subprocesses pass through this helper so failures include the program, arguments, repo root, and the
-best available command output. That context is more useful to the orchestration layer than a bare exit status.
+모든 GitHub automation subprocess는 이 helper를 통과한다.
+실패에는 program, argument, repo root, 그리고 가능한 command output을 함께 넣는다.
+orchestration layer에는 bare exit status보다 "어떤 repo에서 어떤 wrapper/git command가 어떤 메시지로 실패했는가"가 필요하다.
 */
 fn run_command(program: &str, args: &[&str], repo_root: &str) -> Result<String> {
     let output = run_process(program, args, repo_root)?;
@@ -448,9 +449,9 @@ fn run_command(program: &str, args: &[&str], repo_root: &str) -> Result<String> 
 
 fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> {
     /*
-    Non-interactive execution is mandatory for background parallel-mode delivery.
-    Disabling terminal prompts turns credential or network gaps into ordinary
-    command failures instead of hanging the supervisor lane.
+    background parallel-mode delivery에서는 non-interactive execution이 필수다.
+    terminal prompt를 막아 credential/network gap이 supervisor lane을 멈춰 세우는 interactive wait가 아니라
+    일반 command failure로 드러나게 한다.
     */
     Command::new(program)
         .current_dir(repo_root)
@@ -467,9 +468,8 @@ fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> 
 
 fn command_error_detail(output: &Output) -> String {
     /*
-    Most Git/GitHub failures explain themselves on stderr, but wrapper scripts may
-    normalize errors onto stdout. The fallback order keeps the highest-signal text
-    while still returning a stable message for silent exits.
+    대부분의 Git/GitHub failure는 stderr에 설명을 남기지만 wrapper script는 stdout으로 error를 normalize할 수 있다.
+    stderr, stdout, stable fallback 순서로 읽어 가장 signal이 높은 메시지를 보존하면서 silent exit도 일정한 문장으로 만든다.
     */
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !stderr.is_empty() {
@@ -485,16 +485,16 @@ fn command_error_detail(output: &Output) -> String {
 
 fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
     /*
-    `gh pr create` and the wrapper both commonly print the created PR URL. Parsing
-    only the final path segment keeps this as a narrow recovery path; structured
-    PR lookup remains the primary source of port data.
+    `gh pr create`와 wrapper는 흔히 생성된 PR URL을 출력한다.
+    마지막 path segment만 parse해 이 logic을 narrow recovery path로 제한한다.
+    structured PR lookup이 여전히 port data의 primary source다.
     */
     output
         .trim()
         /*
-        Only the final slash-delimited segment is parsed. Query strings or non-URL
-        wrapper chatter will fail to parse and fall back to the structured lookup error
-        instead of producing a misleading PR number.
+        slash로 나눈 마지막 segment만 PR number 후보로 삼는다.
+        query string이나 URL이 아닌 wrapper chatter는 parse에 실패하고 structured lookup error로 이어진다.
+        잘못된 숫자를 만들어 downstream inspect가 엉뚱한 PR을 보는 것보다 실패가 낫다.
         */
         .rsplit('/')
         .next()
