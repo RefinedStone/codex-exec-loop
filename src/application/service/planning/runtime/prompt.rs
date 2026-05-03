@@ -1,15 +1,13 @@
 /*
- * This module is the runtime snapshot boundary for planning.  It reads the
- * operator-facing workspace files, joins them with the DB-backed direction/task
- * authority, validates the combined view, and lowers it into a compact
- * PlanningRuntimeSnapshot consumed by policy.rs, facade.rs, TUI overlays, and
- * auto-follow prompt assembly.
+ * planning runtime의 읽기 모델 경계다. operator가 관리하는 workspace markdown과 DB가
+ * 승인한 direction/task authority를 한 번의 snapshot으로 합친 뒤, policy.rs, facade.rs,
+ * TUI overlay, auto-follow prompt assembly가 공유하는 `PlanningRuntimeSnapshot`으로 낮춘다.
  *
- * The key design point is that runtime readers still use a file-shaped
- * validation contract, but task authority is no longer trusted from an operator
- * file.  It is serialized from the accepted DB snapshot and then passed through
- * the same validator so older validation and prompt-fragment code can remain
- * narrow while the source of truth stays authoritative.
+ * 중요한 점은 validator 입력 형태가 여전히 "파일 묶음"이라는 것이다. runtime은 오래된
+ * 검증/fragment 조립 코드를 넓히지 않기 위해 file-shaped contract를 유지하지만,
+ * task authority의 신뢰 원천은 operator 파일이 아니라 accepted DB snapshot이다. 따라서
+ * DB ledger를 JSON으로 직렬화해 validator에 넣고, result-output 같은 operator instruction만
+ * workspace 파일에서 읽는다.
  */
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_workspace_port::{
@@ -79,8 +77,8 @@ pub struct PlanningRuntimeSnapshot {
 }
 
 impl PlanningRuntimeSnapshot {
-    // No files means planning has not started; this is different from a partial
-    // workspace, which should be repairable and therefore invalid.
+    // 파일이 하나도 없으면 planning이 아직 시작되지 않은 상태다. 일부 파일만 있는 partial
+    // workspace와 달리 repair 대상이 아니므로 inactive surface로 내려간다.
     pub fn uninitialized() -> Self {
         Self {
             workspace_present: false,
@@ -99,9 +97,9 @@ impl PlanningRuntimeSnapshot {
         }
     }
 
-    // Invalid snapshots still mark the workspace as present by default so TUI
-    // repair/doctor flows can explain a broken planning workspace instead of
-    // hiding planning as inactive.
+    // invalid snapshot은 기본적으로 workspace_present=true를 유지한다. TUI가 planning을
+    // 단순 비활성으로 숨기지 않고, 깨진 authority/workspace를 doctor나 repair 안내로
+    // 설명하게 하려는 상태 표현이다.
     pub fn invalid(reason: impl Into<String>) -> Self {
         Self {
             workspace_present: true,
@@ -128,9 +126,9 @@ impl PlanningRuntimeSnapshot {
         Self::ready_with_details(prompt_fragment, queue_summary, None, queue_head)
     }
 
-    // Test and projection callers can build a ready snapshot without retaining
-    // the full queue projection.  Runtime loading uses the richer constructor
-    // below so detailed TUI surfaces can inspect active/proposed/skipped tasks.
+    // 테스트와 일부 projection 호출자는 full queue projection 없이 ready snapshot만 필요하다.
+    // 실제 runtime loading은 아래의 richer constructor를 써서 TUI가 active/proposed/skipped
+    // 세부 queue를 다시 조회하지 않고도 렌더링할 수 있게 한다.
     pub fn ready_with_details(
         prompt_fragment: String,
         queue_summary: String,
@@ -166,9 +164,9 @@ impl PlanningRuntimeSnapshot {
         queue_projection: PriorityQueueProjection,
     ) -> Self {
         /*
-         * This is the full-fidelity ready constructor.  The queue head determines
-         * whether policy may generate a continuation, while the full projection
-         * remains available for UI panes that need more than a single summary.
+         * full-fidelity ready constructor다. queue head는 policy가 continuation을 만들 수
+         * 있는지를 결정하고, full projection은 단일 요약보다 많은 정보가 필요한 TUI pane에
+         * 그대로 보존된다.
          */
         Self {
             workspace_present: true,
@@ -242,9 +240,9 @@ impl PlanningRuntimeSnapshot {
         self.queue_projection.as_ref()
     }
 
-    // Signatures are coarse change detectors for repeat-queue safeguards.  They
-    // are not persistence identifiers; they only let runtime orchestration tell
-    // whether accepted authority or the handed-off task changed between turns.
+    // signature는 repeat-queue safeguard용 거친 변경 감지값이다. persistence identifier가
+    // 아니라 turn 사이에 accepted authority나 handed-off task가 바뀌었는지만 runtime
+    // orchestration이 판단하게 하는 값이다.
     pub fn task_authority_signature(&self) -> Option<u64> {
         self.task_authority_signature
     }
@@ -289,8 +287,8 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn preview_detail(&self) -> Option<&str> {
-        // Preview text uses the highest operator-actionable detail first:
-        // repeated-head pause, validation failure, live queue, then proposals.
+        // preview detail은 operator가 바로 행동할 수 있는 정보를 우선한다. 반복 queue head로
+        // 멈춘 이유, validation failure, live queue, proposal summary 순서로 내려간다.
         self.auto_followup_pause_reason()
             .or_else(|| self.failure_reason())
             .or_else(|| self.queue_summary())
@@ -349,11 +347,10 @@ impl PlanningPromptService {
 
     pub fn load_runtime_snapshot(&self, workspace_dir: &str) -> Result<PlanningRuntimeSnapshot> {
         /*
-         * This is the runtime planning read pipeline.  It collapses every
-         * recoverable planning problem into an invalid snapshot instead of an
-         * application error, because the TUI and repair services need a stable
-         * object that can explain incomplete files, validation failures, or
-         * queue construction failures.
+         * runtime planning read pipeline이다. 복구 가능한 planning 문제는 application error로
+         * 터뜨리지 않고 invalid snapshot으로 접는다. TUI와 repair service가 incomplete file,
+         * validation failure, queue construction failure를 같은 snapshot surface에서 설명해야
+         * 하기 때문이다.
          */
         self.authority_seed_service
             .ensure_default_authority(workspace_dir)?;
@@ -368,9 +365,9 @@ impl PlanningPromptService {
         let missing_paths = missing_workspace_paths(&workspace_record);
         if !missing_paths.is_empty() {
             /*
-             * Partial operator files mean planning was started but cannot be
-             * trusted.  Treating this as invalid keeps repair/doctor guidance
-             * visible instead of silently reverting to an inactive state.
+             * operator 파일이 일부만 있으면 planning은 시작됐지만 신뢰할 수 없는 상태다.
+             * inactive로 되돌리면 사용자가 왜 planning이 사라졌는지 알 수 없으므로 invalid로
+             * 유지해 repair/doctor 안내가 보이게 한다.
              */
             return Ok(PlanningRuntimeSnapshot::invalid(format!(
                 "planning files incomplete: missing {}",
@@ -379,8 +376,9 @@ impl PlanningPromptService {
             .with_workspace_present(workspace_present));
         }
 
-        // Runtime validation uses accepted DB authority, not task-ledger files,
-        // but the validator still expects a file-shaped workspace bundle.
+        // runtime validation은 task-ledger 파일이 아니라 accepted DB authority를 사용한다.
+        // 다만 validator의 입력 계약은 file-shaped workspace bundle이므로 여기서 adapter처럼
+        // 두 authority plane을 한 구조로 묶는다.
         let task_authority_snapshot = self
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_dir)?
@@ -451,10 +449,10 @@ impl PlanningPromptService {
             Ok(queue_projection) => queue_projection,
             Err(error) => {
                 /*
-                 * Queue construction can still reject a validated ledger if
-                 * execution preconditions are inconsistent.  Surface that as an
-                 * invalid planning snapshot so repair paths get a concrete
-                 * reason instead of an unhandled runtime failure.
+                 * ledger가 schema/semantic validation을 통과해도 execution precondition이
+                 * 모순이면 queue construction이 실패할 수 있다. 이 경우도 runtime failure로
+                 * 끊지 않고 invalid planning snapshot으로 표면화해 repair 경로가 구체적인
+                 * 원인을 보여 주게 한다.
                  */
                 return Ok(PlanningRuntimeSnapshot::invalid(format!(
                     "planning queue build failed: {error}"
@@ -463,9 +461,8 @@ impl PlanningPromptService {
             }
         };
 
-        // Prefer the stored projection when it still matches the live rebuild.
-        // This preserves repository-provided ordering metadata while avoiding
-        // stale projections after authority changes.
+        // 저장된 projection이 live rebuild와 같으면 저장본을 우선한다. repository가 보존한
+        // ordering metadata를 살리되, authority 변경 뒤의 stale projection은 즉시 버린다.
         let queue_projection = match stored_queue_projection {
             Some(stored_queue_projection)
                 if stored_queue_projection == current_queue_projection =>
@@ -520,8 +517,8 @@ impl PlanningPromptService {
 }
 
 fn normalized_task_authority_signature(task_authority: &TaskAuthorityDocument) -> u64 {
-    // Task ordering and dependency vector ordering should not make repeat-turn
-    // detection think accepted authority changed.  Normalize before hashing.
+    // task 순서나 dependency vector 순서만 바뀐 경우 repeat-turn detection이 authority
+    // 변경으로 오해하면 안 된다. hashing 전에 ledger를 정렬해 의미 없는 순서 차이를 제거한다.
     let mut normalized_ledger = task_authority.clone();
     normalized_ledger
         .tasks
@@ -535,6 +532,8 @@ fn normalized_task_authority_signature(task_authority: &TaskAuthorityDocument) -
 }
 
 fn normalized_task_signature(task: &TaskDefinition) -> u64 {
+    // queue head 반복 감지는 TaskDefinition의 normalized view를 기준으로 한다. 표시용 공백이나
+    // 정렬 차이가 아니라 다음 turn에 넘겨진 실제 작업 의미가 바뀌었는지를 보려는 값이다.
     normalized_json_signature(&task.normalized())
 }
 
@@ -542,6 +541,8 @@ fn normalized_json_signature<T>(value: &T) -> u64
 where
     T: serde::Serialize,
 {
+    // snapshot signature는 로컬 process 내부의 비교 신호이므로 serde JSON + DefaultHasher로 충분하다.
+    // 외부 저장/호환 포맷이 아니어서 hash algorithm 안정성을 API 계약으로 노출하지 않는다.
     let json = serde_json::to_string(value)
         .expect("valid planning state should serialize into a signature");
     let mut hasher = DefaultHasher::new();
@@ -554,8 +555,9 @@ fn workspace_record_to_files<'a>(
     directions: &'a DirectionCatalogDocument,
     task_authority_json: &'a str,
 ) -> PlanningWorkspaceFiles<'a> {
-    // This adapter keeps the validator's existing file-shaped input while
-    // substituting DB-backed authority for the removed task-authority file.
+    // validator의 기존 file-shaped 입력을 유지하면서 제거된 task-authority 파일 자리에
+    // DB-backed authority를 넣는 adapter다. runtime prompt assembly는 이 덕분에 저장소
+    // 이관 사실을 몰라도 같은 validation result를 소비할 수 있다.
     PlanningWorkspaceFiles {
         directions,
         task_authority_json,
@@ -567,8 +569,8 @@ fn workspace_record_to_files<'a>(
 }
 
 fn missing_workspace_paths(workspace_record: &PlanningWorkspaceLoadRecord) -> Vec<&'static str> {
-    // Direction and task authority now come from DB snapshots, so only
-    // operator-maintained files are reported as missing workspace paths.
+    // direction/task authority는 이제 DB snapshot에서 오므로 workspace missing path로
+    // 보고하지 않는다. operator가 실제로 복구해야 하는 파일만 surface에 남긴다.
     let mut missing_paths = Vec::new();
     if workspace_record.result_output_markdown.is_none() {
         missing_paths.push(RESULT_OUTPUT_FILE_PATH);
