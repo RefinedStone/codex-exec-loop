@@ -1,47 +1,60 @@
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// Parallel slot completion report is the domain contract captured by the supervisor
+// when a worker finishes its assigned task.
 use crate::application::service::parallel_mode::ParallelModeOfficialCompletionReport;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// Official completion refresh turns that report back into planning ledger state and
+// a runtime snapshot the TUI can use for follow-up gating.
 use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeSnapshot,
     PlanningRuntimeWorkspaceStatus,
 };
 
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// The refresh path reads conversation context and reports progress through the same
+// planner worker panel used by builtin queue refresh and hidden repair.
 use super::super::super::{ConversationViewModel, PlannerWorkerStatus};
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// Repeated-head detection is shared with builtin refresh so official completion
+// cannot requeue a slot task that failed to advance planning.
 use super::queue_head_detail::repeated_queue_head_detail;
-// 학습 주석: `use`는 긴 모듈 경로의 이름을 현재 파일로 가져와 아래 코드에서 짧게 쓰도록 합니다.
+// The parent post-turn module owns the failure constant and DTOs; this file owns
+// only the official-completion branch of the executor.
 use super::{
     OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON, OfficialCompletionRefreshOutcome,
     PostTurnEvaluationExecutor, PostTurnEvaluationRequest,
 };
 
-// 학습 주석: `impl` 블록은 특정 타입이나 trait 구현에 속한 함수들을 한곳에 묶습니다.
+/*
+ * Official completion is the parallel-mode exit path. A slot session does not keep
+ * auto-following in-place after its assignment is complete; instead this branch
+ * captures the completed work, asks the planning worker to refresh the authoritative
+ * ledger, and then tells the supervisor whether the slot can be finalized.
+ */
 impl PostTurnEvaluationExecutor {
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+     * Capture the finished slot turn before any ledger refresh runs. The completion
+     * report is the handoff contract between the worker session and supervisor:
+     * it carries final response copy, changed planning-file context, and the task
+     * identity later used by the official refresh worker.
+     */
     pub(super) fn begin_official_completion_if_needed(
         &mut self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Conversation supplies the latest committed agent reply and current planning snapshot.
         conversation: &ConversationViewModel,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Request anchors the slot workspace and queued turn id used by the supervisor.
         request: &PostTurnEvaluationRequest,
     ) -> Option<ParallelModeOfficialCompletionReport> {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Prefer the committed transcript reply over the report fallback so the
+        // supervisor sees exactly what the operator saw in the slot session.
         let latest_main_reply = conversation
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .latest_agent_message_text()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(str::trim)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .filter(|message| !message.is_empty());
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Validation summary tells the supervisor whether protected planning files
+        // were already reconciled before official ledger refresh starts.
         let validation_summary = if request.changed_planning_file_paths.is_empty() {
             "turn completed without planning file changes"
         } else {
             "turn completed with planning file changes; protected planning files were reconciled before official refresh"
         };
 
-        // 학습 주석: `match`는 enum이나 값의 모양을 모든 경우로 나누어 처리하는 Rust의 핵심 분기 표현식입니다.
         match self.parallel_mode_turn_service.begin_official_completion(
             &request.workspace_directory,
             &request.queued_from_turn_id,
@@ -49,12 +62,12 @@ impl PostTurnEvaluationExecutor {
             latest_main_reply,
             Some(validation_summary),
         ) {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok(report) => report,
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Err(error) => {
+                // Capture failure means the supervisor could not create the
+                // official-completion report; the current planning snapshot is
+                // still the most truthful state for the panel.
                 self.record_planner_worker_failure(
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     PlannerWorkerStatus::RefreshFailed,
                     &format!("parallel completion capture failed: {error}"),
                     &conversation.planning_runtime_snapshot,
@@ -64,143 +77,121 @@ impl PostTurnEvaluationExecutor {
         }
     }
 
-    // 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+    /*
+     * Run the official completion ledger refresh. Unlike builtin next-task refresh,
+     * this path is driven by a completed parallel slot contract and must update the
+     * supervisor reservation state before returning a snapshot to post-turn action
+     * selection.
+     */
     pub(super) fn run_official_completion_refresh(
         &mut self,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Source conversation supplies transcript context and previous handoff data.
         conversation: &ConversationViewModel,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Original post-turn request identifies the slot workspace and root turn id.
         request: &PostTurnEvaluationRequest,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Planning workspace may differ from the slot workspace when supervisor state is external.
         planning_workspace_directory: &str,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Current snapshot is reused when the planning workspace is the active turn workspace.
         current_snapshot: &PlanningRuntimeSnapshot,
-        // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
+        // Completion report is the official contract captured before this refresh.
         completion_report: &ParallelModeOfficialCompletionReport,
     ) -> OfficialCompletionRefreshOutcome {
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Load the planning authority that the refresh worker will mutate. Reuse the
+        // in-memory snapshot when possible so reconciliation done earlier in this
+        // post-turn pass is not discarded.
         let planning_workspace_snapshot =
-            // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
             if planning_workspace_directory == request.workspace_directory {
                 current_snapshot.clone()
             } else {
                 self.planning
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .runtime
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .load_runtime_snapshot_or_invalid(planning_workspace_directory)
             };
 
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // Official refresh cannot proceed without an initialized planning workspace;
+        // mark the supervisor reservation failed and return a snapshot that blocks
+        // follow-up from reusing the completed slot.
         if matches!(
             planning_workspace_snapshot.workspace_status(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlanningRuntimeWorkspaceStatus::Invalid | PlanningRuntimeWorkspaceStatus::Uninitialized
         ) {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let failure_detail = planning_workspace_snapshot.preview_detail().unwrap_or(
                 "official completion refresh is blocked because the planning workspace is unavailable",
             );
             self.parallel_mode_turn_service
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let failure_snapshot =
                 official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
             self.record_planner_worker_failure(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 PlannerWorkerStatus::RefreshFailed,
                 failure_detail,
                 &failure_snapshot,
             );
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return OfficialCompletionRefreshOutcome {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 runtime_snapshot: failure_snapshot,
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 runtime_notices: Vec::new(),
             };
         }
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Supervisor may emit a runtime notice when the reservation moves into
+        // refreshing; preserve that notice so shell status reflects the state change.
         let mut runtime_notices = Vec::new();
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
         if let Some(notice) = self
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .parallel_mode_turn_service
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .mark_official_completion_refreshing(&request.workspace_directory)
         {
             runtime_notices.push(notice);
         }
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // The worker prompt needs the latest user and agent context. If the transcript
+        // lacks a committed agent reply, fall back to the captured completion summary.
         let latest_main_reply = conversation
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .latest_agent_message_text()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(str::trim)
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .filter(|message| !message.is_empty())
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .unwrap_or(completion_report.completion.final_response_summary.as_str());
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Request joins three contexts: planning workspace authority, transcript
+        // context, and the parallel completion contract.
         let worker_request = PlanningOfficialCompletionRefreshRequest {
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             workspace_directory: planning_workspace_directory,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             previous_handoff_task: conversation.last_planning_task_handoff(),
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             contract: completion_report,
         };
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Record the exact prompt before execution so a failed worker run still leaves
+        // enough state in the planner panel for operator recovery.
         let worker_prompt = self
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .planning
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .worker
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .render_official_completion_refresh_prompt(&worker_request);
         self.record_planner_worker_running(
-            // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
             PlannerWorkerStatus::RefreshRunning,
             "official-refresh",
             worker_prompt,
         );
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Worker orchestration owns filesystem mutation and validation; this adapter
+        // only sends the contract and interprets the outcome for TUI state.
         let worker_outcome = self
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .planning
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .worker
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .refresh_queue_from_official_completion(worker_request);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
         let outcome = match worker_outcome {
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Ok(outcome) => outcome,
-            // 학습 주석: `Result`의 `Ok`는 성공 값을, `Err`는 실패 정보를 담아 호출자가 오류를 처리하게 합니다.
             Err(error) => {
-                // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+                // Execution failure leaves the official completion reservation blocked
+                // until an operator or later recovery path repairs planning state.
                 let detail = format!("official completion refresh failed: {error}");
                 self.parallel_mode_turn_service
-                    // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                     .mark_official_completion_failed(&request.workspace_directory, &detail);
-                // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
                 let failure_snapshot =
                     official_completion_failure_snapshot(&planning_workspace_snapshot, &detail);
                 self.record_planner_worker_failure(
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     PlannerWorkerStatus::RefreshFailed,
                     &detail,
                     &failure_snapshot,
                 );
-                // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
                 return OfficialCompletionRefreshOutcome {
-                    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                     runtime_snapshot: failure_snapshot,
                     runtime_notices,
                 };
@@ -208,12 +199,14 @@ impl PostTurnEvaluationExecutor {
         };
 
         self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Outcome snapshot may still carry a repair request; keep it mutable so hidden
+        // repair and repeated-head checks can refine the final decision snapshot.
         let mut runtime_snapshot = outcome.runtime_snapshot.clone();
 
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // Official refresh can discover broken task authority. Reuse the hidden repair
+        // loop, but if it cannot resolve the issue, convert the snapshot into the
+        // official-completion block reason rather than letting the slot continue.
         if let Some(repair_request) = outcome.repair_request.as_ref() {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let repair_outcome = self.run_hidden_planning_repairs(
                 planning_workspace_directory,
                 &request.queued_from_turn_id,
@@ -230,7 +223,8 @@ impl PostTurnEvaluationExecutor {
             };
         }
 
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // A successful refresh must also advance beyond the handed-off task. If the
+        // same queue head remains unchanged, pause follow-up and surface the detail.
         if let Some(detail) = repeated_queue_head_detail(
             conversation.last_planning_task_handoff(),
             &planning_workspace_snapshot,
@@ -239,47 +233,36 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail);
         }
 
-        // 학습 주석: `if`는 조건이 참일 때만 분기를 실행하며, Rust에서는 조건식이 반드시 bool 값을 내야 합니다.
+        // Any snapshot that blocks auto-follow also blocks slot finalization. Mark
+        // the supervisor reservation failed before returning to the post-turn reducer.
         if runtime_snapshot.blocks_auto_followup() {
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let failure_detail = runtime_snapshot
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .preview_detail()
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .unwrap_or(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON);
             self.parallel_mode_turn_service
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
-            // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
             let failure_snapshot =
                 official_completion_failure_snapshot(&runtime_snapshot, failure_detail);
             self.record_planner_worker_failure(
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 PlannerWorkerStatus::RefreshFailed,
                 failure_detail,
                 &failure_snapshot,
             );
-            // 학습 주석: `return`은 현재 함수 실행을 즉시 끝내고 호출자에게 값을 돌려줍니다.
             return OfficialCompletionRefreshOutcome {
-                // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
                 runtime_snapshot: failure_snapshot,
                 runtime_notices,
             };
         }
 
-        // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+        // Success copy becomes the supervisor reservation finalization detail. Prefer
+        // worker summary when available because it names the ledger refresh result.
         let authority_refresh_outcome = outcome
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .worker_summary
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .as_deref()
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .map(|summary| format!("official ledger refresh succeeded: {summary}"))
-            // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
             .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
         runtime_notices.extend(
             self.parallel_mode_turn_service
-                // 학습 주석: 점으로 이어지는 메서드 체인은 앞 단계의 결과를 받아 다음 변환이나 검사를 계속 수행합니다.
                 .finalize_official_completion_success(
                     &request.workspace_directory,
                     &authority_refresh_outcome,
@@ -293,14 +276,15 @@ impl PostTurnEvaluationExecutor {
     }
 }
 
-// 학습 주석: `fn`은 재사용 가능한 동작 단위이며, 입력 매개변수와 반환 타입으로 호출 계약을 분명히 합니다.
+// Convert the latest known planning snapshot into a blocking snapshot that explains
+// why official completion could not safely finalize. Keeping the existing snapshot
+// preserves queue/proposal context for panels while adding the pause reason.
 fn official_completion_failure_snapshot(
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     current_snapshot: &PlanningRuntimeSnapshot,
-    // 학습 주석: 이 줄은 이름, 타입, 값 또는 경로를 연결해 Rust가 어떤 대상을 다루는지 분명히 합니다.
     failure_detail: &str,
 ) -> PlanningRuntimeSnapshot {
-    // 학습 주석: `let`은 새 지역 변수를 만들며, `mut`가 있을 때만 이후에 값을 다시 대입할 수 있습니다.
+    // Empty details collapse to the shared official-completion failure copy so every
+    // failure snapshot has an operator-facing pause reason.
     let detail = if failure_detail.trim().is_empty() {
         OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON
     } else {
