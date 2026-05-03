@@ -21,22 +21,22 @@ use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, TaskStatus};
 
 /*
- * Reset is the operator-controlled destructive repair path for planning authority.
- * It intentionally bypasses worker mutation prompts and writes fresh bootstrap-derived authority through the
- * same workspace and repository ports that normal planning uses, so downstream runtime snapshots keep one source
- * of truth after a reset.
+ * Reset은 operator가 명시적으로 선택하는 planning authority의 파괴적 복구 경로다.
+ * worker mutation prompt를 거치지 않고 bootstrap에서 만든 새 authority를 일반 planning이 쓰는
+ * workspace/repository port로 직접 기록한다. 그래야 reset 이후 runtime snapshot도 동일한
+ * 단일 source of truth에서 다시 읽힌다.
  */
 
-// Legacy runtime exports are removed only by full reset because they are generated cache/output material.
+// 레거시 runtime export는 생성 cache/output 산출물이므로 full reset에서만 제거한다.
 const LEGACY_RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
 
-// Directions reset replaces direction authority and prompt/detail artifacts while preserving existing tasks.
+// directions reset은 기존 task를 보존하면서 direction authority와 prompt/detail 산출물을 교체한다.
 const RESET_DIRECTIONS_REMOVED_PATHS: &[&str] = &[
     PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY,
 ];
 
-// Full reset also clears generated drafts/rejections so stale generated planning state cannot survive bootstrap.
+// full reset은 generated draft/rejection도 지워 오래된 planning 상태가 bootstrap 뒤에 남지 않게 한다.
 const RESET_ALL_GENERATED_ARTIFACT_PATHS: &[&str] = &[
     PLANNING_DRAFTS_DIRECTORY,
     PLANNING_REJECTED_DIRECTORY,
@@ -44,14 +44,14 @@ const RESET_ALL_GENERATED_ARTIFACT_PATHS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Public reset target used by CLI, admin API, Telegram, TUI, and control command adapters.
+// CLI, admin API, Telegram, TUI, control command adapter가 공유하는 공개 reset 대상이다.
 pub enum PlanningResetTarget {
     Queue,
     Directions,
     All,
 }
 impl PlanningResetTarget {
-    // Labels are part of the external command/report surface.
+    // label은 외부 command/report 표면에 노출되는 stable 문자열이다.
     pub fn label(self) -> &'static str {
         match self {
             Self::Queue => "queue",
@@ -62,7 +62,7 @@ impl PlanningResetTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Result reports externally visible file effects; DB authority rewrites are represented by the target itself.
+// 결과는 외부에 보이는 파일 효과만 보고하고, DB authority rewrite는 target 선택 자체로 표현한다.
 pub struct PlanningWorkspaceResetResult {
     pub target: PlanningResetTarget,
     pub rewritten_paths: Vec<String>,
@@ -71,9 +71,9 @@ pub struct PlanningWorkspaceResetResult {
 
 #[derive(Clone)]
 /*
- * Reset service coordinates two outbound boundaries.
- * `PlanningWorkspacePort` rewrites/removes active scaffold files, while `PlanningTaskRepositoryPort` commits
- * accepted DB authority snapshots and queue projections after validation.
+ * reset service는 두 outbound boundary를 조율한다.
+ * `PlanningWorkspacePort`는 active scaffold 파일을 쓰거나 지우고,
+ * `PlanningTaskRepositoryPort`는 검증 뒤 accepted DB authority snapshot과 queue projection을 commit한다.
  */
 pub struct PlanningResetService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
@@ -85,7 +85,7 @@ pub struct PlanningResetService {
 impl PlanningResetService {
     #[cfg(test)]
     #[allow(dead_code)]
-    // Test constructor preserves the older dependency shape while production uses the full repository boundary.
+    // test constructor는 예전 dependency shape를 보존하고, production은 전체 repository boundary를 쓴다.
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_bootstrap_service: PlanningBootstrapService,
@@ -99,7 +99,7 @@ impl PlanningResetService {
         )
     }
 
-    // Production constructor receives every collaborator needed to rewrite both file and DB authority surfaces.
+    // production constructor는 file authority와 DB authority 표면을 모두 다시 쓸 collaborator를 받는다.
     pub fn with_task_repository(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_bootstrap_service: PlanningBootstrapService,
@@ -117,9 +117,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Reset an existing planning workspace according to the selected destructive scope.
-     * Bootstrap artifacts are always generated in Simple mode so queue/directions/all reset share the same
-     * baseline direction catalog, default queue-idle prompt, and empty task authority.
+     * 선택된 파괴 범위에 맞춰 기존 planning workspace를 reset한다.
+     * bootstrap 산출물은 항상 Simple mode로 생성해 queue/directions/all reset이 같은 기준
+     * direction catalog, 기본 queue-idle prompt, 빈 task authority를 공유하게 한다.
      */
     pub fn reset_workspace(
         &self,
@@ -140,7 +140,7 @@ impl PlanningResetService {
         }
     }
 
-    // Reset should not implicitly initialize a totally absent workspace; init/doctor own bootstrap creation.
+    // reset은 완전히 없는 workspace를 암묵적으로 초기화하지 않는다. bootstrap 생성은 init/doctor 책임이다.
     fn load_existing_workspace(&self, workspace_dir: &str) -> Result<PlanningWorkspaceLoadRecord> {
         let workspace = self
             .planning_workspace_port
@@ -155,9 +155,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Queue reset clears task authority back to the bootstrap empty queue.
-     * It leaves direction files and prompts alone, so the commit helper must reuse the existing direction DB
-     * snapshot and result-output markdown before accepting the replacement task authority.
+     * queue reset은 task authority를 bootstrap의 빈 큐로 되돌린다.
+     * direction 파일과 prompt는 건드리지 않으므로, commit helper는 교체 task authority를 받기 전에
+     * 기존 direction DB snapshot과 result-output markdown을 재사용해 검증해야 한다.
      */
     fn reset_queue(
         &self,
@@ -179,9 +179,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Directions reset is blocked while live tasks exist because replacing direction authority under active work
-     * can orphan task/direction relationships. Operators can choose reset all when they intend to discard both
-     * directions and task queue together.
+     * live task가 있으면 directions reset을 막는다.
+     * 진행 중인 작업 아래에서 direction authority만 교체하면 task/direction 관계가 고아가 될 수 있다.
+     * direction과 task queue를 함께 버리려는 경우에는 operator가 reset all을 선택해야 한다.
      */
     fn ensure_directions_reset_is_safe(&self, workspace_dir: &str) -> Result<()> {
         let task_authority = self
@@ -219,9 +219,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Directions reset refreshes the direction catalog and supporting prompt/detail files, then recommits the
-     * existing task authority against the new directions. That validation step is the guard that prevents the
-     * repository snapshot from accepting tasks that no longer match the reset direction catalog.
+     * directions reset은 direction catalog와 보조 prompt/detail 파일을 새로 만들고, 기존 task authority를
+     * 새 direction 기준으로 다시 commit한다. 이 검증 단계가 reset된 direction catalog와 맞지 않는
+     * task를 repository snapshot이 받아들이지 못하게 하는 마지막 가드다.
      */
     fn reset_directions(
         &self,
@@ -249,9 +249,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Full reset replaces the active scaffold, direction authority, task authority, and generated planning caches.
-     * It is the only target that rewrites `result-output.md`, because queue/directions reset should not erase the
-     * operator-facing current planning instruction document.
+     * full reset은 active scaffold, direction authority, task authority, generated planning cache를 모두 교체한다.
+     * `result-output.md`를 다시 쓰는 유일한 target이기도 하다. queue/directions reset은 operator-facing
+     * 현재 planning instruction 문서를 지우면 안 되기 때문이다.
      */
     fn reset_all(
         &self,
@@ -282,7 +282,7 @@ impl PlanningResetService {
         })
     }
 
-    // Remove generated artifacts before writing fresh bootstrap state so old drafts/rejections cannot reappear.
+    // 새 bootstrap 상태를 쓰기 전에 generated 산출물을 지워 오래된 draft/rejection이 되살아나지 않게 한다.
     fn reset_all_generated_artifacts(&self, workspace_dir: &str) -> Result<()> {
         for path in RESET_ALL_GENERATED_ARTIFACT_PATHS {
             self.planning_workspace_port
@@ -292,9 +292,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Direction side artifacts are file-backed companion material for direction authority.
-     * The DB direction snapshot is committed before supplemental files so any later file write error leaves the
-     * authority source updated, while the operator still sees the failed path through the returned error.
+     * direction side 산출물은 direction authority를 보조하는 file-backed 자료다.
+     * DB direction snapshot을 supplemental file보다 먼저 commit한다. 뒤쪽 파일 쓰기가 실패해도
+     * authority source는 갱신되고, operator는 반환된 error로 실패한 path를 볼 수 있다.
      */
     fn reset_directions_side_artifacts(
         &self,
@@ -318,9 +318,9 @@ impl PlanningResetService {
     }
 
     /*
-     * Commit task authority only after enough context exists to validate the whole planning runtime contract.
-     * If directions or result-output are missing, the safest reset effect is to clear the DB task snapshot rather
-     * than commit a queue projection that cannot be proven against active workspace authority.
+     * 전체 planning runtime 계약을 검증할 context가 충분할 때만 task authority를 commit한다.
+     * directions나 result-output이 없으면 active workspace authority로 증명할 수 없는 queue projection을
+     * commit하기보다 DB task snapshot을 지우는 편이 더 안전한 reset 효과다.
      */
     fn commit_task_authority_from_document(
         &self,
@@ -358,7 +358,7 @@ impl PlanningResetService {
             return Ok(());
         }
 
-        // Validation reparses the accepted direction/task documents; commit those normalized domain values.
+        // validation은 승인된 direction/task 문서를 다시 parse하므로, commit에는 normalized domain 값을 사용한다.
         let directions = validation_result
             .directions
             .as_ref()
@@ -371,8 +371,8 @@ impl PlanningResetService {
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid reset queue build failed: {error}"))?;
-        // Reset is an operator/system authority rewrite boundary, not an incremental
-        // task mutation. The caller selected a destructive reset target explicitly.
+        // reset은 incremental task mutation이 아니라 operator/system authority rewrite 경계다.
+        // caller가 파괴적 reset target을 명시적으로 선택했으므로 revision guard 없이 commit한다.
         self.planning_task_repository_port
             .commit_task_authority_snapshot(
                 workspace_dir,
@@ -385,7 +385,7 @@ impl PlanningResetService {
             .map(|_| ())
     }
 
-    // Direction authority reset does not need a queue projection; tasks are committed separately after validation.
+    // direction authority reset은 queue projection이 필요 없다. task는 검증 뒤 별도로 commit된다.
     fn commit_direction_authority_from_bootstrap(
         &self,
         workspace_dir: &str,
@@ -403,7 +403,7 @@ impl PlanningResetService {
     }
 }
 
-// Merge direction-side and generated-artifact removal lists for the full-reset report.
+// full-reset report에 쓰려고 direction-side 제거 목록과 generated-artifact 제거 목록을 합친다.
 fn reset_all_removed_path_strings() -> Vec<String> {
     RESET_DIRECTIONS_REMOVED_PATHS
         .iter()
@@ -412,18 +412,18 @@ fn reset_all_removed_path_strings() -> Vec<String> {
         .collect()
 }
 
-// Convert static reset path lists into owned report data without exposing the static slices.
+// static reset path slice를 노출하지 않고 owned report data로 변환한다.
 fn removed_path_strings(paths: &[&str]) -> Vec<String> {
     paths.iter().map(|path| (*path).to_string()).collect()
 }
 
 #[cfg(test)]
-// Current unit coverage only pins the public target variants; behavior is exercised through inbound reset flows.
+// 현재 unit coverage는 공개 target variant만 고정하고, 동작은 inbound reset flow에서 검증한다.
 mod tests {
     use super::PlanningResetTarget;
 
     #[test]
-    // Keep target variants from disappearing while reset callers are still wired through public enum matching.
+    // reset caller가 공개 enum matching으로 연결된 동안 target variant가 사라지지 않게 고정한다.
     fn reset_target_values_still_exist() {
         assert!(matches!(
             PlanningResetTarget::Queue,
