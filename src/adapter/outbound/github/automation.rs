@@ -101,10 +101,11 @@ impl GithubAutomationAdapter {
     }
 
     /*
-    Authentication capability intentionally executes a no-output status command.
+    authentication capability는 의도적으로 output을 버리는 status command만 실행한다.
 
-    The port only needs a stable ready/degraded signal, not the raw credential details. The adapter therefore suppresses
-    stdout/stderr and maps either `gh auth status` or the RefinedStone script status check into a capability snapshot.
+    application port가 필요한 것은 ready/degraded 신호와 operator-facing hint이지 raw credential detail이 아니다.
+    그래서 adapter는 stdout/stderr를 숨기고, `gh auth status` 또는 RefinedStone script의 auth check 결과를
+    ParallelModeCapabilitySnapshot으로만 접는다. credential 위치와 token 문자열은 이 outbound boundary 밖으로 새지 않는다.
     */
     fn inspect_gh_auth(
         gh_binary: &ParallelModeCapabilitySnapshot,
@@ -121,9 +122,10 @@ impl GithubAutomationAdapter {
 
         let auth_status = if which::which("gh").is_ok() {
             /*
-            Prefer gh when it exists because operators can repair that state with standard
-            `gh auth login` tooling. The command is still silenced because capability
-            inspection feeds a compact readiness board, not an interactive diagnostic log.
+            `gh`가 있으면 표준 GitHub CLI 상태를 우선한다.
+            operator가 `gh auth login` 같은 익숙한 도구로 직접 복구할 수 있기 때문이다.
+            그래도 command output은 숨긴다. capability inspection은 interactive diagnostic log가 아니라 compact readiness board를
+            채우는 입력이다.
             */
             Command::new("gh")
                 .current_dir(repo_root)
@@ -134,9 +136,9 @@ impl GithubAutomationAdapter {
                 .status()
         } else {
             /*
-            The repo wrapper is the supported fallback for this project. It lets CI or
-            local machines without gh still use the same RefinedStone credential path
-            that write operations use below.
+            repo wrapper는 이 project의 supported fallback이다.
+            CI나 `gh`가 없는 local machine도 아래 write operation과 같은 RefinedStone credential path를 사용하게 한다.
+            capability check와 실제 PR write가 같은 wrapper contract를 공유해야 "ready" 판단과 실행 경로가 어긋나지 않는다.
             */
             Command::new("bash")
                 .current_dir(repo_root)
@@ -165,10 +167,11 @@ impl GithubAutomationAdapter {
     }
 
     /*
-    PR lookup is the idempotency gate for `ensure_pull_request`.
+    PR lookup은 `ensure_pull_request`의 idempotency gate다.
 
-    The wrapper script returns GitHub's PR JSON shape. This adapter immediately maps that external shape into the
-    application port record so the rest of the system never depends on `baseRefName`/`headRefName` field spelling.
+    같은 base/head branch pair에 이미 open PR이 있으면 create를 다시 호출하지 않아야 review surface가 중복되지 않는다.
+    wrapper script는 GitHub PR JSON shape를 돌려주지만, adapter는 즉시 application port record로 mapping한다.
+    그 덕분에 application layer는 `baseRefName`/`headRefName` 같은 GitHub field spelling에 결합되지 않는다.
     */
     fn find_open_pull_request(
         &self,
@@ -194,9 +197,9 @@ impl GithubAutomationAdapter {
             repo_root,
         )?;
         /*
-        PR lookup intentionally requests only the compact fields the application port
-        exposes. That prevents later code from branching on GitHub-only details that
-        would be unavailable if another provider-backed automation adapter were added.
+        PR lookup은 application port가 노출하는 compact field만 요청한다.
+        나중 코드가 GitHub 전용 세부 값에 branch하지 못하게 하려는 의도다.
+        다른 provider-backed automation adapter가 추가되어도 number/url/state/base/head/draft contract만 맞추면 된다.
         */
         let pull_requests = serde_json::from_str::<Vec<GithubPullRequestJson>>(&output)
             .with_context(|| {
