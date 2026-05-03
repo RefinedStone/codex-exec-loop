@@ -17,20 +17,20 @@ use axum::response::{IntoResponse, Response};
 use axum_extra::extract::CookieJar;
 
 /*
- * api.rs is the JSON half of the planning admin inbound adapter. It deliberately mirrors the
- * browser handlers in pages.rs, but it keeps three transport choices separate: request bodies are
- * typed JSON DTOs from forms.rs, CSRF proof comes from the x-csrf-token header, and responses are
- * application read models wrapped in Json. The facade remains the only place that knows planning
- * validation, workspace file policy, and authority-store mutation rules.
+ * api.rs는 planning admin inbound adapter의 JSON half다.
+ * 의도적으로 pages.rs의 browser handler와 같은 facade 흐름을 mirror하지만, transport 선택은 분리한다.
+ * request body는 forms.rs의 typed JSON DTO, CSRF 증명은 x-csrf-token header, response는 Json으로 감싼
+ * application read model이다. planning validation, workspace file policy, authority-store mutation rule을 아는 곳은
+ * 여전히 facade 하나뿐이다.
  */
 pub(super) async fn summary_api(
     State(state): State<AdminAppState>,
     jar: CookieJar,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Summary is the bootstrap endpoint for scriptable admin clients. It refreshes the same
-     * cookie-bound CSRF token used by later mutation endpoints and returns the full overview so a
-     * client can render directions, tasks, draft affordances, and controls without scraping HTML.
+     * summary는 scriptable admin client의 bootstrap endpoint다.
+     * 뒤 mutation endpoint가 쓸 cookie-bound CSRF token을 갱신하고 full overview를 돌려준다.
+     * client는 HTML을 scraping하지 않고도 direction, task, draft affordance, control을 렌더링할 수 있다.
      */
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let overview = state
@@ -51,7 +51,7 @@ pub(super) async fn runtime_api(
     State(state): State<AdminAppState>,
     jar: CookieJar,
 ) -> std::result::Result<Response, StatusCode> {
-    // Runtime state is read-only, but it still carries the admin cookie forward for the JSON client.
+    // runtime state는 read-only지만 JSON client를 위해 admin cookie를 계속 전달한다.
     let (jar, _) = ensure_csrf_cookie(jar);
     let runtime = state
         .facade
@@ -67,9 +67,9 @@ pub(super) async fn create_draft_api(
     Json(request): Json<CreateDraftRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Draft creation is a mutating admin action even though it mostly prepares editable files.
-     * Header CSRF verification keeps JSON clients on the same trust boundary as classic forms,
-     * while the facade decides whether kind plus direction_id is a valid draft session request.
+     * draft creation은 주로 editable file을 준비하지만 mutating admin action이다.
+     * header CSRF verification은 JSON client를 classic form과 같은 trust boundary에 두고, facade는 kind와
+     * direction_id 조합이 valid draft session request인지 결정한다.
      */
     verify_header_csrf(&jar, &headers)?;
     let session = state
@@ -85,9 +85,9 @@ pub(super) async fn load_draft_api(
     Query(query): Query<EditorQuery>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Loading a draft stays read-only: draft_name comes from the stable route identity, while the
-     * query parameters select the interpretation branch. That matches the editor page route and
-     * avoids encoding draft kind into the filesystem-facing name.
+     * draft load는 read-only로 남는다.
+     * draft_name은 stable route identity에서 오고, query parameter는 interpretation branch를 선택한다.
+     * editor page route와 같은 형태이며, draft kind를 filesystem-facing name에 encoding하지 않게 한다.
      */
     let session = state
         .facade
@@ -108,10 +108,9 @@ pub(super) async fn save_draft_api(
     Json(request): Json<SaveDraftRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * JSON saves send already-typed file updates, so the handler can bypass the dynamic HTML
-     * file_* field extraction used by pages.rs. The discarded facade return value is the write
-     * result; JSON clients need the refreshed session because it carries current file contents and
-     * validation state for redraw.
+     * JSON save는 이미 typed file update를 보내므로 pages.rs가 쓰는 dynamic HTML file_* field extraction을 우회한다.
+     * 버리는 facade return value는 write result이고, JSON client에는 redraw에 필요한 current file content와 validation state를
+     * 담은 refreshed session이 더 중요하다.
      */
     verify_header_csrf(&jar, &headers)?;
     let (_, session) = state
@@ -134,9 +133,9 @@ pub(super) async fn validate_draft_api(
     Json(request): Json<SaveDraftRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Validation intentionally flows through save_draft first. That makes the checked report match
-     * the exact payload the operator just submitted, instead of validating stale workspace files or
-     * requiring the client to issue save and validate as two separate state-changing requests.
+     * validation은 의도적으로 save_draft를 먼저 통과한다.
+     * stale workspace file을 검증하거나 client가 save/validate를 별도 state-changing request로 나누게 하지 않고,
+     * operator가 방금 제출한 정확한 payload에 대한 report를 만들기 위해서다.
      */
     verify_header_csrf(&jar, &headers)?;
     let (_, session) = state
@@ -159,10 +158,9 @@ pub(super) async fn promote_draft_api(
     Json(request): Json<SaveDraftRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Promotion is the point where draft edits become active planning files. The facade validates,
-     * writes, and reloads the session in one transaction-shaped call; this adapter only compresses
-     * the outcome into fields the browser client can display without understanding validation
-     * report internals.
+     * promotion은 draft edit가 active planning file이 되는 지점이다.
+     * facade는 validate/write/reload를 하나의 transaction-shaped call로 수행하고, adapter는 browser client가
+     * validation report internals를 몰라도 표시할 수 있는 field로 outcome을 압축한다.
      */
     verify_header_csrf(&jar, &headers)?;
     let (result, session) = state
@@ -188,7 +186,7 @@ pub(super) async fn upsert_direction_api(
     headers: HeaderMap,
     Json(request): Json<PlanningAdminDirectionMutationRequest>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Direction JSON bodies already match the application mutation request, so no adapter mapping is needed.
+    // direction JSON body는 이미 application mutation request와 같은 shape라 adapter mapping이 필요 없다.
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
         .facade
@@ -203,7 +201,7 @@ pub(super) async fn delete_direction_api(
     headers: HeaderMap,
     Json(request): Json<PlanningAdminDirectionDeleteRequest>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Deleting a direction can affect task planning context, so the facade owns all cascading rules.
+    // direction 삭제는 task planning context에 영향을 줄 수 있으므로 cascading rule은 facade가 소유한다.
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
         .facade
@@ -218,7 +216,7 @@ pub(super) async fn upsert_task_api(
     headers: HeaderMap,
     Json(request): Json<PlanningAdminTaskMutationRequest>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Task mutation stays in application request form to preserve priority and dependency semantics.
+    // task mutation은 priority/dependency semantics를 보존하기 위해 application request form 그대로 유지한다.
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
         .facade
@@ -233,7 +231,7 @@ pub(super) async fn delete_task_api(
     headers: HeaderMap,
     Json(request): Json<PlanningAdminTaskDeleteRequest>,
 ) -> std::result::Result<Response, StatusCode> {
-    // The adapter accepts only the transport envelope; queue cleanup and authority writes stay below.
+    // adapter는 transport envelope만 받는다. queue cleanup과 authority write는 아래 계층에 남긴다.
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
         .facade
@@ -248,9 +246,8 @@ pub(super) async fn export_files_api(
     headers: HeaderMap,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Export/apply endpoints have no JSON body because the active planning workspace is the only
-     * subject. CSRF is therefore the entire caller intent check before the facade mirrors authority
-     * state into editable files.
+     * export/apply endpoint는 active planning workspace 하나만 대상으로 하므로 JSON body가 없다.
+     * 그래서 facade가 authority state를 editable file로 mirror하기 전, CSRF가 caller intent를 확인하는 전체 gate다.
      */
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
@@ -265,7 +262,7 @@ pub(super) async fn apply_files_api(
     jar: CookieJar,
     headers: HeaderMap,
 ) -> std::result::Result<Response, StatusCode> {
-    // Apply reverses export by asking the facade to parse edited files and update planning authority.
+    // apply는 export의 반대 방향이다. facade에게 edited file을 parse하고 planning authority를 갱신하게 한다.
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
         .facade
@@ -281,9 +278,8 @@ pub(super) async fn reset_api(
     Json(request): Json<ResetRequest>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Reset shares parse_reset_target with the HTML control path so queue, directions, and all keep
-     * one accepted vocabulary. Invalid transport labels are rejected as BAD_REQUEST before the
-     * facade gets a chance to mutate workspace state.
+     * reset은 HTML control path와 parse_reset_target을 공유해 queue/directions/all이 하나의 accepted vocabulary를 유지하게 한다.
+     * invalid transport label은 facade가 workspace state를 mutate하기 전에 BAD_REQUEST로 거절된다.
      */
     verify_header_csrf(&jar, &headers)?;
     let outcome = state
