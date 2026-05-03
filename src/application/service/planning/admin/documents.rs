@@ -19,24 +19,23 @@ use crate::domain::planning::{
 };
 
 /*
- * This module is the write boundary for admin-edited planning authority. Admin
- * forms and draft files are operator-friendly text, but committed authority is
- * split between DB-backed direction/task snapshots and the workspace result
- * markdown. The functions below keep those stores in revision order and repair
- * small consistency gaps before validation.
+ * 이 모듈은 admin이 편집한 planning authority를 실제 저장소에 반영하는 write boundary다. admin form과 draft
+ * file은 operator가 다루기 쉬운 text 표면이지만, committed authority는 DB-backed direction/task snapshot과
+ * workspace result markdown으로 나뉘어 있다. 여기서는 그 세 저장소를 하나의 편집 문서처럼 읽고, commit 때는
+ * revision 순서와 validation 순서를 지켜 authority graph가 중간 상태로 남지 않게 한다.
  */
 pub(super) const DEFAULT_DIRECTION_ID: &str = "general-workstream";
 const GENERATED_DIRECTION_ID_PREFIX: &str = "dir";
 
-// The default direction is derived from bootstrap artifacts. Cache the parsed
-// definition so repeated admin loads do not rebuild the bootstrap bundle.
+// default direction은 bootstrap artifact에서 파생한다. admin 화면은 자주 reload되므로 parsed definition을 캐시해
+// 매번 bootstrap bundle을 다시 만들지 않게 한다.
 static DEFAULT_DIRECTION_DEFINITION: OnceLock<Result<DirectionDefinition, String>> =
     OnceLock::new();
 
 impl PlanningAdminFacadeService {
     pub(super) fn ensure_default_authority(&self) -> Result<()> {
-        // Admin pages can be the first planning entry point in a workspace, so
-        // they seed the same authority baseline as runtime startup.
+        // admin page가 workspace에서 처음 열리는 planning entrypoint일 수 있다. 그래서 runtime startup과 같은
+        // authority seed 경로를 호출해 directions/task/result_output baseline을 맞춘 뒤 이후 admin 작업을 진행한다.
         PlanningAuthoritySeedService::new(
             self.planning_workspace_port.clone(),
             self.planning_task_repository_port.clone(),
@@ -49,9 +48,9 @@ impl PlanningAdminFacadeService {
     pub(super) fn load_operator_planning_documents(
         &self,
     ) -> Result<PlanningOperatorPlanningDocuments> {
-        // Load uses the repository snapshots as authority and only reads
-        // result_output from the workspace file system. The observed revision is
-        // carried forward for optimistic concurrency during commit.
+        // load는 direction/task repository snapshot을 authority로 삼고, result_output만 workspace file system에서
+        // 읽는다. observed revision은 operator가 읽은 DB snapshot의 버전이므로 commit 때 optimistic concurrency
+        // guard로 그대로 전달한다.
         self.ensure_default_authority()?;
         let workspace = self
             .planning_workspace_port
@@ -82,9 +81,9 @@ impl PlanningAdminFacadeService {
         &self,
         mut documents: PlanningOperatorPlanningDocuments,
     ) -> Result<()> {
-        // Admin edits may delete directions before cleaning dependent tasks.
-        // Normalize that graph first, then validate the exact files that would
-        // be persisted.
+        // admin edit는 direction을 먼저 지우고 child task 정리를 나중에 할 수 있다. commit boundary에서는 default
+        // direction 복구와 unresolved direction task 제거를 먼저 수행한 뒤, 실제 persist할 세 문서 조합을 그대로
+        // validation에 넣는다.
         ensure_default_direction(&mut documents.directions)?;
         remove_tasks_with_unresolved_directions(&mut documents);
 
@@ -131,8 +130,9 @@ impl PlanningAdminFacadeService {
                 );
             }
         };
-        // Direction and task authority share the same planning DB revision. After the
-        // direction snapshot commits, the task snapshot must observe that new revision.
+        // direction authority와 task authority는 같은 planning DB revision을 공유한다. direction snapshot commit이
+        // 성공하면 task snapshot은 그 새 revision을 observed 값으로 삼아야 하며, 그래야 두 snapshot이 같은
+        // logical authority update 안에서 순서대로 갱신된다.
         match self
             .planning_task_repository_port
             .commit_task_authority_snapshot(
@@ -153,8 +153,9 @@ impl PlanningAdminFacadeService {
                 );
             }
         }
-        // result_output is still file-backed, so it is written last after DB
-        // authority and queue projection have accepted the mutation.
+        // result_output은 아직 file-backed authority라 DB conflict detection에 참여하지 않는다. 그래서 DB authority와
+        // queue projection이 mutation을 받아들인 뒤 마지막에 파일을 교체해, repository 쪽 권위 상태가 거절된 변경을
+        // workspace markdown이 먼저 반영하는 일을 피한다.
         self.planning_workspace_port
             .replace_planning_workspace_file(
                 self.workspace_dir.as_str(),
@@ -166,9 +167,9 @@ impl PlanningAdminFacadeService {
 }
 
 /*
- * A loaded admin edit session spans all planning authority stores. The revision
- * tracks the DB snapshots only; result_output is committed after those snapshots
- * because it does not participate in repository conflict detection.
+ * loaded admin edit session은 planning authority 저장소 전체를 한 값으로 묶은 내부 문서 모델이다. revision은
+ * DB snapshot만 추적한다. result_output은 repository conflict detection 대상이 아니므로 commit phase에서 DB
+ * snapshot 성공 뒤 따로 쓰인다.
  */
 #[derive(Debug, Clone)]
 pub(super) struct PlanningOperatorPlanningDocuments {
@@ -182,9 +183,8 @@ pub(super) fn direction_from_request(
     request: PlanningAdminDirectionMutationRequest,
     directions: &DirectionCatalogDocument,
 ) -> Result<DirectionDefinition> {
-    // Direction forms can either update an existing id or create a stable id
-    // from the title. Success criteria are mandatory because queue-idle review
-    // treats them as completion authority.
+    // direction form은 기존 id를 업데이트하거나 title에서 stable id를 생성할 수 있다. success criteria는
+    // queue-idle review가 완료 판정의 authority로 쓰는 필드라서 blank direction을 허용하지 않는다.
     let title = normalized_required_text(&request.title, "direction title")?;
     let id = if request.id.trim().is_empty() {
         generated_unique_id(
@@ -214,8 +214,8 @@ pub(super) fn direction_from_request(
 }
 
 pub(super) fn ensure_default_direction(directions: &mut DirectionCatalogDocument) -> Result<()> {
-    // The default direction is a compatibility anchor for blank task forms and
-    // older planning data. Missing it is repaired before committing admin edits.
+    // default direction은 blank task form과 오래된 planning data를 위한 compatibility anchor다. operator가 방향을
+    // 재구성하다가 이 anchor를 제거해도 commit 직전에 복구해 task creation fallback이 사라지지 않게 한다.
     if directions
         .directions
         .iter()
@@ -235,8 +235,8 @@ fn default_direction_definition() -> Result<DirectionDefinition> {
 }
 
 fn build_default_direction_definition() -> Result<DirectionDefinition, String> {
-    // Source the default from the same bootstrap path used to create a new
-    // workspace so admin repair and first-run initialization cannot drift.
+    // default definition은 새 workspace 생성과 같은 bootstrap path에서 가져온다. admin repair용 기본값과 first-run
+    // initialization 기본값이 서로 갈라지면 나중에 validation/queue behavior가 workspace 생성 시점에 따라 달라진다.
     let artifacts =
         PlanningBootstrapService::new().build_artifacts_for_mode(PlanningBootstrapMode::Simple);
     artifacts
@@ -248,8 +248,8 @@ fn build_default_direction_definition() -> Result<DirectionDefinition, String> {
 }
 
 fn remove_tasks_with_unresolved_directions(documents: &mut PlanningOperatorPlanningDocuments) {
-    // If a direction disappears, its tasks can no longer enter the queue. Remove
-    // those tasks and then prune dependency/blocker edges that pointed at them.
+    // direction이 사라지면 그 direction의 task는 더 이상 queue에 들어갈 수 없다. commit boundary에서 task를
+    // 제거하고, 제거된 task를 가리키던 dependency/blocker edge도 같이 정리해 dangling graph를 남기지 않는다.
     let direction_ids = documents
         .directions
         .directions
@@ -271,7 +271,8 @@ fn remove_tasks_with_unresolved_directions(documents: &mut PlanningOperatorPlann
 }
 
 fn parse_direction_state(raw: &str) -> Result<DirectionState> {
-    // Empty state defaults to active to keep simple creation forms concise.
+    // state blank는 active로 처리한다. 간단한 creation form이 title/criteria만 제출해도 새 direction이 바로 queue
+    // 후보가 되도록 하되, 명시 label은 domain enum으로만 변환한다.
     match raw.trim().to_ascii_lowercase().as_str() {
         "" | "active" => Ok(DirectionState::Active),
         "paused" => Ok(DirectionState::Paused),
@@ -281,9 +282,8 @@ fn parse_direction_state(raw: &str) -> Result<DirectionState> {
 }
 
 pub(super) fn default_direction_id(directions: &DirectionCatalogDocument) -> Result<&str> {
-    // Prefer the compatibility default, then any active direction, then the
-    // first non-empty id. This gives task creation a deterministic target even
-    // while an operator is reshaping direction authority.
+    // task creation fallback은 compatibility default를 최우선으로 고른다. 없으면 active direction, 그래도 없으면
+    // 첫 direction id를 사용해 operator가 direction authority를 재구성하는 중에도 deterministic target을 제공한다.
     if let Some(direction) = directions
         .directions
         .iter()
@@ -302,8 +302,8 @@ pub(super) fn default_direction_id(directions: &DirectionCatalogDocument) -> Res
 }
 
 pub(super) fn normalized_required_id<'a>(value: &'a str, label: &str) -> Result<&'a str> {
-    // IDs are used in references and generated paths; whitespace or separators
-    // would make authority graph matching and route parameters ambiguous.
+    // id는 authority graph reference와 route/generated path에 동시에 쓰인다. whitespace나 path separator를
+    // 허용하면 graph matching과 URL parameter 해석이 서로 다른 문자열 정규화에 의존하게 된다.
     let value = value.trim();
     if value.is_empty() {
         bail!("{label} is required");
@@ -336,8 +336,8 @@ fn generated_unique_id<'a>(
     title: &str,
     existing_ids: impl IntoIterator<Item = &'a str>,
 ) -> String {
-    // Generated ids are deterministic for the same title but still avoid
-    // collisions inside the current authority document.
+    // generated id는 같은 title에 대해 deterministic해야 operator가 예측할 수 있다. 동시에 현재 authority 문서
+    // 안에서는 collision을 피해야 하므로 base slug 뒤에 numeric suffix를 붙이는 단순한 규칙을 쓴다.
     let existing = existing_ids.into_iter().collect::<BTreeSet<_>>();
     let slug = slugify_title(title);
     let base = format!("{prefix}-{slug}");
@@ -354,8 +354,8 @@ fn generated_unique_id<'a>(
 }
 
 fn slugify_title(title: &str) -> String {
-    // Keep Unicode alphanumerics so non-English direction titles retain meaning
-    // in generated ids instead of collapsing to opaque counters.
+    // Unicode alphanumeric을 유지해 비영어 direction title도 generated id 안에서 의미를 보존한다. 모든 non-ASCII를
+    // 버리면 한국어 title이 item-2 같은 opaque id로 바뀌어 admin 화면에서 추적하기 어려워진다.
     let mut slug = String::new();
     let mut previous_dash = false;
     for character in title.chars().flat_map(char::to_lowercase) {
@@ -378,8 +378,8 @@ fn slugify_title(title: &str) -> String {
 }
 
 fn split_lines(raw: &str) -> Vec<String> {
-    // Admin forms edit list fields as text areas; blank lines are presentation
-    // noise and should not become authority entries.
+    // admin form은 list field를 textarea로 편집한다. blank line은 사람이 읽기 쉽게 넣은 presentation noise이므로
+    // authority entry로 저장하지 않는다.
     raw.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -391,8 +391,8 @@ pub(super) fn remove_task_references(
     task_authority: &mut TaskAuthorityDocument,
     removed_task_ids: &BTreeSet<String>,
 ) {
-    // Reference cleanup trims both sides so legacy whitespace in authority files
-    // does not keep a dangling dependency alive.
+    // reference cleanup은 양쪽을 trim해서 비교한다. legacy authority file에 공백이 섞여 있어도 제거된 task를
+    // 가리키는 dependency가 살아남지 않아야 한다.
     for task in &mut task_authority.tasks {
         task.depends_on
             .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
@@ -407,13 +407,13 @@ mod tests {
 
     #[test]
     fn slugify_title_preserves_unicode_alphanumerics() {
-        // Generated ids should remain readable for non-English operator titles.
+        // generated id는 비영어 operator title에서도 읽을 수 있는 의미를 유지해야 한다.
         assert_eq!(slugify_title("한글 작업 1"), "한글-작업-1");
     }
 
     #[test]
     fn generated_unique_id_keeps_unicode_title_identity() {
-        // Collision suffixes append to the readable slug instead of replacing it.
+        // collision suffix는 readable slug를 대체하지 않고 뒤에 붙어야 title identity가 유지된다.
         let existing = ["task-한글-작업", "task-한글-작업-2"];
 
         assert_eq!(
