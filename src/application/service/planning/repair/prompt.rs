@@ -1,8 +1,9 @@
 /*
- * Repair prompts are the bridge between reconciliation failures and a planning-only worker turn.
- * Reconciliation owns the safety decision and provides accepted DB authority, rejected candidate material,
- * validation errors, and retry metadata. This module renders that evidence into a prompt that still uses
- * the normal planning-task command mutation contract instead of asking the worker to replace authority files.
+ * repair prompt는 reconciliation failure와 planning-only worker turn 사이의 bridge다.
+ * reconciliation은 safety decision을 소유하고 accepted DB authority, rejected candidate material,
+ * validation error, retry metadata를 제공한다. 이 모듈은 그 evidence를 prompt로 렌더링하되,
+ * worker에게 authority file 교체를 요구하지 않고 정상 planning-task command mutation contract를
+ * 계속 사용하게 만든다.
  */
 use std::collections::{BTreeSet, HashMap};
 
@@ -16,7 +17,8 @@ use crate::domain::planning::{TaskAuthorityDocument, TaskDefinition};
 use super::reconciliation::PlanningRepairRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Public handoff shape is copied from worker orchestration without exposing orchestration domain types here.
+// public handoff shape는 worker orchestration에서 필요한 값만 복사한다. repair prompt가
+// orchestration domain type을 직접 노출하지 않게 하기 위한 얇은 DTO다.
 pub struct PlanningRepairPromptHandoff<'a> {
     pub task_id: &'a str,
     pub task_title: &'a str,
@@ -25,7 +27,7 @@ pub struct PlanningRepairPromptHandoff<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Retry reasons add a narrow instruction when the host detected a repeated failed repair attempt.
+// retry reason은 host가 반복 실패한 repair attempt를 감지했을 때만 좁은 추가 지시를 넣는다.
 pub enum PlanningRepairRetryReason {
     TaskAuthorityUnchanged,
     TaskAuthorityStillInvalid,
@@ -33,9 +35,9 @@ pub enum PlanningRepairRetryReason {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 /*
- * Optional focused excerpts replace full authority blobs when the prompt can identify relevant tasks.
- * Empty fields deliberately fall back to full, truncated request JSON so parse failures do not hide evidence
- * from the repair worker.
+ * focused excerpt는 prompt가 관련 task를 식별할 수 있을 때 full authority blob을 대체한다.
+ * 비어 있으면 의도적으로 full truncated request JSON으로 fallback한다. parse failure가 evidence를
+ * 숨겨 repair worker가 무엇을 고쳐야 하는지 모르게 되는 상황을 피하기 위해서다.
  */
 struct PlanningRepairPromptContext {
     accepted_heading: Option<String>,
@@ -45,10 +47,10 @@ struct PlanningRepairPromptContext {
 }
 
 /*
- * Build one repair prompt for a failed planning authority candidate.
- * The section order matters: role/retry/handoff/validation establishes why the worker is running, trusted
- * direction and queue excerpts establish current DB state, then the shared repair mutation block constrains
- * the final answer to planning_task_commands before candidate-specific excerpts are shown.
+ * 실패한 planning authority candidate 하나에 대한 repair prompt를 만든다. section 순서가 중요하다.
+ * role/retry/handoff/validation이 worker 실행 이유를 먼저 고정하고, trusted direction/queue excerpt가
+ * 현재 DB state를 세운다. 그 다음 shared repair mutation block이 final answer를
+ * planning_task_commands로 제한한 뒤 candidate-specific excerpt를 보여 준다.
  */
 pub fn build_planning_repair_prompt(
     request: &PlanningRepairRequest,
@@ -59,7 +61,7 @@ pub fn build_planning_repair_prompt(
 ) -> String {
     let prompt_context = build_planning_repair_prompt_context(request, previous_handoff);
 
-    // Prefer focused accepted evidence, but always include a bounded accepted DB authority baseline.
+    // focused accepted evidence를 우선하지만, 항상 bounded accepted DB authority baseline은 포함한다.
     let accepted_excerpt = prompt_context
         .accepted_excerpt
         .clone()
@@ -78,7 +80,8 @@ pub fn build_planning_repair_prompt(
     let accepted_queue_projection_excerpt =
         truncate_prompt_section(&request.accepted_queue_projection_json, 2_000);
 
-    // Shared repair sections are inserted before accepted/rejected excerpts so output rules frame the evidence.
+    // shared repair section은 accepted/rejected excerpt보다 먼저 들어간다. output rule이 evidence를
+    // 해석하는 frame을 먼저 제공하게 하려는 순서다.
     let builder = PromptDocument::builder("planning-repair")
         .lines("role", repair_role_lines(attempt_number, max_attempts))
         .bullets("constraints", repair_constraints())
@@ -106,7 +109,7 @@ pub fn build_planning_repair_prompt(
         .render()
 }
 
-// Role lines make repair attempts observable in logs and prompt snapshots without carrying mutable evidence.
+// role line은 mutable evidence를 싣지 않고 repair attempt metadata만 logs/prompt snapshot에서 보이게 한다.
 fn repair_role_lines(attempt_number: usize, max_attempts: usize) -> Vec<String> {
     vec![
         "session=planning-repair-only".to_string(),
@@ -115,14 +118,14 @@ fn repair_role_lines(attempt_number: usize, max_attempts: usize) -> Vec<String> 
     ]
 }
 
-// Retry instructions are absent on the first attempt and precise on later attempts to avoid overfitting.
+// retry instruction은 첫 attempt에는 없고, 이후 attempt에서만 좁게 들어간다. 불필요한 overfitting을 피하기 위해서다.
 fn retry_instruction_lines(retry_reason: Option<PlanningRepairRetryReason>) -> Vec<String> {
     retry_reason
         .map(|retry_reason| vec![format!("instruction={}", retry_reason.instruction())])
         .unwrap_or_default()
 }
 
-// Convert the local public handoff wrapper into the shared prompt-section type used by refresh and repair.
+// local public handoff wrapper를 refresh/repair가 공유하는 prompt-section type으로 변환한다.
 fn repair_handoff(handoff: PlanningRepairPromptHandoff<'_>) -> PlanningPromptHandoff<'_> {
     PlanningPromptHandoff {
         task_id: handoff.task_id,
@@ -132,7 +135,7 @@ fn repair_handoff(handoff: PlanningRepairPromptHandoff<'_>) -> PlanningPromptHan
     }
 }
 
-// Validation lines keep the human summary, concrete validator messages, and archive pointer in one section.
+// validation line은 human summary, 구체적인 validator message, archive pointer를 한 section에 모은다.
 fn validation_lines(request: &PlanningRepairRequest) -> Vec<String> {
     let mut lines = vec![format!("failure_summary={}", request.failure_summary)];
     lines.extend(
@@ -148,7 +151,7 @@ fn validation_lines(request: &PlanningRepairRequest) -> Vec<String> {
     lines
 }
 
-// Rejected evidence is optional because some failures come from malformed command envelopes, not parseable authority.
+// rejected evidence는 optional이다. 일부 실패는 parse 가능한 authority가 아니라 malformed command envelope에서 온다.
 fn rejected_excerpt(
     request: &PlanningRepairRequest,
     prompt_context: &PlanningRepairPromptContext,
@@ -165,7 +168,7 @@ fn rejected_excerpt(
         })
 }
 
-// The final response section is intentionally shorter than the shared contract and acts as closing emphasis.
+// final response section은 shared contract보다 의도적으로 짧다. 마지막 강조 역할만 맡는다.
 fn final_response_rules() -> Vec<String> {
     vec![
         "Briefly summarize what was fixed.".to_string(),
@@ -176,10 +179,10 @@ fn final_response_rules() -> Vec<String> {
 }
 
 /*
- * Derive focused authority excerpts for the repair prompt.
- * Focus comes from three sources: the previous handoff task that may be looping, tasks changed by the rejected
- * candidate, and task ids named in validation errors. If any parsing step fails, the caller falls back to full
- * truncated JSON so repair remains possible.
+ * repair prompt용 focused authority excerpt를 만든다. focus source는 세 가지다. loop 가능성이
+ * 있는 previous handoff task, rejected candidate가 바꾼 task, validation error에 직접 언급된
+ * task id다. parsing step이 하나라도 실패하면 caller가 full truncated JSON으로 fallback해 repair
+ * 가능성을 유지한다.
  */
 fn build_planning_repair_prompt_context(
     request: &PlanningRepairRequest,
@@ -221,15 +224,15 @@ fn build_planning_repair_prompt_context(
     }
 }
 
-// Parse best-effort because prompt construction should degrade to raw JSON excerpts, not fail the host turn.
+// prompt construction은 host turn을 실패시키기보다 raw JSON excerpt로 degrade해야 하므로 best-effort parse다.
 fn parse_task_authority_document(body: &str) -> Option<TaskAuthorityDocument> {
     serde_json::from_str(body).ok()
 }
 
 /*
- * Collect the task ids that deserve full context in the repair prompt.
- * The set starts with direct evidence and is later expanded through dependency/blocker edges so the worker sees
- * enough surrounding graph to avoid creating priority or status fixes that violate adjacent task constraints.
+ * repair prompt에서 full context를 받을 task id를 모은다. direct evidence에서 시작한 뒤
+ * dependency/blocker edge를 따라 확장한다. worker가 주변 graph를 충분히 보고 adjacent task
+ * constraint를 깨는 priority/status fix를 만들지 않게 하기 위한 focus set이다.
  */
 fn collect_focus_task_ids(
     accepted_task_authority: &TaskAuthorityDocument,
@@ -277,7 +280,7 @@ fn collect_focus_task_ids(
     focus_ids
 }
 
-// Compare accepted and rejected authority by normalized task content so superficial formatting does not count.
+// accepted/rejected authority는 normalized task content로 비교한다. 표면적인 formatting 차이는 변경으로 보지 않는다.
 fn changed_task_ids(
     accepted_task_authority: &TaskAuthorityDocument,
     rejected_task_authority: &TaskAuthorityDocument,
@@ -319,12 +322,12 @@ fn changed_task_ids(
     changed_task_ids
 }
 
-// Keep the comparison rule named so future domain normalization changes are visible at the repair boundary.
+// 비교 규칙을 이름 있는 함수로 둔다. 미래의 domain normalization 변경이 repair boundary에서 눈에 띄게 하기 위해서다.
 fn normalized_task_definition(task: &TaskDefinition) -> TaskDefinition {
     task.normalized()
 }
 
-// Tokenization avoids substring matches, so `task-1` is not inferred from unrelated prose like `task-10`.
+// tokenization은 substring match를 피한다. `task-10` 같은 prose에서 `task-1`을 잘못 추론하지 않게 한다.
 fn validation_error_mentions_task_id(validation_error: &str, task_id: &str) -> bool {
     validation_error
         .split(|character: char| {
@@ -334,9 +337,9 @@ fn validation_error_mentions_task_id(validation_error: &str, task_id: &str) -> b
 }
 
 /*
- * Expand focus ids across the task graph until no newly related task appears.
- * Repair candidates often fail because a changed task conflicts with dependency or blocker state; including the
- * transitive neighborhood lets the worker fix the relation rather than only the task named in the validator error.
+ * 새로 관련된 task가 더 이상 나타나지 않을 때까지 focus id를 task graph 전체로 확장한다.
+ * repair candidate는 변경 task가 dependency/blocker 상태와 충돌해 실패하는 경우가 많다. transitive
+ * neighborhood를 포함하면 worker가 validator error에 직접 언급된 task만이 아니라 관계 자체를 고칠 수 있다.
  */
 fn expand_related_task_ids(
     focus_ids: &mut BTreeSet<String>,
@@ -378,7 +381,7 @@ fn expand_related_task_ids(
     }
 }
 
-// Serialize only focused tasks back into the same authority document shape expected by existing prompt tests.
+// focused task만 기존 prompt test가 기대하는 authority document shape로 다시 직렬화한다.
 fn serialize_focused_task_authority_excerpt(
     task_authority: &TaskAuthorityDocument,
     focus_ids: &BTreeSet<String>,
@@ -400,7 +403,7 @@ fn serialize_focused_task_authority_excerpt(
 }
 
 impl PlanningRepairRetryReason {
-    // These instructions are operator-facing prompt copy, so they can be more direct than enum names.
+    // 이 instruction은 operator-facing prompt copy라 enum 이름보다 직접적인 문장으로 쓴다.
     fn instruction(self) -> &'static str {
         match self {
             Self::TaskAuthorityUnchanged => {
