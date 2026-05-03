@@ -28,6 +28,11 @@ pub struct SessionBrowserState {
 
 impl SessionBrowserState {
     pub fn new(page_size: usize) -> Self {
+        /*
+         * page_size is normalized at construction because every projection assumes it
+         * can divide a result set into non-empty pages. Keeping the guard here lets TUI
+         * layout code pass its preferred row capacity without duplicating zero checks.
+         */
         Self {
             search_query: String::new(),
             page_index: 0,
@@ -49,6 +54,11 @@ impl SessionBrowserState {
     }
 
     pub fn set_project_filter(&mut self, project_filter: SessionProjectFilter) {
+        /*
+         * Project filter changes invalidate the current page in the same way search
+         * changes do. The selected row is owned by the TUI state, but page_index lives
+         * here so projection never points at a stale page after narrowing the list.
+         */
         if self.project_filter == project_filter {
             return;
         }
@@ -130,11 +140,22 @@ pub struct SessionBrowserProjection {
 
 impl SessionBrowserProjection {
     pub fn clamp_selected_index(&self, selected_session_index: usize) -> Option<usize> {
+        /*
+         * Selection clamping is projection-aware because only the projection knows the
+         * current page length after search, project filtering, and stale page repair.
+         * Returning None for an empty page lets input handlers clear selection without
+         * peeking into raw RecentSessions.
+         */
         (!self.page_session_indexes.is_empty())
             .then(|| selected_session_index.min(self.page_session_indexes.len().saturating_sub(1)))
     }
 
     pub fn cycled_project_filter(&self, delta: isize) -> Option<SessionProjectFilter> {
+        /*
+         * Filter cycling uses the already-built option list so keyboard navigation sees
+         * the same ordering as the rendered menu. rem_euclid makes reverse cycling
+         * wrap cleanly without special casing negative deltas.
+         */
         let option_count = self.project_filter_options.len() as isize;
         if option_count == 0 {
             return None;
@@ -177,6 +198,11 @@ pub struct SessionBrowserSelection {
 
 impl<'a> SessionBrowserPage<'a> {
     pub fn selected_session(&self) -> Option<&'a SessionSummary> {
+        /*
+         * The page owns only borrowed visible sessions, so selected_session returns the
+         * same borrow rather than cloning SessionSummary. This keeps the renderer and
+         * open-session action tied to the exact projection row currently visible.
+         */
         self.selected_index
             .and_then(|selected_index| self.visible_sessions.get(selected_index).copied())
     }
@@ -190,6 +216,11 @@ impl<'a> SessionBrowserPage<'a> {
     }
 
     pub fn selection_after_delta(&self, delta: isize) -> SessionBrowserSelection {
+        /*
+         * Row movement is page-local. Page changes are handled by SessionBrowserState,
+         * while this helper only moves inside the visible slice and returns both row
+         * index and session id so refresh can later prefer identity restoration.
+         */
         if self.visible_sessions.is_empty() {
             return SessionBrowserSelection {
                 index: 0,
@@ -232,6 +263,12 @@ pub fn project_recent_sessions(
     browser_state: &SessionBrowserState,
     current_workspace_directory: Option<&str>,
 ) -> SessionBrowserProjection {
+    /*
+     * Projection is the pure boundary between provider-backed recent sessions and TUI
+     * overlay state. It produces indexes into the original list instead of cloning
+     * sessions, allowing page construction to borrow exact source records while this
+     * function remains focused on filtering, ranking, paging, and counts.
+     */
     let search_tokens = tokenize_search_query(&browser_state.search_query);
     // filter options는 검색어와 무관하게 전체 최근 세션에서 만든다. 검색 때문에 현재 프로젝트
     // 필터 선택지가 사라지면 키보드 순환이 예측 불가능해지기 때문이다.
@@ -285,6 +322,12 @@ pub fn project_recent_sessions(
     }
 
     let filtered_session_count = ranked_sessions.len();
+    /*
+     * Pagination is computed after both project filtering and search scoring. A stale
+     * page index is clamped here instead of mutating browser_state, because projection
+     * is read-only and callers may decide separately whether to persist repaired UI
+     * state.
+     */
     let total_pages = if filtered_session_count == 0 {
         0
     } else {
@@ -328,6 +371,11 @@ pub fn build_session_browser_page<'a>(
     selected_session_id: Option<&str>,
     selected_session_index: usize,
 ) -> SessionBrowserPage<'a> {
+    /*
+     * Page building composes the pure projection with borrowed SessionSummary rows and
+     * selection restoration. Keeping this as a separate step lets tests inspect the
+     * projection alone while render/input code can ask for ready-to-display rows.
+     */
     let projection =
         project_recent_sessions(recent_sessions, browser_state, current_workspace_directory);
 
@@ -356,6 +404,11 @@ fn build_project_filter_options(
     sessions: &[SessionSummary],
     current_workspace_directory: Option<&str>,
 ) -> Vec<SessionProjectFilterOption> {
+    /*
+     * Project options are derived from all recent sessions, not from the current search
+     * result. That makes the project menu a stable navigation surface: search can
+     * explain "no matches in this project" without hiding the project choice itself.
+     */
     let mut workspace_counts = HashMap::new();
     let mut workspace_order = Vec::new();
 
@@ -428,6 +481,11 @@ fn resolve_active_project_filter(
 }
 
 fn matches_project_filter(session: &SessionSummary, project_filter: &SessionProjectFilter) -> bool {
+    /*
+     * Project identity is the raw cwd string because recent-session data has no richer
+     * repository/project id. Keeping the comparison exact avoids accidentally merging
+     * sibling worktrees or similarly named directories.
+     */
     match project_filter {
         SessionProjectFilter::AllProjects => true,
         SessionProjectFilter::RecentProject {
