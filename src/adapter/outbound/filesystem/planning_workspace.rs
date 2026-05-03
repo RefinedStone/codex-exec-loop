@@ -397,7 +397,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
-        // Active workspace load is authority-aware: git-backed workspaces read through the repo-scoped store first.
+        /*
+         * active workspace load는 authority-aware read다.
+         * git-backed workspace에서는 현재 slot directory가 아니라 repo-scoped authority store를 먼저 읽는다.
+         * direct mode에서는 같은 record shape를 filesystem에서 조립해 legacy/plain workspace 실행과 test fixture를 유지한다.
+         */
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             return store.load_active_workspace_files(workspace_dir);
         }
@@ -410,7 +414,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningWorkspaceLoadRecord> {
-        // Candidate load deliberately ignores repo-scoped authority so comparison code can inspect the slot copy.
+        /*
+         * candidate workspace load는 의도적으로 repo-scoped authority를 무시한다.
+         * comparison/review code가 "현재 slot worktree에는 무엇이 있는가"를 봐야 할 때 active authority로 fallback하면
+         * candidate와 active의 차이를 잃는다.
+         */
         Self::load_workspace_record_from(
             workspace_dir,
             Self::read_optional_candidate_workspace_file,
@@ -422,7 +430,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()> {
-        // Commit writes active prompt files to the authority location, delegating to repo-scoped storage when present.
+        /*
+         * commit은 PlanningWorkspaceLoadRecord를 active authority location에 쓴다.
+         * repo-scoped store가 있으면 integration checkout의 authority를 갱신하고, 없으면 workspace_dir 아래 direct filesystem에 쓴다.
+         * record-shaped write를 유지해 load/commit이 같은 prompt file set을 round-trip한다.
+         */
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             return store.commit_active_workspace_files(workspace_dir, record);
         }
@@ -436,8 +448,9 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         relative_path: &str,
     ) -> Result<Option<String>> {
         /*
-         * Optional active-file reads prefer repo-scoped authority. For non-authority paths, a repo-scoped miss falls
-         * back to the workspace filesystem so callers can still read operator-owned supporting files.
+         * optional active-file read는 repo-scoped authority를 우선한다.
+         * canonical authority-managed path에서 None이 나오면 "파일이 authority에 없다"는 의미가 있으므로 바로 None을 반환한다.
+         * 반면 non-authority supporting file은 repo-scoped store가 모를 수 있어 workspace filesystem으로 fallback한다.
          */
         let relative_path = normalize_workspace_relative_path(
             relative_path,
@@ -458,7 +471,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        // Candidate reads never touch repo-scoped authority; they answer "what does this workspace currently contain?"
+        // candidate optional read는 repo-scoped authority를 보지 않고 현재 workspace copy의 내용을 그대로 답한다.
         let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
@@ -472,7 +485,11 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         relative_path: &str,
         body: Option<&str>,
     ) -> Result<()> {
-        // Replace is the low-level active-file write primitive used by planning services after validation.
+        /*
+         * replace는 validation 이후 service가 쓰는 low-level active-file write primitive다.
+         * Some(body)는 parent directory를 만든 뒤 write하고, None은 같은 path의 stale file을 제거한다.
+         * repo-scoped mode에서는 동일한 semantic을 authority store로 위임해 slot worktree가 active state를 몰래 바꾸지 않게 한다.
+         */
         let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
