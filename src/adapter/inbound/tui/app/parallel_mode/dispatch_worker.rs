@@ -17,9 +17,13 @@ use super::super::BackgroundMessage;
  */
 #[derive(Debug, Clone)]
 pub(super) struct ParallelDispatchWorkerRequest {
+    // planning workspace는 official completion refresh가 반영될 authoritative root이다.
     pub(super) planning_workspace_directory: String,
+    // worktree는 실제 isolated Codex turn이 실행되는 slot checkout이다.
     pub(super) worktree_directory: String,
+    // prompt는 queue head handoff를 worker thread에 전달하는 최종 user-facing 입력이다.
     pub(super) prompt: String,
+    // handoff_task는 notice, completion contract, refresh prompt가 같은 task를 가리키게 하는 연결 키이다.
     pub(super) handoff_task: PlanningTaskHandoff,
 }
 
@@ -27,10 +31,21 @@ pub(super) struct ParallelDispatchWorkerRequest {
 // "TurnCompleted", "마지막 답변"을 한 번에 보존해야 한다.
 #[derive(Debug, Clone, Default)]
 struct ParallelDispatchWorkerStreamState {
+    /*
+     * started 여부와 failed-before-started 여부를 둘 다 보관한다. 같은 Failed 이벤트라도 thread가
+     * 시작된 뒤의 실패는 running slot completion 실패이고, 시작 전 실패는 lease를 release할 수
+     * 있는 unstarted-slot 실패로 처리해야 하기 때문이다.
+     */
     saw_turn_started: bool,
     saw_failed_before_turn_started: bool,
     saw_failed_event: bool,
+    /*
+     * TurnCompleted는 official completion refresh의 유일한 성공 입구다. app-server stream이
+     * 답변 text를 끝냈더라도 TurnCompleted가 없으면 changed planning files와 turn id가 없어
+     * authority ledger에 안전하게 completion contract를 남길 수 없다.
+     */
     turn_completed: Option<ParallelDispatchTurnCompleted>,
+    // main reply는 official completion prompt의 증거 문맥으로 쓰되, slot 성공 판정 자체는 TurnCompleted가 맡는다.
     latest_main_reply: Option<String>,
 }
 #[derive(Debug, Clone)]
@@ -47,10 +62,19 @@ pub(super) fn spawn_parallel_dispatch_worker(
     outer_tx: std::sync::mpsc::Sender<BackgroundMessage>,
 ) {
     thread::spawn(move || {
+        /*
+         * Background worker는 TUI event loop를 직접 만지지 않는다. 모든 결과는 notice message와
+         * supervisor snapshot invalidation으로 되돌아가며, sender 실패는 이미 UI가 내려가는 중이라는
+         * 의미라 worker thread 안에서 추가 복구를 시도하지 않는다.
+         */
         let notices = run_parallel_dispatch_worker(request, worker_port, turn_service, planning);
         for notice in notices {
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }
+        /*
+         * 성공, 실패, panic 어느 경로든 supervisor snapshot을 다시 읽게 해야 slot lease와
+         * official completion marker가 화면에 남지 않는다.
+         */
         let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
     });
 }
@@ -64,6 +88,11 @@ fn run_parallel_dispatch_worker(
     let (event_tx, event_rx) = mpsc::channel();
     let service_request = request.clone();
     let service_thread = thread::spawn(move || {
+        /*
+         * ParallelAgentWorkerPort owns app-server execution. This outer worker keeps
+         * the receiver side so it can reduce stream events while the isolated worker
+         * is still running, then joins to capture transport-level errors.
+         */
         worker_port.run_isolated_new_thread_stream(
             &service_request.worktree_directory,
             &service_request.prompt,
@@ -91,6 +120,12 @@ fn run_parallel_dispatch_worker(
     match service_thread.join() {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
+            /*
+             * A port error may happen after the event stream already emitted TurnCompleted
+             * or Failed. Only synthesize a failure flag when the stream itself did not
+             * provide a terminal event, otherwise finalize_stream_completion would double
+             * count the failure class.
+             */
             if stream_state.turn_completed.is_none() && !stream_state.saw_failed_event {
                 stream_state.saw_failed_event = true;
                 if !stream_state.saw_turn_started {
@@ -103,6 +138,11 @@ fn run_parallel_dispatch_worker(
             ));
         }
         Err(_) => {
+            /*
+             * Panic is treated like a terminal stream failure, but we still preserve
+             * saw_turn_started so the turn service can distinguish a dirty running
+             * slot from a launch failure that can be released.
+             */
             if stream_state.turn_completed.is_none() && !stream_state.saw_failed_event {
                 stream_state.saw_failed_event = true;
                 if !stream_state.saw_turn_started {
@@ -141,6 +181,11 @@ fn run_parallel_dispatch_worker(
     }
 
     if stream_state.saw_failed_event {
+        /*
+         * Once any stream failure is observed, do not attempt official completion refresh.
+         * The planning ledger must not record an authoritative completion for a slot whose
+         * app-server turn did not reach a clean terminal success.
+         */
         turn_service.mark_official_completion_failed(
             &request.worktree_directory,
             "parallel worker stream failed before official completion refresh",
@@ -149,6 +194,11 @@ fn run_parallel_dispatch_worker(
     }
 
     let Some(turn_completed) = stream_state.turn_completed else {
+        /*
+         * This branch is defensive after the generic missing-completion failure above.
+         * Keeping it explicit protects future changes that might add non-failed terminal
+         * events without an official completion contract.
+         */
         turn_service.mark_official_completion_failed(
             &request.worktree_directory,
             "parallel worker stream ended without a completed turn",
@@ -183,6 +233,11 @@ fn sync_parallel_dispatch_worker_event(
         ConversationStreamEvent::AgentMessageCompleted { text, .. } => {
             let text = text.trim();
             if !text.is_empty() {
+                /*
+                 * Keep the latest non-empty completed assistant message. Hidden parallel
+                 * workers may emit intermediate assistant messages, but the completion
+                 * refresh prompt should use the final answer as the operator-facing proof.
+                 */
                 stream_state.latest_main_reply = Some(text.to_string());
             }
         }
@@ -190,6 +245,11 @@ fn sync_parallel_dispatch_worker_event(
             turn_id,
             changed_planning_file_paths,
         } => {
+            /*
+             * changed_planning_file_paths is copied out before the loop stops because the
+             * receiver exits on TurnCompleted. Later stream noise should not alter the
+             * official completion validation summary for this slot.
+             */
             stream_state.turn_completed = Some(ParallelDispatchTurnCompleted {
                 turn_id: turn_id.clone(),
                 changed_planning_file_paths: changed_planning_file_paths.clone(),
@@ -275,6 +335,11 @@ fn run_parallel_dispatch_official_completion(
     }
 
     let worker_request = PlanningOfficialCompletionRefreshRequest {
+        /*
+         * The refresh worker runs against the planning authority root, not the slot worktree.
+         * Slot output is already captured in the completion contract; authority mutation must
+         * happen in the canonical workspace so parallel workers converge on one ledger.
+         */
         workspace_directory: &request.planning_workspace_directory,
         latest_user_message: None,
         latest_main_reply,
@@ -316,6 +381,11 @@ fn run_parallel_dispatch_official_completion(
         crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyNoTask
             | crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyWithTask
     ) {
+        /*
+         * A non-ready snapshot after refresh means the worker may have changed files but
+         * the runtime cannot safely choose a next queue head. Marking official completion
+         * failed keeps auto-followup from chaining on top of unavailable planning state.
+         */
         let detail = "parallel official completion refresh left planning unavailable";
         turn_service.mark_official_completion_failed(&request.worktree_directory, detail);
         notices.push(format!(
@@ -339,6 +409,11 @@ fn run_parallel_dispatch_official_completion(
 
 fn parallel_dispatch_validation_summary(changed_planning_file_paths: &[String]) -> String {
     if changed_planning_file_paths.is_empty() {
+        /*
+         * Empty change sets are still valid completion evidence. The summary must say that
+         * explicitly so downstream official-completion prompts do not infer a missing
+         * validation step from the absence of file paths.
+         */
         return "parallel worker completed without planning file changes".to_string();
     }
 
