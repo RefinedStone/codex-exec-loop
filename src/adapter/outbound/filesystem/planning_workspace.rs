@@ -15,14 +15,18 @@ use crate::application::service::planning::{
 };
 
 /*
- * FilesystemPlanningWorkspaceAdapter is the fallback outbound adapter for planning workspace files.
- * It still knows about repo-scoped stores because git-backed worktrees keep the authoritative planning files
- * somewhere other than the candidate workspace directory. The adapter therefore routes active-state reads/writes
- * through RepoScopedPlanningWorkspacePort when possible, while preserving direct filesystem behavior for plain dirs.
+ * FilesystemPlanningWorkspaceAdapter는 planning workspace file을 로컬 filesystem에 매핑하는 outbound adapter다.
+ * 단순 파일 adapter처럼 보이지만 git-backed worktree에서는 candidate workspace와 authoritative planning store가
+ * 서로 다른 root일 수 있다. 그래서 이 adapter는 repo-scoped store가 유효한 경우 active-state read/write를
+ * RepoScopedPlanningWorkspacePort로 우회시키고, 일반 directory fixture나 legacy 실행에서는 직접 filesystem path를 쓴다.
+ *
+ * application layer는 PlanningWorkspacePort만 본다.
+ * 이 구현이 active workspace, candidate workspace, staged draft, rejected archive의 물리 위치 차이를 숨겨야
+ * service가 "무엇을 읽고 쓰는가"에 집중하고 "어느 checkout에 있는가"를 알 필요가 없어진다.
  */
 #[derive(Default)]
 pub struct FilesystemPlanningWorkspaceAdapter {
-    // None means legacy direct-filesystem mode; Some means git-backed workspaces can resolve an active workspace root.
+    // None은 direct-filesystem mode이고, Some은 git-backed workspace에서 active authority root를 resolve할 수 있다는 뜻이다.
     repo_scoped_store: Option<Arc<dyn RepoScopedPlanningWorkspacePort>>,
 }
 
@@ -43,28 +47,28 @@ impl FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Option<&dyn RepoScopedPlanningWorkspacePort> {
-        // The store is only valid for git-backed workspaces; non-git temp fixtures must keep using direct paths.
+        // repo-scoped store는 git-backed workspace에서만 의미가 있으므로 temp fixture나 plain directory는 direct path로 남긴다.
         self.repo_scoped_store
             .as_deref()
             .filter(|store| store.is_git_backed_workspace(workspace_dir))
     }
 
     fn draft_directory(workspace_dir: &str, draft_name: &str) -> PathBuf {
-        // Drafts are staged under the candidate workspace so an operator can inspect/reject them before promotion.
+        // draft는 promotion 전 operator가 inspect/reject할 수 있도록 candidate workspace 아래 staged tree로 둔다.
         Path::new(workspace_dir)
             .join(PLANNING_DRAFTS_DIRECTORY)
             .join(draft_name)
     }
 
     fn rejected_directory(&self, workspace_dir: &str, archive_name: &str) -> PathBuf {
-        // Rejected archives belong to the active workspace root, not necessarily the candidate worktree path.
+        // rejected archive는 candidate worktree가 아니라 active workspace root 쪽에 남겨 authority history와 같은 위치에 둔다.
         self.active_workspace_root(workspace_dir)
             .join(PLANNING_REJECTED_DIRECTORY)
             .join(archive_name)
     }
 
     fn active_workspace_root(&self, workspace_dir: &str) -> PathBuf {
-        // Repo-scoped mode lets a parallel slot write planning state to the integration checkout authority.
+        // repo-scoped mode에서는 parallel slot이 자기 worktree가 아니라 integration checkout authority에 planning state를 쓴다.
         self.repo_scoped_store
             .as_ref()
             .map(|store| store.resolve_active_workspace_root(workspace_dir))
@@ -72,13 +76,13 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 
     fn active_workspace_path(&self, workspace_dir: &str, relative_path: &str) -> PathBuf {
-        // Active paths are used for committed planning state such as result output.
+        // active path는 result output 같은 committed planning state를 읽고 쓸 때 사용한다.
         self.active_workspace_root(workspace_dir)
             .join(relative_path)
     }
 
     fn candidate_workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
-        // Candidate paths read the slot/worktree copy without consulting repo-scoped authority.
+        // candidate path는 repo-scoped authority를 보지 않고 현재 slot/worktree copy 자체를 검사할 때 사용한다.
         Path::new(workspace_dir).join(relative_path)
     }
 
@@ -115,7 +119,7 @@ impl FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         file_loader: impl Fn(&str, &str) -> Result<Option<String>>,
     ) -> Result<PlanningWorkspaceLoadRecord> {
-        // The workspace record intentionally excludes DB-backed task authority artifacts; this adapter only moves prompt files.
+        // workspace record는 DB-backed task authority artifact를 제외한다. 이 adapter는 prompt file만 round-trip한다.
         Ok(PlanningWorkspaceLoadRecord {
             result_output_markdown: file_loader(workspace_dir, RESULT_OUTPUT_FILE_PATH)?,
         })
@@ -125,7 +129,7 @@ impl FilesystemPlanningWorkspaceAdapter {
         workspace_root: &Path,
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()> {
-        // Commit mirrors the load record shape: None removes stale files, Some writes the latest prompt body.
+        // commit은 load record shape를 mirror한다. None은 stale file 제거, Some은 최신 prompt body write를 뜻한다.
         write_optional_workspace_file(
             workspace_root,
             RESULT_OUTPUT_FILE_PATH,
@@ -135,7 +139,7 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 
     fn authority_managed_path(relative_path: &str) -> bool {
-        // Canonical active planning files are considered authoritative even when repo-scoped storage returns None.
+        // canonical active planning file은 repo-scoped storage가 None을 돌려도 authority-managed path로 간주한다.
         canonical_active_planning_file_path(relative_path).is_some()
     }
 
@@ -144,14 +148,18 @@ impl FilesystemPlanningWorkspaceAdapter {
         draft_name: &str,
         active_path: &str,
     ) -> Result<PathBuf> {
-        // Draft paths drop the `.codex-exec-loop/planning` prefix so staged trees are compact and movable.
+        // staged draft tree는 planning root prefix를 제거한 상대 경로를 써서 compact하고 이동 가능한 proposal tree로 만든다.
         let relative_path = Self::draft_relative_path(active_path)?;
         let relative_path = Path::new(&relative_path);
         Ok(Self::draft_directory(workspace_dir, draft_name).join(relative_path))
     }
 
     fn draft_relative_path(active_path: &str) -> Result<String> {
-        // Draft input may already be canonical or may be a short planning-relative path; both normalize to one safe path.
+        /*
+         * draft input은 canonical active path일 수도 있고 planning-relative short path일 수도 있다.
+         * 두 형태를 하나의 safe relative path로 normalize해야 stage/load/promote가 같은 file identity를 바라본다.
+         * 이 함수는 slash normalization 뒤 planning prefix를 제거하고, 마지막에는 workspace escape guard를 통과시킨다.
+         */
         let normalized = active_path.replace('\\', "/");
         let normalized = normalized.trim_start_matches("./");
         let relative_path = normalized
@@ -164,7 +172,7 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 
     fn canonical_draft_active_path(active_path: &str) -> Result<String> {
-        // Promotion code expects active paths to be in the canonical planning namespace.
+        // promotion code는 active path가 canonical planning namespace에 있다고 가정하므로 draft-relative path를 다시 prefix한다.
         Ok(format!(
             ".codex-exec-loop/planning/{}",
             Self::draft_relative_path(active_path)?
@@ -176,7 +184,7 @@ impl FilesystemPlanningWorkspaceAdapter {
         root_directory: &Path,
         records: &mut Vec<PlanningDraftLoadFileRecord>,
     ) -> Result<()> {
-        // Recursive draft loading reconstructs active paths from staged file locations for review/promotion UI.
+        // recursive draft load는 staged file 위치에서 active path를 재구성해 review/promotion UI가 원래 planning file을 표시하게 한다.
         for entry in fs::read_dir(directory)
             .with_context(|| format!("failed to read {}", directory.display()))?
         {
@@ -214,7 +222,7 @@ impl FilesystemPlanningWorkspaceAdapter {
     }
 
     fn draft_sort_order(active_path: &str) -> (usize, &str) {
-        // Known planning files appear first in a stable semantic order; extra files sort after them by path.
+        // 알려진 planning file은 semantic order로 먼저 보이고, extra file은 그 뒤에서 path 기준으로 안정 정렬된다.
         let order = ACTIVE_PLANNING_FILE_PATHS
             .iter()
             .position(|candidate| *candidate == active_path)
@@ -225,9 +233,10 @@ impl FilesystemPlanningWorkspaceAdapter {
 
 fn normalize_workspace_relative_path(path: &str, context: &str) -> Result<String> {
     /*
-     * Every externally supplied planning path passes through this guard before touching the filesystem.
-     * It rejects absolute paths, Windows drive roots, and parent traversal so draft/replace/remove operations
-     * cannot escape the selected workspace root.
+     * 외부에서 들어온 planning relative path는 filesystem을 만지기 전에 반드시 이 guard를 통과한다.
+     * absolute path, Windows drive root, parent traversal을 모두 거부해 draft/replace/remove operation이 선택된
+     * workspace root 밖으로 빠져나가지 못하게 한다. service는 planning-relative vocabulary를 다루고,
+     * adapter는 그 vocabulary가 실제 OS path로 바뀌기 직전의 안전성을 책임진다.
      */
     let normalized = path.trim().replace('\\', "/");
     if normalized.is_empty()
