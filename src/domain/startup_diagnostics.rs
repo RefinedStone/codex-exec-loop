@@ -58,6 +58,12 @@ impl StartupDiagnostics {
      * length를 함께 표시해 어떤 embedded schema가 들어갔는지 startup 화면과 로그만 보고도 확인할 수 있다.
      */
     pub fn bundled_schema_snapshot_label() -> String {
+        /*
+         * The schema file itself is embedded at compile time, while this label is a
+         * runtime-facing breadcrumb. Including both path and byte length gives support
+         * logs enough information to identify which protocol snapshot the binary was
+         * built against even when the source tree is not present on disk.
+         */
         format!(
             "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({} bytes)",
             BUNDLED_SCHEMA_SNAPSHOT_CONTENTS.len()
@@ -69,6 +75,11 @@ impl StartupDiagnostics {
      * 남기고, codex binary/workspace/initialize/account 네 필수 gate만 모두 true여야 한다.
      */
     pub fn can_continue(&self) -> bool {
+        /*
+         * Warnings intentionally do not participate in the gate. The startup overlay
+         * can surface degraded-but-usable states, but prompt submission should be
+         * blocked only when one of the four hard dependencies is unavailable.
+         */
         self.codex_binary_ok && self.workspace_ok && self.initialize_ok && self.account_ok
     }
 }
