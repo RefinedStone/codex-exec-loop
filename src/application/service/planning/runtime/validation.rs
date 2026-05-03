@@ -12,17 +12,21 @@ use crate::domain::planning::{
 };
 
 /*
- * PlanningValidationService is the shared application gate before draft, repair, reset, or promotion
- * output is treated as accepted planning authority.
- * It owns validation that needs workspace contracts: JSON syntax and serde shape for task authority,
- * result-output markdown structure, and supporting-file path rules. The domain semantic validator still
- * owns cross-document meaning, such as task/direction relationships, so every planning entrypoint reports
- * errors through one PlanningValidationReport contract.
+ * planning authority가 draft, repair, reset, promotion 결과로 받아들여지기 전 통과하는
+ * application-level validation gate다. 이 계층은 workspace contract를 알아야만 판단할 수
+ * 있는 규칙, 즉 task authority JSON 구문/serde shape, result-output markdown 구조,
+ * direction supporting file sandbox와 존재 여부를 소유한다.
+ *
+ * task와 direction의 의미 관계 같은 cross-document invariant는 domain validator가 계속
+ * 소유한다. 이 서비스가 application 규칙과 domain 규칙을 하나의 `PlanningValidationReport`
+ * 안에 모으는 이유는 TUI, doctor, admin preview, runtime snapshot이 서로 다른 에러 형식을
+ * 다시 매핑하지 않고 같은 issue code를 보여 주게 하기 위해서다.
  */
 #[derive(Default, Clone)]
 pub struct PlanningValidationService;
 
-// Template markers in result-output.md are warnings, not hard blockers, because an operator may still be editing copy.
+// result-output.md의 template marker는 hard blocker가 아니라 warning이다. operator가 아직
+// 문구를 다듬는 중일 수 있으므로 worker output contract 자체가 비어 있거나 깨진 경우와 구분한다.
 const PLACEHOLDER_MARKERS: &[&str] = &[
     "{{", "}}", "todo", "tbd", "<replace", "[replace", "<fill", "[fill",
 ];
@@ -37,11 +41,10 @@ impl PlanningValidationService {
         files: PlanningWorkspaceFiles<'_>,
     ) -> PlanningValidationResult {
         /*
-         * Validation collects as many independent issues as possible in one pass.
-         * Parse failures are added to the report instead of short-circuiting the whole flow; later phases
-         * receive only documents that were successfully parsed, which lets editors and doctor reports show
-         * syntax, structure, markdown, and semantic problems together without feeding invalid authority into
-         * the domain validator.
+         * validation은 한 번의 pass에서 독립적인 문제를 최대한 모은다. parse failure도 즉시
+         * return하지 않고 report에 적재하며, 이후 단계에는 성공적으로 parse된 document만 넘긴다.
+         * 이 방식 덕분에 editor/doctor는 syntax, 구조, markdown, semantic 문제를 한 화면에
+         * 보여 주면서도 invalid authority를 domain validator에 억지로 먹이지 않는다.
          */
         let mut report = PlanningValidationReport::new();
         let directions = Some(files.directions.clone());
@@ -51,7 +54,8 @@ impl PlanningValidationService {
             self.parse_task_authority(task_authority_value, &mut report)
         });
         self.validate_result_output_markdown(files.result_output_markdown, &mut report);
-        // Semantic validation is intentionally last so it works from parsed domain documents only.
+        // semantic validation은 의도적으로 마지막이다. 앞 단계에서 serde domain document로
+        // 낮아진 값만 받아 task/direction 관계, graph, version 의미를 검증하게 한다.
         PlanningSemanticValidationService::new().validate(
             directions.as_ref(),
             task_authority.as_ref(),
@@ -70,7 +74,9 @@ impl PlanningValidationService {
         task_authority_json: &str,
         report: &mut PlanningValidationReport,
     ) -> Option<Value> {
-        // First parse isolates raw JSON syntax problems before any domain-schema assumptions are applied.
+        // 첫 번째 parse는 raw JSON 구문 문제만 격리한다. 이 단계에서는 versioned task
+        // schema를 아직 가정하지 않으므로 operator에게 "문서가 JSON으로도 읽히지 않는다"는
+        // 가장 낮은 수준의 실패를 분리해 보고할 수 있다.
         match serde_json::from_str(task_authority_json) {
             Ok(document) => Some(document),
             Err(error) => {
@@ -89,7 +95,8 @@ impl PlanningValidationService {
         task_authority_value: Value,
         report: &mut PlanningValidationReport,
     ) -> Option<TaskAuthorityDocument> {
-        // Second parse lowers syntactically valid JSON into the versioned task-authority domain contract.
+        // 두 번째 parse는 구문상 유효한 JSON을 versioned task-authority domain contract로
+        // 낮춘다. unknown field나 enum mismatch는 여기서 잡혀 accepted authority로 흘러가지 않는다.
         match serde_json::from_value(task_authority_value) {
             Ok(document) => Some(document),
             Err(error) => {
@@ -112,9 +119,10 @@ impl PlanningValidationService {
         F: FnMut(&str) -> bool,
     {
         /*
-         * detail_doc_path is the runtime prompt assembly link from a direction to its expanded instructions.
-         * This check verifies both the planning-docs sandbox rule and existence so admin authoring cannot
-         * promote a direction catalog that points outside the workspace contract or to a missing file.
+         * detail_doc_path는 direction과 확장 지시문을 이어 runtime prompt assembly가 따라가는
+         * 링크다. 여기서는 planning-docs sandbox 규칙과 실제 존재 여부를 함께 검증해 admin
+         * authoring이 workspace contract 밖의 파일이나 누락된 파일을 가리키는 direction catalog를
+         * promote하지 못하게 한다.
          */
         for direction in &direction_catalog.directions {
             let direction_id = direction.id.trim();
@@ -147,9 +155,9 @@ impl PlanningValidationService {
         }
 
         /*
-         * review_and_enqueue makes the queue-idle prompt part of the runtime contract.
-         * Without a prompt path, the hidden worker has no operator-approved instruction source for deriving
-         * follow-up proposals, so the otherwise optional prompt mapping becomes mandatory.
+         * review_and_enqueue는 queue가 비었을 때 hidden worker가 후속 proposal을 만들 수 있게
+         * 하는 정책이다. 이때 prompt_path가 없으면 operator가 승인한 지시 원천 없이 proposal을
+         * 만들게 되므로, 평소에는 optional인 prompt mapping이 이 정책에서는 mandatory가 된다.
          */
         let prompt_path = direction_catalog.queue_idle.prompt_path.trim();
         if direction_catalog.queue_idle.policy == QueueIdlePolicy::ReviewAndEnqueue
@@ -169,7 +177,8 @@ impl PlanningValidationService {
             return;
         }
 
-        // Prompt files use their own sandbox so worker prompt assembly cannot read arbitrary workspace files.
+        // prompt file은 direction detail과 별도 sandbox를 쓴다. worker prompt assembly가 임의의
+        // workspace 파일을 읽지 못하게 하고, queue-idle 지시문을 planning/prompts 아래로 제한한다.
         if !is_valid_planning_markdown_path(prompt_path, PLANNING_PROMPTS_DIRECTORY) {
             report.push_error(
                 PlanningFileKind::Directions,
@@ -196,9 +205,9 @@ impl PlanningValidationService {
         report: &mut PlanningValidationReport,
     ) {
         /*
-         * result-output.md is the runtime-facing instruction file for completed task summaries.
-         * A blank file leaves the worker without an output contract, so this is an error even when
-         * directions and task authority parse successfully.
+         * result-output.md는 완료된 task summary를 어떤 형식으로 남길지 worker에게 알려 주는
+         * runtime-facing instruction 파일이다. 빈 파일은 worker output contract가 없는 상태라
+         * directions와 task authority가 모두 유효해도 error로 취급한다.
          */
         if result_output_markdown.trim().is_empty() {
             report.push_error(
@@ -209,7 +218,8 @@ impl PlanningValidationService {
             return;
         }
 
-        // Preserve line numbers for placeholder warnings while ignoring blank lines for document-shape checks.
+        // placeholder warning은 실제 줄 번호가 중요하지만, document shape 판단에서는 빈 줄이
+        // heading/instruction 구조를 흐리면 안 된다. 그래서 line number와 trimmed text를 함께 보존한다.
         let non_empty_lines = result_output_markdown
             .lines()
             .enumerate()
@@ -226,7 +236,8 @@ impl PlanningValidationService {
         let Some((_, first_line)) = non_empty_lines.first() else {
             return;
         };
-        // Requiring a heading keeps admin preview and prompt fragments aligned on the same section boundary.
+        // 첫 줄 heading 요구는 admin preview와 prompt fragment가 같은 section boundary를 기준으로
+        // result-output 지시문을 다루게 만드는 작은 markdown contract다.
         if !first_line.starts_with('#') {
             report.push_error(
                 PlanningFileKind::ResultOutput,
@@ -235,7 +246,8 @@ impl PlanningValidationService {
             );
         }
 
-        // A heading-only file is valid markdown but not a useful worker instruction contract.
+        // heading만 있는 파일은 markdown으로는 유효하지만 worker가 따를 instruction contract가 아니다.
+        // heading 이후에 최소 한 줄의 실제 지시가 있어야 runtime prompt에 넣을 의미가 생긴다.
         if non_empty_lines
             .iter()
             .skip(1)
@@ -248,7 +260,8 @@ impl PlanningValidationService {
             );
         }
 
-        // Placeholder markers remain warnings so operators can decide whether example copy is intentional.
+        // placeholder marker는 warning으로 남긴다. 예시 문구를 의도적으로 남긴 것인지, 실제 미해결
+        // template인지 operator가 판단할 수 있어야 하므로 accepted authority 자체를 막지는 않는다.
         for (line_number, line) in non_empty_lines {
             if let Some(marker) = placeholder_marker(line) {
                 report.push_warning(
@@ -264,7 +277,8 @@ impl PlanningValidationService {
 }
 
 fn placeholder_marker(line: &str) -> Option<&'static str> {
-    // Case-insensitive matching collapses TODO/todo/TBD variants into one warning code.
+    // 대소문자 차이는 같은 template 위험으로 본다. TODO/todo/TBD 변형을 하나의 warning
+    // code로 접어 adapter가 marker별 분기 없이 같은 repair guidance를 낼 수 있게 한다.
     let normalized = line.to_ascii_lowercase();
     PLACEHOLDER_MARKERS
         .iter()
