@@ -1,12 +1,12 @@
 /*
- * 학습 주석: composition.rs는 planning subsystem의 composition root다. adapter가 넘긴 outbound
- * port 네 개를 shared service와 role-specific dependency bundle로 나누고, 최종적으로 PlanningFeature
- * public facade를 구성한다. 실제 업무 로직은 service/use-case에 두고, 이 파일은 "어떤 객체가 누구를
- * 의존하는가"라는 조립 정책만 책임진다.
+ * composition.rs is the planning subsystem's application-level composition root.
+ * Adapters provide the outbound ports; this file groups them into shared services and role-specific
+ * dependency bundles, then exposes only the PlanningFeature facade. Business rules stay in the services
+ * and use-case facades, while this module owns the dependency graph and construction order.
  */
 use std::sync::Arc;
 
-// 학습 주석: 하위 dependency 모듈은 build 함수가 긴 생성자 목록으로 흐려지지 않도록 역할별 bundle을 만든다.
+// Dependency modules keep role-specific wiring out of the top-level build sequence.
 mod runtime_dependencies;
 mod shared_services;
 mod worker_dependencies;
@@ -33,23 +33,23 @@ use super::use_cases::{
 
 #[derive(Clone)]
 /*
- * 학습 주석: PlanningFeaturePorts는 composition 바깥에서 들어오는 실제 outbound boundary 묶음이다.
- * Arc trait object로 보관해 workspace/runtime/worker/task-tool use case가 같은 repository/authority를
- * 공유하면서도, 각 builder가 필요한 handle만 clone해 가져갈 수 있게 한다.
+ * PlanningFeaturePorts is the only bundle of concrete outbound boundaries accepted by this composition
+ * layer. Each field is an Arc trait object so workspace, runtime, worker, and task-tool use cases share
+ * the same storage/worker handles while each builder clones only the dependencies it needs.
  */
 pub(super) struct PlanningFeaturePorts {
-    // 학습 주석: workspace port는 planning 파일 bootstrap/reset/doctor가 실제 filesystem 또는 storage에 닿는 경계다.
+    // Workspace IO supports bootstrap, reset, doctor, and supporting-file validation flows.
     workspace: Arc<dyn PlanningWorkspacePort>,
-    // 학습 주석: task repository는 mutable task authority 저장소로, task tool과 authoring services가 공유한다.
+    // Task repository owns mutable task authority and commit conflict handling.
     task_repository: Arc<dyn PlanningTaskRepositoryPort>,
-    // 학습 주석: authority port는 runtime snapshot, queue projection, distributor state처럼 accepted DB authority를 읽고 쓴다.
+    // Authority port backs accepted runtime snapshots, queue projection, and distributor state.
     authority: Arc<dyn PlanningAuthorityPort>,
-    // 학습 주석: worker port는 hidden planning worker 실행을 외부 adapter로 넘기는 outbound boundary다.
+    // Worker port delegates hidden planning-worker execution to the outbound adapter.
     worker: Arc<dyn PlanningWorkerPort>,
 }
 
 impl PlanningFeaturePorts {
-    // 학습 주석: public feature 생성자의 긴 인자 목록을 이름 있는 port bundle로 바꾸는 얇은 조립 입구다.
+    // Constructor turns the public feature inputs into a named bundle before dependency splitting starts.
     pub(super) fn new(
         workspace: Arc<dyn PlanningWorkspacePort>,
         task_repository: Arc<dyn PlanningTaskRepositoryPort>,
@@ -66,24 +66,25 @@ impl PlanningFeaturePorts {
 }
 
 /*
- * 학습 주석: PlanningFeatureComposition은 feature.rs가 내부 service graph를 직접 알지 않게 하는
- * builder다. 새 planning use case가 생기면 이 composition root와 필요한 dependency bundle에만
- * wiring이 추가되고, inbound adapter는 PlanningFeature facade만 계속 사용한다.
+ * PlanningFeatureComposition prevents feature.rs and inbound adapters from knowing the internal service
+ * graph. New planning capabilities add wiring here and in the relevant dependency bundle, while callers
+ * continue to use the stable PlanningFeature facade.
  */
 pub(super) struct PlanningFeatureComposition {
     ports: PlanningFeaturePorts,
 }
 
 impl PlanningFeatureComposition {
-    // 학습 주석: composition은 port ownership을 받아 build 시점에 dependency graph를 한 번만 펼친다.
+    // The composition object owns the port bundle until build consumes it into the final feature graph.
     pub(super) fn new(ports: PlanningFeaturePorts) -> Self {
         Self { ports }
     }
 
     /*
-     * 학습 주석: build는 planning feature의 service graph를 만드는 핵심 순서다. shared service를 먼저
-     * 만들고, workspace/runtime/task-tool은 clone 가능한 handle만 받아 생성한다. 마지막 worker bundle은
-     * 남은 ports/services를 value로 소비해 composition pass가 끝났음을 드러낸다.
+     * build defines the service graph order for the whole planning feature.
+     * Shared services are created first, workspace/runtime/task-tool facades receive borrowed cloneable
+     * handles, and the worker dependency bundle consumes the remaining ports/services by value to show
+     * that no more wiring should happen after the PlanningFeature is assembled.
      */
     pub(super) fn build(self) -> PlanningFeature {
         let services = PlanningSharedServices::new(&self.ports);
@@ -94,19 +95,19 @@ impl PlanningFeatureComposition {
             PlanningTaskToolUseCaseBuilder::new(&self.ports, &services).build();
         let worker_dependencies = PlanningWorkerUseCaseDependencies::new(self.ports, services);
         PlanningFeature {
-            // 학습 주석: workspace facade는 init/reset/doctor/directions maintenance 같은 operator 관리 흐름을 묶는다.
+            // Workspace facade groups operator maintenance flows: init, reset, doctor, and directions.
             workspace: PlanningWorkspaceUseCaseBuilder::new(workspace_dependencies).build(),
-            // 학습 주석: runtime facade는 TUI/app-server가 읽는 planning snapshot과 queue-driven follow-up 판단을 제공한다.
+            // Runtime facade serves TUI/app-server snapshots and queue-driven follow-up decisions.
             runtime: PlanningRuntimeUseCaseBuilder::new(runtime_dependencies).build(),
-            // 학습 주석: task_tool facade는 LLM/tool payload를 task repository mutation으로 제한해 적용한다.
+            // Task-tool facade confines LLM/tool payloads to task repository mutations.
             task_tool: task_tool_use_cases,
-            // 학습 주석: worker facade는 planning worker prompt/orchestration과 proposal promotion을 담당한다.
+            // Worker facade handles planning-worker prompts, orchestration, and proposal promotion.
             worker: PlanningWorkerUseCaseBuilder::new(worker_dependencies).build(),
         }
     }
 }
 
-// 학습 주석: workspace builder는 operator-facing maintenance services를 하나의 workspace use-case facade로 묶는다.
+// Workspace builder folds operator-facing maintenance services into one use-case facade.
 struct PlanningWorkspaceUseCaseBuilder {
     dependencies: PlanningWorkspaceUseCaseDependencies,
 }
@@ -117,9 +118,9 @@ impl PlanningWorkspaceUseCaseBuilder {
     }
 
     /*
-     * 학습 주석: init/reset/doctor는 같은 bootstrap/validation/prompt stack을 서로 다른 operator command로
-     * 노출한다. 여기서 clone과 move를 정리해 각 service가 필요한 shared helper만 갖도록 하고, facade 밖으로
-     * 개별 service 타입이 새지 않게 한다.
+     * init/reset/doctor expose the same bootstrap, validation, and prompt stack through different
+     * operator commands. This builder localizes clone/move decisions so each service gets only its helper
+     * set and individual service types do not leak past the workspace facade.
      */
     fn build(self) -> PlanningWorkspaceUseCases {
         PlanningWorkspaceUseCases::new(
@@ -143,7 +144,7 @@ impl PlanningWorkspaceUseCaseBuilder {
     }
 }
 
-// 학습 주석: runtime builder는 snapshot/follow-up intake 기능을 runtime facade 하나로 압축한다.
+// Runtime builder compresses snapshot reads and follow-up intake into one runtime facade.
 struct PlanningRuntimeUseCaseBuilder {
     dependencies: PlanningRuntimeUseCaseDependencies,
 }
@@ -153,7 +154,7 @@ impl PlanningRuntimeUseCaseBuilder {
         Self { dependencies }
     }
 
-    // 학습 주석: runtime use case는 내부 service를 노출하지 않고 facade 수준의 read와 task intake만 제공한다.
+    // The runtime facade exposes reads and task intake without leaking internal service ownership.
     fn build(self) -> PlanningRuntimeUseCases {
         PlanningRuntimeUseCases::new(
             self.dependencies.runtime_facade,
@@ -162,7 +163,7 @@ impl PlanningRuntimeUseCaseBuilder {
     }
 }
 
-// 학습 주석: worker builder는 hidden worker orchestration과 promotion service를 하나의 facade 뒤에 묶는다.
+// Worker builder hides planning-worker orchestration and proposal promotion behind one facade.
 struct PlanningWorkerUseCaseBuilder {
     dependencies: PlanningWorkerUseCaseDependencies,
 }
@@ -172,7 +173,7 @@ impl PlanningWorkerUseCaseBuilder {
         Self { dependencies }
     }
 
-    // 학습 주석: worker facade는 direction authoring, worker turn orchestration, proposal promotion을 함께 제공한다.
+    // Direction authoring, worker turn orchestration, and proposal promotion share the worker use-case surface.
     fn build(self) -> PlanningWorkerUseCases {
         PlanningWorkerUseCases::new(
             self.dependencies.directions,
@@ -182,15 +183,16 @@ impl PlanningWorkerUseCaseBuilder {
     }
 }
 
-// 학습 주석: task-tool builder는 repository와 priority queue만 필요하므로 별도 작은 builder로 둔다.
+// Task-tool builder stays separate because it only needs repository mutation and queue projection helpers.
 struct PlanningTaskToolUseCaseBuilder {
     task_tool: PlanningTaskToolService,
 }
 
 impl PlanningTaskToolUseCaseBuilder {
     /*
-     * 학습 주석: task tool은 worker나 workspace port를 몰라도 된다. composition이 필요한 두 의존성만
-     * 골라 주입해 LLM task mutation boundary가 파일 workspace나 worker 실행 경계로 새지 않게 한다.
+     * The task tool does not need worker or workspace ports.
+     * Injecting only the repository and priority queue prevents the LLM task mutation boundary from
+     * reaching into file workspace concerns or worker execution concerns.
      */
     fn new(ports: &PlanningFeaturePorts, services: &PlanningSharedServices) -> Self {
         Self {
@@ -201,7 +203,7 @@ impl PlanningTaskToolUseCaseBuilder {
         }
     }
 
-    // 학습 주석: use-case wrapper는 adapter 호출자가 안정적인 PlanningTaskToolUseCases 표면만 보게 한다.
+    // The wrapper gives adapters a stable PlanningTaskToolUseCases surface instead of a raw service.
     fn build(self) -> PlanningTaskToolUseCases {
         PlanningTaskToolUseCases::new(self.task_tool)
     }
