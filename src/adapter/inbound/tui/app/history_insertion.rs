@@ -44,7 +44,11 @@ impl HistoryInsertionMode {
             .filter(|value| !value.is_empty())
             .map(|value| value.to_ascii_lowercase())
         else {
-            // WT_SESSION is a conservative default to avoid scroll-region corruption on Windows.
+            /*
+             * WT_SESSION is a conservative default to avoid scroll-region corruption
+             * on Windows. An explicit env override still wins so manual debugging
+             * can compare both strategies on the same terminal.
+             */
             return if wt_session
                 .map(str::trim)
                 .is_some_and(|value| !value.is_empty())
@@ -166,6 +170,11 @@ fn insert_with_newline_fallback<B: Backend>(
     }
     let suffix_rows = pending_rows.saturating_sub(overflow_pending_rows);
     if suffix_rows > 0 {
+        /*
+         * Suffix rows are the portion that fits directly above the inline viewport.
+         * They are drawn last because all overflow chunks have already expanded the
+         * host scrollback and moved older shell rows out of the way.
+         */
         scroll_terminal_from_bottom(terminal, size.height, suffix_rows)?;
         let destination_y = viewport_top.saturating_sub(suffix_rows);
         draw_buffer_rows_at(terminal, buffer, source_y, suffix_rows, destination_y)?;
@@ -299,6 +308,11 @@ fn rendered_history_buffer_with_height<'a>(
 }
 
 fn history_paragraph<'a>(text: impl Into<Text<'a>>) -> Paragraph<'a> {
+    /*
+     * trim=false is part of the transcript contract: command output, Markdown
+     * code blocks, and indentation-sensitive snippets must not lose trailing
+     * spaces merely because they are moving into host scrollback.
+     */
     Paragraph::new(text).wrap(Wrap { trim: false })
 }
 
@@ -344,6 +358,10 @@ fn sentinel_line() -> Line<'static> {
     Line::from(Span::styled("X", sentinel_style()))
 }
 fn sentinel_style() -> Style {
+    /*
+     * The sentinel uses an unlikely fg/bg pair rather than text comparison. Real
+     * history can contain any glyph, but it should not carry this synthetic style.
+     */
     Style::default().fg(sentinel_fg()).bg(sentinel_bg())
 }
 fn sentinel_fg() -> Color {
@@ -509,6 +527,11 @@ mod tests {
     }
     #[test]
     fn newline_fallback_preserves_shell_rows_by_scrolling_before_insert() {
+        /*
+         * The fallback must behave like scrollback append, not like repainting the
+         * live shell viewport. Seeding visible shell rows before insertion proves
+         * history creation does not erase prompt-owned content.
+         */
         let mut terminal = tui_testkit::inline_history_vt100_terminal(
             InlineHistoryRenderMode::HostScrollback,
             30,
@@ -551,6 +574,11 @@ mod tests {
     }
     #[test]
     fn newline_fallback_keeps_hangul_graphemes_compact() {
+        /*
+         * Wide cells are the easiest place for a buffer-copy fallback to leak
+         * hidden continuation cells as spaces. Hangul text keeps that regression
+         * visible without depending on emoji rendering differences.
+         */
         let mut terminal = tui_testkit::inline_history_vt100_terminal(
             InlineHistoryRenderMode::HostScrollback,
             40,
