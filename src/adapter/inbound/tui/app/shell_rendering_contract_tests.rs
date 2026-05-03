@@ -140,6 +140,11 @@ fn inline_main_buffer_tail_anchors_below_transcript_area_after_history() {
 }
 #[test]
 fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently() {
+    /*
+     * Inline mode uses the main terminal buffer, so a transient ASCII banner would
+     * become permanent host scrollback noise. The fixture turns the flag on to
+     * prove readiness copy replaces the banner before the first prompt frame.
+     */
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = true;
@@ -183,6 +188,11 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
 }
 #[test]
 fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
+    /*
+     * TestBackend retains previous cells unless the renderer clears them. A live
+     * agent row is rendered first, then removed from state, so the second frame
+     * must actively blank the old row instead of relying on shorter replacement text.
+     */
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
     tui_testkit::set_live_agent_message(&mut app, "ghost line should disappear");
@@ -268,6 +278,11 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
 // popup frames; these tests pin each overlay family to that composition.
 #[test]
 fn inline_startup_inspection_replaces_transcript_panel() {
+    /*
+     * Inline inspections are not popups: they occupy the transcript region inside
+     * the shell flow. The negative border/header assertions keep this path from
+     * accidentally regressing to alternate-screen popup chrome.
+     */
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -315,6 +330,11 @@ fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
 }
 #[test]
 fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navigation() {
+    /*
+     * Attach-only catalogs have enough identity to reattach by handle but not
+     * enough metadata for browser navigation. Rendering this tier keeps the
+     * session overlay honest about what controls are available.
+     */
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -389,6 +409,11 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
 // frame render.
 #[test]
 fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
+    /*
+     * The tail summary is intentionally tested without full-frame rendering so
+     * parallel readiness, supervisor, and distributor copy can be verified as a
+     * compact status contract independent of layout height.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::append_agent_history_message(
@@ -441,6 +466,11 @@ fn inline_tail_reports_partial_handle_based_session_catalog_status() {
 // across independently-built presentation views.
 #[test]
 fn overlay_family_uses_shared_akra_chrome_tokens() {
+    /*
+     * Overlay views are built by separate modules, so shared chrome cannot be
+     * assumed from one renderer. This test samples each view DTO before layout and
+     * verifies the common masthead and key-line accent at the data boundary.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let startup = shell_presentation::build_startup_overlay_view(&app);
