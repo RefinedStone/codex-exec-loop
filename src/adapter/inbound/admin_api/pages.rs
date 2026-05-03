@@ -247,7 +247,7 @@ pub(super) async fn controls_page(
     jar: CookieJar,
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Controls intentionally render only overview-level state plus mutation forms for workspace-wide operations.
+    // controls page는 workspace-wide operation만 다루므로 overview-level state와 mutation form context만 렌더링한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let overview = state
         .facade
@@ -273,9 +273,10 @@ pub(super) async fn editor_page(
     Query(query): Query<EditorQuery>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Editor identity is split across path and query by design: draft_name names the workspace file,
-     * while kind and optional direction_id explain which planning context can interpret it. That
-     * keeps URLs stable across queue, full-planning, and direction-detail draft types.
+     * editor identity는 의도적으로 path와 query에 나뉜다.
+     * draft_name은 workspace file 이름이고, kind와 optional direction_id는 그 파일을 어떤 planning context에서 해석할지
+     * 설명한다. 이렇게 하면 queue, full-planning, direction-detail draft가 같은 editor route를 공유하면서도
+     * service가 load branch를 정확히 선택할 수 있다.
      */
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let session = state
@@ -301,9 +302,9 @@ pub(super) async fn create_draft_page(
     Form(form): Form<CreateDraftForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Creating a draft immediately redirects to the canonical editor URL returned by the facade.
-     * The browser never has to construct draft file names itself; it only preserves kind and
-     * direction_id in the URL so later saves load the same planning branch.
+     * draft 생성은 곧바로 facade가 만든 canonical editor URL로 redirect한다.
+     * browser는 draft file name을 직접 조립하지 않고, kind와 direction_id만 URL에 보존한다.
+     * 이후 save/validate/promote는 같은 path/query identity를 다시 읽어 같은 planning branch의 session을 갱신한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let session = state
@@ -327,9 +328,10 @@ pub(super) async fn save_draft_page(
     Form(form): Form<DraftMutationForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Save supports both full page posts and HTMX partial updates. The same facade call persists the
-     * submitted editor fields; only the response shape changes so inline editor status can refresh
-     * without redrawing the surrounding shell.
+     * save는 full page POST와 HTMX partial update를 같은 mutation으로 처리한다.
+     * facade call은 submitted editor field를 저장하고 refreshed session을 돌려준다.
+     * transport 차이는 response shape뿐이다. HTMX는 draft status fragment만 다시 그리고, 일반 form submit은 같은 session으로
+     * editor page 전체를 다시 렌더링한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let csrf_token = form.csrf_token.clone();
@@ -360,9 +362,9 @@ pub(super) async fn validate_draft_page(
     Form(form): Form<DraftMutationForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Browser validation first saves the posted draft payload for the same reason as the JSON path:
-     * the validation report should describe exactly what the operator submitted, not the previous
-     * file contents left on disk.
+     * browser validation은 JSON path와 같이 posted draft payload를 먼저 저장한다.
+     * validation report가 disk에 남아 있던 이전 file content가 아니라 operator가 방금 제출한 form field를 설명해야 하기 때문이다.
+     * HTMX와 full page response가 같은 session을 받으므로 inline status와 editor shell의 validation copy도 같은 source를 쓴다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let csrf_token = form.csrf_token.clone();
@@ -392,9 +394,9 @@ pub(super) async fn promote_draft_page(
     Form(form): Form<DraftMutationForm>,
 ) -> std::result::Result<Response, StatusCode> {
     /*
-     * Promotion returns to the editor rather than redirecting away because failed validation is part
-     * of the operator loop. The notice is derived from the facade result, while the refreshed session
-     * carries detailed validation and file state into the template.
+     * promotion은 실패 가능성이 operator loop의 일부라서 다른 page로 redirect하지 않고 editor를 다시 렌더링한다.
+     * facade result는 promoted file count와 validation report를 제공하고, handler는 그것을 browser notice로 압축한다.
+     * detailed validation과 file state는 refreshed session 안에 남겨 template이 같은 editor context에서 표시한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
     let csrf_token = form.csrf_token.clone();
@@ -424,7 +426,7 @@ pub(super) async fn reset_page(
     jar: CookieJar,
     Form(form): Form<ResetForm>,
 ) -> std::result::Result<Response, StatusCode> {
-    // Reset shares the same text-to-target parser as api.rs so HTML and JSON controls cannot diverge.
+    // reset은 api.rs와 같은 text-to-target parser를 써서 HTML control과 JSON control의 accepted label이 갈라지지 않게 한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let target = parse_reset_target(&form.target)?;
     state
@@ -438,7 +440,7 @@ fn page_mutation_request(
     draft_name: String,
     form: DraftMutationForm,
 ) -> PlanningAdminDraftMutationRequest {
-    // Convert the flattened browser form into the exact draft mutation request used by api.rs.
+    // flattened browser form을 api.rs가 쓰는 것과 같은 draft mutation request shape로 변환한다.
     PlanningAdminDraftMutationRequest {
         draft_name,
         kind: form.kind,
@@ -451,10 +453,10 @@ pub(super) fn extract_file_updates(
     values: HashMap<String, String>,
 ) -> Vec<PlanningAdminDraftFileUpdate> {
     /*
-     * DraftMutationForm flattens every dynamic editor input into a HashMap. Only file_* fields are
-     * admitted here, and only keys known to PlanningAdminFileKey survive. That prevents unrelated
-     * form controls from becoming arbitrary file updates while keeping the template free to render
-     * different draft kinds with different editable file sets.
+     * DraftMutationForm은 dynamic editor input을 모두 HashMap으로 flatten한다.
+     * 여기서는 file_* field만 후보로 받고, 그중 PlanningAdminFileKey가 아는 key만 살아남는다.
+     * 이 필터가 없으면 stale browser field, hidden control, 임의 form input이 arbitrary file update로 승격될 수 있다.
+     * 동시에 template은 draft kind별로 다른 editable file set을 자유롭게 렌더링할 수 있다.
      */
     values
         .into_iter()
@@ -472,7 +474,7 @@ pub(super) fn extract_file_updates(
 }
 
 pub(super) fn nav_for_kind(kind: PlanningAdminDraftKind) -> &'static str {
-    // The editor sits under the nav area that owns the planning concept being edited.
+    // editor는 현재 수정 중인 planning concept을 소유한 nav 영역 아래에 놓인다.
     match kind {
         PlanningAdminDraftKind::QueueIdlePrompt | PlanningAdminDraftKind::DirectionDetail => {
             "directions"
@@ -488,8 +490,9 @@ fn draft_editor_location(
     notice: Option<&str>,
 ) -> String {
     /*
-     * Redirect targets are built centrally so draft identity, kind, optional direction scope, and
-     * transient notice encoding stay consistent across create/save/validate/promote flows.
+     * draft editor redirect target은 한곳에서 만든다.
+     * draft identity, kind, optional direction scope, transient notice encoding이 create/save/validate/promote flow마다
+     * 조금씩 달라지면 같은 draft session을 다른 URL로 가리키는 문제가 생긴다.
      */
     let mut location = format!(
         "/admin/drafts/{}?kind={}",
@@ -514,7 +517,7 @@ fn render_editor_page(
     notice: Option<String>,
     session: PlanningAdminSessionView,
 ) -> std::result::Result<Response, StatusCode> {
-    // Centralize editor template assembly so every draft action preserves CSRF, nav, and workspace context.
+    // 모든 draft action이 CSRF, nav, workspace context를 같은 방식으로 보존하도록 editor template assembly를 중앙화한다.
     render_html(
         jar,
         EditorTemplate {
