@@ -5,15 +5,22 @@ use crate::domain::planning::{
 };
 
 /*
-학습 주석: planning draft editor UI state는 TUI overlay 내부에서 staged planning files를
-메모리 buffer로 편집하고, 저장/검증/승격 전에 close guard를 제공하는 presentation state입니다.
-이 테스트 파일은 파일 시스템을 직접 건드리지 않고 buffer dirty state, cursor editing, validation
-report 교체, close confirmation state machine만 고정합니다.
+planning draft editor UI state는 application service가 만든 staged planning files를 TUI overlay 안의
+in-memory buffers로 들고 있다. 실제 파일 쓰기, validation 실행, promote는 controller/service가 맡고,
+이 state는 "현재 편집 중인 buffer", "저장 전 dirty 여부", "마지막 validation report", "닫기 전 risk"를
+화면과 key handler가 같은 source of truth로 읽게 한다.
+
+이 테스트 파일은 filesystem을 건드리지 않고 그 presentation state machine만 고정한다. buffer별 dirty
+isolation, save 결과 반영, close confirmation의 2단계 handshake, shell-style 편집 primitive, scroll pinning
+계약이 여기서 깨지면 renderer copy와 controller action이 서로 다른 draft 상태를 보게 된다.
 */
 
 fn sample_session() -> PlanningDraftEditorSession {
-    // 학습 주석: 두 개의 editable file fixture를 둔 이유는 현재 buffer만 dirty해지고 file
-    // selection을 바꿔도 다른 buffer의 clean 상태가 유지되는가를 검증하기 위해서입니다.
+    /*
+     * 두 개의 editable file fixture는 multi-file draft session의 핵심 위험을 노출한다.
+     * 현재 buffer만 dirty해지고 file selection을 바꿔도 다른 buffer의 clean 상태가 유지되어야,
+     * collect_editable_files가 save payload를 만들 때 "수정된 파일"과 "같이 열린 파일"을 구분할 수 있다.
+     */
     PlanningDraftEditorSession {
         draft_name: "bootstrap-test".to_string(),
         draft_directory: "/tmp/bootstrap-test".to_string(),
@@ -35,8 +42,10 @@ fn sample_session() -> PlanningDraftEditorSession {
 }
 
 fn single_buffer_session(body: &str) -> PlanningDraftEditorSession {
-    // 학습 주석: cursor movement와 word deletion 테스트는 multi-file selection noise가 필요 없으므로
-    // 하나의 buffer만 가진 session으로 editor primitive의 동작을 좁혀 검증합니다.
+    /*
+     * cursor movement와 word deletion 테스트는 multi-file selection noise가 필요 없다.
+     * 단일 buffer session을 쓰면 editor primitive가 line/cursor/scroll state만 어떻게 바꾸는지 좁게 검증할 수 있다.
+     */
     PlanningDraftEditorSession {
         draft_name: "bootstrap-test".to_string(),
         draft_directory: "/tmp/bootstrap-test".to_string(),
@@ -51,8 +60,11 @@ fn single_buffer_session(body: &str) -> PlanningDraftEditorSession {
 
 #[test]
 fn editing_buffer_marks_it_dirty_and_preserves_file_switching() {
-    // 학습 주석: draft editor는 여러 staged file을 동시에 들고 있습니다. 한 buffer 편집이 전체
-    // session save payload에는 반영되어야 하지만, 다른 buffer dirty flag를 오염시키면 안 됩니다.
+    /*
+     * draft editor는 여러 staged file을 동시에 연다. 한 buffer 편집은 전체 session save payload에는
+     * 반영되어야 하지만, 다른 buffer dirty flag를 오염시키면 안 된다. 이 계약이 깨지면 footer의 dirty
+     * label과 실제 save payload가 서로 다른 파일 상태를 말하게 된다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(sample_session());
 
@@ -76,8 +88,11 @@ fn editing_buffer_marks_it_dirty_and_preserves_file_switching() {
 
 #[test]
 fn save_result_clears_dirty_flags_and_updates_validation_report() {
-    // 학습 주석: save action은 현재 buffer 내용을 application service에 넘긴 뒤, 성공하면 UI의
-    // dirty flag를 지우고 새 validation report를 화면의 source of truth로 교체합니다.
+    /*
+     * save action은 controller가 collect_editable_files를 service에 넘긴 뒤 성공 결과로 돌아온다.
+     * UI state는 그 순간 dirty flags를 지우고 새 validation report를 화면의 source of truth로 교체해야 한다.
+     * 그렇지 않으면 editor footer가 마지막 저장본과 현재 buffer 상태를 섞어 보여 준다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(sample_session());
     state.insert_character('#');
@@ -106,8 +121,11 @@ fn save_result_clears_dirty_flags_and_updates_validation_report() {
 
 #[test]
 fn request_close_requires_confirmation_for_dirty_buffers() {
-    // 학습 주석: dirty draft를 바로 닫으면 staged edit가 사라집니다. 첫 close는 risk를 표시하고,
-    // 같은 risk가 pending인 두 번째 close만 실제 confirm으로 통과하는 2-step guard를 고정합니다.
+    /*
+     * dirty draft를 바로 닫으면 아직 service에 저장하지 않은 in-memory edit가 사라진다.
+     * 첫 close는 risk를 표시하고 같은 risk가 pending인 두 번째 close만 confirm으로 통과하는
+     * 2-step guard를 고정한다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(sample_session());
     state.insert_character('#');
@@ -132,8 +150,11 @@ fn request_close_requires_confirmation_for_dirty_buffers() {
 
 #[test]
 fn request_close_requires_confirmation_for_invalid_saved_draft() {
-    // 학습 주석: 저장되어 dirty하지 않더라도 validation error가 남은 draft는 승격 가능한 상태가
-    // 아닙니다. close guard가 unsaved뿐 아니라 invalid saved draft도 막는지 확인합니다.
+    /*
+     * 저장되어 dirty하지 않더라도 validation error가 남은 draft는 promote 가능한 accepted state가 아니다.
+     * close guard는 unsaved edit뿐 아니라 "디스크에 남아 있지만 아직 고쳐야 하는 staged draft"도 operator가
+     * 인지하고 닫게 해야 한다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(sample_session());
     let mut invalid_report = PlanningValidationReport::default();
@@ -158,8 +179,10 @@ fn request_close_requires_confirmation_for_invalid_saved_draft() {
 
 #[test]
 fn editing_after_close_warning_clears_pending_confirmation() {
-    // 학습 주석: close confirmation은 특정 risk snapshot에 대한 승인입니다. 사용자가 다시 cursor를
-    // 움직이거나 편집을 시작하면 risk context가 바뀌므로 pending confirmation을 무효화해야 합니다.
+    /*
+     * close confirmation은 특정 risk snapshot에 대한 승인이다. 사용자가 다시 cursor를 움직이거나 편집을
+     * 시작하면 close intent의 맥락이 바뀌므로 pending confirmation을 무효화해야 한다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(sample_session());
     state.insert_character('#');
@@ -172,8 +195,10 @@ fn editing_after_close_warning_clears_pending_confirmation() {
 
 #[test]
 fn delete_previous_word_removes_the_full_word_before_cursor() {
-    // 학습 주석: Ctrl-W 계열 편집은 draft editor에서도 shell input과 비슷하게 동작해야 합니다.
-    // 한 줄 안에서 직전 단어만 제거하고 cursor를 삭제 지점으로 되돌리는 계약을 고정합니다.
+    /*
+     * Ctrl-W 계열 편집은 draft editor에서도 shell input과 비슷하게 동작해야 한다.
+     * 한 줄 안에서 직전 단어만 제거하고 cursor를 삭제 지점으로 되돌리는 계약을 고정한다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(single_buffer_session("alpha beta"));
     for _ in 0..10 {
@@ -188,8 +213,10 @@ fn delete_previous_word_removes_the_full_word_before_cursor() {
 
 #[test]
 fn delete_previous_word_trims_whitespace_and_respects_newline_boundaries() {
-    // 학습 주석: word deletion은 단어 앞 공백을 정리하되 줄 경계를 넘어서 이전 line을 합치지
-    // 않습니다. markdown/JSON draft에서 줄 구조를 우발적으로 깨지 않기 위한 편집 규칙입니다.
+    /*
+     * word deletion은 단어 앞 공백을 정리하되 줄 경계를 넘어 이전 line을 합치지 않는다.
+     * markdown/JSON draft에서 구조적 줄 경계를 우발적으로 깨지 않기 위한 편집 규칙이다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(single_buffer_session("alpha\nbeta gamma"));
     for _ in 0..16 {
@@ -204,8 +231,10 @@ fn delete_previous_word_trims_whitespace_and_respects_newline_boundaries() {
 
 #[test]
 fn sync_editor_scroll_keeps_cursor_visible_without_repinning_every_move() {
-    // 학습 주석: editor scroll은 cursor를 보이게 해야 하지만, cursor가 viewport 안에 있는 동안
-    // 매 이동마다 scroll을 다시 pinning하면 화면이 불필요하게 튑니다.
+    /*
+     * editor scroll은 cursor를 보이게 해야 하지만, cursor가 viewport 안에 있는 동안 매 이동마다 scroll을
+     * 다시 pinning하면 화면이 불필요하게 튄다. 이 테스트는 "밖으로 나갈 때만 따라가기" 동작을 고정한다.
+     */
     let mut state = PlanningDraftEditorUiState::default();
     state.open_session(single_buffer_session("1\n2\n3\n4\n5\n6"));
     for _ in 0..4 {
