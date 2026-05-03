@@ -87,7 +87,11 @@ impl CodexAppServerAdapter {
         client_name: impl Into<String>,
         client_version: impl Into<String>,
     ) -> Self {
-        // Adapter construction snapshots env-driven timeout and execution policy so one process run uses consistent settings.
+        /*
+         * Adapter construction snapshots env-driven timeout and execution policy once.
+         * That keeps a single TUI process from changing approval/sandbox behavior in
+         * the middle of shared runtime reuse or hidden worker launches.
+         */
         Self::with_configs(
             client_name,
             client_version,
@@ -114,7 +118,11 @@ impl CodexAppServerAdapter {
     }
 
     fn open_connection(&self) -> Result<AppServerConnection> {
-        // Every connection performs its own initialize handshake; shared runtime decides whether to reuse or recreate it.
+        /*
+         * open_connection only spawns the child and wires client metadata. Callers
+         * still perform initialize so shared, isolated fallback, and isolated stream
+         * paths can attach their own lifecycle metadata and warnings.
+         */
         AppServerConnection::spawn(
             self.client_name.clone(),
             self.client_version.clone(),
@@ -269,7 +277,12 @@ impl CodexAppServerAdapter {
     where
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
-        // Locked shared runtime owns initialize metadata, attachment profile, connection warnings, and retry notices as one batch.
+        /*
+         * The locked runtime is the only path allowed to reuse the shared child. It
+         * returns value, attachment profile, retry notices, and connection warnings as
+         * one batch so callers never combine a response from one process with
+         * diagnostics from another.
+         */
         runtime.ensure_connected(self)?;
         let initialize_detail = runtime.initialize_detail()?.to_string();
         let attachment_profile = runtime.attachment_profile()?;
@@ -297,7 +310,11 @@ impl CodexAppServerAdapter {
     where
         F: FnMut(&mut AppServerConnection, &str) -> Result<T>,
     {
-        // Isolated runtime is used for fallback short requests; it never mutates or resets the shared runtime.
+        /*
+         * Isolated runtime is a pressure-release path for short reads while the shared
+         * child is busy streaming. It intentionally does not mutate shared runtime
+         * state, because the lock holder may still be reducing the authoritative turn.
+         */
         let mut connection = self.open_connection()?;
         let initialize_response = connection.initialize()?;
         let initialize_detail = initialize_detail(&initialize_response);
@@ -319,7 +336,12 @@ impl CodexAppServerAdapter {
     where
         F: FnMut(&mut AppServerConnection) -> Result<()>,
     {
-        // Worker streams use their own child process so they cannot interleave notifications with the user's active turn.
+        /*
+         * Worker streams use their own child process so planning/parallel sub-session
+         * notifications cannot interleave with the user's active conversation stream.
+         * Any warnings are drained locally because hidden workers report meaningful
+         * output through the stream events and worker result reduction.
+         */
         let mut connection = self.open_connection()?;
         connection.initialize()?;
         let result = operation(&mut connection);
@@ -331,7 +353,12 @@ impl CodexAppServerAdapter {
     where
         F: FnMut(&mut AppServerConnection) -> Result<()>,
     {
-        // User-facing streams deliberately hold the shared runtime mutex until turn/completed to preserve line ordering.
+        /*
+         * User-facing streams deliberately hold the shared runtime mutex until
+         * turn/completed. Short requests can still use isolated fallback, but no other
+         * shared caller may consume stdout lines while this stream reducer owns
+         * notification ordering.
+         */
         let mut runtime = self
             .shared_runtime
             .lock()
@@ -349,7 +376,12 @@ impl CodexAppServerAdapter {
         match result {
             Ok(()) => Ok(()),
             Err(error) => {
-                // A stream failure may leave app-server protocol state ambiguous, so the next short request must reconnect.
+                /*
+                 * A stream failure may leave the shared child's protocol state
+                 * ambiguous: there could be unread notifications, partial stderr, or a
+                 * child close in progress. Resetting forces the next short request to
+                 * reconnect and keeps the original stream error visible as a notice.
+                 */
                 runtime.reset();
                 runtime.push_notice(format!(
                     "shared runtime reset after turn stream failure; the next request will reconnect ({error})"
@@ -368,7 +400,12 @@ impl CodexAppServerAdapter {
         effort: Option<ReasoningEffortValue>,
         event_sender: &Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        // Capture interrupt generation before turn/start so only later stop requests interrupt this specific turn.
+        /*
+         * The interrupt generation is sampled before turn/start so a stale stop from a
+         * previous turn cannot cancel the new one. wait_for_turn_stream compares
+         * against this snapshot and translates only later generations into
+         * turn/interrupt.
+         */
         let observed_interrupt_generation = self.turn_interrupt_signal.current_generation();
         let turn_response = connection.start_turn(TurnStartParams {
             thread_id: thread_id.to_string(),
@@ -394,7 +431,11 @@ impl CodexAppServerAdapter {
     }
 
     fn planning_worker_turn_input(&self, prompt: &str) -> Vec<TurnInputItem> {
-        // Skill first, text second: app-server must load the evaluator contract before reading the worker prompt.
+        /*
+         * Skill first, text second: app-server must load the evaluator contract before
+         * interpreting the worker prompt. This is the enforcement point that keeps
+         * hidden planning workers on task-command output instead of free-form prose.
+         */
         vec![
             self.planning_worker_skill_adapter
                 .queue_mutation_skill_input(),
@@ -403,7 +444,11 @@ impl CodexAppServerAdapter {
     }
 
     fn reset_shared_runtime(&self, notice: Option<String>) {
-        // Reset can be called from retry paths; failure to lock means the active stream owns the runtime and will clean up.
+        /*
+         * Reset can be called from retry paths outside the stream owner. If the mutex
+         * is busy, the active stream remains responsible for cleanup; forcing a reset
+         * from here would risk dropping the child while stdout is being reduced.
+         */
         if let Ok(mut runtime) = self.shared_runtime.lock() {
             runtime.reset();
             if let Some(notice) = notice {
@@ -419,7 +464,12 @@ impl CodexAppServerAdapter {
 
 impl CodexAppServerPort for CodexAppServerAdapter {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
-        // Startup context combines app-server initialize detail, auth account status, runtime warnings, and attachment profile.
+        /*
+         * Startup context is the first consumer of the shared runtime batch. It combines
+         * initialize detail, account/auth interpretation, transport warnings, and
+         * attachment profile so startup UI can show whether the process is usable and
+         * what it attached to.
+         */
         let output = self.with_shared_runtime(
             SharedRuntimeRequestKind::StartupChecks,
             |connection, initialize_detail| {
@@ -438,7 +488,11 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 
     fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
-        // Recent sessions are provider-backed because app-server owns the thread catalog and pagination cursor.
+        /*
+         * Recent sessions are provider-backed because app-server owns thread storage,
+         * pagination, and source metadata. This adapter only maps wire records to
+         * SessionSummary and preserves next_cursor for future catalog expansion.
+         */
         let output =
             self.with_shared_runtime(SharedRuntimeRequestKind::RecentSessions, |connection, _| {
                 connection.list_threads(ThreadListParams {
@@ -468,7 +522,11 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
-        // Snapshot reads include historical turns and then protocol.rs projects raw items into domain messages.
+        /*
+         * Snapshot reads include historical turns because resumed sessions need the
+         * same transcript vocabulary as live streams. protocol.rs owns raw item
+         * projection so TUI/application layers never inspect app-server JSON directly.
+         */
         let output = self.with_shared_runtime(
             SharedRuntimeRequestKind::ConversationSnapshot,
             |connection, _| connection.read_thread(thread_id, true),
@@ -480,7 +538,11 @@ impl CodexAppServerPort for CodexAppServerAdapter {
     }
 
     fn request_stop_all_sessions(&self) -> Result<()> {
-        // Stop is broadcast by generation counter; active stream loops decide whether they observed a newer generation.
+        /*
+         * Stop is broadcast by generation counter rather than by holding a list of
+         * active connections. Each stream loop decides whether it started before the
+         * new generation and sends at most one interrupt for its own turn id.
+         */
         self.request_turn_interrupt_for_all_streams();
         Ok(())
     }
@@ -500,7 +562,12 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         prompt: &str,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        // Existing-thread streaming reattaches first so app-server restores thread state before a new turn is started.
+        /*
+         * Existing-thread streaming reattaches before turn/start so app-server restores
+         * thread context and execution policy on the server side. The reattach
+         * attachment event tells the terminal bridge that this stream is bound to an
+         * existing app-server session, not a freshly created thread.
+         */
         let result = self.with_streaming_runtime(|connection| {
             connection.resume_thread(ThreadResumeParams {
                 thread_id: thread_id.to_string(),
@@ -580,7 +647,11 @@ fn finish_stream_result(
     result: Result<()>,
     event_sender: &Sender<ConversationStreamEvent>,
 ) -> Result<()> {
-    // Stream callers need both an Err return and a Failed event so UI state and service error handling stay in sync.
+    /*
+     * Stream callers need both an Err return and a Failed event. The Err drives
+     * service-level error handling, while the event lets TUI state leave streaming
+     * mode even when the caller does not own the render state directly.
+     */
     if let Err(error) = &result {
         let _ = event_sender.send(ConversationStreamEvent::Failed {
             message: error.to_string(),
