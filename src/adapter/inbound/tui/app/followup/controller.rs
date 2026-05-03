@@ -1,13 +1,21 @@
-// 학습 주석: live activity pulse는 현재 시각과 turn 시작 시각의 차이를 표시하기 때문에 Instant를 사용합니다.
-// wall-clock 시간이 아니라 monotonic duration을 써서 시스템 시간이 바뀌어도 pulse가 뒤틀리지 않습니다.
+/*
+ * Follow-up controller code sits at the terminal-input edge of NativeTuiApp.
+ * It deliberately avoids owning policy: conversation-level auto-follow changes
+ * are sent to followup_controls, while in-progress editor text is sent to
+ * followup_overlay_ui. Keeping those two event streams separate lets the TUI
+ * offer a forgiving inline text editor without letting half-typed values change
+ * the runtime continuation budget.
+ */
 use std::time::Instant;
 
-// 학습 주석: follow-up overlay의 max auto turns editor는 raw terminal key를 직접 받습니다.
-// 여기서는 Enter/Esc/Ctrl-C/Backspace/문자 입력을 UI event로 번역합니다.
+/*
+ * This adapter receives already-decoded crossterm keys from the shell router.
+ * The mapping below is part of the UI contract for the SimpleReview inline
+ * control: Enter commits, Esc/Ctrl-C cancel, Backspace edits local text, and
+ * accepted characters stay local until the control reducer validates them.
+ */
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
-// 학습 주석: 이 controller는 NativeTuiApp 내부 상태를 읽고, follow-up control event와 overlay UI event를
-// dispatch하는 얇은 adapter입니다. 실제 state mutation은 reducer 쪽으로 넘겨 입력 처리와 상태 변경을 분리합니다.
 use super::super::{
     ConversationState, DEFAULT_AUTO_FOLLOW_MAX_TURNS, FollowupControlEvent, FollowupOverlayUiEvent,
     NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
@@ -15,14 +23,22 @@ use super::super::{
 
 impl NativeTuiApp {
     pub(crate) fn pause_post_turn_continuation(&mut self) {
-        // 학습 주석: auto-follow 일시정지는 UI local flag가 아니라 follow-up control event입니다.
-        // reducer를 거치게 해야 현재 turn 이후 이어쓰기 여부와 footer copy가 같은 상태를 공유합니다.
+        /*
+         * Pause is an operator intent against the auto-follow policy, not a
+         * visual toggle. Sending it through the control reducer keeps footer
+         * copy, post-turn continuation guards, and budget accounting on the
+         * same ConversationViewModel state.
+         */
         self.dispatch_followup_controls(FollowupControlEvent::AutoFollowPaused);
     }
 
     pub(crate) fn current_max_auto_turns_label(&self) -> String {
-        // 학습 주석: max auto turns 값은 ready conversation의 auto_follow_state가 source of truth입니다.
-        // 아직 conversation이 없으면 editor 초기값으로 repo 기본값을 표시해 startup 상태에서도 copy가 안정적입니다.
+        /*
+         * Ready conversation state is the only canonical owner of
+         * max_auto_turns. Startup and failure screens still need stable copy
+         * for the editor/status surface, so they fall back to the repository
+         * default instead of inventing a separate overlay default.
+         */
         match &self.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.auto_follow_state.max_auto_turns_label()
@@ -34,63 +50,90 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn planner_shows_debug_details(&self) -> bool {
-        // 학습 주석: shell presentation은 planner_visibility 내부 enum을 알 필요 없이, debug detail을
-        // 보여도 되는지만 묻습니다. 이 helper가 rendering layer의 조건문을 작게 유지합니다.
+        /*
+         * Rendering code asks for a capability-shaped bool rather than
+         * matching planner_visibility internals. That keeps presentation
+         * modules independent from the state machine that decides which
+         * planning diagnostics are operator-facing.
+         */
         self.planner_visibility.shows_debug_details()
     }
 
     pub(crate) fn live_activity_pulse(&self, now: Instant) -> Option<u64> {
-        // 학습 주석: live activity pulse는 ready conversation에서 active live activity가 있을 때만 footer에
-        // 표시됩니다. loading/failed 상태는 transcript runtime이 없으므로 pulse row를 숨깁니다.
+        /*
+         * The footer pulse is derived only when a ready conversation has a
+         * live activity timestamp. Loading/failed states have no transcript
+         * runtime to measure, so None suppresses the row instead of showing a
+         * stale or synthetic duration.
+         */
         match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation
-                // 학습 주석: conversation model이 live activity 시작 시각을 알고 있으며, 없으면 None이 전파됩니다.
+                // ConversationViewModel owns the monotonic start instant for the current auto-follow/live turn.
                 .live_activity_started_at()
-                // 학습 주석: saturating_duration_since로 now가 started_at보다 앞서는 비정상 입력도 0초로 낮춥니다.
+                // Saturating math prevents clock/test anomalies from producing negative-looking elapsed values.
                 .map(|started_at| now.saturating_duration_since(started_at).as_secs()),
             ConversationState::Loading | ConversationState::Failed(_) => None,
         }
     }
 
     pub(crate) fn is_max_auto_turns_editing(&self) -> bool {
-        // 학습 주석: editor 활성 여부는 overlay UI state에만 있습니다. conversation state의 실제
-        // max_auto_turns 값과 분리해, 사용자가 입력 중인 buffer를 저장 전까지 격리합니다.
+        /*
+         * Editing ownership is screen-local state. The conversation may hold
+         * a valid max_auto_turns value while the operator is temporarily
+         * typing an empty string, `inf`, or another not-yet-valid candidate.
+         */
         self.followup_overlay_ui_state
             .max_auto_turns_editor
             .is_editing
     }
 
     pub(crate) fn start_max_auto_turns_edit(&mut self) {
-        // 학습 주석: 실제 auto-follow 설정은 ready conversation에만 적용됩니다. loading/failed 상태에서
-        // editor를 열면 저장할 대상이 없어지므로 입력 시작을 무시합니다.
+        /*
+         * The editor commits into the active conversation policy, so opening
+         * it without a Ready conversation would create an input surface with
+         * no durable target. The startup/failure presentations therefore stay
+         * read-only for this control.
+         */
         if !matches!(self.conversation_state, ConversationState::Ready(_)) {
             return;
         }
 
-        // 학습 주석: max auto turns editor는 planning init의 SimpleReview 단계 안에 있는 inline control입니다.
-        // 다른 overlay나 다른 step에서 키가 들어오면 해당 화면의 입력 계약을 침범하지 않도록 무시합니다.
+        /*
+         * The max-turns control lives inside PlanningInit::SimpleReview. This
+         * guard prevents a stale keybinding from stealing input while another
+         * overlay or another planning-init step owns the keyboard.
+         */
         if self.shell_overlay != ShellOverlay::PlanningInit
             || self.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::SimpleReview
         {
             return;
         }
 
-        // 학습 주석: edit start는 overlay UI event입니다. 현재 실제 값을 buffer로 복사해 사용자가
-        // 취소해도 conversation auto_follow_state는 그대로 남게 합니다.
+        /*
+         * Starting an edit snapshots the current canonical label into the
+         * overlay buffer. From this point until commit/cancel, the buffer is
+         * allowed to diverge from the conversation policy.
+         */
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditStarted {
             current_value: self.current_max_auto_turns_label(),
         });
     }
 
     pub(crate) fn save_max_auto_turns_edit(&mut self) {
-        // 학습 주석: 저장은 editor가 열려 있을 때만 의미가 있습니다. 닫힌 상태의 Enter 입력이
-        // 실제 auto-follow 설정을 덮어쓰지 않도록 방어합니다.
+        /*
+         * Enter outside editor ownership must not rewrite policy. The same
+         * method is callable from key routing and shell-level flows, so the
+         * local guard keeps accidental commits idempotent.
+         */
         if !self.is_max_auto_turns_editing() {
             return;
         }
 
-        // 학습 주석: 저장 시점에는 UI buffer를 control event로 넘깁니다. reducer가 값 검증과
-        // conversation state 갱신을 담당해 controller가 parsing 규칙을 복제하지 않습니다.
+        /*
+         * Commit sends the raw buffer to the control reducer. That reducer
+         * centralizes normalization and validation, then emits a UI effect
+         * only when the policy accepted a canonical value.
+         */
         self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
             value: self
                 .followup_overlay_ui_state
@@ -101,57 +144,79 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn cancel_max_auto_turns_edit(&mut self) {
-        // 학습 주석: cancel은 실제 설정을 되돌리는 동작이 아니라 editor buffer를 현재 설정값으로 재동기화하고
-        // 편집 상태를 닫는 UI event입니다.
+        /*
+         * Cancel is purely presentational: close the editor and restore the
+         * visible buffer from the current policy label. It intentionally does
+         * not dispatch a control event because no policy decision changed.
+         */
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditCanceled {
             current_value: self.current_max_auto_turns_label(),
         });
     }
 
     pub(crate) fn push_max_auto_turns_character(&mut self, character: char) {
-        // 학습 주석: 문자 입력은 바로 파싱하지 않고 UI buffer에만 반영합니다. 저장 시점까지
-        // invalid intermediate state를 허용해야 일반 텍스트 editor처럼 동작합니다.
+        /*
+         * Typing appends to overlay state only. Deferring parse errors until
+         * save gives this terminal control normal text-editor behavior rather
+         * than rejecting intermediate input one key at a time.
+         */
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsCharacterTyped {
             character,
         });
     }
 
     pub(crate) fn pop_max_auto_turns_character(&mut self) {
-        // 학습 주석: Backspace도 overlay UI state만 수정합니다. 실제 max_auto_turns 값은 save event가
-        // 발생하기 전까지 유지됩니다.
+        /*
+         * Backspace edits the same overlay buffer and leaves the canonical
+         * auto-follow limit untouched until a later successful save.
+         */
         self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsBackspacePressed);
     }
 
     pub(crate) fn handle_max_auto_turns_editor_key(&mut self, key: event::KeyEvent) -> bool {
-        // 학습 주석: 이 handler의 반환값은 "키를 editor가 소비했는가"입니다. editor가 닫혀 있으면
-        // 상위 key router가 일반 shell/planning 단축키로 처리할 수 있게 false를 반환합니다.
+        /*
+         * The bool is a key-consumption contract for the outer shell router.
+         * `false` means this inline editor is not active and global shortcuts
+         * may inspect the key; `true` means the editor owned the key even if
+         * the key did not mutate the buffer.
+         */
         if !self.is_max_auto_turns_editing() {
             return false;
         }
 
-        // 학습 주석: 편집 중이라도 화면이 SimpleReview에서 벗어났다면 더 이상 이 editor가 키를
-        // 소유하면 안 됩니다. overlay 전환 중 stale editing flag가 남아도 입력 탈취를 막습니다.
+        /*
+         * Editing state can outlive a visual transition for one event loop
+         * tick. Rechecking the active overlay and step prevents that stale
+         * state from capturing keys meant for another surface.
+         */
         let editor_supported = self.shell_overlay == ShellOverlay::PlanningInit
             && self.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::SimpleReview;
         if !editor_supported {
             return false;
         }
 
-        // 학습 주석: 여기부터는 editor가 키를 소유합니다. 지원하지 않는 키도 true를 반환해
-        // 바깥 overlay가 같은 키를 두 번 해석하지 않게 합니다.
+        /*
+         * Once the editor is the active owner, unsupported keys are still
+         * consumed. Letting arrows or punctuation fall through would make one
+         * physical keypress affect both the inline editor context and the
+         * surrounding planning overlay.
+         */
         match key.code {
-            // 학습 주석: modifier 없는 Enter만 저장으로 인정해 Shift/Alt 조합이 의도치 않게 설정을 확정하지 않게 합니다.
+            // Plain Enter is the only commit gesture; modified Enter combinations remain available for terminal/platform behavior.
             KeyCode::Enter if key.modifiers.is_empty() => self.save_max_auto_turns_edit(),
-            // 학습 주석: Esc는 일반적인 inline editor 취소 동작입니다.
+            // Esc follows the TUI convention of abandoning the active inline edit.
             KeyCode::Esc => self.cancel_max_auto_turns_edit(),
-            // 학습 주석: Ctrl-C도 terminal UI에서 취소로 해석해 사용자가 editor에 갇히지 않게 합니다.
+            // Ctrl-C mirrors Esc here so the operator has a terminal-native escape hatch from editor ownership.
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                 self.cancel_max_auto_turns_edit()
             }
-            // 학습 주석: Backspace는 buffer에서 마지막 문자를 제거합니다.
+            // Backspace is routed through the UI reducer so empty-buffer behavior stays centralized.
             KeyCode::Backspace => self.pop_max_auto_turns_character(),
-            // 학습 주석: max turns label은 숫자뿐 아니라 "infinite" 같은 identifier-like 값을 허용하므로
-            // ASCII alphanumeric 입력을 받습니다. Shift는 대문자 입력을 위해 허용합니다.
+            /*
+             * The canonical parser accepts numeric labels and named forms
+             * such as `infinite`; key routing therefore permits ASCII
+             * alphanumerics and leaves semantic validation to commit time.
+             */
             KeyCode::Char(character)
                 if (key.modifiers == KeyModifiers::NONE
                     || key.modifiers == KeyModifiers::SHIFT)
@@ -159,8 +224,6 @@ impl NativeTuiApp {
             {
                 self.push_max_auto_turns_character(character);
             }
-            // 학습 주석: 화살표나 punctuation 같은 입력은 현재 editor가 지원하지 않지만, 이미 editor
-            // 모드이므로 상위 router로 흘리지 않고 소비 처리합니다.
             _ => {}
         }
 
