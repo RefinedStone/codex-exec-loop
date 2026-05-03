@@ -39,6 +39,12 @@ impl PromptDocument {
     // 내부 구조를 최종 prompt 문자열로 직렬화한다. agent에게 전달되는 실제 payload는
     // 이 함수의 출력이므로, 공백과 section 구분 규칙은 테스트로 고정되어야 한다.
     pub(crate) fn render(&self) -> String {
+        /*
+         * Render is intentionally dumb: it trusts the builder's line normalization and
+         * only enforces the outer document grammar. This split keeps section-specific
+         * cleanup close to insertion APIs while making the final prompt layout easy to
+         * audit in snapshot-like tests.
+         */
         // 첫 줄은 항상 `# 제목`이다. 제목 양끝 공백을 제거해 호출부 실수로 prompt 헤더가 흔들리지 않게 한다.
         let mut lines = vec![format!("# {}", self.title.trim())];
         for section in &self.sections {
@@ -73,6 +79,12 @@ impl PromptDocumentBuilder {
     // 이미 줄 단위로 준비된 본문을 section으로 추가한다. `raw_lines`라는 이름은
     // bullet prefix나 text splitting 같은 추가 의미 변환을 하지 않는다는 것을 호출자에게 알려 준다.
     pub(crate) fn raw_lines(mut self, title: impl Into<String>, lines: Vec<String>) -> Self {
+        /*
+         * raw_lines is for callers that have already chosen the exact line structure,
+         * such as code fences or generated contracts. The builder still trims trailing
+         * whitespace and suppresses all-empty sections, but it does not add bullets,
+         * split text, or otherwise reinterpret the payload.
+         */
         // 오른쪽 공백만 제거한다. 왼쪽 공백은 code block 내부 indentation이나 payload 정렬에
         // 의미가 있을 수 있으므로 보존한다.
         let lines = lines
@@ -93,6 +105,12 @@ impl PromptDocumentBuilder {
     // 일반 line section을 추가한다. 현재는 `raw_lines`와 같은 정규화 규칙을 쓰지만,
     // 호출 의도상 "이미 prompt에 그대로 들어갈 줄들"보다 한 단계 높은 일반 텍스트 라인 API로 남겨 둔다.
     pub(crate) fn lines(mut self, title: impl Into<String>, lines: Vec<String>) -> Self {
+        /*
+         * lines is the normal section API for prompt components that are already
+         * represented as rows. It deliberately shares the same empty-section policy as
+         * raw_lines so optional context can disappear consistently regardless of which
+         * insertion helper produced it.
+         */
         let lines = lines
             .into_iter()
             .map(|line| line.trim_end().to_string())
@@ -125,6 +143,11 @@ impl PromptDocumentBuilder {
     // multi-line text를 section으로 추가한다. 입력 전체의 양끝 공백은 제거하지만,
     // 내부 줄과 빈 줄은 보존해 사람이 작성한 runtime context의 구조를 유지한다.
     pub(crate) fn text(self, title: impl Into<String>, text: &str) -> Self {
+        /*
+         * text trims the enclosing block but preserves internal blank lines. Planning
+         * fragments and handoff copy often rely on paragraph breaks, while leading or
+         * trailing blank rows usually come from string literal indentation.
+         */
         let lines = text
             .trim()
             .lines()
@@ -146,6 +169,12 @@ impl PromptDocumentBuilder {
     // fenced code block section을 추가한다. JSON, diff, TOML 같은 payload를 일반 텍스트로
     // 넣으면 모델이 section 설명과 본문을 헷갈릴 수 있으므로, language fence를 포함한 raw section으로 렌더링한다.
     pub(crate) fn code_block(self, title: impl Into<String>, language: &str, body: &str) -> Self {
+        /*
+         * Code blocks are assembled as raw section lines so render does not need a
+         * second Markdown-aware branch. The language tag is kept caller-controlled
+         * because JSON, TOML, diff, and shell snippets are used by different planning
+         * prompts.
+         */
         // block 전체 양끝 공백은 제거해 불필요한 첫/마지막 빈 줄을 없앤다.
         let body = body.trim();
         // fence 자체도 section lines에 포함한다. 그래서 render는 code block을 특별 취급하지 않고
@@ -167,6 +196,11 @@ impl PromptDocumentBuilder {
         // 존재할 때만 code block으로 렌더링할 본문이다.
         body: Option<&str>,
     ) -> Self {
+        /*
+         * optional_code_block mirrors optional_text at the payload boundary. Empty tool
+         * output or missing snapshots should remove the entire section, not leave an
+         * empty fence that suggests a payload was intentionally blank.
+         */
         // 공백뿐인 body도 없는 것으로 취급해 prompt에 빈 fence가 들어가지 않게 한다.
         match body.map(str::trim).filter(|value| !value.is_empty()) {
             Some(body) => self.code_block(title, language, body),
