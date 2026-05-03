@@ -9,6 +9,12 @@ use super::{
  */
 #[test]
 fn parse_recognizes_supported_aliases() {
+    /*
+    Parsing accepts historical aliases and mixed case because these commands are
+    typed from operator memory in the main prompt. Unsupported near-aliases such
+    as :auto stay rejected so automation control does not grow ambiguous entry
+    points outside the explicit command catalog.
+    */
     let cases = [
         (":diag", Some((InlineShellCommand::Diagnostics, None))),
         (
@@ -82,6 +88,11 @@ fn parse_recognizes_supported_aliases() {
 
 #[test]
 fn suggestions_show_all_commands_for_colon_only() {
+    /*
+    A lone colon opens the discoverability surface. The ordering here mirrors the
+    command catalog rather than alphabetical sorting, preserving high-frequency
+    operational commands before setup and help entries.
+    */
     let suggestions = InlineShellCommand::suggestions(":");
 
     assert_eq!(
@@ -107,6 +118,11 @@ fn suggestions_show_all_commands_for_colon_only() {
 
 #[test]
 fn suggestions_filter_by_prefix() {
+    /*
+    Prefix filtering is intentionally command-name only. These assertions keep
+    overlapping prefixes stable, especially :p and :t where multiple commands
+    compete for the same first letter.
+    */
     assert_eq!(
         InlineShellCommand::suggestions(":p"),
         vec![
@@ -165,6 +181,10 @@ fn suggestion_prefix_only_stays_active_while_typing_command_name() {
 
 #[test]
 fn palette_state_keeps_selected_command_when_input_refines() {
+    /*
+    Selection memory lets an operator move to :planning from the full menu and
+    then type :p without losing the intended command to the first filtered item.
+    */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
     assert!(state.move_selection(10));
@@ -183,6 +203,11 @@ fn palette_state_keeps_selected_command_when_input_refines() {
 
 #[test]
 fn completion_text_uses_canonical_argument_ready_command_forms() {
+    /*
+    Completion text is what gets inserted into the prompt, so commands that need
+    arguments carry a trailing space while simple commands insert the canonical
+    executable form. Aliases remain parse-only and never become completion text.
+    */
     assert_eq!(InlineShellCommand::Diagnostics.completion_text(), ":diag");
     assert_eq!(
         InlineShellCommand::PlanningInit.completion_text(),
@@ -209,6 +234,11 @@ fn help_status_uses_short_overlay_status() {
 
 #[test]
 fn help_entries_use_renderable_command_forms() {
+    /*
+    Help entries are rendered in a compact overlay, not a raw alias dump. The
+    tests keep broad parser aliases out of help copy while preserving argument
+    grammar for commands whose execution depends on typed values.
+    */
     let rendered = InlineShellCommand::help_entries()
         .iter()
         .map(|entry| format!("{} - {}", entry.usage, entry.detail))
@@ -306,6 +336,10 @@ fn parallel_command_hint_is_argument_aware() {
 
 #[test]
 fn doctor_and_init_command_hints_use_lifecycle_language() {
+    /*
+    Doctor and init both touch planning setup, but their hints must communicate
+    distinct lifecycle actions: inspect existing health versus stage scaffolding.
+    */
     let doctor = InlineShellCommandInput::parse(":doctor").expect("command should parse");
     let init = InlineShellCommandInput::parse(":init").expect("command should parse");
 
@@ -352,6 +386,11 @@ fn reset_command_hint_is_argument_aware() {
 fn execution_status_stays_alias_neutral() {
     // Execution status is shown after dispatch, so it describes the action instead of
     // echoing whichever alias the operator typed.
+    /*
+    Commands with longer-running controller flows return no immediate status here;
+    their handlers own follow-up copy once they inspect runtime state. The inline
+    command layer only emits neutral statuses for instant overlay switches.
+    */
     let cases = [
         (":diag", Some("opened diagnostics inspection")),
         (":sessions", Some("opened recent sessions inspection")),
