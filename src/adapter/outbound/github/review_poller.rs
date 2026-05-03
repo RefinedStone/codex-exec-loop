@@ -69,10 +69,9 @@ impl GithubReviewPollerAdapter {
     }
     pub fn from_refinedstone_credentials(repo_root: &Path) -> Result<Self> {
         /*
-        The poller is intentionally tied to the RefinedStone credential contract used by
-        repository automation. The adapter converts the repo-local or WSL-discovered
-        credential into a bearer token immediately, so later HTTP code never needs to
-        know where the token came from.
+        poller는 repository automation과 같은 RefinedStone credential contract에 의도적으로 묶인다.
+        repo-local credential이나 WSL fallback에서 찾은 credential line은 즉시 bearer token으로 변환한다.
+        이후 HTTP code는 token이 어느 파일에서 왔는지 모르고, raw credential URL도 보존하지 않는다.
         */
         let credential_line = Self::read_refinedstone_credential_line(repo_root)?;
         Ok(Self::new(Self::parse_refinedstone_token(&credential_line)?))
@@ -127,10 +126,10 @@ impl GithubReviewPollerAdapter {
     }
     fn resolve_git_path(repo_root: &Path, flag: &str, label: &str) -> Result<PathBuf> {
         /*
-        Worktrees make `.git` a pointer file, so direct path assumptions are fragile.
-        `git rev-parse --path-format=absolute` asks git for the canonical worktree or
-        common directory and keeps credential lookup valid across normal clones and
-        linked worktrees.
+        linked worktree에서는 `.git`이 directory가 아니라 pointer file일 수 있다.
+        직접 path를 추측하면 credential lookup이 clone/worktree 형태마다 깨진다.
+        `git rev-parse --path-format=absolute`로 git에게 canonical git dir 또는 common dir을 묻기 때문에
+        일반 clone과 linked worktree 모두 같은 discovery path를 쓴다.
         */
         let path =
             Self::run_git_command(repo_root, &["rev-parse", "--path-format=absolute", flag])?;
@@ -141,26 +140,26 @@ impl GithubReviewPollerAdapter {
     }
     fn resolve_repository_full_name(repo_root: &Path) -> Result<String> {
         /*
-        The repository identity comes from origin because GitHub's pull request APIs are
-        repository scoped. Keeping this lookup local avoids asking GitHub to search
-        across installations before we know which owner/repo path is authoritative.
+        repository identity는 origin remote에서 얻는다.
+        GitHub pull request API는 repository-scoped라 owner/repo path를 먼저 알아야 한다.
+        이 lookup을 local git에 묶으면 어떤 installation을 검색해야 할지 모르는 상태에서 GitHub에 broad search를 하지 않아도 된다.
         */
         let origin_url = Self::run_git_command(repo_root, &["remote", "get-url", "origin"])?;
         Self::parse_repository_full_name(&origin_url)
     }
     fn resolve_current_branch_name(repo_root: &Path) -> Result<String> {
         /*
-        The current branch is the user's review lane. Detached HEAD returns `HEAD`,
-        which the discovery entrypoint treats as non-pollable because no stable
-        `owner:branch` head filter can be constructed.
+        current branch는 사용자의 review lane이다.
+        detached HEAD는 `HEAD`를 반환하며, discovery entrypoint는 이를 non-pollable로 접는다.
+        stable `owner:branch` head filter를 만들 수 없으면 어떤 PR activity를 가져와야 하는지 특정할 수 없다.
         */
         Self::run_git_command(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
     }
     fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<String> {
         /*
-        Git is invoked non-interactively and stdout is trimmed at the boundary. Callers
-        receive domain-specific parse errors above this helper, while command failure
-        still includes stderr so repository identity problems are diagnosable.
+        git은 non-interactive command로 실행하고 stdout은 helper boundary에서 trim한다.
+        이 helper 위쪽 caller는 repository/branch/credential 같은 domain-specific parse error를 붙이고,
+        command 자체가 실패하면 stderr를 포함해 origin 설정이나 worktree 상태 문제를 진단할 수 있게 한다.
         */
         let output = Command::new("git")
             .arg("-C")
