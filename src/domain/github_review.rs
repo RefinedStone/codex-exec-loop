@@ -15,7 +15,12 @@ pub struct GithubPullRequestTarget {
 }
 
 impl GithubPullRequestTarget {
-    // 환경 변수나 auto-discovery 결과가 만든 target을 domain 값으로 고정한다.
+    /*
+     * The target constructor is the seam where environment overrides, branch
+     * auto-discovery, and tests all become the same domain identity. From this point
+     * onward polling code should compare PR activity by repository plus number, not by
+     * branch names that can move or be renamed.
+     */
     pub fn new(repository: impl Into<String>, number: u64) -> Self {
         Self {
             repository: repository.into(),
@@ -63,6 +68,12 @@ impl GithubPullRequestActivitySnapshot {
      * latest timestamp 안의 identity set을 함께 저장한다.
      */
     pub fn poll_state(&self) -> GithubPullRequestPollState {
+        /*
+         * The snapshot must already be sorted before this cursor is meaningful. The
+         * latest timestamp is taken from the last event, then every event sharing that
+         * timestamp is recorded so a later poll can notice additional same-timestamp
+         * GitHub activity without replaying already seen events.
+         */
         let Some(latest_submitted_at) = self.events.last().map(|event| event.submitted_at.clone())
         else {
             return GithubPullRequestPollState::default();
@@ -93,7 +104,11 @@ pub struct GithubPullRequestPollState {
 }
 
 impl GithubPullRequestPollState {
-    // caller가 snapshot에서 다음 cursor를 만들 때 사용하는 얇은 domain helper다.
+    /*
+     * Callers use this helper instead of constructing cursors by hand. That keeps the
+     * "latest timestamp plus same-timestamp identities" rule attached to the snapshot
+     * type and prevents services from accidentally storing only a timestamp cursor.
+     */
     pub fn from_snapshot(snapshot: &GithubPullRequestActivitySnapshot) -> Self {
         snapshot.poll_state()
     }
@@ -130,7 +145,12 @@ pub struct GithubPullRequestActivityEvent {
 }
 
 impl GithubPullRequestActivityEvent {
-    // poll cursor에서 쓰는 최소 identity만 추출한다. body 변경 같은 표시 정보는 중복 판정에 쓰지 않는다.
+    /*
+     * Poll identity intentionally ignores mutable display fields such as body, URL, or
+     * author copy. GitHub review activity is considered "seen" by endpoint kind and id;
+     * edits to the text can still appear in the full snapshot without being announced
+     * as a new activity event.
+     */
     pub fn identity(&self) -> GithubPullRequestActivityIdentity {
         GithubPullRequestActivityIdentity {
             kind: self.kind,
@@ -195,7 +215,11 @@ impl GithubPullRequestActivityEvent {
         truncate_notice_text(&summary, max_total_len)
     }
 
-    // GitHub review state를 제품 copy로 변환한다. 알 수 없는 state는 숨기지 않고 normalized form으로 드러낸다.
+    /*
+     * Review states are external vocabulary. Known states become short product copy,
+     * while unknown states are normalized instead of hidden so operators can see schema
+     * drift in the notice surface without breaking rendering.
+     */
     fn review_notice_label(&self) -> String {
         match self
             .state
@@ -229,12 +253,20 @@ pub enum GithubPullRequestActivityKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GithubPullRequestActivityIdentity {
-    // endpoint가 다른 event id 충돌을 막기 위해 kind를 identity에 포함한다.
+    /*
+     * GitHub ids are unique inside an endpoint family, not a guarantee across every PR
+     * timeline endpoint. Including kind keeps a review submission and an inline review
+     * comment with the same numeric id from collapsing into one cursor entry.
+     */
     pub kind: GithubPullRequestActivityKind,
     pub event_id: u64,
 }
 
-// review comment path는 footer에서 전체 경로보다 파일명이 더 유용하다. 파일명 추출에 실패하면 원래 path를 쓴다.
+/*
+ * Review comment paths can be deep repository paths, but footer notices are scanned
+ * quickly. Prefer the file name when available and fall back to the original trimmed
+ * path so unusual path strings still produce useful copy.
+ */
 fn review_comment_file_label(path: &str) -> Option<&str> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -248,7 +280,11 @@ fn review_comment_file_label(path: &str) -> Option<&str> {
         .or(Some(trimmed))
 }
 
-// GitHub가 새 review state를 추가해도 notice가 screaming snake case를 그대로 노출하지 않게 한다.
+/*
+ * Unknown review states should be visible but readable. Lowercasing and replacing
+ * underscores keeps future GitHub state values from leaking screaming-snake API
+ * vocabulary into TUI copy.
+ */
 fn normalize_review_state(state: &str) -> String {
     state.trim().to_ascii_lowercase().replace('_', " ")
 }
@@ -267,7 +303,11 @@ pub fn truncate_notice_text(text: &str, max_len: usize) -> String {
     let mut pending_space = false;
     let mut truncated = false;
 
-    // whitespace를 먼저 접어야 긴 body의 줄바꿈/탭이 footer layout을 흔들지 않는다.
+    /*
+     * Whitespace is collapsed before budget accounting because GitHub bodies often
+     * contain Markdown line breaks or tabs. The footer needs a single-line scalar
+     * budget, not the original authoring layout.
+     */
     for ch in text.chars() {
         if ch.is_whitespace() {
             if compact_len > 0 {
@@ -302,7 +342,11 @@ pub fn truncate_notice_text(text: &str, max_len: usize) -> String {
         return ".".repeat(max_len);
     }
 
-    // ellipsis 공간을 먼저 확보하고 trailing space를 제거해 `word ...` 같은 어색한 copy를 피한다.
+    /*
+     * Reserve ellipsis space before trimming the visible prefix. Removing trailing
+     * spaces avoids awkward `word ...` copy while still returning exactly max_len
+     * scalar values for normal budgets.
+     */
     let mut result: String = compact.chars().take(max_len - 3).collect();
     while result.ends_with(' ') {
         result.pop();
