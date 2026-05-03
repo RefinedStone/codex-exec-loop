@@ -131,6 +131,11 @@ impl ParallelModeTurnService {
         event: &ConversationStreamEvent,
     ) -> ParallelTurnStreamEventOutcome {
         if let ConversationStreamEvent::ThreadPrepared { thread_id, .. } = event {
+            /*
+            ThreadPrepared는 lease가 아직 Running이 되기 전의 식별자 결합 단계다.
+            같은 workspace가 slot worktree가 아니면 service가 Ok(None)을 돌려주므로,
+            root conversation 이벤트가 병렬 슬롯 상태를 건드리지 않는다.
+            */
             return match self
                 .parallel_mode_service
                 .record_workspace_slot_thread_prepared(workspace_directory, thread_id)
@@ -155,6 +160,11 @@ impl ParallelModeTurnService {
             };
         }
         if !matches!(event, ConversationStreamEvent::TurnStarted { .. }) {
+            /*
+            Streaming delta, tool output, completion 같은 이벤트는 슬롯 lifecycle에
+            직접 의미가 없다. 여기서 false outcome으로 접어야 TUI가 불필요하게
+            supervisor snapshot을 다시 읽지 않는다.
+            */
             return ParallelTurnStreamEventOutcome {
                 runtime_notice: None,
                 invalidate_supervisor_snapshot: false,
@@ -165,6 +175,11 @@ impl ParallelModeTurnService {
             .parallel_mode_service
             .mark_workspace_slot_running(workspace_directory)
         {
+            /*
+            Ok(None) still returns turn_started_observed=true. The conversation
+            runtime did see a turn begin, even if this workspace has no matching
+            slot lease; completion cleanup needs that stream-level fact.
+            */
             Ok(Some(_)) => ParallelTurnStreamEventOutcome {
                 runtime_notice: None,
                 invalidate_supervisor_snapshot: true,
@@ -205,6 +220,11 @@ impl ParallelModeTurnService {
             saw_failed_before_turn_started,
             terminal_failure_observed,
         ) {
+            /*
+            Startup failure release is intentionally narrow. It only runs before
+            TurnStarted because after that point the slot worktree may contain
+            meaningful user-visible changes or failure evidence for inspection.
+            */
             return match self
                 .parallel_mode_service
                 .release_workspace_slot_lease_after_failed_start(workspace_directory)
@@ -311,6 +331,12 @@ impl ParallelModeTurnService {
         authority_refresh_outcome: &str,
     ) -> Vec<String> {
         let mut notices = Vec::new();
+        /*
+        mark_workspace_commit_ready updates the session ledger before enqueue.
+        Even if this write fails, enqueue is still attempted because the queue
+        record may be recoverable from the lease/session state and should surface
+        its own failure separately.
+        */
         if let Err(error) = self
             .parallel_mode_service
             .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome)
@@ -331,6 +357,11 @@ impl ParallelModeTurnService {
             )),
             Ok(None) => {}
             Err(error) => {
+                /*
+                Without an enqueue record there is no queue head for the
+                orchestrator to process, so stop here and preserve the enqueue
+                error as the actionable notice.
+                */
                 notices.push(format!(
                     "distributor enqueue failed after official refresh: {error}"
                 ));
@@ -355,6 +386,11 @@ fn should_release_unstarted_slot_lease(
     saw_failed_before_turn_started: bool,
     terminal_failure_observed: bool,
 ) -> bool {
+    /*
+    Release is based on evidence that the agent never began useful work. A direct
+    pre-start failure is enough, and a terminal failure with no TurnStarted event
+    covers transports that report only the final failure.
+    */
     saw_failed_before_turn_started || (!saw_turn_started && terminal_failure_observed)
 }
 fn should_mark_cleanup_pending_after_success(
@@ -362,6 +398,11 @@ fn should_mark_cleanup_pending_after_success(
     saw_failed_event: bool,
     terminal_failure_observed: bool,
 ) -> bool {
+    /*
+    A successful running turn does not immediately return the slot. It becomes a
+    candidate for official completion/distributor handoff only when the stream
+    both started and ended without any failure signal.
+    */
     saw_turn_started && !saw_failed_event && !terminal_failure_observed
 }
 #[cfg(test)]
