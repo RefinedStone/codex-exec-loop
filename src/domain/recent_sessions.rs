@@ -20,8 +20,11 @@ pub struct SessionCatalogRequest {
 }
 
 impl SessionCatalogRequest {
-    // new는 workspace context 없이 전체 recent catalog를 요청하는 기본 constructor이다.
-    // shell chrome에서 세션 목록을 처음 열 때처럼 현재 workspace 필터가 필요 없을 때 사용한다.
+    /*
+     * `new` represents a provider-wide catalog request. It deliberately leaves
+     * workspace context empty so callers that only need a generic recent list do not
+     * accidentally imply current-workspace filtering or ranking at the port boundary.
+     */
     pub fn new(limit: usize) -> Self {
         Self {
             limit,
@@ -29,8 +32,12 @@ impl SessionCatalogRequest {
         }
     }
 
-    // for_workspace는 현재 작업 디렉터리를 catalog 요청과 함께 묶는다. runtime layer가
-    // ShellChromeEffect::LoadSessionCatalog를 처리할 때 workspace 문자열을 잃지 않도록 이 생성자를 쓴다.
+    /*
+     * `for_workspace` preserves the shell's current workspace alongside the provider
+     * limit. Some adapters still ignore this field, but the request shape carries it
+     * through application tests so workspace-scoped catalog behavior can be added
+     * without changing inbound effect contracts later.
+     */
     pub fn for_workspace(limit: usize, current_workspace_directory: impl Into<String>) -> Self {
         Self {
             limit,
@@ -67,8 +74,11 @@ pub enum SessionCatalogTier {
 }
 
 impl SessionCatalogTier {
-    // label은 capability/status 문구에 들어가는 안정적인 짧은 tier 이름이다. UI 함수들이
-    // enum variant 이름을 직접 문자열화하지 않게 해 copy 변경 지점을 domain helper 하나로 모은다.
+    /*
+     * Labels are stable product copy, not derived Rust variant names. Keeping the
+     * strings here lets capability panels, inline tails, and tests agree on the same
+     * tier wording even if enum names or presentation surfaces change.
+     */
     pub fn label(self) -> &'static str {
         match self {
             Self::AttachOnly => "attach-only",
@@ -109,8 +119,11 @@ pub enum SessionCatalog {
 }
 
 impl SessionCatalog {
-    // unsupported constructor는 adapter/service가 "목록 없음" 상태를 만들 때 status struct 조립을
-    // 반복하지 않도록 한다. detail은 Into<String>으로 받아 테스트와 production copy 모두 간단히 넣을 수 있다.
+    /*
+     * Unsupported is a deliberate capability result, not an error. Adapters use this
+     * constructor when no row payload can be produced but the UI should still explain
+     * the available fallback tier and any diagnostics.
+     */
     pub fn unsupported(
         tier: SessionCatalogTier,
         detail: impl Into<String>,
@@ -123,8 +136,11 @@ impl SessionCatalog {
         })
     }
 
-    // partial constructor는 capability가 완전히 닫힌 것은 아니지만 browser payload가 아직 없는
-    // 중간 상태를 표현한다. presentation layer는 이 상태를 Ready처럼 row로 그리지 않고, partial 안내문으로 처리한다.
+    /*
+     * Partial keeps degraded capability separate from full browser readiness. It is
+     * useful for handle-based reattach or future providers that can expose diagnostic
+     * context before they can return a complete RecentSessions payload.
+     */
     pub fn partial(
         tier: SessionCatalogTier,
         detail: impl Into<String>,
@@ -137,8 +153,11 @@ impl SessionCatalog {
         })
     }
 
-    // ready constructor는 실제 session list를 enum 안에 감싸는 단일 진입점이다.
-    // app-server adapter와 tests가 이 함수를 쓰면 Ready 상태의 tier/payload 배치가 일관된다.
+    /*
+     * Ready is the only variant that carries row data. Keeping construction centralized
+     * prevents callers from drifting on where tier lives versus where provider warning
+     * payload lives inside RecentSessions.
+     */
     pub fn ready(tier: SessionCatalogTier, recent_sessions: RecentSessions) -> Self {
         Self::Ready {
             tier,
@@ -146,8 +165,11 @@ impl SessionCatalog {
         }
     }
 
-    // tier accessor는 상태 variant와 무관하게 capability level을 꺼내게 한다. capability copy는
-    // Unsupported/Partial/Ready를 따로 match하지 않아도 같은 tier label을 만들 수 있다.
+    /*
+     * Tier is the cross-variant capability signal. Presentation code can ask for it
+     * without caring whether the catalog is unsupported, partial, or ready, which keeps
+     * fallback copy and ready browser chrome aligned.
+     */
     pub fn tier(&self) -> SessionCatalogTier {
         match self {
             Self::Unsupported(status) | Self::Partial(status) => status.tier,
@@ -155,8 +177,11 @@ impl SessionCatalog {
         }
     }
 
-    // detail은 목록 payload가 없는 상태에서만 의미 있는 설명이다. Ready에서는 None을 돌려
-    // renderer가 stale error/detail 문구를 ready browser 위에 겹쳐 표시하지 않도록 한다.
+    /*
+     * Detail is intentionally absent for Ready. A ready provider may still have
+     * warnings, but a status detail belongs to unavailable/degraded states and should
+     * not be rendered over a valid browser row list.
+     */
     pub fn detail(&self) -> Option<&str> {
         match self {
             Self::Unsupported(status) | Self::Partial(status) => Some(status.detail.as_str()),
@@ -164,8 +189,11 @@ impl SessionCatalog {
         }
     }
 
-    // warnings accessor는 status 기반 catalog와 ready payload의 warning 위치 차이를 감춘다.
-    // capability projection과 session browser copy는 이 함수만 호출해 모든 상태의 경고를 같은 방식으로 읽는다.
+    /*
+     * Warnings live in different structs depending on state, but callers should treat
+     * them as a single diagnostic stream. This accessor hides storage differences so
+     * capability projection does not duplicate enum-specific warning plumbing.
+     */
     pub fn warnings(&self) -> &[String] {
         match self {
             Self::Unsupported(status) | Self::Partial(status) => status.warnings.as_slice(),
@@ -175,8 +203,12 @@ impl SessionCatalog {
         }
     }
 
-    // recent_sessions는 Ready catalog에서만 browser projection이 필요한 payload를 빌려 준다.
-    // shell chrome reducer는 None이면 selection 이동을 중단하고, renderer는 unsupported/partial panel을 그린다.
+    /*
+     * Borrowing RecentSessions only from Ready makes row projection an explicit
+     * capability check. Input handlers can stop selection movement on None, while
+     * renderers can switch to unsupported/partial panels without inspecting payload
+     * internals.
+     */
     pub fn recent_sessions(&self) -> Option<&RecentSessions> {
         match self {
             Self::Ready {
@@ -187,9 +219,11 @@ impl SessionCatalog {
     }
 }
 
-// From<RecentSessions>는 provider-backed ready catalog가 기본 성공 shape라는 convention을
-// 코드로 고정한다. tests와 fake ports가 간단히 `RecentSessions.into()`를 써도 production adapter와
-// 같은 tier를 얻게 하는 작은 연결점이다.
+/*
+ * From<RecentSessions> encodes the convention that a raw provider payload is a
+ * provider-backed ready catalog. Test fakes and adapters can use `.into()` without
+ * accidentally producing an attach-only or partial tier.
+ */
 impl From<RecentSessions> for SessionCatalog {
     fn from(recent_sessions: RecentSessions) -> Self {
         Self::ready(SessionCatalogTier::ProviderBackedCatalog, recent_sessions)
