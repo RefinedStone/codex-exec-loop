@@ -31,6 +31,11 @@ fn queue_head() -> PriorityQueueTask {
  */
 #[test]
 fn builtin_next_task_blocks_when_planning_is_uninitialized() {
+    /*
+    Uninitialized planning files have no queue authority at all. The policy maps
+    that to the same actionable-queue gate as an empty ready workspace so callers
+    do not special-case bootstrap state as permission to generate a task.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::uninitialized();
     let decision = service.decide_auto_follow(&snapshot);
@@ -51,6 +56,11 @@ fn builtin_next_task_blocks_when_planning_is_uninitialized() {
 
 #[test]
 fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
+    /*
+    Proposal summaries are advisory inventory, not executable queue heads. This
+    protects the main prompt path from treating promotable ideas as already
+    authorized work while still preserving the proposal detail in the preview.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -77,6 +87,10 @@ fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
 
 #[test]
 fn builtin_next_task_blocks_ready_no_task_state_without_existing_proposals() {
+    /*
+    ReadyNoTask without proposals is the quiet idle case: valid planning files
+    exist, but no direction-owned task can be handed to the next assistant turn.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -127,6 +141,11 @@ fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
 
 #[test]
 fn repeated_queue_head_blocks_queue_driven_automation() {
+    /*
+    The pause reason comes from the prompt snapshot after a handoff. Keeping it
+    as a hard block prevents the runtime loop from repeatedly continuing the same
+    queue head when planning refresh has not advanced.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
@@ -163,6 +182,11 @@ fn builtin_next_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
 
 #[test]
 fn ready_queue_head_uses_continue_mode() {
+    /*
+    This is the only positive auto-follow path: a valid snapshot with an actual
+    queue head becomes a continuation prompt. No proposal or idle policy can reach
+    this branch without first being promoted into queue_head.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
@@ -208,6 +232,11 @@ fn summary_view_marks_running_ready_planning_as_executing() {
 
 #[test]
 fn summary_view_keeps_proposal_summary_when_present() {
+    /*
+    Proposal context survives summary projection even when the queue is idle.
+    The TUI needs that detail for review affordances, while automation still
+    remains blocked by the missing queue head tests above.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -231,6 +260,11 @@ fn summary_view_keeps_proposal_summary_when_present() {
 
 #[test]
 fn summary_view_prefers_repair_failure_when_present() {
+    /*
+    Live repair errors outrank the snapshot's validation text. That ordering keeps
+    the visible failure tied to the most recent automatic repair attempt rather
+    than an older file-load diagnostic.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot =
         PlanningRuntimeSnapshot::invalid("planning validation failed: task authority".to_string());
@@ -256,6 +290,11 @@ fn summary_view_prefers_repair_failure_when_present() {
  */
 #[test]
 fn summary_line_compacts_repair_queue_and_proposal_details() {
+    /*
+    The footer line deliberately mixes repair progress with compact queue and
+    proposal fragments. This regression keeps all three signals present after
+    truncation because each explains a different next action.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready_with_details(
         "Planning Context".to_string(),
@@ -291,6 +330,11 @@ fn summary_line_compacts_repair_queue_and_proposal_details() {
 
 #[test]
 fn status_projection_uses_queue_head_label_when_actionable_work_exists() {
+    /*
+    Expanded status projection changes the prefix when a real queue head exists.
+    Consumers can then render "planning queue head" as an actionable label instead
+    of parsing queue_summary text to infer whether work is available.
+    */
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
