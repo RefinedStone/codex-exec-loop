@@ -8,13 +8,14 @@ use crate::domain::planning::{
 };
 
 /*
- * Reconciliation tests cover the defensive rules around planner-generated repair output.
- * The production service currently restores protected files, but these tests also preserve the planned
- * authority-repair contract: rejected candidates must not erase accepted DB work, regress terminal state,
- * or keep the previous queue handoff unchanged while pretending progress was made.
+ * 이 파일은 복구 워커가 생성한 planning_task_commands 주변의 방어 계약을 고정한다.
+ * 현재 운영 경로는 보호 파일을 복원하는 수준에 머물러 있지만, 테스트는 이후 DB 권한
+ * 후보를 직접 조정하게 될 때도 지켜야 하는 조건을 먼저 문서화한다. 거절된 후보는
+ * 이미 승인된 DB 작업을 지우거나, 완료된 상태를 되돌리거나, 이전 ready handoff를
+ * 그대로 반복하면서 진행된 것처럼 보이면 안 된다.
  */
 
-// Mirror of the stale-candidate guard used by repair orchestration tests to pin the expected diagnostics.
+// 복구 오케스트레이션의 stale-candidate 진단 문구를 테스트 안에 고정한 미러 가드다.
 fn stale_candidate_guard_failure(
     accepted_task_authority: Option<&TaskAuthorityDocument>,
     candidate_task_authority: &TaskAuthorityDocument,
@@ -45,12 +46,12 @@ fn stale_candidate_guard_failure(
     None
 }
 
-// Done/cancelled tasks are terminal for repair purposes: candidates may not move them backward.
+// 복구 후보는 완료/취소된 작업을 다시 진행 가능한 상태로 되돌릴 수 없다.
 fn terminal_status(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
 }
 
-// Timestamp regression is ignored for malformed or missing dates so schema validation remains the caller's job.
+// 날짜 형식 검증은 호출자 책임이므로, 비어 있거나 파싱 불가능한 값은 회귀 판정에서 제외한다.
 fn timestamp_regressed(candidate_updated_at: &str, accepted_updated_at: &str) -> bool {
     let candidate_updated_at = candidate_updated_at.trim();
     let accepted_updated_at = accepted_updated_at.trim();
@@ -69,9 +70,10 @@ fn timestamp_regressed(candidate_updated_at: &str, accepted_updated_at: &str) ->
 }
 
 /*
- * Guard against repair loops that re-emit the same ready queue head.
- * A candidate is acceptable when the same task remains at the head only if its authority row actually changed
- * relative to the accepted DB baseline; otherwise the worker has not advanced the prior handoff.
+ * ready 큐 head를 그대로 다시 내보내는 복구 루프를 막는 가드다.
+ * 같은 작업이 계속 head에 남아도, 승인된 DB 기준선과 비교해 해당 권한 row가 실제로
+ * 바뀌었다면 허용된다. 그렇지 않으면 워커가 이전 handoff를 소비하지 못한 상태에서
+ * 자동 후속 복구만 반복하게 된다.
  */
 fn queue_advancement_guard_failure(
     previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
@@ -107,7 +109,7 @@ fn queue_advancement_guard_failure(
     }
 }
 
-// Test helper trims ids like production code because prompts and JSON candidates can contain padded values.
+// 프롬프트와 JSON 후보에는 공백이 섞일 수 있으므로, 운영 코드처럼 id를 trim해서 찾는다.
 fn find_task<'a>(
     task_authority: &'a TaskAuthorityDocument,
     task_id: &str,
@@ -119,7 +121,7 @@ fn find_task<'a>(
         .find(|task| task.id.trim() == task_id)
 }
 
-// DB task authority and legacy queue artifacts are no longer protected workspace files.
+// DB 작업 권한과 레거시 큐 산출물은 더 이상 보호해야 하는 workspace 파일이 아니다.
 #[test]
 fn change_set_ignores_legacy_task_file_paths() {
     let paths = vec![
@@ -132,9 +134,9 @@ fn change_set_ignores_legacy_task_file_paths() {
 }
 
 /*
- * Repair prompts must ask for planning_task_commands, not a whole replacement authority document.
- * This keeps the repair worker inside the same mutation contract used by normal task tooling and prevents
- * old file-based task-ledger/queue-snapshot language from reappearing in generated prompts.
+ * 복구 프롬프트는 전체 권한 문서 교체가 아니라 planning_task_commands payload를 요구해야 한다.
+ * 이렇게 해야 복구 워커가 일반 작업 도구와 같은 mutation 계약 안에 머물며, 예전 파일 기반
+ * task-ledger/queue-snapshot 표현이 생성 프롬프트에 다시 들어오지 않는다.
  */
 #[test]
 fn repair_prompt_requests_task_command_payload_from_db_authority() {
@@ -178,7 +180,7 @@ fn repair_prompt_requests_task_command_payload_from_db_authority() {
     assert!(!prompt.contains("queue snapshot artifact"));
 }
 
-// Re-emitting the previous ready handoff unchanged would create an auto-follow repair loop.
+// 이전 ready handoff를 변경 없이 다시 내보내면 자동 후속 복구 루프가 생긴다.
 #[test]
 fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
     let accepted = TaskAuthorityDocument {
@@ -209,7 +211,7 @@ fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
     );
 }
 
-// The same queue head is allowed when the candidate authority records a real update to that task.
+// 같은 큐 head라도 후보 권한에 실제 작업 갱신이 기록되어 있으면 진행으로 인정한다.
 #[test]
 fn queue_advancement_guard_allows_updated_same_head() {
     let accepted = TaskAuthorityDocument {
@@ -241,7 +243,7 @@ fn queue_advancement_guard_allows_updated_same_head() {
     assert_eq!(failure, None);
 }
 
-// A candidate cannot move accepted terminal work back into ready/proposed state.
+// 후보 권한은 이미 승인된 terminal 작업을 ready/proposed 상태로 되돌릴 수 없다.
 #[test]
 fn stale_candidate_guard_rejects_accepted_db_status_regression() {
     let accepted = TaskAuthorityDocument {
@@ -284,7 +286,7 @@ fn stale_candidate_guard_rejects_accepted_db_status_regression() {
     );
 }
 
-// The accepted DB row is newer, so the generated candidate is stale even if status did not change.
+// 승인된 DB row가 더 최신이면 상태가 같아도 생성 후보는 stale로 취급한다.
 #[test]
 fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
     let accepted = TaskAuthorityDocument {
@@ -305,7 +307,7 @@ fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
     );
 }
 
-// RFC3339 comparison uses instants, not string ordering; fractional seconds after the accepted instant are safe.
+// RFC3339 비교는 문자열 순서가 아니라 시각 기준이므로, 더 늦은 fractional seconds 값은 안전하다.
 #[test]
 fn stale_candidate_guard_compares_rfc3339_timestamps_by_time() {
     let accepted = TaskAuthorityDocument {
@@ -321,7 +323,7 @@ fn stale_candidate_guard_compares_rfc3339_timestamps_by_time() {
     assert_eq!(failure, None);
 }
 
-// Compact task fixture keeps each guard test focused on id/status/update-time changes.
+// 작은 작업 fixture로 각 가드 테스트의 관심사를 id/status/update-time 차이에 묶어 둔다.
 fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
     TaskDefinition {
         id: id.to_string(),
@@ -347,7 +349,7 @@ fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
     }
 }
 
-// Queue fixture gives advancement tests a ready head without rebuilding the whole projection service.
+// 큐 fixture는 전체 projection 서비스를 다시 만들지 않고 advancement 테스트에 ready head를 제공한다.
 fn queue_task(id: &str, status: TaskStatus) -> PriorityQueueTask {
     PriorityQueueTask {
         rank: 1,
