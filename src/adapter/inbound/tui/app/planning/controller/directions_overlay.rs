@@ -1,29 +1,30 @@
 /*
- * 학습 주석: directions overlay controller는 shell key input을 directions maintenance state machine에
- * 연결한다. application service가 만든 summary와 `DirectionsMaintenanceOverlayUiState`가 화면 상태를
- * 보관하고, 이 파일은 사용자의 키 입력을 "editor 열기", "detail doc 생성 확인", "status message 표시"
- * 같은 app-level action으로 바꾸는 inbound adapter 역할을 한다.
+ * Directions maintenance key routing is the inbound edge of the overlay.
+ * The service-owned summary and DirectionsMaintenanceOverlayUiState decide what can be shown; this
+ * controller turns shell key events into app actions such as opening an editor, entering the detail-doc
+ * confirmation flow, or publishing a status message when the requested action is unsafe.
  */
 use super::*;
 
 impl NativeTuiApp {
     /*
-     * 학습 주석: shell_controller는 DirectionsMaintenance overlay가 열려 있을 때 모든 key event를
-     * 이 함수로 넘긴다. 반환값 true는 key가 directions overlay context에서 소비됐다는 뜻이며,
-     * manual editor step에서도 draft editor handler까지 위임한 뒤 shell 전역 shortcut으로 흘리지 않는다.
+     * Shell routing calls this while the directions maintenance overlay owns focus.
+     * Returning true keeps every key inside the overlay context, including manual-editor keys that are
+     * delegated to the shared draft editor instead of falling through to shell-wide shortcuts.
      */
     pub(crate) fn handle_directions_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match self.directions_maintenance_overlay_ui_state.step() {
             DirectionsMaintenanceOverlayStep::Overview => match key.code {
                 /*
-                 * 학습 주석: Overview의 Enter는 가장 흔한 복구 작업인 queue-idle prompt editor로 바로 들어간다.
-                 * prompt는 directions maintenance의 supporting file 중 하나라 manual editor flow를 재사용한다.
+                 * Enter starts with the most common recovery path: the queue-idle prompt editor.
+                 * The prompt is a directions supporting file, so it reuses the manual editor flow rather
+                 * than creating a separate editing surface.
                  */
                 KeyCode::Enter if key.modifiers.is_empty() => self.open_queue_idle_prompt_editor(),
                 /*
-                 * 학습 주석: detail doc 생성은 DB direction authority가 parse 가능한 상태에서만 허용한다.
-                 * parse error가 남아 있으면 생성할 대상과 파일 경로 판단 자체가 불안정하므로 status line으로
-                 * 먼저 authority 수정을 요구한다.
+                 * Detail-doc generation only makes sense after the DB direction authority parses cleanly.
+                 * With a parse error, the app cannot reliably identify targets or output paths, so the key
+                 * reports the recovery requirement through the shared status channel.
                  */
                 KeyCode::Char('d') if key.modifiers.is_empty() => {
                     if self
@@ -45,8 +46,9 @@ impl NativeTuiApp {
                         .is_empty()
                     {
                         /*
-                         * 학습 주석: actionable list가 비어 있으면 service summary상 모든 direction이 이미
-                         * ready 상태다. selection step을 열어 빈 목록을 보여 주지 않고 현재 상태를 설명한다.
+                         * An empty actionable list means the service snapshot has no missing or broken
+                         * detail-doc mappings. The controller keeps the operator on overview and explains
+                         * the no-op instead of opening an empty selection step.
                          */
                         self.dispatch_conversation_input(
                             ConversationInputEvent::StatusMessageShown {
@@ -61,9 +63,9 @@ impl NativeTuiApp {
                     }
                 }
                 /*
-                 * 학습 주석: `p`는 queue-idle prompt 편집 shortcut이다. prompt도 direction authority를
-                 * 기준으로 생성/검증되므로 parse error가 있으면 editor를 열지 않고 같은 recovery channel인
-                 * status_text로 막는다.
+                 * `p` is the explicit queue-idle prompt shortcut. Prompt generation and validation still
+                 * depend on the direction authority, so parse errors block the editor with the same status
+                 * feedback used for detail-doc generation.
                  */
                 KeyCode::Char('p') if key.modifiers.is_empty() => {
                     if self
@@ -84,9 +86,9 @@ impl NativeTuiApp {
                     }
                 }
                 /*
-                 * 학습 주석: reload는 overlay state를 service의 최신 workspace summary로 교체한다.
-                 * `present_directions_maintenance_overview`가 summary load, overlay visibility, status dispatch를
-                 * 함께 처리하므로 controller는 여기서 동일한 entrypoint를 재사용한다.
+                 * Reload replaces the overlay state with a fresh workspace summary from the service.
+                 * present_directions_maintenance_overview already owns loading, visibility, and status
+                 * dispatch, so the key handler reuses that entrypoint.
                  */
                 KeyCode::Char('r') if key.modifiers.is_empty() => self
                     .present_directions_maintenance_overview(
@@ -96,11 +98,11 @@ impl NativeTuiApp {
                 _ => {}
             },
             DirectionsMaintenanceOverlayStep::DetailDocSelection => match key.code {
-                // 학습 주석: selection step의 back/left는 pending 생성 없이 overview로 돌아가는 탐색 동작이다.
+                // Back/left leaves selection without creating a pending generation target.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
                     .directions_maintenance_overlay_ui_state
                     .return_to_overview(),
-                // 학습 주석: 위/아래 이동은 actionable detail-doc 목록 안에서만 clamp된다.
+                // Movement is clamped by UI state against the filtered actionable detail-doc list.
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
                     .directions_maintenance_overlay_ui_state
                     .move_missing_detail_doc_selection(-1),
@@ -108,8 +110,8 @@ impl NativeTuiApp {
                     .directions_maintenance_overlay_ui_state
                     .move_missing_detail_doc_selection(1),
                 /*
-                 * 학습 주석: Enter는 곧바로 파일 생성 service를 호출하지 않고 confirm step을 연다.
-                 * UI state가 현재 direction id/title을 snapshot으로 잡아 이후 Enter on Yes가 같은 대상을 실행한다.
+                 * Enter snapshots the selected direction and opens confirmation instead of starting file
+                 * generation immediately. The later Yes action runs against that captured id/title pair.
                  */
                 KeyCode::Enter if key.modifiers.is_empty() => self
                     .directions_maintenance_overlay_ui_state
@@ -117,13 +119,13 @@ impl NativeTuiApp {
                 _ => {}
             },
             DirectionsMaintenanceOverlayStep::DetailDocConfirm => match key.code {
-                // 학습 주석: confirm에서 back/left는 선택 목록으로 돌아가 대상 direction을 다시 고르게 한다.
+                // Back/left returns to the selection list so the operator can pick a different direction.
                 KeyCode::Backspace | KeyCode::Left if key.modifiers.is_empty() => self
                     .directions_maintenance_overlay_ui_state
                     .open_detail_doc_selection(),
                 /*
-                 * 학습 주석: confirm choice는 Yes/No 두 칸짜리 선택 상태다. 숫자 1/2와 j/k를 함께 받아
-                 * keyboard-only 사용자가 renderer의 옵션 순서를 그대로 조작할 수 있게 한다.
+                 * The confirm choice is a two-position Yes/No control. Numeric keys mirror the displayed
+                 * option order, while j/k keep the same keyboard-only navigation model as selection lists.
                  */
                 KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => self
                     .directions_maintenance_overlay_ui_state
@@ -144,8 +146,9 @@ impl NativeTuiApp {
                     {
                         DetailDocConfirmChoice::Yes => {
                             /*
-                             * 학습 주석: service/editor 호출에는 title이 아니라 direction id만 넘긴다.
-                             * pending snapshot이 없으면 confirm state가 불완전한 것이므로 아무 작업도 시작하지 않는다.
+                             * Execution uses the stable direction id, not the display title.
+                             * A missing pending snapshot means the confirm state is incomplete, so the
+                             * controller declines to start any editor/service work.
                              */
                             let direction_id = self
                                 .directions_maintenance_overlay_ui_state
@@ -157,8 +160,8 @@ impl NativeTuiApp {
                         }
                         DetailDocConfirmChoice::No => {
                             /*
-                             * 학습 주석: No는 service를 호출하지 않는 명시적 취소다. overview로 돌아가고,
-                             * status line에 directions 파일이 바뀌지 않았음을 남겨 operator가 결과를 확인하게 한다.
+                             * No is an explicit cancellation path. It returns to overview and emits a status
+                             * message confirming that the directions files were not changed.
                              */
                             self.directions_maintenance_overlay_ui_state
                                 .return_to_overview();
@@ -176,9 +179,9 @@ impl NativeTuiApp {
             },
             DirectionsMaintenanceOverlayStep::ManualEditor => {
                 /*
-                 * 학습 주석: manual editor step은 directions overlay 안에 draft editor를 중첩한 상태다.
-                 * 먼저 닫기 확인 키를 처리해 dirty/invalid draft 위험을 보존하고, 일반 편집 키는 공통
-                 * draft editor handler에 save/promote 함수를 주입해 처리한다.
+                 * ManualEditor nests the shared draft editor inside the directions overlay.
+                 * Close-confirmation keys run first to protect dirty or invalid drafts; all other editing
+                 * keys use the generic draft editor handler with directions-specific save/promote hooks.
                  */
                 if self.handle_directions_manual_editor_close_confirmation_key(key) {
                     return true;
