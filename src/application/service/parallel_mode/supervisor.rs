@@ -54,6 +54,11 @@ impl ParallelModeSupervisorService {
                 inspect_pool_board_and_context(planning_authority, workspace_dir),
                 mode_enabled,
             ),
+            /*
+            When readiness is absent or blocked, distributor snapshot still gets
+            built below, but roster/detail stay placeholder-only. That keeps queue
+            diagnostics visible without implying new agents can be launched.
+            */
             _ => (
                 build_pool_board(planning_authority, workspace_dir, readiness_snapshot),
                 build_placeholder_roster(mode_enabled, readiness_snapshot),
@@ -95,6 +100,11 @@ impl ParallelModeSupervisorService {
         let (pool, roster, detail) = match readiness_snapshot {
             Some(snapshot) if snapshot.allows_parallel_mode() => {
                 let runtime = if mode_enabled {
+                    /*
+                    Only the enabled path may reconcile. A user can inspect the
+                    board before turning parallel mode on, but slot provisioning
+                    and cleanup should wait until the mode flag is actually live.
+                    */
                     reconcile_pool_board_and_context(planning_authority, workspace_dir)
                 } else {
                     inspect_pool_board_and_context(planning_authority, workspace_dir)
@@ -177,11 +187,21 @@ fn build_supervisor_views(
     match runtime {
         Ok((context, pool)) => (
             pool,
+            /*
+            Roster and detail share the same context so an active lease, session
+            history row, and distributor queue head are observed from one runtime
+            projection instead of three independent store/git reads.
+            */
             build_agent_roster_from_context(&context, mode_enabled),
             build_supervisor_detail_from_context(&context, mode_enabled),
         ),
         Err(error) => {
             let (pool, detail) = *error;
+            /*
+            A blocked pool board is still valuable: it usually contains the path
+            or slot reason the operator must fix. Roster/detail are intentionally
+            empty because there is no trustworthy context to join against.
+            */
             (
                 pool,
                 ParallelModeAgentRosterSnapshot::new(
@@ -218,6 +238,11 @@ fn build_agent_roster_from_context(
     )
 }
 fn running_duration_labels(leases: &[ParallelModeSlotLeaseSnapshot]) -> BTreeMap<String, String> {
+    /*
+    Duration labels are keyed by the same lease_session_key used by persisted
+    session detail. This lets domain roster projection attach elapsed time after
+    it joins leases with runtime detail records.
+    */
     leases
         .iter()
         .filter(|lease| lease.state == ParallelModeSlotLeaseState::Running)
@@ -248,6 +273,11 @@ fn build_supervisor_detail_from_context(
     context: &PoolRuntimeContext,
     mode_enabled: bool,
 ) -> ParallelModeSupervisorDetailSnapshot {
+    /*
+    Clone the context slices before detail selection because the domain selector
+    returns an owned snapshot. Supervisor rendering should not borrow from a
+    transient runtime context after this projection step finishes.
+    */
     let history = context.session_details.clone();
     let queue_records = context.distributor_queue_records.clone();
     let empty_state = if mode_enabled {
@@ -280,6 +310,11 @@ pub(super) fn selected_runtime_session_detail(
         .iter()
         .find(|record| record.queue_state.is_active())
         .map(|record| record.session_key.as_str());
+    /*
+    Active queue head outranks live lease ordering because integrated/blocked
+    work may already have left the running roster but still needs operator focus
+    in the detail panel.
+    */
     ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
         &leases,
         history,
