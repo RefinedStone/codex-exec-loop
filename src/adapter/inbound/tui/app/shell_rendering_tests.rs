@@ -9,7 +9,11 @@ use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_sna
 
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
-    // 학습 주석: 기본 inline shell은 startup diagnostics가 준비된 상태에서 frame border 없이 transcript/prompt만 보여야 합니다.
+    /*
+     * InlineMainBuffer는 host terminal scrollback 안에 직접 그리는 primary frontend다.
+     * ready shell snapshot은 popup frame border 없이 transcript/prompt chrome만 남는지 확인해,
+     * inline renderer가 modal layout을 잘못 끌고 오지 않도록 막는다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
@@ -22,7 +26,11 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
 
 #[test]
 fn queue_overlay_matches_snapshot() {
-    // 학습 주석: queue overlay snapshot은 planning runtime summary가 popup section으로 압축되는 계약을 잠급니다.
+    /*
+     * Queue overlay snapshot은 planning runtime snapshot이 popup summary/queue/proposal/note section으로
+     * 압축되는 presentation contract를 잠근다. domain queue ranking 자체는 다른 테스트가 맡고,
+     * 여기서는 shell frame이 그 read model을 좁은 overlay에 어떻게 배치하는지 본다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
@@ -44,7 +52,10 @@ fn queue_overlay_matches_snapshot() {
 
 #[test]
 fn planning_manual_editor_matches_snapshot() {
-    // 학습 주석: manual editor overlay는 planning init shell 안에서 draft files와 editor controls를 함께 렌더링해야 합니다.
+    /*
+     * Manual editor overlay는 planning init flow에서 staged draft buffers와 editor control copy를 함께 보여 준다.
+     * 이 snapshot은 editor 상태가 popup chrome, file list, footer key guide로 끝까지 전달되는지 확인한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.shell_overlay = ShellOverlay::PlanningInit;
@@ -62,7 +73,11 @@ fn planning_manual_editor_matches_snapshot() {
 
 #[test]
 fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() {
-    // 학습 주석: viewport replay mode는 과거 transcript와 live stream tail을 같은 frame에서 중복 없이 보존해야 합니다.
+    /*
+     * ViewportReplay는 host scrollback을 믿지 않고 최근 transcript를 viewport에 다시 그린다.
+     * streaming 중에는 persisted history와 live tail이 동시에 보이되 중복되면 안 되므로,
+     * 이 테스트는 replay buffer와 live delta lane의 병합 경계를 고정한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
@@ -98,7 +113,11 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
 
 #[test]
 fn vt100_ready_shell_matches_snapshot() {
-    // 학습 주석: vt100 backend도 inline renderer와 같은 ready shell copy를 ANSI terminal output으로 보존해야 합니다.
+    /*
+     * vt100 backend snapshot은 real terminal escape output을 통과한 결과를 본다.
+     * TestBackend의 cell buffer와 달리 ANSI backend path에서 ready shell copy와 border-free inline layout이
+     * 같은지 확인해 backend별 rendering drift를 잡는다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
 
@@ -111,7 +130,11 @@ fn vt100_ready_shell_matches_snapshot() {
 
 #[test]
 fn vt100_streaming_shell_matches_snapshot() {
-    // 학습 주석: streaming vt100 snapshot은 live delta가 transcript tail에 한 번만 들어가고 legacy live label이 사라졌는지 검증합니다.
+    /*
+     * Streaming vt100 snapshot은 live delta가 transcript tail에 한 번만 들어가는지 확인한다.
+     * 과거 live label path가 남아 있으면 `live: Codex`나 ghost text가 같이 보일 수 있어,
+     * terminal output 기준으로 legacy lane 제거를 검증한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(
@@ -135,7 +158,10 @@ fn vt100_streaming_shell_matches_snapshot() {
 
 #[test]
 fn vt100_viewport_replay_streaming_matches_snapshot() {
-    // 학습 주석: vt100 viewport replay는 persisted transcript와 live stream을 분리해 scroll replay regression을 잡습니다.
+    /*
+     * vt100 + ViewportReplay 조합은 persisted transcript replay와 live stream tail을 모두 ANSI backend로 통과시킨다.
+     * scroll replay regression은 보통 이 조합에서 중복/누락으로 나타나므로 두 문자열이 각각 한 번만 남는지 본다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
@@ -161,7 +187,11 @@ fn vt100_viewport_replay_streaming_matches_snapshot() {
 
 #[test]
 fn vt100_markdown_code_block_shell_matches_snapshot() {
-    // 학습 주석: markdown code fence는 terminal renderer를 지나도 fence와 code line이 같이 남아야 합니다.
+    /*
+     * Markdown code fence는 syntax-ish text이지만 terminal renderer는 내용을 잃지 말아야 한다.
+     * fence 두 개와 code line이 ANSI output 뒤에도 남는지 확인해 markdown line projection과 wrapping이
+     * code block structure를 지우지 않게 한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(&mut app, "```rust\nlet ok = true;\n```");
@@ -175,7 +205,11 @@ fn vt100_markdown_code_block_shell_matches_snapshot() {
 
 #[test]
 fn vt100_queue_overlay_matches_snapshot() {
-    // 학습 주석: queue overlay의 vt100 path는 inline snapshot과 같은 planning sections를 terminal backend에서 검증합니다.
+    /*
+     * Queue overlay의 vt100 path는 popup planning sections가 terminal backend에서도 보존되는지 확인한다.
+     * TestBackend snapshot만 통과하면 ANSI write/clear/resize path의 section loss를 놓칠 수 있어
+     * queue/proposal headings를 실제 terminal output에서도 고정한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
@@ -197,7 +231,11 @@ fn vt100_queue_overlay_matches_snapshot() {
 
 #[test]
 fn vt100_planning_manual_editor_matches_snapshot() {
-    // 학습 주석: manual editor의 vt100 snapshot은 controls/help copy가 terminal backend에서도 보존되는지 확인합니다.
+    /*
+     * Planning manual editor의 vt100 snapshot은 draft editor controls/help copy가 terminal backend에서도
+     * 보존되는지 확인한다. 특히 footer key guide는 좁은 terminal layout에서 잘리기 쉬워 snapshot으로
+     * editor affordance를 고정한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.shell_overlay = ShellOverlay::PlanningInit;
@@ -215,7 +253,11 @@ fn vt100_planning_manual_editor_matches_snapshot() {
 
 #[test]
 fn vt100_narrow_shell_matches_snapshot() {
-    // 학습 주석: narrow shell snapshot은 terminal width를 넘는 줄이 생기지 않도록 resize contract를 잠급니다.
+    /*
+     * Narrow shell snapshot은 resize contract다. Inline renderer는 terminal width를 넘는 줄을 만들면
+     * host terminal scrollback과 cursor tracking이 흔들리므로, vt100 output의 모든 visible line이
+     * requested width 안에 들어오는지 확인한다.
+     */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     tui_testkit::set_live_agent_message(&mut app, "narrow resize keeps the live tail visible");
