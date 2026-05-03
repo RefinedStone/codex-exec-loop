@@ -68,6 +68,12 @@ impl GithubReviewPollerAdapter {
         }
     }
     pub fn from_refinedstone_credentials(repo_root: &Path) -> Result<Self> {
+        /*
+        The poller is intentionally tied to the RefinedStone credential contract used by
+        repository automation. The adapter converts the repo-local or WSL-discovered
+        credential into a bearer token immediately, so later HTTP code never needs to
+        know where the token came from.
+        */
         let credential_line = Self::read_refinedstone_credential_line(repo_root)?;
         Ok(Self::new(Self::parse_refinedstone_token(&credential_line)?))
     }
@@ -120,6 +126,12 @@ impl GithubReviewPollerAdapter {
         Self::resolve_git_path(repo_root, "--git-common-dir", "git common dir")
     }
     fn resolve_git_path(repo_root: &Path, flag: &str, label: &str) -> Result<PathBuf> {
+        /*
+        Worktrees make `.git` a pointer file, so direct path assumptions are fragile.
+        `git rev-parse --path-format=absolute` asks git for the canonical worktree or
+        common directory and keeps credential lookup valid across normal clones and
+        linked worktrees.
+        */
         let path =
             Self::run_git_command(repo_root, &["rev-parse", "--path-format=absolute", flag])?;
         if path.is_empty() {
@@ -128,13 +140,28 @@ impl GithubReviewPollerAdapter {
         Ok(PathBuf::from(path))
     }
     fn resolve_repository_full_name(repo_root: &Path) -> Result<String> {
+        /*
+        The repository identity comes from origin because GitHub's pull request APIs are
+        repository scoped. Keeping this lookup local avoids asking GitHub to search
+        across installations before we know which owner/repo path is authoritative.
+        */
         let origin_url = Self::run_git_command(repo_root, &["remote", "get-url", "origin"])?;
         Self::parse_repository_full_name(&origin_url)
     }
     fn resolve_current_branch_name(repo_root: &Path) -> Result<String> {
+        /*
+        The current branch is the user's review lane. Detached HEAD returns `HEAD`,
+        which the discovery entrypoint treats as non-pollable because no stable
+        `owner:branch` head filter can be constructed.
+        */
         Self::run_git_command(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
     }
     fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<String> {
+        /*
+        Git is invoked non-interactively and stdout is trimmed at the boundary. Callers
+        receive domain-specific parse errors above this helper, while command failure
+        still includes stderr so repository identity problems are diagnosable.
+        */
         let output = Command::new("git")
             .arg("-C")
             .arg(repo_root)
@@ -213,6 +240,12 @@ impl GithubReviewPollerAdapter {
         );
     }
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
+        /*
+        Credential files may contain trailing newlines or comments managed outside this
+        adapter. The poller only accepts the first non-empty line because the
+        RefinedStone credential contract stores exactly one usable GitHub credential
+        per lookup file.
+        */
         let contents = fs::read_to_string(path)?;
         contents
             .lines()
@@ -272,6 +305,12 @@ impl GithubReviewPollerAdapter {
         users_root: &Path,
         current_user: &str,
     ) -> Result<Option<PathBuf>> {
+        /*
+        WSL `$USER` commonly matches the Windows profile directory, but casing can
+        differ and directory scans can be blocked by permissions. This function first
+        records whether the direct path exists, then uses the scan only as a more
+        tolerant casing fallback.
+        */
         let direct_match = users_root.join(current_user);
         let direct_match_exists = direct_match.is_dir();
         let entries = match fs::read_dir(users_root) {
@@ -314,6 +353,11 @@ impl GithubReviewPollerAdapter {
         Ok(token.to_string())
     }
     fn encode_query_value(value: &str) -> String {
+        /*
+        GitHub's head/base filters live in the query string, not the path. Branch names
+        can contain slash or other reserved characters, so encoding here protects the
+        `owner:branch` search expression without double-encoding endpoint paths.
+        */
         utf8_percent_encode(value, GITHUB_QUERY_ENCODE_SET).to_string()
     }
     fn fetch_pull_request_details(
@@ -356,6 +400,11 @@ impl GithubReviewPollerAdapter {
     where
         T: DeserializeOwned,
     {
+        /*
+        Single-object endpoints still flow through fetch_json + parse_json so curl
+        failure, HTTP status, and serde shape errors are reported with the same endpoint
+        context as paginated array endpoints.
+        */
         let body = self.fetch_json(endpoint)?;
         Self::parse_json(&body, endpoint)
     }
@@ -385,8 +434,12 @@ impl GithubReviewPollerAdapter {
         }
     }
     fn fetch_json(&self, endpoint: &str) -> Result<String> {
-        // curl is used instead of a persistent HTTP client so the adapter stays dependency-light and mirrors shell tooling.
-        // Timeouts prevent review polling from blocking the TUI/app-server loop indefinitely.
+        /*
+        curl is used instead of a persistent HTTP client so the adapter stays
+        dependency-light and mirrors the repository's shell automation. The timeout
+        flags are part of the TUI contract: review polling must fail with diagnostics
+        instead of blocking the app-server loop indefinitely.
+        */
         let url = format!("{}{}", self.api_base_url, endpoint);
         let authorization = format!("Authorization: Bearer {}", self.token);
         let user_agent = format!("User-Agent: {}", self.user_agent);
@@ -428,8 +481,12 @@ impl GithubReviewPollerAdapter {
         review_comments: Vec<PullRequestReviewCommentResponse>,
         issue_comments: Vec<IssueCommentResponse>,
     ) -> GithubPullRequestActivitySnapshot {
-        // GitHub splits PR activity across three endpoints. The snapshot merges them into one list and sorts afterward so
-        // service diffing can reason about a single monotonic activity stream.
+        /*
+        GitHub splits PR activity across review submissions, inline review comments,
+        and issue comments. The domain service wants a single activity stream for
+        polling diffs, so this adapter merges endpoint-specific DTOs first and sorts
+        only after all event kinds have the same domain shape.
+        */
         let mut events = reviews
             .into_iter()
             .filter_map(Self::to_review_event)
@@ -460,7 +517,11 @@ impl GithubReviewPollerAdapter {
     fn to_review_event(
         review: PullRequestReviewResponse,
     ) -> Option<GithubPullRequestActivityEvent> {
-        // Pending reviews have no submitted timestamp and are not visible as public PR activity yet, so they are skipped.
+        /*
+        Pending reviews have no submitted timestamp and are not public review activity
+        yet. Skipping them prevents the poller from announcing draft review state that
+        the PR timeline itself would not show to the operator.
+        */
         let submitted_at = review.submitted_at?;
 
         Some(GithubPullRequestActivityEvent {
@@ -509,6 +570,11 @@ impl GithubReviewPollerPort for GithubReviewPollerAdapter {
         &self,
         target: &GithubPullRequestTarget,
     ) -> Result<GithubPullRequestActivitySnapshot> {
+        /*
+        Loading activity is intentionally a full refresh. The application service owns
+        diffing against the previous snapshot, while this adapter keeps each poll
+        stateless and reconstructs the authoritative PR timeline from GitHub.
+        */
         let pull_request = self.fetch_pull_request_details(target)?;
         let reviews = self.fetch_pull_request_reviews(target)?;
         let review_comments = self.fetch_review_comments(target)?;
