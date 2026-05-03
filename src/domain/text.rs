@@ -1,22 +1,38 @@
 // 이 함수는 로그, 상태줄, overlay 요약에 들어가는 상세 text를 한 줄짜리 짧은 설명으로 정규화한다.
 // domain helper에 두면 adapter마다 whitespace 압축과 ellipsis 규칙을 다시 만들지 않아도 된다.
 pub fn compact_whitespace_detail(text: &str, max_len: usize) -> String {
-    // `split_whitespace`는 공백, 탭, 줄바꿈을 모두 구분자로 보고 빈 조각을 버린다. 다시 single space로
-    // join하면 여러 줄 입력도 UI가 다루기 쉬운 한 줄 detail로 바뀐다.
+    /*
+     * Whitespace compaction happens before length budgeting because callers usually
+     * pass stderr, markdown snippets, or multi-line status details. A newline-heavy
+     * input should spend the visible budget on words, not on layout artifacts that the
+     * one-line UI surface cannot preserve.
+     */
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    // 길이 검사는 byte 길이가 아니라 char 개수 기준이다. 한글 같은 multibyte 문자가 있어도 화면에 보여 줄
-    // 문자 수 기준으로 제한하고, 중간 byte를 잘라 깨진 UTF-8을 만들지 않는다.
+    /*
+     * Budgeting uses Unicode scalar count instead of byte length. This keeps Korean
+     * text and other multi-byte input from being split inside UTF-8 sequences while
+     * still giving status surfaces a deterministic character budget.
+     */
     if compact.chars().count() <= max_len {
-        // 이미 제한 안에 들어온 text는 ellipsis를 붙이지 않는다. caller가 원문 의미를 최대한 보존한 compact
-        // string을 받을 수 있다.
+        /*
+         * Text already inside the budget is returned without decoration. Adding an
+         * ellipsis in this branch would make complete diagnostics look truncated and
+         * would mislead users reading startup or runtime status copy.
+         */
         return compact;
     }
 
-    // ellipsis 세 글자(`...`)를 붙일 공간을 먼저 뺀다. `saturating_sub`라 max_len이 0~2여도 underflow 없이
-    // keep이 0이 되고, 결과는 최소한의 `...` truncation marker가 된다.
+    /*
+     * The ellipsis marker is always preferred over a silent cut. For tiny budgets,
+     * saturating_sub keeps the function total and returns the smallest possible marker
+     * rather than panicking or exposing a misleading partial word.
+     */
     let keep = max_len.saturating_sub(3);
-    // `chars().take(keep)`로 문자 경계에서 잘라 UTF-8 안전성을 유지한다. byte slice로 자르면 multibyte 문자를
-    // 중간에서 끊어 panic이나 잘못된 표시를 만들 수 있다.
+    /*
+     * Taking chars after compaction preserves UTF-8 boundaries. This helper is used by
+     * adapters and presentation code that should never need to reason about byte
+     * slicing to show a safe diagnostic tail.
+     */
     let truncated = compact.chars().take(keep).collect::<String>();
     format!("{truncated}...")
 }
