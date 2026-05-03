@@ -20,7 +20,12 @@ pub(super) const ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT: &str =
     "app-server connection while a turn stream was active";
 
 pub(super) fn initialize_detail(initialize_response: &InitializeResponse) -> String {
-    // initialize response는 startup diagnostics와 terminal attachment event에 들어갈 짧은 environment label이 된다.
+    /*
+     * The initialize response is reduced to a compact environment label because the
+     * TUI shows it in startup diagnostics and terminal attachment events. Keeping the
+     * full response out of higher layers prevents UI copy from depending on upstream
+     * initialize fields that are not part of Akra's user-facing contract.
+     */
     format!(
         "{} / {} / {}",
         initialize_response.platform_os,
@@ -78,7 +83,12 @@ pub(super) fn to_conversation_snapshot(
 }
 
 pub(super) fn thread_title(thread_record: &ThreadRecord) -> String {
-    // app-server name이 비어 있으면 preview 첫 줄을 fallback으로 써서 재개 화면과 session list의 제목 기준을 맞춘다.
+    /*
+     * app-server may return an empty thread name for older or auto-created sessions.
+     * Falling back to the preview's first non-empty line keeps resume screens and the
+     * session catalog using the same title rule instead of letting each adapter view
+     * invent its own placeholder.
+     */
     thread_record
         .name
         .clone()
@@ -96,13 +106,22 @@ pub(super) fn thread_title(thread_record: &ThreadRecord) -> String {
 }
 
 pub(super) fn sort_and_dedup_warnings(warnings: &mut Vec<String>) {
-    // app-server warnings와 runtime retry notices는 여러 retry path에서 합쳐지므로 출력 직전에 안정 정렬한다.
+    /*
+     * Warnings are normalized at the projection edge because they can be gathered from
+     * stderr, delayed notifications, shared runtime retry notices, and isolated
+     * fallback notices. Stable sort/dedup makes repeated retry paths deterministic for
+     * tests and prevents duplicate operator copy.
+     */
     warnings.sort();
     warnings.dedup();
 }
 
 pub(super) fn partition_runtime_notices(warnings: Vec<String>) -> (Vec<String>, Vec<String>) {
-    // runtime notice는 실패가 아니라 adapter 운영 상태이므로 transcript warning과 분리해 TUI가 다른 copy로 보여준다.
+    /*
+     * Runtime notices describe adapter operations, not conversation content. Splitting
+     * them before snapshot projection lets the TUI place reconnect/fallback copy near
+     * runtime status while preserving actual app-server warnings beside the transcript.
+     */
     let mut conversation_warnings = Vec::new();
     let mut runtime_notices = Vec::new();
 
@@ -118,7 +137,11 @@ pub(super) fn partition_runtime_notices(warnings: Vec<String>) -> (Vec<String>, 
 }
 
 pub(super) fn is_runtime_notice(warning: &str) -> bool {
-    // shared runtime retry와 active-stream isolated fallback은 둘 다 app-server content warning이 아니라 adapter notice다.
+    /*
+     * The classifier is intentionally string-based because notices are assembled in
+     * lower transport/runtime layers as human-readable diagnostics. The stable prefix
+     * and fragment are the adapter's contract for routing those messages.
+     */
     warning.starts_with(SHARED_RUNTIME_NOTICE_PREFIX)
         || warning.contains(ACTIVE_STREAM_ISOLATION_NOTICE_FRAGMENT)
 }
@@ -141,12 +164,22 @@ pub(super) struct AccountReadResponse {
 
 impl AccountReadResponse {
     pub(super) fn is_authenticated(&self) -> bool {
-        // API-key mode처럼 OpenAI login이 필요 없는 setup은 account object가 없어도 startup을 통과시킨다.
+        /*
+         * Authentication is not equivalent to "has an account object". API-key setups
+         * can be valid without ChatGPT account metadata, so the app-server-provided
+         * requiresOpenAIAuth flag is the gate that keeps startup checks from rejecting
+         * supported headless configurations.
+         */
         self.account.is_some() || !self.requires_openai_auth.unwrap_or(false)
     }
 
     pub(super) fn to_summary_text(&self) -> String {
-        // startup panel은 상세 account schema 대신 사용자에게 읽을 수 있는 한 줄 요약만 필요로 한다.
+        /*
+         * Startup copy needs a readable account summary, not the full account schema.
+         * This keeps provider-specific fields localized while still surfacing enough
+         * detail for operators to recognize ChatGPT, API key, and unauthenticated
+         * states.
+         */
         match &self.account {
             Some(account) if account.account_type == "chatgpt" => format!(
                 "chatgpt / {} / {}",
@@ -227,7 +260,12 @@ pub(super) enum SandboxModeValue {
 
 impl SandboxModeValue {
     pub(super) fn as_turn_sandbox_policy(self) -> SandboxPolicyValue {
-        // thread start/resume uses SandboxModeValue, while turn/start expects the tagged sandboxPolicy shape.
+        /*
+         * app-server uses two wire shapes for the same policy concept: thread
+         * start/resume accepts the legacy sandbox mode enum, while turn/start expects
+         * a tagged sandboxPolicy object. Keeping the conversion here prevents request
+         * assembly code from knowing both protocol spellings.
+         */
         match self {
             Self::ReadOnly => SandboxPolicyValue::ReadOnly,
             Self::WorkspaceWrite => SandboxPolicyValue::WorkspaceWrite,
@@ -338,12 +376,21 @@ pub(super) enum TurnInputItem {
 
 impl TurnInputItem {
     pub(super) fn text(text: impl Into<String>) -> Self {
-        // helper keeps call sites away from serde's tagged enum spelling.
+        /*
+         * The constructor hides serde's tagged enum shape from prompt assembly code.
+         * That keeps input ordering decisions near workers/controllers while protocol
+         * field spelling remains centralized in this module.
+         */
         Self::Text { text: text.into() }
     }
 
     pub(super) fn skill(name: impl Into<String>, path: impl Into<String>) -> Self {
-        // planning_worker_skill.rs uses this to attach the queue mutation evaluator contract to hidden worker turns.
+        /*
+         * Skill items must precede the text prompt when hidden workers need a local
+         * evaluator contract. Representing them as first-class turn input keeps the
+         * app-server responsible for loading SKILL.md rather than embedding long
+         * contract text into every prompt body.
+         */
         Self::Skill {
             name: name.into(),
             path: path.into(),
@@ -394,9 +441,16 @@ pub(super) struct TurnRecord {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThreadRecord {
-    // id is the app-server thread identifier used by resume, turn start, and snapshot reads.
+    /*
+     * id is the stable app-server thread identifier shared by resume, turn start, and
+     * snapshot reads. Domain projections keep it verbatim because this adapter cannot
+     * synthesize or repair thread identity.
+     */
     pub(super) id: String,
-    // name can be missing or blank, so thread_title falls back to preview.
+    /*
+     * name can be missing or blank on upstream records. thread_title is the only
+     * projection path that decides whether preview should become the display title.
+     */
     pub(super) name: Option<String>,
     pub(super) preview: String,
     pub(super) cwd: String,
