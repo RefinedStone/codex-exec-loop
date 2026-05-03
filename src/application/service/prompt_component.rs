@@ -40,10 +40,10 @@ impl PromptDocument {
     // 이 함수의 출력이므로, 공백과 section 구분 규칙은 테스트로 고정되어야 한다.
     pub(crate) fn render(&self) -> String {
         /*
-         * Render is intentionally dumb: it trusts the builder's line normalization and
-         * only enforces the outer document grammar. This split keeps section-specific
-         * cleanup close to insertion APIs while making the final prompt layout easy to
-         * audit in snapshot-like tests.
+         * render는 의도적으로 단순하다.
+         * builder가 이미 line normalization을 끝냈다고 믿고, 바깥 document grammar만 강제한다.
+         * 이렇게 나누면 section별 cleanup은 insertion API 근처에 남고, 최종 prompt layout은 snapshot-like test로
+         * 감사하기 쉬운 형태가 된다.
          */
         // 첫 줄은 항상 `# 제목`이다. 제목 양끝 공백을 제거해 호출부 실수로 prompt 헤더가 흔들리지 않게 한다.
         let mut lines = vec![format!("# {}", self.title.trim())];
@@ -80,10 +80,9 @@ impl PromptDocumentBuilder {
     // bullet prefix나 text splitting 같은 추가 의미 변환을 하지 않는다는 것을 호출자에게 알려 준다.
     pub(crate) fn raw_lines(mut self, title: impl Into<String>, lines: Vec<String>) -> Self {
         /*
-         * raw_lines is for callers that have already chosen the exact line structure,
-         * such as code fences or generated contracts. The builder still trims trailing
-         * whitespace and suppresses all-empty sections, but it does not add bullets,
-         * split text, or otherwise reinterpret the payload.
+         * raw_lines는 code fence나 generated contract처럼 호출자가 정확한 line structure를 이미 결정했을 때 쓴다.
+         * builder는 trailing whitespace 제거와 all-empty section 생략만 수행하고, bullet 추가, text split,
+         * payload 재해석은 하지 않는다.
          */
         // 오른쪽 공백만 제거한다. 왼쪽 공백은 code block 내부 indentation이나 payload 정렬에
         // 의미가 있을 수 있으므로 보존한다.
@@ -106,10 +105,9 @@ impl PromptDocumentBuilder {
     // 호출 의도상 "이미 prompt에 그대로 들어갈 줄들"보다 한 단계 높은 일반 텍스트 라인 API로 남겨 둔다.
     pub(crate) fn lines(mut self, title: impl Into<String>, lines: Vec<String>) -> Self {
         /*
-         * lines is the normal section API for prompt components that are already
-         * represented as rows. It deliberately shares the same empty-section policy as
-         * raw_lines so optional context can disappear consistently regardless of which
-         * insertion helper produced it.
+         * lines는 이미 row로 표현된 prompt component를 넣는 일반 section API다.
+         * raw_lines와 같은 empty-section 정책을 의도적으로 공유해, 어떤 insertion helper가 만들었든 optional context가
+         * 일관되게 사라지게 한다.
          */
         let lines = lines
             .into_iter()
@@ -144,9 +142,9 @@ impl PromptDocumentBuilder {
     // 내부 줄과 빈 줄은 보존해 사람이 작성한 runtime context의 구조를 유지한다.
     pub(crate) fn text(self, title: impl Into<String>, text: &str) -> Self {
         /*
-         * text trims the enclosing block but preserves internal blank lines. Planning
-         * fragments and handoff copy often rely on paragraph breaks, while leading or
-         * trailing blank rows usually come from string literal indentation.
+         * text는 enclosing block만 trim하고 내부 빈 줄은 보존한다.
+         * planning fragment와 handoff copy는 paragraph break에 의존하는 경우가 많고, 앞뒤 빈 줄은 보통 string literal
+         * indentation에서 온다.
          */
         let lines = text
             .trim()
@@ -170,10 +168,8 @@ impl PromptDocumentBuilder {
     // 넣으면 모델이 section 설명과 본문을 헷갈릴 수 있으므로, language fence를 포함한 raw section으로 렌더링한다.
     pub(crate) fn code_block(self, title: impl Into<String>, language: &str, body: &str) -> Self {
         /*
-         * Code blocks are assembled as raw section lines so render does not need a
-         * second Markdown-aware branch. The language tag is kept caller-controlled
-         * because JSON, TOML, diff, and shell snippets are used by different planning
-         * prompts.
+         * code block은 raw section line으로 조립한다. render가 Markdown-aware branch를 따로 가질 필요가 없게 하기 위해서다.
+         * language tag는 caller가 제어한다. planning prompt마다 JSON, TOML, diff, shell snippet이 서로 다르게 쓰이기 때문이다.
          */
         // block 전체 양끝 공백은 제거해 불필요한 첫/마지막 빈 줄을 없앤다.
         let body = body.trim();
@@ -197,9 +193,9 @@ impl PromptDocumentBuilder {
         body: Option<&str>,
     ) -> Self {
         /*
-         * optional_code_block mirrors optional_text at the payload boundary. Empty tool
-         * output or missing snapshots should remove the entire section, not leave an
-         * empty fence that suggests a payload was intentionally blank.
+         * optional_code_block은 payload boundary에서 optional_text와 같은 정책을 따른다.
+         * 빈 tool output이나 누락 snapshot은 section 전체를 제거해야 하며, 의도적으로 비워 둔 payload처럼 보이는
+         * empty fence를 남기면 안 된다.
          */
         // 공백뿐인 body도 없는 것으로 취급해 prompt에 빈 fence가 들어가지 않게 한다.
         match body.map(str::trim).filter(|value| !value.is_empty()) {
