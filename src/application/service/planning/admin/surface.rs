@@ -3,11 +3,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 /*
- * The admin surface module is intentionally data-heavy: it is the stable JSON
- * contract between inbound admin routes/templates and the planning application
- * services. Domain documents stay behind service boundaries; these request and
- * view types expose only editor-friendly labels, markdown bodies, summaries,
- * and mutation forms.
+ * admin surface는 의도적으로 data-heavy한 모듈이다. inbound admin route/template과 planning application
+ * service 사이의 안정적인 JSON/view 계약을 여기에 모아두면, domain document는 service 경계 뒤에 남고 admin
+ * UI는 editor-friendly label, markdown body, 요약, mutation form만 다룬다. 이 계층이 얇아 보여도 중요한
+ * 이유는 route가 domain enum이나 persistence snapshot을 직접 serialize하기 시작하면 authority format 변경이
+ * 곧바로 admin API breaking change가 되기 때문이다.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,8 +18,8 @@ pub enum PlanningAdminDraftKind {
 }
 impl PlanningAdminDraftKind {
     pub fn label(self) -> &'static str {
-        // Labels are lower-case because they are embedded in notices and inline
-        // admin copy rather than used as page headings.
+        // label은 notice와 inline copy에 들어가는 작은 문자열이다. page heading처럼 title case를 강제하지 않고
+        // lower-case 문구로 고정해 draft 종류가 flash message 안에서 자연스럽게 이어지게 한다.
         match self {
             Self::FullPlanning => "full planning",
             Self::QueueIdlePrompt => "queue-idle prompt",
@@ -27,8 +27,8 @@ impl PlanningAdminDraftKind {
         }
     }
     pub fn editor_heading(self) -> &'static str {
-        // Draft kind controls the editor shell: full planning returns to the
-        // overview, while direction-scoped drafts live under directions.
+        // draft kind는 editor shell의 제목과 navigation 소유권을 함께 결정한다. full planning은 overview에서
+        // 시작한 전체 편집이고, queue-idle/detail draft는 directions 영역의 세부 문서 편집이다.
         match self {
             Self::FullPlanning => "Full Planning Draft",
             Self::QueueIdlePrompt => "Queue-Idle Prompt Draft",
@@ -36,15 +36,16 @@ impl PlanningAdminDraftKind {
         }
     }
     pub fn return_path(self) -> &'static str {
-        // The return path mirrors the ownership of the backing document.
+        // return path는 backing document의 소유 화면을 따른다. editor가 저장/취소 후 돌아갈 곳을 route가 따로
+        // 추론하지 않게 enum 표면에서 한 번만 정의한다.
         match self {
             Self::FullPlanning => "/admin",
             Self::QueueIdlePrompt | Self::DirectionDetail => "/admin/directions",
         }
     }
     pub fn slug(self) -> &'static str {
-        // Slugs are persisted in routes and draft directory names, so Display
-        // delegates here instead of formatting enum debug names.
+        // slug는 route parameter와 draft directory name으로 쓰이는 persisted-ish 값이다. Display가 debug name이
+        // 아니라 이 slug를 위임하게 해 Rust enum 이름 변경이 외부 path 계약을 흔들지 않게 한다.
         match self {
             Self::FullPlanning => "full_planning",
             Self::QueueIdlePrompt => "queue_idle_prompt",
@@ -67,7 +68,8 @@ pub enum PlanningAdminFileKey {
 }
 impl PlanningAdminFileKey {
     pub fn label(self) -> &'static str {
-        // File keys identify editable panes inside a draft session.
+        // file key label은 draft session 안의 editor pane 제목이다. active path보다 짧은 표시명을 내려 UI가
+        // filesystem layout을 그대로 노출하지 않아도 된다.
         match self {
             Self::ResultOutput => "Result Output",
             Self::QueueIdlePrompt => "Queue-Idle Prompt",
@@ -75,14 +77,15 @@ impl PlanningAdminFileKey {
         }
     }
     pub fn editor_language(self) -> &'static str {
-        // All current planning admin files are markdown, but the method keeps
-        // the editor contract extensible without leaking file names upward.
+        // 지금 admin planning file은 모두 markdown이지만, editor contract는 file key에서 language를 얻는다.
+        // 나중에 JSON/YAML pane이 생겨도 route/template은 path suffix를 검사하지 않고 이 메서드만 따르면 된다.
         match self {
             Self::ResultOutput | Self::QueueIdlePrompt | Self::DirectionDetail => "markdown",
         }
     }
     pub fn slug(self) -> &'static str {
-        // These slugs are used as request keys and draft file identifiers.
+        // file key slug는 request body의 key와 draft file 식별자로 쓰인다. enum variant 이름 대신 명시 문자열을
+        // 유지해 serde rename, form field, editor state가 같은 값을 공유하게 한다.
         match self {
             Self::ResultOutput => "result_output",
             Self::QueueIdlePrompt => "queue_idle_prompt",
@@ -96,7 +99,10 @@ impl fmt::Display for PlanningAdminFileKey {
     }
 }
 
-/* Draft requests describe the temporary editing session, not committed state. */
+/*
+ * draft request는 committed authority가 아니라 임시 editing session을 가리킨다. draft_name은 staged file
+ * directory를 찾는 handle이고, kind/direction_id는 그 directory 안에서 어떤 editor surface를 노출할지 정한다.
+ */
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningAdminDraftLoadRequest {
     pub draft_name: String,
@@ -122,9 +128,9 @@ pub struct PlanningAdminDraftMutationRequest {
 }
 
 /*
- * Validation views flatten parser and consistency diagnostics into UI-ready
- * strings. The admin layer can render counts and per-file issues without
- * depending on domain error enums.
+ * validation view는 parser/consistency diagnostics를 UI-ready 문자열로 평탄화한 계약이다. admin layer는 count와
+ * file별 issue를 렌더링하지만, domain error enum이나 PlanningFileKind variant를 route/template에 직접 노출하지
+ * 않는다. 실제 severity 판정은 projection 쪽 validation report가 authority로 유지한다.
  */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminValidationIssueView {
@@ -143,9 +149,9 @@ pub struct PlanningAdminValidationView {
 }
 
 /*
- * Queue previews are read-only projections of domain queue state. The surface
- * keeps the head richer than regular rows because rank reasons explain why that
- * task became the next handoff.
+ * queue preview는 domain queue state의 read-only projection이다. 일반 row는 목록 스캔에 필요한 최소 필드만
+ * 갖고, queue head만 rank_reasons를 포함한다. 다음 handoff가 왜 선택됐는지 설명하는 정보는 중요하지만 모든 row에
+ * 실으면 overview와 draft validation 응답이 불필요하게 커진다.
  */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminQueueTaskView {
@@ -177,7 +183,11 @@ pub struct PlanningAdminQueuePreview {
     pub proposed_tasks: Vec<PlanningAdminQueueTaskView>,
 }
 
-/* A draft session combines editable file panes with live validation context. */
+/*
+ * draft session view는 editor pane과 live validation context를 한 응답에 결합한다. 저장된 staged file만
+ * 보여주는 것이 아니라 같은 staged content로 validation/queue preview를 계산해, operator가 promote 전에
+ * "지금 이 draft가 accepted authority로 들어가도 되는가"를 한 화면에서 판단하게 한다.
+ */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminDraftFileView {
     pub key: PlanningAdminFileKey,
@@ -201,9 +211,9 @@ pub struct PlanningAdminSessionView {
 }
 
 /*
- * Direction summaries power the high-level directions page: document health,
- * queue-idle prompt status, and the minimal identity needed to jump into detail
- * editing.
+ * direction summary는 high-level directions page의 목록 계약이다. detail document health, queue-idle prompt
+ * 상태, detail editor로 이동하는 데 필요한 최소 identity만 내려보낸다. accepted direction catalog 전체를
+ * 노출하지 않으므로 direction 문서가 커져도 목록 화면의 response shape는 작게 유지된다.
  */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminDirectionSummaryView {
@@ -226,9 +236,9 @@ pub struct PlanningAdminDirectionsSummaryView {
 }
 
 /*
- * Management views are form-shaped snapshots of accepted direction/task
- * authority. List fields are already joined into text blocks so inbound routes
- * can round-trip the same form payloads used for mutation requests.
+ * management view는 accepted direction/task authority를 form-shaped snapshot으로 바꾼 값이다. list field는
+ * 이미 text block으로 join되어 있어 inbound route가 mutation request와 같은 payload shape를 왕복시킬 수 있다.
+ * 이 계약 덕분에 template은 domain Vec<String>과 textarea 사이의 변환 규칙을 몰라도 된다.
  */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminDirectionManagementView {
@@ -264,7 +274,11 @@ pub struct PlanningAdminManagementView {
     pub tasks: Vec<PlanningAdminTaskManagementView>,
 }
 
-/* Mutation requests mirror browser form payloads before validation/coercion. */
+/*
+ * mutation request는 validation/coercion 이전의 browser form payload를 그대로 닮는다. 숫자와 status도 먼저
+ * String으로 받아 admin CRUD service에서 typed command로 변환하므로, 잘못된 입력에 대해 field 문맥이 살아 있는
+ * operator-facing 오류를 만들 수 있다.
+ */
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningAdminDirectionMutationRequest {
     #[serde(default)]
@@ -315,7 +329,10 @@ pub struct PlanningAdminTaskDeleteRequest {
     pub id: String,
 }
 
-/* Command outcomes pair the operator notice with the refreshed admin surface. */
+/*
+ * command outcome은 operator notice와 갱신된 admin surface를 함께 돌려준다. mutation 후 caller가 별도 reload를
+ * 하지 않아도 최신 management/path 상태를 렌더링할 수 있고, notice는 실제 적용된 command 결과를 짧게 설명한다.
+ */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminCrudOutcome {
     pub notice: String,
@@ -329,9 +346,9 @@ pub struct PlanningAdminFileSyncOutcome {
 }
 
 /*
- * Overview summaries condense doctor, runtime, queue, and direction status for
- * the admin landing page. They intentionally avoid raw documents so the page
- * remains stable across authority format changes.
+ * overview summary는 admin landing page가 필요로 하는 doctor/runtime/queue/direction 상태를 축약한다. raw
+ * document를 피하는 이유는 방향 카탈로그나 task authority format이 바뀌어도 overview가 같은 표시 계약을 유지해야
+ * 하기 때문이다. 세부 편집은 management/draft surface가 맡고, overview는 운영 상태 판단에 집중한다.
  */
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminDoctorSummary {
