@@ -117,6 +117,11 @@ pub(super) fn inspect_push_remote(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
+    /*
+    Remote absence is degraded, not blocked, because local-only inspection and
+    pool supervision can still run. The distributor will later surface a harder
+    delivery failure only if a commit-ready result actually needs GitHub push.
+    */
     let Some(push_url) = runtime.run_command(
         "git",
         &[
@@ -139,6 +144,12 @@ pub(super) fn inspect_push_remote(
         );
     };
     let Some((host, path)) = parse_https_remote(&push_url) else {
+        /*
+        Non-HTTPS remotes might still be usable by a human, but the automated
+        credential probe below only knows Git's HTTPS credential protocol shape.
+        Keep this as degraded so readiness reports the automation limitation
+        without rejecting all parallel-mode preparation.
+        */
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
             ParallelModeCapabilityState::Degraded,
@@ -146,6 +157,11 @@ pub(super) fn inspect_push_remote(
             Some("use an https GitHub remote to enable push capability checks".to_string()),
         );
     };
+    /*
+    credential fill is a dry-run for the exact host/path distributor push will
+    hit. It avoids network writes while still catching the common "remote exists
+    but no noninteractive credential is configured" case before dispatch.
+    */
     let Some(credentials) = runtime.run_command_with_stdin(
         "git",
         &["credential", "fill"],
@@ -192,6 +208,11 @@ GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 repo-loca
 pub(super) fn inspect_gh_binary(
     runtime: &dyn ParallelModeRuntimePort,
 ) -> ParallelModeCapabilitySnapshot {
+    /*
+    Binary readiness accepts either the public gh CLI or the repo wrapper. That
+    mirrors the write adapter: capability checks should predict the same execution
+    path the distributor will use instead of forcing an unnecessary gh install.
+    */
     match runtime.find_executable("gh") {
         Some(path) => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
@@ -227,6 +248,11 @@ pub(super) fn inspect_gh_auth(
     repo_root: Option<&str>,
 ) -> ParallelModeCapabilitySnapshot {
     if gh_binary.state != ParallelModeCapabilityState::Ready {
+        /*
+        Auth depends on an executable path. Returning degraded here preserves the
+        dependency chain in the popup: first fix the missing command/script, then
+        rerun readiness for credential status.
+        */
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
@@ -235,6 +261,11 @@ pub(super) fn inspect_gh_auth(
         );
     }
     let auth_succeeded = if runtime.find_executable("gh").is_some() {
+        /*
+        Prefer gh auth status when available because it is the user's familiar
+        diagnostic surface. The fallback script path below is only for workspaces
+        where gh is absent but the repo-local RefinedStone API wrapper exists.
+        */
         runtime.gh_auth_status(repo_root)
     } else if github_fallback_script_available(runtime) {
         runtime
@@ -271,6 +302,11 @@ pub(super) fn inspect_planning(
     snapshot: &PlanningRuntimeSnapshot,
 ) -> ParallelModeCapabilitySnapshot {
     if !snapshot.workspace_present() {
+        /*
+        workspace_present is checked before workspace_status because an absent
+        planning tree cannot offer repair-specific validation detail. The next
+        action should point to initialization, not generic planning repair.
+        */
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::Planning,
             ParallelModeCapabilityState::Blocked,
@@ -334,6 +370,11 @@ pub(super) fn inspect_authority_store(
     planning: &ParallelModeCapabilitySnapshot,
 ) -> ParallelModeCapabilitySnapshot {
     if git_repository.state != ParallelModeCapabilityState::Ready {
+        /*
+        Authority store inspection needs a stable repository root. Without git,
+        calling into the planning authority would produce misleading store errors
+        that are really repository-location failures.
+        */
         return blocked_prerequisite_capability(
             ParallelModeCapabilityKey::AuthorityStore,
             "waiting for git repository detection",
@@ -341,6 +382,11 @@ pub(super) fn inspect_authority_store(
         );
     }
     if planning.state != ParallelModeCapabilityState::Ready {
+        /*
+        Store parity only matters after planning files are usable. When planning is
+        invalid or missing, the more useful recovery path is to repair planning
+        first and let the authority mirror bootstrap/resync afterward.
+        */
         return blocked_prerequisite_capability(
             ParallelModeCapabilityKey::AuthorityStore,
             "waiting for planning readiness",
@@ -351,6 +397,11 @@ pub(super) fn inspect_authority_store(
         Ok(inspection) => {
             let canonical_root = inspection.location.canonical_repo_root;
             let document_count = inspection.mirrored_document_count;
+            /*
+            Bootstrapped, in-sync, and resynced are all Ready because the adapter
+            has produced a coherent shadow store by the time inspection returns.
+            Resynced keeps a sample parity issue only as operator context.
+            */
             let detail = match inspection.sync_state {
                 crate::domain::planning::PlanningAuthorityShadowStoreSyncState::Bootstrapped => {
                     format!(
@@ -418,6 +469,10 @@ pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
     let mut parts = stripped.splitn(2, '/');
     let host = parts.next()?.trim();
     let path = parts.next()?.trim();
+    /*
+    The path intentionally keeps the full owner/repo suffix, including `.git` if
+    present, because `git credential fill` keys credentials by host plus path.
+    */
     if host.is_empty() || path.is_empty() {
         return None;
     }
