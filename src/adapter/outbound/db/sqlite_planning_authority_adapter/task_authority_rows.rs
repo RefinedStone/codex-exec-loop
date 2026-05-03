@@ -45,6 +45,11 @@ pub(super) fn replace_task_authority_tables(
     task_authority: &TaskAuthorityDocument,
     queue_projection: &PriorityQueueProjection,
 ) -> Result<()> {
+    /*
+    Projection rows are cleared before task rows are synchronized because queue rank is a
+    derived snapshot, not independent state. If task upsert later fails, the outer
+    transaction rolls this clear back with the rest of the authority update.
+    */
     clear_queue_projection_rows(transaction)?;
     sync_task_authority_rows(transaction, task_authority)?;
     insert_queue_projection_tasks(transaction, "active", &queue_projection.active_tasks)?;
@@ -73,6 +78,11 @@ fn sync_task_authority_rows(
     transaction: &rusqlite::Transaction<'_>,
     task_authority: &TaskAuthorityDocument,
 ) -> Result<()> {
+    /*
+    desired_task_ids is computed from the incoming document, not from the DB. This makes
+    document absence authoritative: anything left in SQLite but omitted by the latest
+    task authority must be treated as stale adapter state and removed.
+    */
     let desired_task_ids = task_authority
         .tasks
         .iter()
@@ -82,6 +92,11 @@ fn sync_task_authority_rows(
     for (index, task) in task_authority.tasks.iter().enumerate() {
         upsert_task_row(transaction, index, task)?;
         let task_id = task.id.trim();
+        /*
+        Edges are task-local projections of arrays in content_json. Clearing only the
+        current task's edges preserves other tasks while guaranteeing that removed or
+        reordered dependency entries do not survive from the previous snapshot.
+        */
         transaction
             .execute(
                 "DELETE FROM planning_task_edges WHERE task_id = ?1",
@@ -130,6 +145,11 @@ fn delete_stale_task_rows(
     drop(statement);
 
     for task_id in stale_task_ids {
+        /*
+        Stale IDs are trimmed at deletion time to match the normalized IDs used during
+        insert/upsert. This keeps a previously sloppy row from surviving just because
+        the new document normalized whitespace around task ids.
+        */
         transaction
             .execute(
                 "DELETE FROM planning_task_edges WHERE task_id = ?1",
@@ -163,6 +183,11 @@ fn upsert_task_row(
     task: &crate::domain::planning::TaskDefinition,
 ) -> Result<()> {
     let task_id = task.id.trim();
+    /*
+    The searchable columns are intentionally normalized views of the domain task. The
+    JSON payload remains the full restore source, while these columns support queue,
+    admin, and diagnostic queries without forcing callers to deserialize every row.
+    */
     transaction
         .execute(
             "INSERT INTO planning_tasks
@@ -213,6 +238,11 @@ fn insert_task_edges(
     target_task_ids: &[String],
 ) -> Result<()> {
     for (index, target_task_id) in target_task_ids.iter().enumerate() {
+        /*
+        Edge rows use the already-normalized parent task_id from the caller and trim the
+        target id here. Validation owns whether the target exists; this adapter only
+        persists the document's relationship list in a query-friendly shape.
+        */
         transaction
             .execute(
                 "INSERT INTO planning_task_edges (task_id, edge_kind, target_task_id, edge_order)
@@ -243,6 +273,11 @@ fn insert_queue_projection_tasks(
     tasks: &[PriorityQueueTask],
 ) -> Result<()> {
     for task in tasks {
+        /*
+        rank is trusted from PriorityQueueProjection instead of recomputed from task
+        priority columns. Runtime queue policy may include more than raw priority, so
+        the persisted projection must mirror the already-decided ordering.
+        */
         transaction
             .execute(
                 "INSERT INTO planning_queue_projection
@@ -278,6 +313,11 @@ fn insert_queue_projection_skipped(
     skipped_tasks: &[PriorityQueueSkippedTask],
 ) -> Result<()> {
     for (index, task) in skipped_tasks.iter().enumerate() {
+        /*
+        Skipped entries use display order as rank because skipped reasons are explanation
+        rows, not executable queue candidates. That keeps them stable in admin/TUI output
+        without implying they compete with active/proposed priorities.
+        */
         transaction
             .execute(
                 "INSERT INTO planning_queue_projection
@@ -310,6 +350,11 @@ row 데이터만 지우고 metadata가 남으면 상위 로직이 DB에 아직 �
 */
 pub(super) fn clear_task_authority_tables(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     clear_task_authority_rows(transaction)?;
+    /*
+    Removing the ledger version is what makes store::task_authority_exists return false
+    when no task rows remain. Without this metadata delete, an intentionally cleared
+    authority could be misread as an initialized but empty ledger snapshot.
+    */
     transaction
         .execute(
             "DELETE FROM authority_metadata WHERE key = ?1",
