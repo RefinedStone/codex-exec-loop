@@ -399,9 +399,9 @@ impl GithubReviewPollerAdapter {
         T: DeserializeOwned,
     {
         /*
-        Single-object endpoints still flow through fetch_json + parse_json so curl
-        failure, HTTP status, and serde shape errors are reported with the same endpoint
-        context as paginated array endpoints.
+        single-object endpoint도 fetch_json + parse_json을 그대로 통과한다.
+        curl failure, HTTP status failure, serde shape error가 paginated array endpoint와 같은 endpoint context를 갖게 하려는
+        의도다. 호출자가 object인지 array인지에 따라 진단 품질이 달라지면 polling failure를 해석하기 어렵다.
         */
         let body = self.fetch_json(endpoint)?;
         Self::parse_json(&body, endpoint)
@@ -411,10 +411,11 @@ impl GithubReviewPollerAdapter {
         T: DeserializeOwned,
     {
         /*
-        GitHub REST pagination stops when a page returns fewer than `PER_PAGE` items.
+        GitHub REST pagination은 한 page가 `PER_PAGE`보다 적은 item을 반환하면 끝난 것으로 본다.
 
-        This avoids depending on Link headers and keeps curl output parsing limited to JSON bodies. The tradeoff is one
-        request per page, which is fine for PR review activity volumes and simpler to test with fixture JSON.
+        Link header parsing에 의존하지 않고 curl output parsing을 JSON body로 제한하기 위한 선택이다.
+        tradeoff는 page마다 request를 하나씩 더 보내는 것이지만, PR review activity volume에서는 충분히 작고
+        fixture JSON으로 테스트하기도 단순하다.
         */
         let mut items = Vec::new();
         let mut page = 1;
@@ -433,10 +434,10 @@ impl GithubReviewPollerAdapter {
     }
     fn fetch_json(&self, endpoint: &str) -> Result<String> {
         /*
-        curl is used instead of a persistent HTTP client so the adapter stays
-        dependency-light and mirrors the repository's shell automation. The timeout
-        flags are part of the TUI contract: review polling must fail with diagnostics
-        instead of blocking the app-server loop indefinitely.
+        persistent HTTP client 대신 curl을 사용해 adapter dependency를 가볍게 유지하고 repository shell automation과 실행 방식을 맞춘다.
+        timeout flag는 TUI contract의 일부다.
+        review polling은 app-server loop를 무기한 막지 않고, 진단 가능한 command failure로 돌아와야 한다.
+        bearer token과 API version/user-agent header는 이 outbound boundary에서만 조립한다.
         */
         let url = format!("{}{}", self.api_base_url, endpoint);
         let authorization = format!("Authorization: Bearer {}", self.token);
@@ -469,6 +470,11 @@ impl GithubReviewPollerAdapter {
     where
         T: DeserializeOwned,
     {
+        /*
+        JSON parsing은 endpoint context와 함께 실패해야 한다.
+        GitHub response DTO는 private type이므로, shape drift가 발생하면 어떤 REST endpoint의 payload가 contract와 달라졌는지
+        바로 드러나야 한다.
+        */
         serde_json::from_str(body)
             .with_context(|| format!("failed to parse GitHub response for {endpoint}"))
     }
