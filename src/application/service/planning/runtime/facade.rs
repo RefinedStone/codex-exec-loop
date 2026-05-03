@@ -1,8 +1,8 @@
 /*
- * Runtime facade is the application-layer boundary used by TUI and app-server turn execution.
- * It does not reimplement planning rules; it sequences snapshot loading, auto-follow policy decisions,
- * prompt assembly, and post-turn reconciliation into return shapes that inbound adapters can consume without
- * knowing the internal service graph.
+ * runtime facade는 TUI와 app-server turn execution이 사용하는 application-layer boundary다. planning rule을
+ * 다시 구현하지 않고, snapshot loading, auto-follow policy decision, prompt assembly, post-turn reconciliation을
+ * inbound adapter가 바로 소비할 return shape로 순서화한다. adapter는 내부 service graph를 모르고 이 facade의
+ * 작은 DTO와 method만 알면 된다.
  */
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
@@ -23,7 +23,7 @@ use crate::application::service::turn_prompt_assembly_service::{
 use crate::domain::planning::PriorityQueueTask;
 use anyhow::Result;
 
-// Re-export policy view models through the facade so callers keep one runtime import surface.
+// policy view model을 facade에서 re-export해 caller가 runtime import surface 하나만 바라보게 한다.
 pub use crate::application::service::planning::runtime::policy::{
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
@@ -31,7 +31,7 @@ pub use crate::application::service::planning::runtime::policy::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Auto-follow decisions need the last message and stop keyword for policy, plus a preloaded snapshot for speed.
+// auto-follow decision에는 policy가 참고할 last message/stop keyword와, 중복 load를 피하기 위한 preloaded snapshot이 들어간다.
 pub struct PlanningRuntimeAutoFollowRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: &'a str,
@@ -39,7 +39,7 @@ pub struct PlanningRuntimeAutoFollowRequest<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Preview rendering is read-only and may run with no last message when the UI only needs planning status.
+// preview rendering은 read-only이고, UI가 planning status만 필요로 할 때는 last message 없이도 실행된다.
 pub struct PlanningRuntimePreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
@@ -47,14 +47,14 @@ pub struct PlanningRuntimePreviewRequest<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Policy output after facade materializes any required queued-task prompt.
+// facade가 필요한 queued-task prompt를 materialize한 뒤 adapter에게 돌려주는 policy output이다.
 pub enum PlanningRuntimeAutoFollowDecision {
     QueuePrompt(PlanningRuntimeQueuedAutoFollowPrompt),
     Blocked(PlanningAutoFollowBlockReason),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Queued auto-follow contains both executable prompt text and transcript metadata for the visible session.
+// queued auto-follow는 실제 실행 prompt와 visible session에 남길 transcript metadata를 함께 담는다.
 pub struct PlanningRuntimeQueuedAutoFollowPrompt {
     pub prompt: String,
     pub transcript_text: String,
@@ -62,7 +62,7 @@ pub struct PlanningRuntimeQueuedAutoFollowPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Preview bundle pairs the actual prompt preview with policy-derived status copy.
+// preview bundle은 실제 prompt preview와 policy-derived status copy를 한 응답으로 묶는다.
 pub struct PlanningRuntimeRenderedPreview {
     pub rendered_prompt: String,
     pub planning_status_line: String,
@@ -70,7 +70,7 @@ pub struct PlanningRuntimeRenderedPreview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Main-session handoff is appended to the operator-visible conversation and therefore carries transcript copy.
+// main-session handoff는 operator-visible conversation에 append되므로 transcript copy를 함께 가진다.
 pub struct PlanningMainSessionHandoff {
     pub prompt: String,
     pub transcript_text: String,
@@ -78,14 +78,14 @@ pub struct PlanningMainSessionHandoff {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Sub-session handoff starts hidden work; it needs a prompt and task identity but no visible transcript marker.
+// sub-session handoff는 hidden work를 시작한다. prompt와 task identity만 필요하고 visible transcript marker는 없다.
 pub struct PlanningSubSessionHandoff {
     pub prompt: String,
     pub task: PlanningTaskHandoff,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Compact task metadata shared by auto-follow, UI status, and repair handoff code.
+// auto-follow, UI status, repair handoff code가 공유하는 compact task metadata다.
 pub struct PlanningTaskHandoff {
     pub task_id: String,
     pub task_title: String,
@@ -97,10 +97,9 @@ pub struct PlanningTaskHandoff {
 
 #[derive(Clone)]
 /*
- * Facade owns the ordering between runtime services.
- * Prompt service creates immutable snapshots, policy service turns snapshots into status/follow decisions,
- * turn prompt assembly wraps task instructions into main/sub-session prompts, and reconciliation restores
- * protected planning state after a turn.
+ * facade는 runtime service 사이의 순서를 소유한다. prompt service는 immutable snapshot을 만들고, policy service는
+ * snapshot을 status/follow decision으로 바꾸고, turn prompt assembly는 task instruction을 main/sub-session prompt로
+ * 감싸며, reconciliation은 turn 이후 protected planning state를 복구한다.
  */
 pub struct PlanningRuntimeFacadeService {
     planning_prompt_service: PlanningPromptService,
@@ -109,7 +108,7 @@ pub struct PlanningRuntimeFacadeService {
     turn_prompt_assembly_service: TurnPromptAssemblyService,
 }
 impl PlanningRuntimeFacadeService {
-    // Composition injects concrete services once, keeping adapters away from runtime wiring details.
+    // composition은 concrete service를 한 번 주입한다. adapter는 runtime wiring detail 대신 facade method만 호출한다.
     pub fn new(
         planning_prompt_service: PlanningPromptService,
         planning_reconciliation_service: PlanningReconciliationService,
@@ -125,9 +124,8 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * TUI rendering must not panic when planning files fail to load.
-     * Collapsing loader errors into an invalid snapshot lets the same policy/status path display a blocked
-     * planning state and failure reason.
+     * TUI rendering은 planning file load가 실패해도 panic하면 안 된다. loader error를 invalid snapshot으로 낮추면
+     * 같은 policy/status path가 blocked planning state와 failure reason을 표시할 수 있다.
      */
     pub fn load_runtime_snapshot_or_invalid(
         &self,
@@ -142,7 +140,8 @@ impl PlanningRuntimeFacadeService {
             })
     }
 
-    // Manual prompts are user-authored prompts plus the current planning fragment, if the snapshot is ready.
+    // manual prompt는 user-authored prompt에 current planning fragment를 붙인 형태다. snapshot이 ready가 아니면
+    // prompt assembly service가 fragment 없이 안전하게 조립한다.
     pub fn build_manual_prompt(
         &self,
         operator_prompt: &str,
@@ -156,9 +155,8 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * Convert the current queue head into a main-session prompt.
-     * A missing queue head returns None instead of fabricating work; policy maps that condition to an actionable
-     * queue-required block when auto-follow was otherwise allowed.
+     * current queue head를 main-session prompt로 변환한다. queue head가 없으면 work를 조작해 만들지 않고 None을
+     * 돌려준다. policy는 auto-follow가 허용된 듯 보이더라도 이 상태를 actionable queue-required block으로 낮춘다.
      */
     pub fn build_builtin_next_task_handoff(
         &self,
@@ -168,15 +166,14 @@ impl PlanningRuntimeFacadeService {
         Some(self.build_task_handoff_with_planning_fragment(queue_head, snapshot.prompt_fragment()))
     }
 
-    // Public helper for callers that already have a task and do not need to include a planning fragment.
+    // 이미 task를 가진 caller가 planning fragment 없이 main-session handoff만 만들 때 쓰는 public helper다.
     pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
         self.build_task_handoff_with_planning_fragment(task, None)
     }
 
     /*
-     * Hidden sub-sessions receive only the queued task handoff prompt.
-     * They intentionally omit the planning prompt fragment because orchestration-specific workers render their
-     * own authority context through worker prompt builders.
+     * hidden sub-session은 queued task handoff prompt만 받는다. planning prompt fragment를 의도적으로 생략하는 이유는
+     * orchestration-specific worker가 worker prompt builder를 통해 자기 authority context를 별도로 렌더링하기 때문이다.
      */
     pub fn build_sub_session_task_handoff(
         &self,
@@ -197,9 +194,9 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * Main session handoff is visible to the operator and can include the current planning fragment.
-     * The transcript marker records that the runtime queued a built-in continuation without leaking the full
-     * internal queue prompt into chat history.
+     * main-session handoff는 operator에게 보이는 conversation에 들어가며 current planning fragment를 포함할 수 있다.
+     * transcript marker는 runtime이 built-in continuation을 큐에서 넘겼다는 사실만 기록하고, 내부 queue prompt 전체를
+     * chat history에 노출하지 않는다.
      */
     fn build_task_handoff_with_planning_fragment(
         &self,
@@ -222,7 +219,8 @@ impl PlanningRuntimeFacadeService {
         }
     }
 
-    // Preview uses the same prompt builder as execution, with queue-idle explanatory copy when no task exists.
+    // preview는 execution과 같은 prompt builder를 사용한다. task가 없을 때만 queue-idle explanatory copy로 대체해,
+    // 실제 실행될 prompt와 preview가 서로 다른 규칙을 타지 않게 한다.
     pub fn builtin_next_task_preview_prompt(&self, snapshot: &PlanningRuntimeSnapshot) -> String {
         self.build_builtin_next_task_handoff(snapshot)
             .map(|handoff| handoff.prompt)
@@ -239,9 +237,8 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * Decide auto-follow and materialize the executable prompt only for the allowed queued-task mode.
-     * The extra queue-head check protects against stale snapshots or future policy changes that claim work is
-     * actionable without providing a concrete task.
+     * auto-follow를 결정하고, 허용된 queued-task mode에서만 executable prompt를 materialize한다. 추가 queue-head check는
+     * stale snapshot이나 미래 policy 변경이 concrete task 없이 actionable work를 주장하는 상황을 방어한다.
      */
     pub fn decide_auto_followup(
         &self,
@@ -271,7 +268,7 @@ impl PlanningRuntimeFacadeService {
         }
     }
 
-    // Build the read-only prompt/status preview shown before auto-follow is submitted.
+    // auto-follow submit 전에 보여 주는 read-only prompt/status preview를 만든다.
     pub fn build_auto_follow_preview(
         &self,
         request: PlanningRuntimePreviewRequest<'_>,
@@ -292,7 +289,7 @@ impl PlanningRuntimeFacadeService {
         }
     }
 
-    // Summary/status helpers are delegated so facade callers do not import policy service directly.
+    // summary/status helper는 policy service에 위임한다. facade caller가 policy service를 직접 import하지 않게 하기 위해서다.
     pub fn build_summary_line(
         &self,
         request: PlanningRuntimeSummaryLineRequest<'_>,
@@ -309,7 +306,7 @@ impl PlanningRuntimeFacadeService {
             .build_status_projection(request)
     }
 
-    // Capture protected planning files before a turn so reconciliation can restore them afterward if needed.
+    // turn 전에 protected planning file snapshot을 잡는다. 이후 reconciliation이 필요하면 이 snapshot을 기준으로 복구한다.
     pub fn load_execution_snapshot(
         &self,
         workspace_directory: &str,
@@ -318,7 +315,7 @@ impl PlanningRuntimeFacadeService {
             .load_execution_snapshot(workspace_directory)
     }
 
-    // Reconciliation remains behind the facade because adapters only know changed paths and the pre-turn snapshot.
+    // reconciliation은 facade 뒤에 남긴다. adapter는 changed path와 pre-turn snapshot만 알고, 복구 세부 규칙은 service가 담당한다.
     pub fn reconcile_after_turn(
         &self,
         workspace_directory: &str,
@@ -335,7 +332,7 @@ impl PlanningRuntimeFacadeService {
     }
 }
 
-// Normalize queue task fields once before sharing handoff metadata with UI/reconciliation code.
+// queue task field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff metadata를 공유한다.
 fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTaskHandoff {
     PlanningTaskHandoff {
         task_id: task.task_id.trim().to_string(),
@@ -348,9 +345,9 @@ fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTa
 }
 
 /*
- * Render a domain queue task into the instruction document sent to Codex.
- * The task section explains what to continue and why it is first in the queue; the rules section keeps the
- * worker focused on repository work instead of exposing planning queue maintenance unless explicitly requested.
+ * domain queue task를 Codex에게 보낼 instruction document로 렌더링한다. task section은 무엇을 이어갈지와 왜 queue
+ * 첫 항목인지 설명하고, rules section은 사용자가 명시적으로 planning maintenance를 요청하지 않은 한 worker가 repository
+ * work에 집중하게 한다.
  */
 fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
     let rank_reason = queue_head
