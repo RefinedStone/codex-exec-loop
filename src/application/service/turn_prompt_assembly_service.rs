@@ -67,10 +67,9 @@ impl TurnPromptAssemblyService {
     // 별도 렌더러를 만들지 않고 main session 렌더러를 재사용해, manual 실행과 queue 실행이 같은 guardrail을 공유한다.
     pub fn build_manual_prompt(&self, request: ManualPromptAssemblyRequest<'_>) -> Option<String> {
         /*
-         * Manual turns are still main-session turns. Routing through
-         * build_main_session_prompt keeps direct operator input under the same delivery
-         * reporting contract as queue handoffs, while preserving the operator's text as
-         * the final user prompt section.
+         * manual turn도 여전히 main-session turn이다.
+         * build_main_session_prompt를 거치면 직접 operator 입력도 queue handoff와 같은 delivery/reporting 계약을 탄다.
+         * 동시에 operator가 입력한 원문은 마지막 user prompt section으로 보존된다.
          */
         self.build_main_session_prompt(MainSessionPromptAssemblyRequest {
             // operator prompt는 main session 관점에서는 user prompt이다.
@@ -91,9 +90,9 @@ impl TurnPromptAssemblyService {
         let user_prompt = request.user_prompt.trim();
         if user_prompt.is_empty() {
             /*
-             * Empty user prompts are stopped before prompt rendering. Sending a system
-             * prompt with no user payload would create a turn with authority rules but
-             * no task, which is harder for callers to reason about than a None result.
+             * 빈 user prompt는 prompt rendering 전에 멈춘다.
+             * user payload 없는 system prompt를 보내면 authority rule만 있고 task가 없는 turn이 생긴다.
+             * caller 입장에서는 그런 turn보다 None 결과가 훨씬 판단하기 쉽다.
              */
             return None;
         }
@@ -116,9 +115,8 @@ impl TurnPromptAssemblyService {
         let handoff_prompt = request.handoff_prompt.trim();
         if handoff_prompt.is_empty() {
             /*
-             * A sub-session without a handoff would have no bounded task. Returning
-             * None here prevents the distributor from leasing a worker lane that could
-             * only act on generic system instructions.
+             * handoff 없는 sub-session은 bounded task가 없다.
+             * 여기서 None을 돌리면 distributor가 generic system instruction만 보고 움직일 worker lane을 lease하지 않는다.
              */
             return None;
         }
@@ -150,10 +148,9 @@ fn render_main_session_prompt(
     result.push_str(system_prompt.trim());
 
     /*
-     * Runtime context is optional but, when present, it must sit between the system
-     * prompt and final user prompt. That position gives the model current planning
-     * state without making the operator's direct request stop being the last concrete
-     * task instruction.
+     * runtime context는 optional이지만, 있으면 system prompt와 final user prompt 사이에 있어야 한다.
+     * 이 위치는 model에게 현재 planning state를 제공하면서도 operator의 직접 요청이 마지막 concrete task instruction으로
+     * 남게 한다.
      */
     // planning fragment가 없으면 runtime context section 전체를 생략한다.
     // 빈 section을 남기지 않는 정책은 prompt_component builder와 같은 방향이다.
@@ -180,9 +177,9 @@ fn render_main_session_prompt(
 // `queued-task handoff:` 하나만 작업 범위로 전달한다.
 fn render_sub_session_prompt(system_prompt: &str, handoff_prompt: &str) -> String {
     /*
-     * Sub-session rendering has no runtime-context slot by design. The only task body
-     * is the queued handoff, so parallel workers cannot accidentally blend ambient main
-     * session context into their leased-worktree scope.
+     * sub-session rendering에는 의도적으로 runtime-context slot이 없다.
+     * 유일한 task body는 queued handoff이므로, parallel worker가 ambient main-session context를 leased-worktree scope에
+     * 우연히 섞을 수 없다.
      */
     // system prompt가 먼저 권한 제한을 선언하고, 그 다음 handoff가 실제 작업 내용을 제공한다.
     let mut result = String::new();
