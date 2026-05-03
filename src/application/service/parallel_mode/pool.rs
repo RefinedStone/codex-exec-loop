@@ -248,6 +248,11 @@ pub(super) fn reconcile_pool_board_and_context(
     };
     let pool_root = derive_default_pool_root(&canonical_repo_root);
     let pool_root_existed = pool_root.exists();
+    /*
+    pool root는 canonical repo sibling 아래에 둔다. 사용자가 slot worktree 안에서
+    reconcile을 호출해도 pool 위치가 slot 기준으로 흔들리지 않아야 모든 lane이 같은
+    slot inventory를 공유한다.
+    */
     if ensure_directory_exists(&pool_root).is_err() {
         return Err(Box::new((
             build_blocked_pool_board(
@@ -302,12 +307,22 @@ pub(super) fn reconcile_pool_board_and_context(
         &worktree_records,
         &runtime_projection.slot_leases,
     );
+    /*
+    reset count 자체는 board summary에 직접 드러내지 않는다. reset된 slot은 곧 idle
+    baseline으로 다시 관측되며, 사용자가 알아야 하는 action count는 아래 cleanup pass가
+    반환하는 "실제로 slot을 돌려놓은 수"에 더 가깝다.
+    */
     if reset_reusable_baseline_slots > 0
         && let Some(refreshed_records) = load_worktree_records(&repo_root)
     {
         worktree_records = refreshed_records;
     }
     let provisioned_slots = provision_missing_slots(&repo_root, &pool_root, &worktree_records);
+    /*
+    provision 직후 worktree list를 다시 읽는다. 새 slot worktree가 생긴 뒤의 inventory로
+    cleanup과 board projection을 돌려야 missing slot이 같은 reconcile tick 안에서
+    계속 missing으로 보이는 일이 없다.
+    */
     let Some(reloaded_worktree_records) = load_worktree_records(&repo_root) else {
         return Err(Box::new((
             build_blocked_pool_board(
@@ -325,6 +340,11 @@ pub(super) fn reconcile_pool_board_and_context(
         &pool_root,
         &reloaded_worktree_records,
     );
+    /*
+    cleanup은 planning authority의 lease/session mirror를 바꿀 수 있으므로 context는
+    cleanup 이후에 다시 로드한다. 이전 projection을 재사용하면 반환된 slot이 roster나
+    detail에 남는 stale supervisor 상태가 된다.
+    */
     let Ok(context) =
         load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
     else {
@@ -454,6 +474,12 @@ pub(super) fn resolve_workspace_slot_lease(
         .filter(|lease| worktree_paths_match(&workspace_path, Path::new(&lease.worktree_path)))
         .cloned()
         .collect::<Vec<_>>();
+    /*
+    Path matching uses best-effort canonicalization because callers may be inside
+    nested directories of a slot worktree. Branch matching below is the stricter
+    guard that prevents a reused path with the wrong checkout from being treated
+    as the lease owner.
+    */
     if matching_leases.is_empty() {
         return Ok(None);
     }
@@ -495,6 +521,11 @@ fn load_pool_runtime_context_from_roots(
     let pool_root = derive_default_pool_root(canonical_repo_root);
     let runtime_projections = load_runtime_projection_snapshot(planning_authority, repo_root);
 
+    /*
+    Context stores the raw authority projections instead of immediately reducing
+    them to board rows. Distributor, supervisor detail, and pool rendering each
+    need a different join shape over the same leases, sessions, and queue records.
+    */
     Ok(PoolRuntimeContext {
         repo_root: repo_root.to_string(),
         canonical_repo_root: canonical_repo_root.to_path_buf(),
@@ -523,6 +554,11 @@ fn load_runtime_projection_snapshot(
 }
 
 fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {
+    /*
+    `git worktree list --porcelain` is the inventory source for both reconcile
+    and inspection. Keeping it as an Option lets callers choose their own blocked
+    board copy instead of leaking command failures through a generic error.
+    */
     let worktree_output = run_command(
         "git",
         ["-C", repo_root, "worktree", "list", "--porcelain"],
