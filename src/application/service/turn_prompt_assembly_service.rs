@@ -33,6 +33,15 @@ pub struct SubSessionPromptAssemblyRequest<'a> {
     pub handoff_prompt: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+// `SubSessionPromptAssembly`는 app-server thread metadata와 turn prompt를 한 application 경계에서 묶는다.
+// outbound adapter는 이 값을 직렬화만 하고, Akra-specific worker 계약 문구를 새로 조립하지 않는다.
+pub struct SubSessionPromptAssembly {
+    pub turn_prompt: String,
+    pub developer_instructions: String,
+    pub service_name: String,
+}
+
 #[derive(Debug, Clone, Default)]
 // `TurnPromptAssemblyService`는 Codex turn에 실제로 넣을 최종 prompt 문자열을 만드는 application service이다.
 // 상태를 들고 있지 않기 때문에 값 자체는 빈 struct이고, 호출자는 shared service 구성에서 cheap clone/default로 주입한다.
@@ -82,6 +91,20 @@ fn sub_session_delivery_boundary_lines() -> Vec<String> {
 
 fn sub_session_reporting_contract_lines() -> Vec<String> {
     vec!["최종 답변에는 변경 요약, 검증 결과, 남은 작업만 간결하게 포함하세요.".to_string()]
+}
+
+fn sub_session_developer_instructions() -> String {
+    [
+        "You are an Akra parallel task sub session running in a leased worktree.",
+        "Execute only the queued-task handoff supplied in the turn prompt.",
+        "Keep changes scoped to that task and leave a small reviewable commit when source changes are needed.",
+        "Do not push, open pull requests, merge, rebase shared branches, or clean up the worktree; Akra distributor handles delivery after completion.",
+    ]
+    .join("\n")
+}
+
+fn sub_session_service_name() -> String {
+    "akra-parallel-worker".to_string()
 }
 
 impl TurnPromptAssemblyService {
@@ -140,7 +163,7 @@ impl TurnPromptAssemblyService {
         &self,
         // distributor가 lease한 slot에 전달할 handoff 요청이다.
         request: SubSessionPromptAssemblyRequest<'_>,
-    ) -> Option<String> {
+    ) -> Option<SubSessionPromptAssembly> {
         // 빈 handoff는 범위 없는 sub session을 만들기 때문에 `None`으로 막는다.
         let handoff_prompt = request.handoff_prompt.trim();
         if handoff_prompt.is_empty() {
@@ -151,7 +174,11 @@ impl TurnPromptAssemblyService {
             return None;
         }
 
-        Some(render_sub_session_prompt(handoff_prompt))
+        Some(SubSessionPromptAssembly {
+            turn_prompt: render_sub_session_prompt(handoff_prompt),
+            developer_instructions: sub_session_developer_instructions(),
+            service_name: sub_session_service_name(),
+        })
     }
 }
 
@@ -275,7 +302,8 @@ mod tests {
             handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
         });
 
-        let rendered = prompt.expect("sub session prompt should render");
+        let assembly = prompt.expect("sub session prompt should render");
+        let rendered = assembly.turn_prompt;
         assert!(rendered.starts_with("# akra-sub-session-turn\n"));
         assert!(rendered.contains("Akra sub session"));
         assert!(rendered.contains("push, PR 생성, merge"));
@@ -285,5 +313,12 @@ mod tests {
             )
         );
         assert!(!rendered.contains("[runtime-context]"));
+        assert_eq!(assembly.service_name, "akra-parallel-worker");
+        assert!(
+            assembly
+                .developer_instructions
+                .contains("parallel task sub session")
+        );
+        assert!(assembly.developer_instructions.contains("Do not push"));
     }
 }
