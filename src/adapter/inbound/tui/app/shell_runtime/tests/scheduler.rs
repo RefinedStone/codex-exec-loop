@@ -118,3 +118,24 @@ fn active_supersession_supervisor_refreshes_periodically() {
     assert!(!runtime.parallel_supervisor_refresh_due(now + Duration::from_millis(999)));
     assert!(runtime.parallel_supervisor_refresh_due(now + Duration::from_secs(1)));
 }
+
+#[test]
+fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(0, "idle", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    let now = Instant::now();
+
+    assert!(!runtime.parallel_supervisor_refresh_due(now));
+}

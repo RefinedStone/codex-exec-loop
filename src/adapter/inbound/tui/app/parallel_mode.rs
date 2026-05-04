@@ -65,8 +65,7 @@ impl NativeTuiApp {
             return true;
         };
 
-        (snapshot.pool.configured_size == 0 && snapshot.pool.slots.is_empty())
-            || snapshot.roster.active_count() > 0
+        parallel_mode_supervisor_snapshot_is_loading(snapshot) || snapshot.roster.active_count() > 0
     }
 
     pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
@@ -78,7 +77,7 @@ impl NativeTuiApp {
             return true;
         };
 
-        snapshot.pool.configured_size == 0 && snapshot.pool.slots.is_empty()
+        parallel_mode_supervisor_snapshot_is_loading(snapshot)
     }
 
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
@@ -384,6 +383,14 @@ impl NativeTuiApp {
 
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
     }
+}
+
+fn parallel_mode_supervisor_snapshot_is_loading(snapshot: &ParallelModeSupervisorSnapshot) -> bool {
+    snapshot
+        .top_notice
+        .as_deref()
+        .is_some_and(|notice| notice.starts_with("loading "))
+        || snapshot.pool.pool_root_label.starts_with("loading:")
 }
 
 fn dispatch_parallel_queue_pool(
