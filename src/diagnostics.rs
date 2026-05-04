@@ -4,11 +4,45 @@
  * raw event log는 release에서는 명시적인 env var가 있을 때만, debug Akra binary 실행에서는
  * workspace-local runtime 파일에 JSON Lines로 append한다.
  */
+#[cfg(debug_assertions)]
+fn debug_executable_allows_default_diagnostics(executable_path: Option<&std::path::Path>) -> bool {
+    let Some(executable_path) = executable_path else {
+        return false;
+    };
+    if executable_is_target_debug_deps_harness(executable_path) {
+        return false;
+    }
+
+    let Some(file_name) = executable_path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+    else {
+        return false;
+    };
+    let binary_name = file_name.strip_suffix(".exe").unwrap_or(file_name);
+    matches!(
+        binary_name,
+        "codex-exec-loop-native" | "akra" | "akra-admin" | "akra-telegram"
+    )
+}
+
+#[cfg(debug_assertions)]
+fn executable_is_target_debug_deps_harness(executable_path: &std::path::Path) -> bool {
+    let components = executable_path
+        .components()
+        .map(|component| component.as_os_str())
+        .collect::<Vec<_>>();
+    components.windows(3).any(|window| {
+        window[0] == std::ffi::OsStr::new("target")
+            && window[1] == std::ffi::OsStr::new("debug")
+            && window[2] == std::ffi::OsStr::new("deps")
+    })
+}
+
 pub mod raw_event_log {
-    use std::ffi::OsStr;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
     use serde_json::{Value, json};
@@ -74,7 +108,9 @@ pub mod raw_event_log {
 
     #[cfg(debug_assertions)]
     fn default_debug_raw_log_path() -> Option<PathBuf> {
-        if !debug_executable_allows_default_raw_log(std::env::current_exe().ok().as_deref()) {
+        if !super::debug_executable_allows_default_diagnostics(
+            std::env::current_exe().ok().as_deref(),
+        ) {
             return None;
         }
         Some(
@@ -83,28 +119,6 @@ pub mod raw_event_log {
                 .join(".codex-exec-loop")
                 .join("runtime")
                 .join("akra-raw.jsonl"),
-        )
-    }
-
-    #[cfg(debug_assertions)]
-    fn debug_executable_allows_default_raw_log(executable_path: Option<&Path>) -> bool {
-        let Some(executable_path) = executable_path else {
-            return false;
-        };
-        if executable_path
-            .components()
-            .any(|component| component.as_os_str() == OsStr::new("deps"))
-        {
-            return false;
-        }
-
-        let Some(file_name) = executable_path.file_name().and_then(OsStr::to_str) else {
-            return false;
-        };
-        let binary_name = file_name.strip_suffix(".exe").unwrap_or(file_name);
-        matches!(
-            binary_name,
-            "codex-exec-loop-native" | "akra" | "akra-admin" | "akra-telegram"
         )
     }
 
@@ -117,23 +131,23 @@ pub mod raw_event_log {
     mod tests {
         use std::path::Path;
 
-        use super::debug_executable_allows_default_raw_log;
+        use super::super::debug_executable_allows_default_diagnostics;
 
         #[test]
         fn debug_default_raw_log_is_disabled_for_test_harness_binaries() {
-            assert!(!debug_executable_allows_default_raw_log(Some(Path::new(
-                "/repo/target/debug/deps/integration_test-abc123",
-            ))));
+            assert!(!debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/deps/integration_test-abc123",)
+            )));
         }
 
         #[test]
         fn debug_default_raw_log_is_enabled_for_cargo_run_binaries() {
-            assert!(debug_executable_allows_default_raw_log(Some(Path::new(
-                "/repo/target/debug/codex-exec-loop-native",
-            ))));
-            assert!(debug_executable_allows_default_raw_log(Some(Path::new(
-                "/repo/target/debug/akra",
-            ))));
+            assert!(debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/codex-exec-loop-native",)
+            )));
+            assert!(debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/akra",)
+            )));
         }
     }
 }
@@ -218,8 +232,10 @@ pub mod trace_event_log {
     }
 
     fn trace_filter_from_env() -> Option<String> {
-        let value = std::env::var("AKRA_TRACE").ok()?;
-        trace_filter_from_value(&value)
+        match std::env::var("AKRA_TRACE") {
+            Ok(value) => trace_filter_from_value(&value),
+            Err(_) => default_debug_trace_filter(),
+        }
     }
 
     fn trace_filter_from_value(value: &str) -> Option<String> {
@@ -237,7 +253,22 @@ pub mod trace_event_log {
     }
 
     fn default_trace_filter() -> String {
-        "codex_exec_loop_native=trace,akra=trace,akra_admin=trace,akra_telegram=trace".to_string()
+        "trace".to_string()
+    }
+
+    #[cfg(debug_assertions)]
+    fn default_debug_trace_filter() -> Option<String> {
+        if !super::debug_executable_allows_default_diagnostics(
+            std::env::current_exe().ok().as_deref(),
+        ) {
+            return None;
+        }
+        Some(default_trace_filter())
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn default_debug_trace_filter() -> Option<String> {
+        None
     }
 
     fn trace_log_path() -> Option<PathBuf> {
@@ -259,22 +290,45 @@ pub mod trace_event_log {
 
     #[cfg(test)]
     mod tests {
+        use std::path::Path;
+
+        use super::super::debug_executable_allows_default_diagnostics;
         use super::trace_filter_from_value;
 
         #[test]
         fn trace_filter_value_accepts_on_off_and_directives() {
-            assert_eq!(
-                trace_filter_from_value("1"),
-                Some(
-                    "codex_exec_loop_native=trace,akra=trace,akra_admin=trace,akra_telegram=trace"
-                        .to_string()
-                )
-            );
+            assert_eq!(trace_filter_from_value("1"), Some("trace".to_string()));
             assert_eq!(trace_filter_from_value("0"), None);
             assert_eq!(
                 trace_filter_from_value("codex_exec_loop_native::adapter=debug"),
                 Some("codex_exec_loop_native::adapter=debug".to_string())
             );
+        }
+
+        #[test]
+        fn debug_default_trace_is_disabled_for_test_harness_binaries() {
+            assert!(!debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/deps/integration_test-abc123",)
+            )));
+            assert!(!debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/deps/akra-abc123",)
+            )));
+        }
+
+        #[test]
+        fn debug_default_trace_is_enabled_for_cargo_run_binaries() {
+            assert!(debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/codex-exec-loop-native",)
+            )));
+            assert!(debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/akra",)
+            )));
+            assert!(debug_executable_allows_default_diagnostics(Some(
+                Path::new("/repo/target/debug/akra-admin",)
+            )));
+            assert!(debug_executable_allows_default_diagnostics(Some(
+                Path::new("/home/user/deps/repo/target/debug/akra",)
+            )));
         }
     }
 }
