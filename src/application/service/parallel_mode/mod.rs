@@ -4,9 +4,9 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeDispatchBlockReason, ParallelModeOrchestratorState,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -107,6 +107,28 @@ pub struct ParallelModeDispatchPlan {
 
 fn failed_start_dispatch_blockers(context: &PoolRuntimeContext) -> BTreeMap<String, i64> {
     let mut blockers = BTreeMap::new();
+    for block in &context.task_dispatch_blocks {
+        if block.reason != ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges {
+            continue;
+        }
+        let task_id = block.task_id.trim();
+        if task_id.is_empty() {
+            continue;
+        }
+        let Ok(blocked_at) = DateTime::parse_from_rfc3339(block.blocked_at.trim())
+            .map(|timestamp| timestamp.timestamp_millis())
+        else {
+            continue;
+        };
+        blockers
+            .entry(task_id.to_string())
+            .and_modify(|current| {
+                if blocked_at > *current {
+                    *current = blocked_at;
+                }
+            })
+            .or_insert(blocked_at);
+    }
     for detail in &context.session_details {
         let task_id = detail.task_id.trim();
         if task_id.is_empty() {

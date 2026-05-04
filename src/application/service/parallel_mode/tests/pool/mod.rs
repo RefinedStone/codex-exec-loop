@@ -161,6 +161,21 @@ fn build_dispatch_plan_excludes_failed_start_tasks_until_task_changes() {
         .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
         .expect("failed start should release slot")
         .expect("lease should be released");
+    let runtime_projection_before_reset =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should load after failed start");
+    assert_eq!(runtime_projection_before_reset.session_details.len(), 1);
+    assert_eq!(
+        runtime_projection_before_reset.task_dispatch_blocks.len(),
+        1
+    );
+    service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect("pool reset should preserve failed-start dispatch block");
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should load after pool reset");
+    assert_eq!(runtime_projection.task_dispatch_blocks.len(), 1);
 
     let plan = service
         .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)

@@ -10,6 +10,7 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot,
     ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 
 use super::current_branch_name;
@@ -145,6 +146,7 @@ pub(super) struct PoolRuntimeContext {
     pub(super) slot_leases: BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
     invalid_slot_leases: BTreeSet<String>,
     pub(super) session_details: Vec<ParallelModeAgentSessionDetailSnapshot>,
+    pub(super) task_dispatch_blocks: Vec<ParallelModeTaskDispatchBlockSnapshot>,
     pub(super) distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
 }
 pub(super) type PoolBoardWithContextResult = Result<
@@ -589,7 +591,10 @@ fn load_pool_runtime_context_from_roots(
         return Err("worktree list inspection failed");
     };
     let pool_root = derive_default_pool_root(canonical_repo_root);
-    let runtime_projections = load_runtime_projection_snapshot(planning_authority, repo_root);
+    let runtime_projections = load_runtime_projection_snapshot(
+        planning_authority,
+        canonical_repo_root.to_str().unwrap_or(repo_root),
+    );
 
     /*
     Context stores the raw authority projections instead of immediately reducing
@@ -605,6 +610,7 @@ fn load_pool_runtime_context_from_roots(
         slot_leases: runtime_projections.slot_leases,
         invalid_slot_leases: runtime_projections.invalid_slot_leases,
         session_details: runtime_projections.session_details,
+        task_dispatch_blocks: runtime_projections.task_dispatch_blocks,
         distributor_queue_records: runtime_projections.distributor_queue_records,
     })
 }

@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 // `Connection`은 helper 함수들이 트랜잭션 밖 조회를 수행할 때 필요하고,
 // `OptionalExtension`은 "행 없음"을 오류가 아닌 Option으로 바꿔 클레임 부재를 표현한다.
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 // application port의 record/status/snapshot 타입을 그대로 반환해,
 // SQLite 세부 구조가 application layer로 새지 않도록 어댑터 내부에서 매핑을 끝낸다.
@@ -22,6 +22,7 @@ use crate::application::port::outbound::planning_authority_port::{
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 
 // metadata upsert helper는 store 모듈의 스키마 관리와 같은 규칙을 공유한다.
@@ -509,6 +510,8 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction()
             .context("failed to open parallel runtime reset transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let dispatch_block_rows = preserve_failed_start_dispatch_blocks(&transaction)
+            .context("failed to preserve failed-start dispatch blocks before runtime reset")?;
         let slot_rows = transaction
             .execute("DELETE FROM runtime_slot_leases", [])
             .context("failed to clear runtime slot leases")?;
@@ -539,7 +542,7 @@ impl SqlitePlanningAuthorityAdapter {
             "parallel_runtime",
             "pool",
             &format!(
-                "parallel runtime reset / leases: {slot_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / claims: {claim_rows} / reason: {reason}"
+                "parallel runtime reset / leases: {slot_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / claims: {claim_rows} / dispatch_blocks_preserved: {dispatch_block_rows} / reason: {reason}"
             ),
             "{}",
         )?;
@@ -615,6 +618,61 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit runtime session detail transaction")?;
 
+        Ok(())
+    }
+
+    pub(crate) fn upsert_runtime_task_dispatch_block(
+        workspace_dir: &str,
+        block: &ParallelModeTaskDispatchBlockSnapshot,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let payload_json = serde_json::to_string(block)
+            .context("failed to serialize runtime task dispatch block projection")?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime task dispatch block transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        transaction
+            .execute(
+                "INSERT INTO runtime_task_dispatch_blocks
+                    (task_id, reason, task_updated_at, blocked_at, content)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(task_id) DO UPDATE
+                 SET reason = excluded.reason,
+                     task_updated_at = excluded.task_updated_at,
+                     blocked_at = excluded.blocked_at,
+                     content = excluded.content",
+                params![
+                    block.task_id,
+                    block.reason.label(),
+                    block.task_updated_at,
+                    block.blocked_at,
+                    payload_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to persist runtime task dispatch block `{}`",
+                    block.task_id
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "task_dispatch_block_upsert",
+            "task_dispatch_block",
+            &block.task_id,
+            &format!(
+                "runtime task dispatch block stored / task: {} / reason: {}",
+                block.task_id,
+                block.reason.label()
+            ),
+            &serde_json::to_string(block)
+                .context("failed to serialize task dispatch block event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime task dispatch block transaction")?;
         Ok(())
     }
 
@@ -706,6 +764,8 @@ fn load_runtime_projection_snapshot(
     let mut invalid_slot_leases = BTreeSet::new();
     // session detail은 SQL의 updated_at DESC 순서를 유지해야 하므로 Vec에 push한다.
     let mut session_details = Vec::new();
+    // task dispatch block은 pool reset과 별도로 유지되는 orchestrator read model이다.
+    let mut task_dispatch_blocks = Vec::new();
     // distributor queue도 enqueued_at 순서가 의미 있으므로 Vec 순서를 그대로 snapshot 순서로 사용한다.
     let mut distributor_queue_records = Vec::new();
 
@@ -772,6 +832,27 @@ fn load_runtime_projection_snapshot(
         );
     }
 
+    let mut block_statement = connection
+        .prepare(
+            "SELECT task_id, content
+             FROM runtime_task_dispatch_blocks
+             ORDER BY blocked_at DESC, task_id ASC",
+        )
+        .context("failed to read runtime task dispatch blocks")?;
+    let block_rows = block_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate runtime task dispatch blocks")?;
+    for row in block_rows {
+        let (task_id, content) = row.context("failed to decode runtime task dispatch block row")?;
+        task_dispatch_blocks.push(
+            serde_json::from_str::<ParallelModeTaskDispatchBlockSnapshot>(&content).with_context(
+                || format!("failed to deserialize runtime task dispatch block `{task_id}`"),
+            )?,
+        );
+    }
+
     // distributor queue는 오래 들어온 item부터 처리/표시해야 하므로 enqueued_at 오름차순으로 읽는다.
     // 같은 enqueue 시각이면 queue_item_id로 tie-break한다.
     let mut queue_statement = connection
@@ -808,8 +889,76 @@ fn load_runtime_projection_snapshot(
         slot_leases,
         invalid_slot_leases,
         session_details,
+        task_dispatch_blocks,
         distributor_queue_records,
     })
+}
+
+fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Result<usize> {
+    let mut preserved_rows = 0;
+    let mut statement = transaction
+        .prepare("SELECT session_key, content FROM runtime_session_details")
+        .context("failed to read session details before runtime reset")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate session details before runtime reset")?;
+
+    for row in rows {
+        let (session_key, content) =
+            row.context("failed to decode session detail before runtime reset")?;
+        let detail = serde_json::from_str::<ParallelModeAgentSessionDetailSnapshot>(&content)
+            .with_context(|| {
+                format!("failed to deserialize session detail `{session_key}` before reset")
+            })?;
+        if !is_failed_start_session_detail(&detail) {
+            continue;
+        }
+        let block = ParallelModeTaskDispatchBlockSnapshot::new(
+            detail.task_id.clone(),
+            String::new(),
+            detail.updated_at.clone(),
+            crate::domain::parallel_mode::ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+        );
+        let payload_json = serde_json::to_string(&block)
+            .context("failed to serialize preserved task dispatch block")?;
+        transaction
+            .execute(
+                "INSERT INTO runtime_task_dispatch_blocks
+                    (task_id, reason, task_updated_at, blocked_at, content)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(task_id) DO UPDATE
+                 SET reason = excluded.reason,
+                     task_updated_at = excluded.task_updated_at,
+                     blocked_at = excluded.blocked_at,
+                     content = excluded.content",
+                params![
+                    block.task_id,
+                    block.reason.label(),
+                    block.task_updated_at,
+                    block.blocked_at,
+                    payload_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to preserve failed-start task dispatch block `{}`",
+                    detail.task_id
+                )
+            })?;
+        preserved_rows += 1;
+    }
+
+    Ok(preserved_rows)
+}
+
+fn is_failed_start_session_detail(detail: &ParallelModeAgentSessionDetailSnapshot) -> bool {
+    detail.state_label == "failed"
+        && detail.completion_state_label == "aborted"
+        && detail
+            .latest_summary
+            .contains("launch failed before the session reached the running state")
 }
 
 // runtime projection의 current row 변경을 시간순 이벤트로 남긴다.
