@@ -415,7 +415,7 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
     app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
-        ParallelModePoolBoardSnapshot::new(0, "loading", "loading", Vec::new()),
+        ParallelModePoolBoardSnapshot::new(0, "loading: test", "loading", Vec::new()),
         ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading"),
         ParallelModeSupervisorDetailSnapshot::new(None, "loading"),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
@@ -435,6 +435,32 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
         .any(|frame| rendered.contains(frame))
     );
     assert!(!rendered.contains("thinking"));
+}
+
+#[test]
+fn inline_tail_omits_parallel_loading_spinner_after_empty_non_loading_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_overlay = ShellOverlay::Supersession;
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(0, "idle", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    ));
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for frame in ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] {
+        assert!(!rendered.contains(frame));
+    }
 }
 
 // The inline tail is the status surface that remains visible during app-server

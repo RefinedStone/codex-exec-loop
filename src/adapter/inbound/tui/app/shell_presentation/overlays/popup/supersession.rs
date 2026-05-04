@@ -446,7 +446,7 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
 }
 
 fn is_pending_pool_board(pool: &ParallelModePoolBoardSnapshot) -> bool {
-    pool.configured_size == 0 && pool.slots.is_empty()
+    pool.pool_root_label.starts_with("loading:")
 }
 
 fn is_pending_distributor(distributor: &ParallelModeDistributorSnapshot) -> bool {
