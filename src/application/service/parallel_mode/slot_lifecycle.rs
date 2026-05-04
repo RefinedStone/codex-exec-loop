@@ -12,7 +12,8 @@ use super::{
     inspect_slot_git_status, load_pool_runtime_context, reconcile_pool_board,
     record_assigned_session_detail, record_cleanup_pending_session_detail,
     record_failed_start_session_detail, record_running_session_detail,
-    record_thread_prepared_session_detail, resolve_workspace_slot_lease, write_slot_lease,
+    record_thread_prepared_session_detail, remove_slot_lease, resolve_workspace_slot_lease,
+    write_slot_lease,
 };
 
 impl ParallelModeService {
@@ -125,6 +126,12 @@ impl ParallelModeService {
             &context.pool_root,
             &lease,
         ) {
+            let _ = remove_slot_lease(
+                self.planning_authority.as_ref(),
+                &context.repo_root,
+                &context.pool_root,
+                &lease.slot_id,
+            );
             let _ =
                 discard_unstarted_slot_branch(&context.repo_root, &slot_path, branch_name.as_str());
             return Err(error);
