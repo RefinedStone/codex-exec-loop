@@ -313,6 +313,37 @@ fn mark_slot_running_updates_persisted_lease_and_pool_state() {
     assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Running);
 }
 
+// 드물게 terminal completion은 받았지만 TurnStarted 이벤트를 보지 못하면, 완료 파이프라인은
+// slot을 Running으로 승격해 결과 capture가 이어지게 해야 한다. 그렇지 않으면 Leased slot이
+// orphan 상태로 남아 dispatch capacity를 잃는다.
+#[test]
+fn terminal_success_without_turn_started_promotes_lease_to_running() {
+    let repo = TempGitRepo::new("terminal-success-missing-start");
+    let service = test_parallel_mode_service();
+    let turn_service =
+        crate::application::service::parallel_mode::turn::ParallelModeTurnService::new(
+            service.clone(),
+        );
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let outcome =
+        turn_service.finalize_stream_completion(&lease.worktree_path, false, false, false, false);
+    let persisted = repo.read_slot_lease(1);
+
+    assert!(outcome.invalidate_supervisor_snapshot);
+    assert!(
+        outcome
+            .runtime_notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("inferred from terminal completion"))
+    );
+    assert_eq!(persisted.state, ParallelModeSlotLeaseState::Running);
+}
+
 // TUI/app-server callbacks는 slot id보다 workspace path를 알고 있는 경우가 많다.
 // workspace 기반 running 전이는 canonical path lookup으로 같은 lease를 찾아 store와
 // mirror를 업데이트해야 한다.
