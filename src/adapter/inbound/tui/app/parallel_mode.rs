@@ -187,6 +187,7 @@ impl NativeTuiApp {
                 // read-only and close the control tower so normal shell focus
                 // resumes immediately.
                 self.parallel_mode_enabled = false;
+                self.pending_parallel_mode_task_update_dispatch = None;
                 self.sync_parallel_mode_supervisor_snapshot(false);
                 if self.shell_overlay == ShellOverlay::Supersession {
                     self.close_shell_overlay();
@@ -386,16 +387,57 @@ impl NativeTuiApp {
         });
     }
 
-    pub(super) fn refresh_parallel_mode_dispatch_after_task_update(&self, task_id: &str) {
+    pub(super) fn refresh_parallel_mode_dispatch_after_task_update(&mut self, task_id: &str) {
         if !self.parallel_mode_enabled() {
             return;
         }
 
         let workspace_directory = self.planning_workspace_directory();
-        self.spawn_parallel_mode_dispatch_refresh_worker(
-            workspace_directory,
-            format!("task update: {task_id}"),
-        );
+        let reason = format!("task update: {task_id}");
+        if self.parallel_mode_dispatch_refresh_should_defer() {
+            self.pending_parallel_mode_task_update_dispatch = Some(reason);
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "parallel mode: queue refresh deferred until entry loading finishes"
+                    .to_string(),
+            });
+            return;
+        }
+
+        self.spawn_parallel_mode_dispatch_refresh_worker(workspace_directory, reason);
+    }
+
+    fn parallel_mode_dispatch_refresh_should_defer(&self) -> bool {
+        if self.parallel_mode_readiness_snapshot.is_none() {
+            return true;
+        }
+
+        match self.parallel_mode_supervisor_snapshot.as_ref() {
+            Some(snapshot) => parallel_mode_supervisor_snapshot_is_loading(snapshot),
+            None => true,
+        }
+    }
+
+    pub(super) fn take_ready_deferred_parallel_mode_task_update_dispatch_reason(
+        &mut self,
+    ) -> Option<String> {
+        let reason = self.pending_parallel_mode_task_update_dispatch.take()?;
+
+        if !self.parallel_mode_enabled() || self.parallel_mode_dispatch_refresh_should_defer() {
+            self.pending_parallel_mode_task_update_dispatch = Some(reason);
+            return None;
+        }
+
+        Some(format!("deferred {reason}"))
+    }
+
+    fn spawn_deferred_parallel_mode_task_update_dispatch(&mut self) {
+        let Some(reason) = self.take_ready_deferred_parallel_mode_task_update_dispatch_reason()
+        else {
+            return;
+        };
+
+        let workspace_directory = self.planning_workspace_directory();
+        self.spawn_parallel_mode_dispatch_refresh_worker(workspace_directory, reason);
     }
 
     fn spawn_parallel_mode_dispatch_refresh_worker(
@@ -512,6 +554,11 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
+        if self.parallel_mode_enabled {
+            self.spawn_deferred_parallel_mode_task_update_dispatch();
+        } else {
+            self.pending_parallel_mode_task_update_dispatch = None;
+        }
     }
 
     pub(super) fn apply_parallel_mode_supervisor_snapshot_refreshed(
@@ -519,7 +566,9 @@ impl NativeTuiApp {
         workspace_directory: &str,
         supervisor_snapshot: ParallelModeSupervisorSnapshot,
     ) {
-        if self.planning_workspace_directory() != workspace_directory {
+        if !self.parallel_mode_enabled()
+            || self.planning_workspace_directory() != workspace_directory
+        {
             return;
         }
 

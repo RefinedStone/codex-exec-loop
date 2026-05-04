@@ -238,11 +238,11 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     );
 }
 
-// parallel mode를 off -> on으로 켜는 순간 pool slot은 disposable cache로 취급한다.
-// 이전 실행의 lease/session/queue projection과 checkout branch를 모두 버리고 detached prerelease baseline으로 되돌린다.
+// parallel mode를 off -> on으로 켜는 순간에도 실행 중인 slot은 disposable cache로 취급하면 안 된다.
+// worker가 살아 있을 수 있는 Running lease가 있으면 reset을 막아 산출물과 branch를 보존한다.
 #[test]
-fn parallel_entry_from_off_resets_stale_leases_and_all_slot_worktrees() {
-    let repo = TempGitRepo::new("parallel-enable-reset");
+fn parallel_entry_from_off_blocks_reset_when_slot_is_active() {
+    let repo = TempGitRepo::new("parallel-enable-reset-active");
     let service = test_parallel_mode_service();
     let lease = service
         .acquire_slot_lease(
@@ -257,9 +257,55 @@ fn parallel_entry_from_off_resets_stale_leases_and_all_slot_worktrees() {
     repo.commit_file_in_slot(&slot_path, "stale.txt", "stale\n", "stale agent work");
     fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
 
+    let reset_error = service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect_err("parallel enable reset should block active running slots");
+    let snapshot = service.build_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+
+    assert!(reset_error.contains("active slot slot-1"));
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(slot_path.join("stale.txt").exists());
+    assert!(slot_path.join("scratch.tmp").exists());
+}
+
+// Stale startup leases are different from active running work: no worker reached Running and the
+// assigned session detail is old enough to be considered abandoned, so off -> on reset may reclaim it.
+#[test]
+fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
+    let repo = TempGitRepo::new("parallel-enable-reset-stale-startup");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
+        .expect("stale lease should be persisted");
+    record_assigned_session_detail(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("assigned detail should be recorded");
+    fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
+
     let reset_count = service
         .reset_pool_on_parallel_enable(&repo.workspace_dir())
-        .expect("parallel enable reset should succeed");
+        .expect("parallel re-entry from off should reset stale startup lease");
     let snapshot = service.build_supervisor_snapshot(
         &repo.workspace_dir(),
         true,
@@ -276,58 +322,8 @@ fn parallel_entry_from_off_resets_stale_leases_and_all_slot_worktrees() {
     assert!(snapshot.detail.session.is_none());
     assert!(!repo.slot_lease_path(1).exists());
     assert!(!repo.pool_root().join(".agent-sessions").exists());
-    assert!(!slot_path.join("stale.txt").exists());
     assert!(!slot_path.join("scratch.tmp").exists());
     assert_eq!(current_branch(&slot_path), "HEAD");
-    assert_eq!(
-        run_command(
-            "git",
-            [
-                "-C",
-                slot_path.to_str().expect("slot path should be valid utf-8"),
-                "rev-parse",
-                "HEAD",
-            ],
-            None,
-        )
-        .expect("slot head should resolve"),
-        run_command(
-            "git",
-            [
-                "-C",
-                repo.repo_root
-                    .to_str()
-                    .expect("repo root should be valid utf-8"),
-                "rev-parse",
-                POOL_BASELINE_BRANCH,
-            ],
-            None,
-        )
-        .expect("baseline head should resolve")
-    );
-
-    service
-        .acquire_slot_lease(
-            &repo.workspace_dir(),
-            sample_lease_request("task-2", "Task Two", "agent-2", "task-two"),
-        )
-        .expect("second entry setup should acquire a slot lease");
-    let second_reset_count = service
-        .reset_pool_on_parallel_enable(&repo.workspace_dir())
-        .expect("parallel re-entry from off should reset again");
-    let second_snapshot = service.build_supervisor_snapshot(
-        &repo.workspace_dir(),
-        true,
-        Some(&ParallelModeReadinessSnapshot::new(
-            repo.workspace_dir(),
-            ParallelModeReadinessState::Ready,
-            Vec::new(),
-            None,
-        )),
-    );
-    assert_eq!(second_reset_count, DEFAULT_POOL_SIZE);
-    assert_eq!(second_snapshot.roster.active_count(), 0);
-    assert!(second_snapshot.detail.session.is_none());
 }
 
 // `:parallel` 진입 reset의 범위는 disposable pool runtime으로 한정된다. 기존
@@ -446,6 +442,13 @@ fn reconcile_releases_stale_leased_startup_slot() {
     lease.leased_at = "2020-01-01T00:00:00Z".to_string();
     SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
         .expect("stale lease should be persisted");
+    record_assigned_session_detail(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("assigned detail should be recorded");
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),

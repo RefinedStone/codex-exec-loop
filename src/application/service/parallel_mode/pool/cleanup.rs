@@ -12,8 +12,7 @@ use super::super::readiness::command_succeeds;
 use super::super::record_failed_start_session_detail;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, POOL_BASELINE_BRANCH,
-    SlotGitStatus, inspect_slot_git_status, load_runtime_projection_snapshot, remove_slot_lease,
-    slot_id,
+    SlotGitStatus, inspect_slot_git_status, remove_slot_lease, slot_id,
 };
 
 const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
@@ -34,10 +33,9 @@ pub(super) fn cleanup_reusable_slots(
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
+    slot_leases: &std::collections::BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
 ) -> usize {
     let mut cleaned_slots = 0;
-    // lease state는 planning authority가 가진 runtime projection을 기준으로 보며, git inventory만으로 판단하지 않는다.
-    let slot_leases = load_runtime_projection_snapshot(planning_authority, repo_root).slot_leases;
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -156,7 +154,7 @@ fn stale_leased_startup_slot_can_be_released(
         .iter()
         .find(|detail| detail.session_key == lease.session_key())
     else {
-        return true;
+        return false;
     };
 
     detail.thread_id.is_none()
