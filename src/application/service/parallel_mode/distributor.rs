@@ -25,6 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const STALE_LEDGER_REFRESHING_AFTER_SECS: i64 = 300;
+const INTEGRATION_BRANCH_PUSH_BLOCK_FRAGMENT: &str = "`prerelease` could not be pushed to `origin`";
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
 mod delivery;
 mod queue_keys;
@@ -716,6 +717,7 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
         || detail.contains("integration worktree must be clean before cherry-pick delivery")
         || detail.contains("push capability is unavailable for distributor delivery")
         || detail.contains("source branch `") && detail.contains("` could not be pushed to `")
+        || detail.contains(INTEGRATION_BRANCH_PUSH_BLOCK_FRAGMENT)
         || detail.contains("source branch was pushed but GitHub automation is unavailable")
 }
 
@@ -828,12 +830,15 @@ mod tests {
     use super::is_retryable_distributor_block;
 
     #[test]
-    fn retryable_push_block_matching_is_limited_to_source_branch_pushes() {
+    fn retryable_push_block_matching_accepts_known_delivery_pushes() {
         assert!(is_retryable_distributor_block(
             "source branch `akra-agent/slot-1/task-one` could not be pushed to `origin`: temporary remote failure"
         ));
-        assert!(!is_retryable_distributor_block(
+        assert!(is_retryable_distributor_block(
             "`prerelease` could not be pushed to `origin`: non-fast-forward"
+        ));
+        assert!(!is_retryable_distributor_block(
+            "`feature` could not be pushed to `origin`: unsupported integration branch"
         ));
     }
 }
