@@ -1,11 +1,13 @@
 /*
  * diagnostics는 UI copy나 domain state가 아닌 개발/운영 관측용 side channel이다.
  * TUI stdout/stderr를 건드리면 terminal protocol과 app-server stream을 오염시킬 수 있으므로,
- * raw event log는 명시적인 env var가 있을 때만 파일에 JSON Lines로 append한다.
+ * raw event log는 release에서는 명시적인 env var가 있을 때만, debug/cargo run에서는
+ * workspace-local runtime 파일에 JSON Lines로 append한다.
  */
 pub mod raw_event_log {
     use std::fs::{File, OpenOptions};
     use std::io::Write;
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
     use serde_json::{Value, json};
@@ -27,7 +29,7 @@ pub mod raw_event_log {
     }
 
     /*
-     * AKRA_RAW_LOG가 설정된 프로세스에서만 한 줄 JSON event를 쓴다.
+     * AKRA_RAW_LOG가 설정된 프로세스나 debug build에서만 한 줄 JSON event를 쓴다.
      * 실패해도 product flow를 방해하지 않는 best-effort 경로이며, prompt/body 원문은 caller가 명시적으로 넣지 않는 한 기록하지 않는다.
      */
     pub fn emit(event: &str, detail: Value) {
@@ -46,12 +48,42 @@ pub mod raw_event_log {
     }
 
     fn open_raw_log_file() -> Option<Mutex<File>> {
-        let path = std::env::var_os("AKRA_RAW_LOG")?;
+        let path = raw_log_path()?;
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
             .ok()
             .map(Mutex::new)
+    }
+
+    fn raw_log_path() -> Option<PathBuf> {
+        if let Some(path) = std::env::var_os("AKRA_RAW_LOG") {
+            let path = PathBuf::from(path);
+            if path.as_os_str().is_empty() {
+                return None;
+            }
+            return Some(path);
+        }
+        default_debug_raw_log_path()
+    }
+
+    #[cfg(all(debug_assertions, not(test)))]
+    fn default_debug_raw_log_path() -> Option<PathBuf> {
+        Some(
+            std::env::current_dir()
+                .ok()?
+                .join(".codex-exec-loop")
+                .join("runtime")
+                .join("akra-raw.jsonl"),
+        )
+    }
+
+    #[cfg(any(not(debug_assertions), test))]
+    fn default_debug_raw_log_path() -> Option<PathBuf> {
+        None
     }
 }
