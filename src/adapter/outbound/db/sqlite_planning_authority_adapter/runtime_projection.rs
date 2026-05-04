@@ -633,7 +633,7 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction()
             .context("failed to open runtime task dispatch block transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
-        transaction
+        let changed_rows = transaction
             .execute(
                 "INSERT INTO runtime_task_dispatch_blocks
                     (task_id, reason, task_updated_at, blocked_at, content)
@@ -642,7 +642,8 @@ impl SqlitePlanningAuthorityAdapter {
                  SET reason = excluded.reason,
                      task_updated_at = excluded.task_updated_at,
                      blocked_at = excluded.blocked_at,
-                     content = excluded.content",
+                     content = excluded.content
+                 WHERE excluded.blocked_at >= runtime_task_dispatch_blocks.blocked_at",
                 params![
                     block.task_id,
                     block.reason.label(),
@@ -657,19 +658,20 @@ impl SqlitePlanningAuthorityAdapter {
                     block.task_id
                 )
             })?;
-        append_runtime_event(
-            &transaction,
-            "task_dispatch_block_upsert",
-            "task_dispatch_block",
-            &block.task_id,
-            &format!(
-                "runtime task dispatch block stored / task: {} / reason: {}",
-                block.task_id,
-                block.reason.label()
-            ),
-            &serde_json::to_string(block)
-                .context("failed to serialize task dispatch block event payload")?,
-        )?;
+        if changed_rows > 0 {
+            append_runtime_event(
+                &transaction,
+                "task_dispatch_block_upsert",
+                "task_dispatch_block",
+                &block.task_id,
+                &format!(
+                    "runtime task dispatch block stored / task: {} / reason: {}",
+                    block.task_id,
+                    block.reason.label()
+                ),
+                &payload_json,
+            )?;
+        }
         transaction
             .commit()
             .context("failed to commit runtime task dispatch block transaction")?;
@@ -923,7 +925,7 @@ fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Resul
         );
         let payload_json = serde_json::to_string(&block)
             .context("failed to serialize preserved task dispatch block")?;
-        transaction
+        let changed_rows = transaction
             .execute(
                 "INSERT INTO runtime_task_dispatch_blocks
                     (task_id, reason, task_updated_at, blocked_at, content)
@@ -932,7 +934,8 @@ fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Resul
                  SET reason = excluded.reason,
                      task_updated_at = excluded.task_updated_at,
                      blocked_at = excluded.blocked_at,
-                     content = excluded.content",
+                     content = excluded.content
+                 WHERE excluded.blocked_at >= runtime_task_dispatch_blocks.blocked_at",
                 params![
                     block.task_id,
                     block.reason.label(),
@@ -947,7 +950,7 @@ fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Resul
                     detail.task_id
                 )
             })?;
-        preserved_rows += 1;
+        preserved_rows += changed_rows;
     }
 
     Ok(preserved_rows)

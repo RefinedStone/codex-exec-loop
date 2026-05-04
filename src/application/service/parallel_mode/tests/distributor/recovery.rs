@@ -142,6 +142,46 @@ fn readiness_recovery_marks_stale_ledger_refreshing_session_for_manual_recovery(
     assert_eq!(snapshot.roster.active_count(), 0);
 }
 
+#[test]
+fn stale_official_refresh_recovery_abandons_only_the_head_order() {
+    let repo = TempGitRepo::new("stale-official-refresh-single-order");
+    let service = test_parallel_mode_service();
+    let first_order =
+        SqlitePlanningAuthorityAdapter::reserve_next_official_refresh_order(&repo.workspace_dir())
+            .expect("first refresh order should reserve");
+    let second_order =
+        SqlitePlanningAuthorityAdapter::reserve_next_official_refresh_order(&repo.workspace_dir())
+            .expect("second refresh order should reserve");
+    assert_eq!(first_order, 1);
+    assert_eq!(second_order, 2);
+
+    let readiness = service.inspect_readiness(
+        &repo.workspace_dir(),
+        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+            .with_workspace_present(true),
+    );
+    assert!(readiness.allows_parallel_mode());
+
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+            &repo.workspace_dir(),
+            first_order,
+            "first-worker",
+        )
+        .expect("first claim should be readable"),
+        PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
+    );
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::acquire_official_refresh_claim(
+            &repo.workspace_dir(),
+            second_order,
+            "second-worker",
+        )
+        .expect("second claim should still be executable"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+}
+
 // official completion refresh order는 worker가 실제 완료를 보고하는 순서와 별도로
 // 예약된 순서를 따라야 한다. 늦게 시작한 completion이 먼저 보고되어도 feed와
 // distributor queue가 stable ordering을 유지하도록 reservation 값을 보존한다.
