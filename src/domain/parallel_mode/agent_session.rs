@@ -49,6 +49,10 @@ impl ParallelModeAgentRosterEntry {
             latest_summary: latest_summary.into(),
         }
     }
+
+    pub fn counts_as_active(&self) -> bool {
+        self.state_label != "failed"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -379,7 +383,10 @@ impl ParallelModeAgentRosterSnapshot {
 
     // compact status copy에서 active agent 수만 빠르게 읽는다.
     pub fn active_count(&self) -> usize {
-        self.entries.len()
+        self.entries
+            .iter()
+            .filter(|entry| entry.counts_as_active())
+            .count()
     }
 
     // supervisor header에 들어가는 짧은 roster summary다.

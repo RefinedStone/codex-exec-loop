@@ -185,6 +185,43 @@ fn roster_projection_sorts_active_leases_and_applies_runtime_detail_overrides() 
     assert_eq!(roster.entries[2].duration_label, "complete");
 }
 
+// failed detail은 operator가 원인과 slot 상태를 볼 수 있도록 roster row에는 남긴다.
+// 다만 더 이상 실행 중인 worker가 아니므로 header의 active count와 live pulse에서는 제외되어야 한다.
+#[test]
+fn roster_active_count_excludes_failed_runtime_detail_rows() {
+    let failed_running = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Running,
+        "2026-01-01T00:00:00Z",
+        Some("2026-01-01T00:05:00Z"),
+    );
+    let detail = session_detail(
+        &failed_running,
+        "failed",
+        "official completion refresh failed",
+    );
+
+    let roster = super::ParallelModeAgentRosterSnapshot::project_from_leases(
+        vec![failed_running],
+        &[detail],
+        true,
+        &BTreeMap::new(),
+    );
+
+    assert_eq!(roster.entries.len(), 1);
+    assert_eq!(roster.active_count(), 0);
+    assert_eq!(roster.compact_summary(), "0 active");
+    assert_eq!(roster.entries[0].state_label, "failed");
+    assert_eq!(roster.entries[0].duration_label, "blocked");
+    assert_eq!(
+        roster.entries[0].latest_summary,
+        "official completion refresh failed"
+    );
+}
+
 // live detail은 저장된 agent history가 비어 있거나 일부 필드를 잃어도 lease에서
 // 화면에 필요한 최소 runtime 정보를 복원한다. CleanupPending은 완료된 branch가
 // slot cleanup만 기다린다는 distributor 설명까지 채워야 한다.
