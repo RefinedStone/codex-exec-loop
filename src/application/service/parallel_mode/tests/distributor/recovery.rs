@@ -73,7 +73,7 @@ fn build_supervisor_snapshot_does_not_trigger_runtime_recovery_side_effects() {
 }
 
 #[test]
-fn readiness_recovery_marks_stale_ledger_refreshing_session_failed() {
+fn readiness_recovery_marks_stale_ledger_refreshing_session_for_manual_recovery() {
     let repo = TempGitRepo::new("stale-ledger-refreshing");
     let service = test_parallel_mode_service();
     let lease = service
@@ -125,8 +125,12 @@ fn readiness_recovery_marks_stale_ledger_refreshing_session_failed() {
     let recovered = snapshot
         .detail
         .session
-        .expect("failed stale session should remain selected for operator recovery");
-    assert_eq!(recovered.state_label, "failed");
+        .expect("stale session should remain selected for operator recovery");
+    assert_eq!(recovered.state_label, "official_refresh_recovery_needed");
+    assert_eq!(
+        recovered.latest_summary,
+        "official completion refresh needs recovery"
+    );
     assert!(
         recovered
             .authority_refresh_outcome
@@ -134,7 +138,8 @@ fn readiness_recovery_marks_stale_ledger_refreshing_session_failed() {
         "{}",
         recovered.authority_refresh_outcome
     );
-    assert_ne!(snapshot.distributor.head_summary, "ledger refreshing");
+    assert_eq!(snapshot.distributor.head_summary, "recovery needed");
+    assert_eq!(snapshot.roster.active_count(), 0);
 }
 
 // official completion refresh order는 worker가 실제 완료를 보고하는 순서와 별도로

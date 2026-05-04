@@ -201,14 +201,20 @@ impl ParallelModeSlotLeaseSnapshot {
     ) -> Option<&'a str> {
         match self.state {
             ParallelModeSlotLeaseState::Running => match detail.state_label.as_str() {
-                "reported_complete" | "ledger_refreshing" | "commit_ready" | "merge_queued"
-                | "pushing" | "pr_pending" | "merge_pending" | "integrating" | "failed" => {
-                    Some(detail.state_label.as_str())
-                }
+                "reported_complete"
+                | "ledger_refreshing"
+                | "commit_ready"
+                | "merge_queued"
+                | "pushing"
+                | "pr_pending"
+                | "merge_pending"
+                | "integrating"
+                | "official_refresh_recovery_needed"
+                | "failed" => Some(detail.state_label.as_str()),
                 _ => None,
             },
             ParallelModeSlotLeaseState::CleanupPending => match detail.state_label.as_str() {
-                "failed" => Some(detail.state_label.as_str()),
+                "official_refresh_recovery_needed" | "failed" => Some(detail.state_label.as_str()),
                 _ => None,
             },
             ParallelModeSlotLeaseState::Leased => None,
