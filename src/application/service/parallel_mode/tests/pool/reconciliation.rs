@@ -238,6 +238,75 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     );
 }
 
+// parallel mode를 off -> on으로 처음 켜는 순간 pool slot은 disposable cache로 취급한다.
+// 이전 실행의 lease/session/queue projection과 checkout branch를 모두 버리고 detached prerelease baseline으로 되돌린다.
+#[test]
+fn parallel_enable_reset_discards_stale_leases_and_resets_all_slot_worktrees() {
+    let repo = TempGitRepo::new("parallel-enable-reset");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "stale.txt", "stale\n", "stale agent work");
+    fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
+
+    let reset_count = service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect("parallel enable reset should succeed");
+    let snapshot = service.build_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+
+    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
+    assert_eq!(snapshot.roster.active_count(), 0);
+    assert!(snapshot.detail.session.is_none());
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.pool_root().join(".agent-sessions").exists());
+    assert!(!slot_path.join("stale.txt").exists());
+    assert!(!slot_path.join("scratch.tmp").exists());
+    assert_eq!(current_branch(&slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                slot_path.to_str().expect("slot path should be valid utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("slot head should resolve"),
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root
+                    .to_str()
+                    .expect("repo root should be valid utf-8"),
+                "rev-parse",
+                POOL_BASELINE_BRANCH,
+            ],
+            None,
+        )
+        .expect("baseline head should resolve")
+    );
+}
+
 // reconcile은 비어 있는 pool root를 실제 capacity로 바꾸는 provisioning 단계다.
 // 모든 slot worktree가 생성되고 missing count가 사라져야 dispatcher가 곧바로
 // idle slot을 사용할 수 있다.

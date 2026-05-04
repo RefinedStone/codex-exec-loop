@@ -218,6 +218,57 @@ pub(super) fn reconcile_pool_board(
     }
 }
 
+pub(super) fn reset_pool_for_parallel_enable(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Result<usize, String> {
+    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+        return Err("git repository is unavailable".to_string());
+    };
+    let Some(canonical_repo_root) = detect_canonical_repo_root(planning_authority, workspace_dir)
+    else {
+        return Err("canonical repository root is unavailable".to_string());
+    };
+    let pool_root = derive_default_pool_root(&canonical_repo_root);
+    ensure_directory_exists(&pool_root)
+        .map_err(|error| format!("pool root could not be created: {error}"))?;
+    ensure_pool_baseline_branch(&repo_root)
+        .map_err(|_| "pool baseline could not be created".to_string())?;
+    planning_authority
+        .clear_parallel_runtime_projections(
+            &repo_root,
+            "parallel mode enabled; disposable pool reset to baseline",
+        )
+        .map_err(|error| format!("parallel runtime projection reset failed: {error}"))?;
+    clear_pool_runtime_mirrors(&pool_root);
+
+    let worktree_records = load_worktree_records(&repo_root)
+        .ok_or_else(|| "git worktree inventory could not be loaded".to_string())?;
+    let mut reset_slots = 0;
+    for slot_number in 1..=DEFAULT_POOL_SIZE {
+        let slot_id = slot_id(slot_number);
+        let slot_path = pool_root.join(&slot_id);
+        if worktree_records
+            .iter()
+            .any(|record| record.path == slot_path)
+            && reset_slot_worktree_to_akra(&slot_path).succeeded()
+        {
+            reset_slots += 1;
+        }
+    }
+
+    Ok(reset_slots)
+}
+
+fn clear_pool_runtime_mirrors(pool_root: &Path) {
+    for directory in [".leases", ".agent-sessions", ".distributor-queue"] {
+        let path = pool_root.join(directory);
+        if path.exists() {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
 pub(super) fn reconcile_pool_board_and_context(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,

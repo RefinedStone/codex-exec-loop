@@ -38,7 +38,8 @@ use self::pool::{
     build_pool_board, build_pool_slots, cleanup_slot, inspect_pool_board_and_context,
     inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
     reconcile_pool_board, reconcile_pool_board_and_context, remove_slot_lease,
-    resolve_workspace_head_sha, resolve_workspace_slot_lease, short_sha, write_slot_lease,
+    reset_pool_for_parallel_enable, resolve_workspace_head_sha, resolve_workspace_slot_lease,
+    short_sha, write_slot_lease,
 };
 #[cfg(test)]
 use self::pool::{derive_default_pool_root, slot_id, slot_lease_file_path};
@@ -333,6 +334,10 @@ impl ParallelModeService {
             readiness_snapshot,
             &self.distributor_service,
         )
+    }
+
+    pub fn reset_pool_on_parallel_enable(&self, workspace_dir: &str) -> Result<usize, String> {
+        reset_pool_for_parallel_enable(self.planning_authority.as_ref(), workspace_dir)
     }
 
     /*

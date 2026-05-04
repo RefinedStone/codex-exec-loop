@@ -499,6 +499,57 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn clear_parallel_runtime_projections(
+        workspace_dir: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open parallel runtime reset transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let slot_rows = transaction
+            .execute("DELETE FROM runtime_slot_leases", [])
+            .context("failed to clear runtime slot leases")?;
+        let invalid_rows = transaction
+            .execute("DELETE FROM runtime_invalid_slot_leases", [])
+            .context("failed to clear invalid runtime slot leases")?;
+        let session_rows = transaction
+            .execute("DELETE FROM runtime_session_details", [])
+            .context("failed to clear runtime session details")?;
+        let queue_rows = transaction
+            .execute("DELETE FROM runtime_distributor_queue", [])
+            .context("failed to clear runtime distributor queue")?;
+        let claim_rows = transaction
+            .execute(
+                "DELETE FROM runtime_claims
+                 WHERE claim_kind IN (?1, ?2)
+                    OR scope_key = ?3",
+                params![
+                    DISTRIBUTOR_QUEUE_CLAIM_KIND,
+                    "official-refresh",
+                    OFFICIAL_REFRESH_SCOPE_KEY
+                ],
+            )
+            .context("failed to clear parallel runtime claims")?;
+        append_runtime_event(
+            &transaction,
+            "parallel_runtime_reset",
+            "parallel_runtime",
+            "pool",
+            &format!(
+                "parallel runtime reset / leases: {slot_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / claims: {claim_rows} / reason: {reason}"
+            ),
+            "{}",
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit parallel runtime reset transaction")?;
+
+        Ok(())
+    }
+
     // parallel agent session의 상세 상태를 runtime projection에 저장한다.
     // session_key 단위로 최신 row를 유지하고, slot_id는 어떤 slot에서 실행 중인 session인지 빠르게 필터링하는 색인 역할을 한다.
     pub(crate) fn upsert_runtime_session_detail(

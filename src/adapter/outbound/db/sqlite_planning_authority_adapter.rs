@@ -624,6 +624,10 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         Self::load_runtime_projections(workspace_dir)
     }
 
+    fn clear_parallel_runtime_projections(&self, workspace_dir: &str, reason: &str) -> Result<()> {
+        Self::clear_parallel_runtime_projections(workspace_dir, reason)
+    }
+
     /*
     slot lease projection을 upsert한다.
 
