@@ -101,6 +101,7 @@ impl PostTurnEvaluationExecutor {
     // only when automation can act on the result, finish official parallel
     // completions before built-in follow-up refreshes, then derive the action
     // from the final runtime snapshot.
+    #[tracing::instrument(level = "trace", skip(self, conversation))]
     fn run(
         mut self,
         conversation: &ConversationViewModel,
@@ -221,6 +222,7 @@ impl PostTurnEvaluationExecutor {
     // Reconciliation runs only for paths covered by the protected execution
     // snapshot. Without a matching snapshot, auto follow-up is blocked because
     // the host cannot safely restore planning authority after a turn mutation.
+    #[tracing::instrument(level = "trace", skip(self))]
     fn reconcile_planning_after_turn(
         &mut self,
         request: &PostTurnEvaluationRequest,
@@ -273,6 +275,7 @@ impl PostTurnEvaluationExecutor {
     // reply. It skips non-ready workspaces, honors queue-idle policy, records
     // worker panel state, and promotes justified proposals into the executable
     // queue when no actionable head exists yet.
+    #[tracing::instrument(level = "trace", skip(self, conversation))]
     fn run_builtin_next_task_refresh(
         &mut self,
         conversation: &ConversationViewModel,
@@ -586,6 +589,7 @@ impl PostTurnEvaluationExecutor {
     // The final action is always derived from the latest snapshot. Explicit
     // pause states and queue-idle stop policy win before the conversation model
     // is allowed to enqueue another prompt.
+    #[tracing::instrument(level = "trace", skip(self))]
     fn auto_followup_action_from_snapshot(
         &self,
         conversation: &ConversationViewModel,
@@ -672,6 +676,7 @@ impl NativeTuiApp {
     // Production isolates post-turn planning work behind a timeout so a stalled
     // planner worker cannot strand the TUI. Tests execute synchronously to keep
     // assertions deterministic while still exercising the same executor.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
         let Some(conversation) = self.ready_conversation_snapshot() else {
             return;

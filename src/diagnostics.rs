@@ -137,3 +137,144 @@ pub mod raw_event_log {
         }
     }
 }
+
+pub mod trace_event_log {
+    use std::fs::OpenOptions;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    use tracing_appender::non_blocking::WorkerGuard;
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt::format::FmtSpan;
+    use tracing_subscriber::prelude::*;
+
+    static TRACE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+
+    struct TraceConfig {
+        filter: String,
+        path: PathBuf,
+    }
+
+    pub fn init_from_env() {
+        if TRACE_GUARD.get().is_some() {
+            return;
+        }
+        let Some(config) = trace_config_from_env() else {
+            return;
+        };
+        match build_trace_guard(config) {
+            Ok(guard) => {
+                let _ = TRACE_GUARD.set(guard);
+            }
+            Err(error) => {
+                eprintln!("akra trace initialization failed: {error}");
+            }
+        }
+    }
+
+    fn trace_config_from_env() -> Option<TraceConfig> {
+        Some(TraceConfig {
+            filter: trace_filter_from_env()?,
+            path: trace_log_path()?,
+        })
+    }
+
+    fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
+        if let Some(parent) = config.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "failed to create trace log directory `{}`: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&config.path)
+            .map_err(|error| {
+                format!(
+                    "failed to open trace log file `{}`: {error}",
+                    config.path.display()
+                )
+            })?;
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let env_filter = EnvFilter::try_new(config.filter)
+            .unwrap_or_else(|_| EnvFilter::new(default_trace_filter()));
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_span_events(FmtSpan::FULL)
+            .with_writer(writer);
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(fmt_layer)
+            .try_init()
+            .map_err(|error| format!("failed to install tracing subscriber: {error}"))?;
+
+        Ok(guard)
+    }
+
+    fn trace_filter_from_env() -> Option<String> {
+        let value = std::env::var("AKRA_TRACE").ok()?;
+        trace_filter_from_value(&value)
+    }
+
+    fn trace_filter_from_value(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("0") {
+            return None;
+        }
+        if matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ) {
+            return Some(default_trace_filter());
+        }
+        Some(trimmed.to_string())
+    }
+
+    fn default_trace_filter() -> String {
+        "codex_exec_loop_native=trace,akra=trace,akra_admin=trace,akra_telegram=trace".to_string()
+    }
+
+    fn trace_log_path() -> Option<PathBuf> {
+        if let Some(path) = std::env::var_os("AKRA_TRACE_FILE") {
+            let path = PathBuf::from(path);
+            if path.as_os_str().is_empty() {
+                return None;
+            }
+            return Some(path);
+        }
+        Some(
+            std::env::current_dir()
+                .ok()?
+                .join(".codex-exec-loop")
+                .join("runtime")
+                .join("akra-trace.jsonl"),
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::trace_filter_from_value;
+
+        #[test]
+        fn trace_filter_value_accepts_on_off_and_directives() {
+            assert_eq!(
+                trace_filter_from_value("1"),
+                Some(
+                    "codex_exec_loop_native=trace,akra=trace,akra_admin=trace,akra_telegram=trace"
+                        .to_string()
+                )
+            );
+            assert_eq!(trace_filter_from_value("0"), None);
+            assert_eq!(
+                trace_filter_from_value("codex_exec_loop_native::adapter=debug"),
+                Some("codex_exec_loop_native::adapter=debug".to_string())
+            );
+        }
+    }
+}

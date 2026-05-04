@@ -5,6 +5,13 @@
  */
 #[tokio::main]
 async fn main() {
+    codex_exec_loop_native::diagnostics::trace_event_log::init_from_env();
+    tracing::info!(
+        cwd = ?std::env::current_dir().ok(),
+        debug_assertions = cfg!(debug_assertions),
+        arg_count = std::env::args_os().count(),
+        "akra_admin_process_started"
+    );
     /*
      * run_from_env() 아래에서 args/env, workspace canonicalization, facade wiring, HTTP bind가
      * 모두 수행된다. bin wrapper는 그 결과를 process contract로만 변환해 systemd나 shell script가

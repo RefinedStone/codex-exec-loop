@@ -132,6 +132,7 @@ impl CodexAppServerAdapter {
         )
     }
 
+    #[tracing::instrument(level = "trace", skip(self, event_sender))]
     fn run_new_thread_stream_request(
         &self,
         cwd: &str,
@@ -174,6 +175,7 @@ impl CodexAppServerAdapter {
         finish_stream_result(result, &event_sender)
     }
 
+    #[tracing::instrument(level = "trace", skip(self, event_sender))]
     fn run_hidden_planning_thread_stream(
         &self,
         workspace_directory: &str,
@@ -244,6 +246,7 @@ impl CodexAppServerAdapter {
         finish_stream_result(result, &event_sender)
     }
 
+    #[tracing::instrument(level = "trace", skip(self, operation))]
     fn with_shared_runtime<T, F>(
         &self,
         request_kind: SharedRuntimeRequestKind,
@@ -298,6 +301,7 @@ impl CodexAppServerAdapter {
         unreachable!("shared runtime retry loop always returns on success or final failure")
     }
 
+    #[tracing::instrument(level = "trace", skip(self, runtime, operation))]
     fn run_request_on_locked_runtime<T, F>(
         &self,
         runtime: &mut SharedAppServerRuntime,
@@ -361,6 +365,7 @@ impl CodexAppServerAdapter {
         })
     }
 
+    #[tracing::instrument(level = "trace", skip(self, operation))]
     fn with_isolated_streaming_runtime<F>(&self, mut operation: F) -> Result<()>
     where
         F: FnMut(&mut AppServerConnection) -> Result<()>,
@@ -378,6 +383,7 @@ impl CodexAppServerAdapter {
         result
     }
 
+    #[tracing::instrument(level = "trace", skip(self, operation))]
     fn with_streaming_runtime<F>(&self, mut operation: F) -> Result<()>
     where
         F: FnMut(&mut AppServerConnection) -> Result<()>,
@@ -420,6 +426,7 @@ impl CodexAppServerAdapter {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self, connection, event_sender))]
     fn start_turn_and_wait_for_stream(
         &self,
         connection: &mut AppServerConnection,
@@ -585,6 +592,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         self.run_new_thread_stream_request(cwd, prompt, None, None, event_sender)
     }
 
+    #[tracing::instrument(level = "trace", skip(self, event_sender))]
     fn run_turn_stream(
         &self,
         thread_id: &str,
@@ -620,6 +628,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
 }
 
 impl PlanningThreadLauncher for CodexAppServerAdapter {
+    #[tracing::instrument(level = "trace", skip(self, event_sender))]
     fn run_hidden_planning_thread(
         &self,
         workspace_directory: &str,
@@ -632,6 +641,7 @@ impl PlanningThreadLauncher for CodexAppServerAdapter {
 }
 
 impl ParallelAgentWorkerPort for CodexAppServerAdapter {
+    #[tracing::instrument(level = "trace", skip(self, event_sender))]
     fn run_isolated_new_thread_stream(
         &self,
         cwd: &str,

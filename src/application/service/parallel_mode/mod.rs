@@ -378,6 +378,7 @@ impl ParallelModeService {
     켜거나 명시적으로 refresh할 때 사용하며, 읽기 전용 snapshot과 구분해 side effect가 있는 작업을
     예측 가능하게 한다.
     */
+    #[tracing::instrument(level = "trace", skip(self, readiness_snapshot))]
     pub fn reconcile_supervisor_snapshot(
         &self,
         workspace_dir: &str,
@@ -393,6 +394,7 @@ impl ParallelModeService {
         )
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn reset_pool_on_parallel_enable(&self, workspace_dir: &str) -> Result<usize, String> {
         reset_pool_for_parallel_enable(self.planning_authority.as_ref(), workspace_dir)
     }
@@ -403,6 +405,7 @@ impl ParallelModeService {
     뽑는다. 이미 lease 중이거나 distributor queue에 있는 task는 excluded로 제거해 같은 task가 중복
     agent에게 배정되지 않게 한다.
     */
+    #[tracing::instrument(level = "trace", skip(self, planning_snapshot))]
     pub fn build_dispatch_plan(
         &self,
         workspace_dir: &str,

@@ -52,6 +52,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
      * response로 축약한다. 이렇게 해야 queue refresh/repair service가 app-server protocol의 세부 event
      * vocabulary에 직접 의존하지 않는다.
      */
+    #[tracing::instrument(level = "trace", skip(self))]
     fn run_planning_session(
         &self,
         request: PlanningWorkerRequest,

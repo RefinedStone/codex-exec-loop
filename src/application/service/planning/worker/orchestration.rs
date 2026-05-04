@@ -159,6 +159,7 @@ impl PlanningWorkerOrchestrationService {
             task_mutation_service,
         }
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn refresh_queue_from_reply(
         &self,
         request: PlanningQueueRefreshRequest<'_>,
@@ -174,6 +175,7 @@ impl PlanningWorkerOrchestrationService {
             previous_handoff.as_ref(),
         )
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn refresh_queue_from_official_completion(
         &self,
         request: PlanningOfficialCompletionRefreshRequest<'_>,
@@ -193,6 +195,7 @@ impl PlanningWorkerOrchestrationService {
             request.previous_handoff_task,
         )
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn repair_task_authority(
         &self,
         request: PlanningLedgerRepairRequest<'_>,
@@ -210,6 +213,7 @@ impl PlanningWorkerOrchestrationService {
             request.previous_handoff_task,
         )
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
         // prompt rendering은 항상 가능한 최신 accepted authority snapshot을 포함하지만, rendering 자체는 state를 mutate하지 않는다.
         let authority_context = self.load_worker_authority_context(request.workspace_directory);
@@ -231,6 +235,7 @@ impl PlanningWorkerOrchestrationService {
             ),
         }
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn render_official_completion_refresh_prompt(
         &self,
         request: &PlanningOfficialCompletionRefreshRequest<'_>,
@@ -246,6 +251,7 @@ impl PlanningWorkerOrchestrationService {
             &authority_context,
         )
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn render_repair_task_authority_prompt(
         &self,
         request: &PlanningLedgerRepairRequest<'_>,
@@ -266,6 +272,7 @@ impl PlanningWorkerOrchestrationService {
             request.retry_reason,
         )
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     fn acquire_official_refresh_permit(
         &self,
         workspace_directory: &str,
@@ -300,6 +307,7 @@ impl PlanningWorkerOrchestrationService {
             }
         }
     }
+    #[tracing::instrument(level = "trace", skip(self))]
     fn run_worker_and_reconcile(
         &self,
         workspace_directory: &str,
