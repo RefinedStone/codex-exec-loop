@@ -66,14 +66,23 @@ impl NativeTuiApp {
          * runtime to measure, so None suppresses the row instead of showing a
          * stale or synthetic duration.
          */
-        match &self.conversation_state {
+        let conversation_pulse = match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation
                 // ConversationViewModel owns the monotonic start instant for the current auto-follow/live turn.
                 .live_activity_started_at()
                 // Saturating math prevents clock/test anomalies from producing negative-looking elapsed values.
                 .map(|started_at| now.saturating_duration_since(started_at).as_secs()),
             ConversationState::Loading | ConversationState::Failed(_) => None,
+        };
+        if conversation_pulse.is_some() {
+            return conversation_pulse;
         }
+
+        if self.parallel_mode_activity_pulse_visible() {
+            return Some(0);
+        }
+
+        None
     }
 
     pub(crate) fn is_max_auto_turns_editing(&self) -> bool {

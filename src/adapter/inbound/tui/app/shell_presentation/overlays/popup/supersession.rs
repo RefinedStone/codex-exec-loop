@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
@@ -23,16 +24,23 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     };
     let readiness_snapshot = app.parallel_mode_readiness_snapshot();
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
+    let activity_frame = supersession_activity_frame();
     /*
     The app state remains the source of truth for live readiness and supervisor
     snapshots. This adapter only chooses popup grouping and copy, so service-layer
     invariants such as queue ordering, pool reconciliation, and official completion
     refresh stay testable outside ratatui rendering.
     */
-    let summary_lines = build_summary_lines(mode_label, readiness_snapshot, &supervisor_snapshot);
-    let capability_lines = build_capability_lines(readiness_snapshot, &supervisor_snapshot);
-    let pool_lines = build_pool_lines(&supervisor_snapshot.pool);
-    let roster_lines = build_roster_lines(&supervisor_snapshot);
+    let summary_lines = build_summary_lines(
+        mode_label,
+        readiness_snapshot,
+        &supervisor_snapshot,
+        activity_frame,
+    );
+    let capability_lines =
+        build_capability_lines(readiness_snapshot, &supervisor_snapshot, activity_frame);
+    let pool_lines = build_pool_lines(&supervisor_snapshot.pool, activity_frame);
+    let roster_lines = build_roster_lines(&supervisor_snapshot, activity_frame);
     let detail_lines = build_detail_lines(&supervisor_snapshot);
     let distributor_lines = build_distributor_lines(&supervisor_snapshot.distributor);
     let mut key_lines = vec![AkraTheme::key_line("Ctrl+R: rerun readiness")];
@@ -51,7 +59,9 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     SupersessionOverlayView {
         header_lines: vec![
             AkraTheme::title_line("Supersession Control Tower", " / supervisor board"),
-            Line::from("Track readiness, pool capacity, agent roster, and distributor state."),
+            Line::from(format!(
+                "activity {activity_frame} / prompt locked while this board is open"
+            )),
         ],
         summary_lines,
         capability_lines,
@@ -67,6 +77,7 @@ fn build_summary_lines(
     mode_label: &str,
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    activity_frame: &'static str,
 ) -> Vec<Line<'static>> {
     /*
     Summary lines are the popup's triage header: readiness tells whether parallel
@@ -74,6 +85,17 @@ fn build_summary_lines(
     distributor compact summary shows whether completed work is stuck downstream.
     */
     let mut lines = vec![
+        Line::from(format!(
+            "activity: {}  |  prompt: locked  |  workers: {}",
+            activity_frame,
+            if supervisor_snapshot.roster.active_count() > 0 {
+                "running"
+            } else if is_pending_pool_board(&supervisor_snapshot.pool) {
+                "loading"
+            } else {
+                "idle"
+            }
+        )),
         Line::from(format!("mode: {mode_label}")),
         Line::from(format!(
             "board state: {}",
@@ -108,6 +130,7 @@ fn build_summary_lines(
 fn build_capability_lines(
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    activity_frame: &'static str,
 ) -> Vec<Line<'static>> {
     if let Some(snapshot) = readiness_snapshot {
         return snapshot
@@ -118,8 +141,8 @@ fn build_capability_lines(
     }
 
     vec![
-        Line::from("loading pipeline"),
-        Line::from("readiness: running"),
+        Line::from(format!("loading pipeline {activity_frame}")),
+        Line::from(format!("readiness: running {activity_frame}")),
         Line::from("pool reconcile: next"),
         Line::from("queue dispatch: next"),
         Line::from("board refresh: next"),
@@ -157,7 +180,10 @@ fn distributor_summary_label(distributor: &ParallelModeDistributorSnapshot) -> S
     distributor.compact_summary()
 }
 
-fn build_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<Line<'static>> {
+fn build_pool_lines(
+    pool: &ParallelModePoolBoardSnapshot,
+    activity_frame: &'static str,
+) -> Vec<Line<'static>> {
     /*
     Pool state is rendered before roster state because a missing or blocked slot
     explains why a seemingly idle lane cannot accept work. The per-slot rows keep
@@ -165,7 +191,7 @@ fn build_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<Line<'static>> 
     */
     if is_pending_pool_board(pool) {
         return vec![
-            Line::from("loading pool board"),
+            Line::from(format!("loading pool board {activity_frame}")),
             Line::from(format!("stage: {}", pool.reconcile_status)),
             Line::from(format!("focus: {}", pool.pool_root_label)),
             Line::from("slots: waiting for baseline, leases, and worktree scan"),
@@ -203,11 +229,14 @@ fn build_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<Line<'static>> 
     lines
 }
 
-fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> Vec<Line<'static>> {
+fn build_roster_lines(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    activity_frame: &'static str,
+) -> Vec<Line<'static>> {
     let roster = &supervisor_snapshot.roster;
     if is_pending_pool_board(&supervisor_snapshot.pool) {
         return vec![
-            Line::from("loading agent roster"),
+            Line::from(format!("loading agent roster {activity_frame}")),
             Line::from(format!("state: {}", supervisor_snapshot.state_label())),
             Line::from(format!("stage: {}", roster.empty_state)),
             Line::from("row shape: agent / task / slot / branch / state / age / summary"),
@@ -248,7 +277,8 @@ fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
             .map(String::as_str)
             .unwrap_or("slot not projected");
         Line::from(format!(
-            "{}: {} / {} / {} / {} / {} / {} / {}",
+            "{} {}: {} / {} / {} / {} / {} / {} / {}",
+            activity_frame,
             entry.agent_id,
             entry.task_title,
             entry.slot_id,
@@ -425,6 +455,15 @@ fn is_pending_distributor(distributor: &ParallelModeDistributorSnapshot) -> bool
         && (distributor.head_summary.starts_with("waiting ")
             || distributor.head_summary.contains("progress")
             || distributor.head_summary.contains("refreshing"))
+}
+
+fn supersession_activity_frame() -> &'static str {
+    const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    FRAMES[((millis / 250) as usize) % FRAMES.len()]
 }
 
 fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
