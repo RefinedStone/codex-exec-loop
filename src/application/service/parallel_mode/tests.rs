@@ -63,6 +63,10 @@ impl TempGitRepo {
         run_git(&repo_root, &["commit", "-qm", "init"]);
         run_git(&repo_root, &["branch", "akra"]);
         run_git(&repo_root, &["branch", "prerelease"]);
+        run_git(
+            &repo_root,
+            &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
+        );
 
         Self { root, repo_root }
     }
@@ -179,6 +183,7 @@ impl TempGitRepo {
             &self.repo_root,
             &["merge", "--ff-only", branch_name.as_str()],
         );
+        self.set_remote_tracking_branch("origin/prerelease", "prerelease");
         run_git(&self.repo_root, &["checkout", original_branch.as_str()]);
     }
 
@@ -223,6 +228,9 @@ impl TempGitRepo {
         fs::write(self.repo_root.join(file_name), contents).expect("repo file should write");
         run_git(&self.repo_root, &["add", file_name]);
         run_git(&self.repo_root, &["commit", "-qm", message]);
+        if current_branch(&self.repo_root) == "prerelease" {
+            self.set_remote_tracking_branch("origin/prerelease", "prerelease");
+        }
     }
 }
 impl Drop for TempGitRepo {

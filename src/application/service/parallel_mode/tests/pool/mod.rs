@@ -316,6 +316,29 @@ fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
     assert!(!capability.detail.contains("version = 0"));
 }
 
+// parallel pool은 local branch나 현재 HEAD가 아니라 `origin/prerelease`에서만 시작한다.
+// remote-tracking baseline이 없으면 readiness 단계에서 막아 잘못된 작업 branch를 만들지 않는다.
+#[test]
+fn inspect_readiness_blocks_when_origin_prerelease_is_missing() {
+    let repo = TempGitRepo::new("missing-origin-prerelease");
+    run_git(
+        &repo.repo_root,
+        &["update-ref", "-d", "refs/remotes/origin/prerelease"],
+    );
+    let service = test_parallel_mode_service();
+    let snapshot = service.inspect_readiness(
+        &repo.workspace_dir(),
+        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+            .with_workspace_present(true),
+    );
+    let capability = snapshot
+        .capability(ParallelModeCapabilityKey::AkraBranch)
+        .expect("akra branch capability should exist");
+
+    assert_eq!(capability.state, ParallelModeCapabilityState::Blocked);
+    assert!(capability.summary().contains("origin/prerelease"));
+}
+
 // pool board의 reconciliation 세부 규칙은 missing/blocked/leased 상태 조합이 많아
 // 별도 모듈로 분리한다. 이 파일은 dispatch와 root detection의 큰 흐름만 맡는다.
 mod reconciliation;

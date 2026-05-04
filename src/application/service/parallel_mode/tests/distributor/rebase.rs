@@ -147,6 +147,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         &repo.repo_root,
         &["commit", "-qm", "seed conflict baseline"],
     );
+    repo.set_remote_tracking_branch("origin/prerelease", "prerelease");
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     let lease = service
         .acquire_slot_lease(

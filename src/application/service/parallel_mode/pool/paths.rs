@@ -48,26 +48,16 @@ fn stable_short_hash(value: &str) -> String {
 }
 
 /*
-pool baseline head는 local branch, origin branch, 현재 HEAD 순서로 찾는다.
-reconcile 초기에 local baseline이 없을 수 있고, freshly cloned workspace에서는 origin
-baseline만 있을 수 있다. 둘 다 없을 때 HEAD를 fallback으로 쓰면 최초 pool 생성이
-완전히 막히지 않는다.
+pool baseline head는 origin branch를 먼저 보고, read-only inspection에서만 local branch를
+fallback으로 쓴다. mutating reconcile은 별도 guard에서 `origin/prerelease`를 요구하므로
+현재 HEAD를 baseline으로 해석하지 않는다.
 */
 pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
-    resolve_branch_head(repo_root, POOL_BASELINE_BRANCH)
-        .or_else(|| {
-            resolve_branch_head(
-                repo_root,
-                &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
-            )
-        })
-        .or_else(|| {
-            run_command(
-                "git",
-                ["-C", repo_root, "rev-parse", "--verify", "HEAD"],
-                None,
-            )
-        })
+    resolve_branch_head(
+        repo_root,
+        &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
+    )
+    .or_else(|| resolve_branch_head(repo_root, POOL_BASELINE_BRANCH))
 }
 
 pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {

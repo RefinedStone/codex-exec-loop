@@ -51,8 +51,7 @@ use self::paths::{
 };
 pub(super) use self::paths::{derive_default_pool_root, inspect_slot_git_status};
 use self::reconcile::{
-    can_refresh_pool_baseline_from_workspace, ensure_pool_baseline_branch, provision_missing_slots,
-    reset_reusable_detached_baseline_slots,
+    ensure_pool_baseline_branch, provision_missing_slots, reset_reusable_detached_baseline_slots,
 };
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
 use self::slot_inspection::summarize_pool_reconcile_status;
@@ -266,15 +265,12 @@ pub(super) fn reconcile_pool_board_and_context(
     }
     let created_pool_root = !pool_root_existed;
     let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
-    let can_refresh_pool_baseline =
-        can_refresh_pool_baseline_from_workspace(&repo_root, &runtime_projection);
     /*
-    baseline refresh는 active lease나 distributor queue가 없는 경우에만 허용된다. pool
-    baseline이 움직이면 idle slot reset 기준도 함께 움직이므로, 진행 중인 작업이 있을 때는
-    현재 baseline을 보존해야 한다.
+    pool baseline은 현재 workspace HEAD가 아니라 `origin/prerelease`에서만 갱신한다.
+    local `prerelease`가 drift했더라도 reconcile은 remote-tracking ref로 되돌려 새 slot과
+    기존 idle slot의 출발점을 표준 branch에 맞춘다.
     */
-    let Ok((_baseline_head, created_baseline_branch)) =
-        ensure_pool_baseline_branch(&repo_root, can_refresh_pool_baseline)
+    let Ok((_baseline_head, created_baseline_branch)) = ensure_pool_baseline_branch(&repo_root)
     else {
         return Err(Box::new((
             build_blocked_pool_board(
@@ -459,8 +455,11 @@ pub(super) fn resolve_workspace_slot_lease(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
-    let context = load_pool_runtime_context(planning_authority, workspace_dir)
-        .map_err(|(_, detail)| detail.to_string())?;
+    let context = match load_pool_runtime_context(planning_authority, workspace_dir) {
+        Ok(context) => context,
+        Err((_, "pool baseline is unavailable during inspection")) => return Ok(None),
+        Err((_, detail)) => return Err(detail.to_string()),
+    };
     let workspace_path = canonicalize_best_effort(Path::new(&context.repo_root));
     let Some(current_branch) = current_branch_name(&workspace_path) else {
         return Err(format!(
