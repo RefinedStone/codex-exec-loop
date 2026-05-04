@@ -60,7 +60,12 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         header_lines: vec![
             AkraTheme::title_line("Supersession Control Tower", " / supervisor board"),
             Line::from(format!(
-                "activity {activity_frame} / prompt locked while this board is open"
+                "activity {activity_frame} / {}",
+                if app.parallel_mode_prompt_input_locked() {
+                    "prompt locked while parallel loading is active"
+                } else {
+                    "prompt available"
+                }
             )),
         ],
         summary_lines,

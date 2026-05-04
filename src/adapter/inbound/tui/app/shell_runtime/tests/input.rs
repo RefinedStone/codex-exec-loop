@@ -40,13 +40,25 @@ fn plain_character_input_uses_empty_modifier_check() {
 }
 
 #[test]
-fn supersession_overlay_blocks_prompt_input() {
+fn supersession_overlay_blocks_prompt_input_while_loading() {
     /*
-     * Supersession overlay는 병렬 제어면이다. overlay가 열려 있는 동안 일반 prompt 입력은
-     * 막아, loading/worker control과 새 prompt 작성이 같은 화면에서 섞이지 않게 한다.
+     * Supersession overlay는 loading 중에만 일반 prompt 입력을 막는다. 이 시점에는
+     * pool reset/reconcile/dispatch가 진행 중이라 새 prompt 작성과 섞이면 상태를 읽기 어렵다.
      */
     let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+            Some("loading 2/4: pool reconcile".to_string()),
+        ));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -57,6 +69,40 @@ fn supersession_overlay_blocks_prompt_input() {
         panic!("expected ready conversation state");
     };
     assert!(conversation.input_buffer.is_empty());
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
+    /*
+     * Loading이 끝나 concrete supervisor snapshot이 들어오면 Supersession board를 열어 둔 채로도
+     * prompt editing은 다시 가능해야 한다. Ctrl+R/Ctrl+P 같은 board shortcut만 overlay가 계속 소유한다.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::empty(),
+    )));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "a");
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }
@@ -132,13 +178,25 @@ fn supersession_active_worker_requests_live_pulse() {
 }
 
 #[test]
-fn supersession_overlay_blocks_plain_r_prompt_input() {
+fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
     /*
      * `r`은 Ctrl-R refresh shortcut과 같은 문자다. modifier가 없으면 overlay control도 아니지만,
-     * Supersession이 열려 있는 동안 prompt text로도 내려가면 안 된다.
+     * Supersession loading 중에는 prompt text로도 내려가면 안 된다.
      */
     let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+            Some("loading 2/4: pool reconcile".to_string()),
+        ));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -181,17 +239,29 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
 }
 
 #[test]
-fn supersession_overlay_blocks_enter_submit_prompt() {
+fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
     /*
-     * Supersession overlay가 떠 있으면 Enter도 prompt submit으로 내려가지 않는다.
+     * Supersession overlay가 loading 중이면 Enter도 prompt submit으로 내려가지 않는다.
      * startup diagnostics를 Ready로 만든 이유는 startup guard가 아니라 overlay routing을
      * 직접 검증하기 위해서다.
      */
     let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
         &runtime.app().current_workspace_directory(),
     ));
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+            Some("loading 2/4: pool reconcile".to_string()),
+        ));
     for character in "run next".chars() {
         runtime.app_mut().push_input_character(character);
     }
