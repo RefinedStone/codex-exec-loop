@@ -4,7 +4,12 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::Event;
 
-use super::{TuiFrameScheduler, make_test_runtime};
+use super::{ShellOverlay, TuiFrameScheduler, make_test_runtime};
+use crate::domain::parallel_mode::{
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+};
 
 // A new runtime must request the first frame immediately; otherwise the TUI can sit blank until input or background work.
 #[test]
@@ -74,4 +79,42 @@ fn focus_lost_blocks_draw_until_focus_returns() {
 
     // Regaining focus schedules a fresh frame at the same timestamp to repair any stale layout.
     assert!(runtime.take_due_draw_request(now + Duration::from_millis(2)));
+}
+
+// Supersession can display active worker state without any incoming stream event.
+// The runtime must periodically refresh the supervisor projection so stale in-memory
+// rows are reconciled against the store and git state.
+#[test]
+fn active_supersession_supervisor_refreshes_periodically() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Task One",
+                    "slot-1",
+                    "akra-agent/slot-1/task-one",
+                    "running",
+                    "12s",
+                    "working",
+                )],
+                "no active agents",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    let now = Instant::now();
+
+    assert!(runtime.parallel_supervisor_refresh_due(now));
+    runtime.poll_background_messages_at(now);
+    assert!(!runtime.parallel_supervisor_refresh_due(now + Duration::from_millis(999)));
+    assert!(runtime.parallel_supervisor_refresh_due(now + Duration::from_secs(1)));
 }

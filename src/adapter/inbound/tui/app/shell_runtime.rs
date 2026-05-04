@@ -16,6 +16,7 @@ pub(super) struct ShellRuntime {
     should_quit: bool,
     frame_scheduler: TuiFrameScheduler,
     last_live_activity_pulse: Option<u64>,
+    last_parallel_supervisor_refresh_at: Option<Instant>,
 }
 
 impl ShellRuntime {
@@ -26,6 +27,7 @@ impl ShellRuntime {
             should_quit: false,
             frame_scheduler: TuiFrameScheduler::new(now),
             last_live_activity_pulse: None,
+            last_parallel_supervisor_refresh_at: None,
         }
     }
     pub(super) fn app_mut(&mut self) -> &mut NativeTuiApp {
@@ -195,6 +197,11 @@ impl ShellRuntime {
             redraw_requested = true;
         }
         self.last_live_activity_pulse = live_activity_pulse;
+        if self.parallel_supervisor_refresh_due(now) {
+            self.app.invalidate_parallel_mode_supervisor_snapshot();
+            self.last_parallel_supervisor_refresh_at = Some(now);
+            redraw_requested = true;
+        }
         if redraw_requested {
             self.request_redraw_at(now);
         } else if live_activity_pulse.is_some() {
@@ -202,6 +209,15 @@ impl ShellRuntime {
             self.frame_scheduler
                 .request_delayed(now, Duration::from_millis(250));
         }
+    }
+
+    fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
+        if !self.app.parallel_mode_activity_pulse_visible() {
+            return false;
+        }
+
+        self.last_parallel_supervisor_refresh_at
+            .is_none_or(|last_refresh| now.duration_since(last_refresh) >= Duration::from_secs(1))
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: Event) {
