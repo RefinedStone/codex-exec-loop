@@ -17,7 +17,7 @@ Read in this order:
 ## Historical References
 
 - [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md): authority-store redesign record that guided the implemented cutover
-- [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md): pre-store failure analysis and risk audit
+- [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md): compact pre-store risk history
 
 ## Working Rules
 
