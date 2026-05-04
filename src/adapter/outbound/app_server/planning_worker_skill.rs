@@ -45,6 +45,10 @@ impl PlanningWorkerSkillAdapter {
             skill_path(&self.asset_root),
         )
     }
+
+    pub(super) fn queue_mutation_skill_path(&self) -> String {
+        skill_path(&self.asset_root)
+    }
 }
 
 /*

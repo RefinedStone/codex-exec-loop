@@ -8,6 +8,8 @@ use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::diagnostics::raw_event_log;
+use serde_json::json;
 
 /*
  * PlanningThreadLauncher는 planning worker port와 실제 app-server thread 실행 사이의 좁은 seam이다.
@@ -55,6 +57,13 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse> {
         let (tx, rx) = mpsc::channel();
+        raw_event_log::emit_lazy("planning_worker_session_starting", || {
+            json!({
+                "operation": format!("{:?}", request.operation),
+                "workspace_directory": &request.workspace_directory,
+                "prompt_chars": request.prompt.chars().count(),
+            })
+        });
         let stream_result = self.planning_thread_launcher.run_hidden_planning_thread(
             &request.workspace_directory,
             &request.prompt,
@@ -70,7 +79,16 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
          * succeeds, later failures should arrive as ConversationStreamEvent::Failed
          * so the reducer can still consume any earlier context before returning.
          */
-        stream_result?;
+        if let Err(error) = stream_result {
+            raw_event_log::emit_lazy("planning_worker_session_launch_failed", || {
+                json!({
+                    "operation": format!("{:?}", request.operation),
+                    "workspace_directory": &request.workspace_directory,
+                    "error": error.to_string(),
+                })
+            });
+            return Err(error);
+        }
 
         // sender가 drop될 때까지 hidden thread event를 drain해 마지막 completed message와 turn summary를 채택한다.
         for event in rx.iter() {
@@ -115,9 +133,29 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         }
 
         if let Some(message) = failure_message {
+            raw_event_log::emit_lazy("planning_worker_session_stream_failed", || {
+                json!({
+                    "operation": format!("{:?}", request.operation),
+                    "workspace_directory": &request.workspace_directory,
+                    "message": &message,
+                    "changed_planning_file_count": changed_planning_file_paths.len(),
+                    "has_final_agent_message": final_agent_message.is_some(),
+                })
+            });
             return Err(anyhow!("planning worker stream failed: {message}"));
         }
 
+        raw_event_log::emit_lazy("planning_worker_session_reduced", || {
+            json!({
+                "operation": format!("{:?}", request.operation),
+                "workspace_directory": &request.workspace_directory,
+                "changed_planning_file_count": changed_planning_file_paths.len(),
+                "has_final_agent_message": final_agent_message.is_some(),
+                "final_agent_message_chars": final_agent_message
+                    .as_deref()
+                    .map(|message| message.chars().count()),
+            })
+        });
         Ok(PlanningWorkerResponse {
             operation: request.operation,
             final_agent_message,

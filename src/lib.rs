@@ -15,6 +15,8 @@ use std::io;
 pub mod adapter;
 // application은 use-case service와 port 계약을 둬 adapter가 domain을 직접 흔들지 않게 하는 중심층이다.
 pub mod application;
+// diagnostics는 TUI/app-server stdout을 오염시키지 않는 선택적 raw observability hook이다.
+pub mod diagnostics;
 // domain은 planning/parallel-mode의 상태 전이와 값 객체를 framework 없이 표현하는 가장 안쪽 계층이다.
 pub mod domain;
 

@@ -25,8 +25,10 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, extract_planning_task_commands,
 };
+use crate::diagnostics::raw_event_log;
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use anyhow::Result;
+use serde_json::json;
 
 /*
  * worker orchestration은 free-form LLM planning output과 accepted planning authority 사이의 bridge다.
@@ -308,18 +310,57 @@ impl PlanningWorkerOrchestrationService {
     ) -> Result<PlanningWorkerRunOutcome> {
         // worker execution 전에 execution snapshot을 capture한다. protected file reconciliation이 worker file change를
         // synthetic planning turn 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
-        let execution_snapshot = self
+        raw_event_log::emit_lazy("planning_worker_orchestration_started", || {
+            json!({
+                "workspace_directory": workspace_directory,
+                "synthetic_turn_id": synthetic_turn_id,
+                "operation": operation_label(operation),
+                "prompt_chars": prompt.chars().count(),
+                "has_previous_handoff": _previous_handoff.is_some(),
+            })
+        });
+        let execution_snapshot = match self
             .runtime_facade
-            .load_execution_snapshot(workspace_directory)?;
+            .load_execution_snapshot(workspace_directory)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                    json!({
+                        "workspace_directory": workspace_directory,
+                        "synthetic_turn_id": synthetic_turn_id,
+                        "operation": operation_label(operation),
+                        "phase": "load_execution_snapshot",
+                        "error": error.to_string(),
+                    })
+                });
+                return Err(error);
+            }
+        };
         // worker는 changed planning file과 final message를 모두 돌려줄 수 있다. accepted task authority를 mutate할 수 있는 것은
         // final message 안의 structured planning_task_commands뿐이다.
         let worker_response =
-            self.planning_worker_port
+            match self
+                .planning_worker_port
                 .run_planning_session(PlanningWorkerRequest {
                     operation,
                     workspace_directory: workspace_directory.to_string(),
                     prompt,
-                })?;
+                }) {
+                Ok(response) => response,
+                Err(error) => {
+                    raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                        json!({
+                            "workspace_directory": workspace_directory,
+                            "synthetic_turn_id": synthetic_turn_id,
+                            "operation": operation_label(operation),
+                            "phase": "run_planning_session",
+                            "error": error.to_string(),
+                        })
+                    });
+                    return Err(error);
+                }
+            };
         let mut authority_result = PlanningReconciliationResult::default();
         let mut task_authority_changed = false;
         if let Some(final_message) = worker_response.final_agent_message.as_deref() {
@@ -384,12 +425,27 @@ impl PlanningWorkerOrchestrationService {
         }
         // command handling 뒤에도 file-level reconciliation은 실행된다. worker가 task command를 내지 않았어도 planning workspace file을
         // 건드렸을 수 있기 때문이다.
-        let reconciliation_result = self.runtime_facade.reconcile_after_turn(
+        let reconciliation_result = match self.runtime_facade.reconcile_after_turn(
             workspace_directory,
             synthetic_turn_id,
             &worker_response.changed_planning_file_paths,
             &execution_snapshot,
-        )?;
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                    json!({
+                        "workspace_directory": workspace_directory,
+                        "synthetic_turn_id": synthetic_turn_id,
+                        "operation": operation_label(operation),
+                        "phase": "reconcile_after_turn",
+                        "changed_planning_file_count": worker_response.changed_planning_file_paths.len(),
+                        "error": error.to_string(),
+                    })
+                });
+                return Err(error);
+            }
+        };
         let reconciliation_result =
             merge_reconciliation_results(authority_result, reconciliation_result);
         let runtime_snapshot =
@@ -418,6 +474,22 @@ impl PlanningWorkerOrchestrationService {
                 worker_summary
             ));
         }
+        raw_event_log::emit_lazy("planning_worker_orchestration_completed", || {
+            json!({
+                "workspace_directory": workspace_directory,
+                "synthetic_turn_id": synthetic_turn_id,
+                "operation": operation_label(operation),
+                "changed_planning_file_count": worker_response.changed_planning_file_paths.len(),
+                "task_authority_changed": task_authority_changed,
+                "repair_requested": reconciliation_result.repair_request.is_some(),
+                "auto_followup_blocked": reconciliation_result.auto_followup_block_reason.is_some(),
+                "runtime_status": format!("{:?}", runtime_snapshot.workspace_status()),
+                "runtime_failure_reason": runtime_snapshot.failure_reason(),
+                "runtime_pause_reason": runtime_snapshot.auto_followup_pause_reason(),
+                "notices_count": notices.len(),
+                "has_worker_summary": worker_summary.is_some(),
+            })
+        });
         Ok(PlanningWorkerRunOutcome {
             runtime_snapshot,
             notices,
