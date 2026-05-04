@@ -36,6 +36,7 @@ dist/native/
 Bundle contents:
 
 - native binary
+- `assets/`
 - `akra` launcher on macOS/Linux or `akra.cmd` on Windows
 - `README.md`
 - `OPERATOR.md`
@@ -195,7 +196,7 @@ npm publish notes:
 
 - publish platform packages before the main `@refinedstone/akra` package
 - npm versions are immutable, so a corrected republish needs a new tag version
-- the npm package ships only the native binary under `vendor/<target>/akra/`
+- the npm platform package ships the native binary and runtime `assets/` under `vendor/<target>/akra/`
 
 Typical release flow:
 

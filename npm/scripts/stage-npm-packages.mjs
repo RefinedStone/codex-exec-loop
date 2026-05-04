@@ -117,6 +117,10 @@ function stagePlatformPackage({
     if (!fs.existsSync(sourceBinaryPath)) {
       throw new Error(`Bundled binary is missing: ${sourceBinaryPath}`);
     }
+    const sourceAssetsPath = path.join(bundleRoot, "assets");
+    if (!fs.existsSync(sourceAssetsPath)) {
+      throw new Error(`Bundled runtime assets are missing: ${sourceAssetsPath}`);
+    }
 
     const packageDir = path.join(outDir, config.packageAlias);
     const vendorDir = path.join(
@@ -134,6 +138,7 @@ function stagePlatformPackage({
     if (config.os !== "win32") {
       fs.chmodSync(destinationBinaryPath, 0o755);
     }
+    copyDir(sourceAssetsPath, path.join(vendorDir, "assets"));
 
     writeJson(path.join(packageDir, "package.json"), {
       name: publishedPackageName,
