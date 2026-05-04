@@ -422,12 +422,12 @@ impl ParallelModeService {
 
         // 실패 기록은 이미 회수한 lease의 사후 설명이다. cleanup 성공 후 기록해 board에는
         // "왜 사라졌는지"가 남고, slot 자체는 즉시 재사용 가능해진다.
-        let _ = record_failed_start_session_detail(
+        record_failed_start_session_detail(
             self.planning_authority.as_ref(),
-            &resolution.context.repo_root,
+            &resolution.context.canonical_repo_root.display().to_string(),
             &resolution.context.pool_root,
             &resolution.lease,
-        );
+        )?;
         Ok(Some(resolution.lease))
     }
 }

@@ -1,6 +1,7 @@
 // orchestrator state machine은 parallel mode의 제어 결정을 표시 문자열이나
 // 파일 존재 여부에서 분리한다. application layer는 여기서 나온 action만 실행하고,
 // planning task authority 자체를 reset 대상으로 삼지 않는다.
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModePoolResetScope {
@@ -59,7 +60,8 @@ impl ParallelModeEntryPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ParallelModeDispatchBlockReason {
     RuntimeAlreadyOwnsTask,
     StartupFailedUntilTaskChanges,
@@ -70,6 +72,30 @@ impl ParallelModeDispatchBlockReason {
         match self {
             Self::RuntimeAlreadyOwnsTask => "runtime_already_owns_task",
             Self::StartupFailedUntilTaskChanges => "startup_failed_until_task_changes",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeTaskDispatchBlockSnapshot {
+    pub task_id: String,
+    pub task_updated_at: String,
+    pub blocked_at: String,
+    pub reason: ParallelModeDispatchBlockReason,
+}
+
+impl ParallelModeTaskDispatchBlockSnapshot {
+    pub fn new(
+        task_id: impl Into<String>,
+        task_updated_at: impl Into<String>,
+        blocked_at: impl Into<String>,
+        reason: ParallelModeDispatchBlockReason,
+    ) -> Self {
+        Self {
+            task_id: task_id.into(),
+            task_updated_at: task_updated_at.into(),
+            blocked_at: blocked_at.into(),
+            reason,
         }
     }
 }

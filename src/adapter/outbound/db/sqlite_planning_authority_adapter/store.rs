@@ -172,6 +172,14 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 content TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS runtime_task_dispatch_blocks (
+                task_id TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                task_updated_at TEXT NOT NULL,
+                blocked_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS runtime_distributor_queue (
                 queue_item_id TEXT PRIMARY KEY,
                 session_key TEXT NOT NULL,

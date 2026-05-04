@@ -8,6 +8,7 @@ use crate::application::port::outbound::github_automation_port::GithubAutomation
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorQueueItem,
     ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
@@ -168,6 +169,8 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
     pub invalid_slot_leases: BTreeSet<String>,
     // Session detail projections that outlive individual lease snapshots.
     pub session_details: Vec<ParallelModeAgentSessionDetailSnapshot>,
+    // Task-level dispatch blocks survive disposable pool reset.
+    pub task_dispatch_blocks: Vec<ParallelModeTaskDispatchBlockSnapshot>,
     // Queue records still pending, blocked, or otherwise visible to distributor.
     pub distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
 }
@@ -299,6 +302,13 @@ pub trait PlanningAuthorityPort: Send + Sync {
         workspace_dir: &str,
         // Session-keyed projection containing state, timestamps, and outcome.
         detail: &ParallelModeAgentSessionDetailSnapshot,
+    ) -> Result<()>;
+
+    // Store a task-level dispatch block that should survive disposable pool reset.
+    fn upsert_runtime_task_dispatch_block(
+        &self,
+        workspace_dir: &str,
+        block: &ParallelModeTaskDispatchBlockSnapshot,
     ) -> Result<()>;
 
     // Store a durable distributor queue record until the agent result is integrated.
@@ -465,6 +475,15 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
         // Detail payload is ignored.
         _detail: &ParallelModeAgentSessionDetailSnapshot,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    // Task dispatch blocks are discarded with the empty fallback projection.
+    fn upsert_runtime_task_dispatch_block(
+        &self,
+        _workspace_dir: &str,
+        _block: &ParallelModeTaskDispatchBlockSnapshot,
     ) -> Result<()> {
         Ok(())
     }

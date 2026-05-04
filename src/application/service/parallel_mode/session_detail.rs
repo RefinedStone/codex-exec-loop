@@ -1,8 +1,9 @@
 use super::current_timestamp;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeLiveSessionDetailDefaults,
-    ParallelModeSlotLeaseSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchBlockReason,
+    ParallelModeLiveSessionDetailDefaults, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 use chrono::Utc;
 use std::path::Path;
@@ -596,7 +597,7 @@ pub(super) fn record_failed_start_session_detail(
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(
+    let detail = update_agent_session_detail_record(
         planning_authority,
         workspace_dir,
         pool_root,
@@ -625,7 +626,17 @@ pub(super) fn record_failed_start_session_detail(
             );
             detail
         },
-    )
+    )?;
+    let block = ParallelModeTaskDispatchBlockSnapshot::new(
+        detail.task_id.clone(),
+        String::new(),
+        detail.updated_at.clone(),
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    planning_authority
+        .upsert_runtime_task_dispatch_block(workspace_dir, &block)
+        .map_err(|error| format!("failed to store startup failure dispatch block: {error}"))?;
+    Ok(detail)
 }
 
 /*

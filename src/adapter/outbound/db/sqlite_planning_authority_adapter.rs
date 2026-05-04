@@ -30,6 +30,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 // active snapshot 테이블을 다루는 하위 모듈이다.
 mod active_documents;
@@ -664,6 +665,14 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         detail: &ParallelModeAgentSessionDetailSnapshot,
     ) -> Result<()> {
         Self::upsert_runtime_session_detail(workspace_dir, detail)
+    }
+
+    fn upsert_runtime_task_dispatch_block(
+        &self,
+        workspace_dir: &str,
+        block: &ParallelModeTaskDispatchBlockSnapshot,
+    ) -> Result<()> {
+        Self::upsert_runtime_task_dispatch_block(workspace_dir, block)
     }
 
     /*
