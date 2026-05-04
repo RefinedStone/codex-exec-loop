@@ -432,3 +432,107 @@ fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_reco
         ParallelModeSlotLeaseState::CleanupPending
     );
 }
+
+// cleanup 실패로 blocked된 record라도 source branch가 이미 integration branch에
+// 들어갔다면 재시작 복구는 사람 개입 상태로 고정하지 않고 slot 반환 단계로
+// 다시 보내야 한다. 그렇지 않으면 통합이 끝난 작업이 blocked head로 계속 큐를 막는다.
+#[test]
+fn distributor_retries_blocked_cleanup_failure_after_integrated_recovery() {
+    let repo = TempGitRepo::new("distributor-blocked-cleanup-recovery");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-blocked-cleanup-recovery",
+            None,
+            Some("Cleanup recovery slice completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: queued for delivery",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should enqueue")
+        .expect("queue item should be created");
+    repo.merge_agent_slot_into_akra(&slot_path);
+    assert!(
+        command_succeeds(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "merge-base",
+                "--is-ancestor",
+                lease.branch_name.as_str(),
+                POOL_BASELINE_BRANCH,
+            ],
+        ),
+        "source branch should be integrated before cleanup recovery"
+    );
+
+    let mut cleanup_pending_lease = lease.clone();
+    cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(
+        &repo.workspace_dir(),
+        &cleanup_pending_lease,
+    )
+    .expect("cleanup pending lease should be persisted");
+
+    let mut queue_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    queue_record.queue_state = ParallelModeQueueItemState::Blocked;
+    queue_record.integration_state = "blocked".to_string();
+    queue_record.integration_note =
+        "slot `slot-1` cleanup failed after distributor delivery".to_string();
+    queue_record.recovery_note = Some(queue_record.integration_note.clone());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &queue_record,
+    )
+    .expect("blocked cleanup queue record should be persisted");
+
+    let recovered = test_parallel_mode_service();
+    let notices = recovered
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("cleanup recovery should process");
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let snapshot =
+        recovered.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice.contains("distributor queue head is blocked")),
+        "cleanup recovery should not leave a blocked head: {notices:?}"
+    );
+    assert_eq!(snapshot.distributor.head_summary, "idle");
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.branch_exists(&lease.branch_name));
+}
