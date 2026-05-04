@@ -7,13 +7,14 @@ This file should stay lightweight. Expand it only while two or more live branche
 - default base: `origin/prerelease`
 - no checked-in slice plan is active right now
 - if concurrent work starts, record each live slice here with branch name, goal, owned files, verification commands, and dependencies
+- for shipped supersession behavior, use [../supersession/current-contract.md](../supersession/current-contract.md)
 
 ## Hotspots
 
 - shell flow and rendering: `src/adapter/inbound/tui/app.rs`, `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`
 - session surfaces: `src/adapter/inbound/tui/app/session_overlay_ui.rs`, `src/adapter/inbound/tui/app/session_shell_controller.rs`
 - planning surfaces: `src/adapter/inbound/tui/app/planning_init_overlay_ui.rs`, `src/adapter/inbound/tui/app/planning_draft_editor_ui.rs`, `src/adapter/inbound/tui/app/planning/`, `src/application/service/planning/authoring/init.rs`, `src/application/service/planning/runtime/prompt.rs`, `src/application/service/planning/repair/reconciliation.rs`
-- docs and operator contract: `docs/README.md`, `docs/design/06-planning-runtime-and-draft-editor.md`, `docs/plan/10-inline-scrollback-shell.md`, `docs/plan/12-platform-validation-matrix.md`
+- docs and operator contract: `docs/supersession/current-contract.md`, `docs/supersession/remaining-work.md`, `docs/README.md`
 
 ## Usage Rule
 
