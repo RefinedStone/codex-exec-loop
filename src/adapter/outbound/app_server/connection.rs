@@ -207,11 +207,13 @@ impl AppServerConnection {
         self.send_request("account/read", json!({}))
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn list_threads(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {
         self.ensure_initialized()?;
         self.send_request("thread/list", serde_json::to_value(params)?)
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn read_thread(
         &mut self,
         thread_id: &str,
@@ -227,6 +229,7 @@ impl AppServerConnection {
         )
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn start_thread(
         &mut self,
         params: ThreadStartParams,
@@ -235,6 +238,7 @@ impl AppServerConnection {
         self.send_request("thread/start", serde_json::to_value(params)?)
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn resume_thread(
         &mut self,
         params: ThreadResumeParams,
@@ -243,11 +247,13 @@ impl AppServerConnection {
         self.send_request("thread/resume", serde_json::to_value(params)?)
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn start_turn(&mut self, params: TurnStartParams) -> Result<TurnStartResponse> {
         self.ensure_initialized()?;
         self.send_request("turn/start", serde_json::to_value(params)?)
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn interrupt_turn(
         &mut self,
         params: TurnInterruptParams,

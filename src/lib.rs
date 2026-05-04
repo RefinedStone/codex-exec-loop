@@ -26,6 +26,13 @@ pub mod domain;
  * app-server shell을 시작한다. 그래서 bin target들은 이름이 달라도 동일한 실행 정책을 공유한다.
  */
 pub fn run() -> anyhow::Result<i32> {
+    diagnostics::trace_event_log::init_from_env();
+    tracing::info!(
+        cwd = ?std::env::current_dir().ok(),
+        debug_assertions = cfg!(debug_assertions),
+        arg_count = std::env::args_os().count(),
+        "akra_process_started"
+    );
     diagnostics::raw_event_log::emit_lazy("akra_process_started", || {
         serde_json::json!({
             "cwd": std::env::current_dir()

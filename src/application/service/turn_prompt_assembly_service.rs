@@ -65,6 +65,7 @@ impl TurnPromptAssemblyService {
 
     // manual prompt는 사람이 직접 입력한 요청을 main session prompt로 승격한다.
     // 별도 렌더러를 만들지 않고 main session 렌더러를 재사용해, manual 실행과 queue 실행이 같은 guardrail을 공유한다.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn build_manual_prompt(&self, request: ManualPromptAssemblyRequest<'_>) -> Option<String> {
         /*
          * manual turn도 여전히 main-session turn이다.
@@ -81,6 +82,7 @@ impl TurnPromptAssemblyService {
 
     // main session prompt를 만든다. 반환이 `Option<String>`인 이유는 공백뿐인 user prompt를
     // app-server로 보내지 않기 위해서이다. 호출자는 `None`을 "실행할 turn 없음"으로 처리할 수 있다.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn build_main_session_prompt(
         &self,
         // 사용자 요청과 선택 planning context를 담은 조립 요청이다.
@@ -106,6 +108,7 @@ impl TurnPromptAssemblyService {
 
     // sub session prompt를 만든다. sub session은 handoff 하나가 작업 범위이므로,
     // handoff가 비어 있으면 session을 시작하지 않는 것이 맞다.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn build_sub_session_prompt(
         &self,
         // distributor가 lease한 slot에 전달할 handoff 요청이다.
@@ -131,6 +134,7 @@ impl TurnPromptAssemblyService {
 // main session prompt의 실제 문자열 레이아웃을 담당한다.
 // 형식은 system prompt, 선택 runtime context, user prompt 순서이다. 이 순서는 모델이 전역 실행 규칙을 먼저 읽고,
 // 현재 계획 상태를 다음에 읽은 뒤, 마지막으로 수행할 사용자 요청을 보도록 의도한 것이다.
+#[tracing::instrument(level = "trace")]
 fn render_main_session_prompt(
     // production에서는 `MAIN_SESSION_SYSTEM_PROMPT`를 넘기고, 함수 분리 덕분에 테스트나 미래 확장에서
     // 다른 system prompt를 주입해 렌더링 규칙만 따로 확인할 수 있다.
@@ -175,6 +179,7 @@ fn render_main_session_prompt(
 
 // sub session prompt의 문자열 레이아웃이다. main session과 달리 runtime context를 따로 받지 않고,
 // `queued-task handoff:` 하나만 작업 범위로 전달한다.
+#[tracing::instrument(level = "trace")]
 fn render_sub_session_prompt(system_prompt: &str, handoff_prompt: &str) -> String {
     /*
      * sub-session rendering에는 의도적으로 runtime-context slot이 없다.

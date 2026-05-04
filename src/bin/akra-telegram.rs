@@ -4,6 +4,13 @@
  * process-level 오류 출력과 exit code 변환만 책임진다.
  */
 fn main() {
+    codex_exec_loop_native::diagnostics::trace_event_log::init_from_env();
+    tracing::info!(
+        cwd = ?std::env::current_dir().ok(),
+        debug_assertions = cfg!(debug_assertions),
+        arg_count = std::env::args_os().count(),
+        "akra_telegram_process_started"
+    );
     /*
      * run_from_env()는 local workspace에 묶인 planning control service를 만들고 long-polling loop를
      * 시작한다. bootstrap 오류와 runner 오류는 모두 anyhow chain으로 올라오므로 여기서 한 번만 출력한다.
