@@ -18,6 +18,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 manifest_path="${repo_root}/Cargo.toml"
 runbook_path="${repo_root}/docs/plan/13-native-packaging-and-operator-runbook.md"
+assets_dir="${repo_root}/assets"
 
 checksum_tool=""
 profile="release"
@@ -137,6 +138,7 @@ mkdir -p "${bundle_dir}"
 cp "${binary_path}" "${bundle_dir}/${binary_file_name}"
 cp "${repo_root}/README.md" "${bundle_dir}/README.md"
 cp "${runbook_path}" "${bundle_dir}/OPERATOR.md"
+cp -R "${assets_dir}" "${bundle_dir}/assets"
 
 write_bundle_launcher() {
   if [[ "${artifact_target}" == *windows* ]]; then

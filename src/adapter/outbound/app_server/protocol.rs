@@ -369,7 +369,7 @@ pub(super) enum TurnInputItem {
     // Text carries the user prompt or worker prompt body.
     #[serde(rename = "text")]
     Text { text: String },
-    // Skill points app-server at a repo-local SKILL.md before the text prompt is interpreted.
+    // Skill points app-server at a local SKILL.md asset before the text prompt is interpreted.
     #[serde(rename = "skill")]
     Skill { name: String, path: String },
 }
@@ -388,7 +388,7 @@ impl TurnInputItem {
         /*
          * Skill items must precede the text prompt when hidden workers need a local
          * evaluator contract. Representing them as first-class turn input keeps the
-         * app-server responsible for loading SKILL.md rather than embedding long
+         * app-server responsible for loading the SKILL.md asset rather than embedding long
          * contract text into every prompt body.
          */
         Self::Skill {
