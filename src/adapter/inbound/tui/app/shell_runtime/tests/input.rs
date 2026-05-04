@@ -3,9 +3,11 @@ use super::{
     sample_startup_diagnostics,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeSupervisorDetailSnapshot,
-    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey,
+    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
@@ -17,6 +19,22 @@ runtime은 overlay, inline command palette, conversation input reducer, startup 
 분기한다. 작은 modifier 차이 하나가 prompt text, shell command, refresh shortcut, submit flow 사이를
 바꿀 수 있으므로 이 파일은 "어느 surface가 키를 소비하는가"를 직접 검증한다.
 */
+
+fn ready_parallel_mode_readiness_snapshot(
+    workspace_directory: &str,
+) -> ParallelModeReadinessSnapshot {
+    ParallelModeReadinessSnapshot::new(
+        workspace_directory,
+        ParallelModeReadinessState::Ready,
+        vec![ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::Planning,
+            ParallelModeCapabilityState::Ready,
+            "planning workspace is healthy",
+            None,
+        )],
+        None,
+    )
+}
 
 #[test]
 fn plain_character_input_uses_empty_modifier_check() {
@@ -105,6 +123,82 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
     assert_eq!(conversation.input_buffer, "a");
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn parallel_task_update_dispatch_defers_while_entry_is_loading() {
+    /*
+     * Task intake can commit while parallel entry is still loading. That update
+     * must not race a second dispatch refresh against the entry worker; it is
+     * queued and flushed after the concrete entry snapshot arrives.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_readiness_snapshot = None;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+            Some("loading 2/4: pool reconcile".to_string()),
+        ));
+
+    runtime
+        .app_mut()
+        .refresh_parallel_mode_dispatch_after_task_update("task-added");
+
+    assert_eq!(
+        runtime
+            .app()
+            .pending_parallel_mode_task_update_dispatch
+            .as_deref(),
+        Some("task update: task-added")
+    );
+    assert!(
+        runtime
+            .app_mut()
+            .take_ready_deferred_parallel_mode_task_update_dispatch_reason()
+            .is_none()
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .pending_parallel_mode_task_update_dispatch
+            .as_deref(),
+        Some("task update: task-added")
+    );
+
+    runtime.app_mut().parallel_mode_readiness_snapshot =
+        Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+
+    assert_eq!(
+        runtime
+            .app_mut()
+            .take_ready_deferred_parallel_mode_task_update_dispatch_reason()
+            .as_deref(),
+        Some("deferred task update: task-added")
+    );
+    assert!(
+        runtime
+            .app()
+            .pending_parallel_mode_task_update_dispatch
+            .is_none()
+    );
 }
 
 #[test]

@@ -48,12 +48,11 @@ fn sync_pool_baseline_branch_from_remote(
 ) -> Result<(String, bool), ()> {
     let remote_head = resolve_branch_head(repo_root, remote_ref).ok_or(())?;
     let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
+    if local_head.as_deref() == Some(remote_head.as_str()) {
+        return Ok((remote_head, false));
+    }
     if current_branch_name(Path::new(repo_root)).as_deref() == Some(POOL_BASELINE_BRANCH) {
-        return if local_head.as_deref() == Some(remote_head.as_str()) {
-            Ok((remote_head, false))
-        } else {
-            Err(())
-        };
+        return Err(());
     }
 
     let existed = local_head.is_some();
@@ -85,7 +84,38 @@ fn seed_pool_baseline_branch_from_workspace_head(
 
     let workspace_head = resolve_branch_head(repo_root, "HEAD").ok_or(())?;
     let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
-    let existed = local_head.is_some();
+    if let Some(local_head) = local_head {
+        let local_ref = local_branch_ref(POOL_BASELINE_BRANCH);
+        let push_refspec = format!("{local_ref}:{local_ref}");
+        if !command_succeeds(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "push",
+                DEFAULT_PUSH_REMOTE_NAME,
+                push_refspec.as_str(),
+            ],
+        ) {
+            return Err(());
+        }
+
+        if !command_succeeds(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "update-ref",
+                remote_ref,
+                local_head.as_str(),
+            ],
+        ) {
+            return Err(());
+        }
+
+        return Ok((local_head, false));
+    }
+
     if current_branch != POOL_BASELINE_BRANCH
         && !command_succeeds(
             "git",
@@ -130,7 +160,7 @@ fn seed_pool_baseline_branch_from_workspace_head(
         return Err(());
     }
 
-    Ok((workspace_head, !existed))
+    Ok((workspace_head, true))
 }
 
 /*
@@ -171,7 +201,7 @@ pub(super) fn provision_missing_slots(
             */
             continue;
         }
-        if slot_path.exists()
+        if fs::symlink_metadata(&slot_path).is_ok()
             && (slot_leases.contains_key(&slot_id) || remove_slot_residue(&slot_path).is_err())
         {
             continue;
