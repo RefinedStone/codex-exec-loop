@@ -52,14 +52,41 @@ impl NativeTuiApp {
             &workspace_directory,
             self.parallel_mode_enabled(),
             self.parallel_mode_readiness_snapshot(),
+            ParallelModeLoadingStage::Entering,
         )
     }
 
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
-        // Worker dispatch changes leases asynchronously. Clearing this cache is
-        // the UI-side signal that the next overlay render should show a cheap
-        // pending board instead of recalculating pool state on the input path.
-        self.parallel_mode_supervisor_snapshot = None;
+        // Worker dispatch changes leases asynchronously. Keep the last concrete
+        // board on screen and refresh a new snapshot off the input/render path.
+        let Some(readiness_snapshot) = self.parallel_mode_readiness_snapshot.clone() else {
+            if self.parallel_mode_supervisor_snapshot.is_none() {
+                let workspace_directory = self.planning_workspace_directory();
+                self.parallel_mode_supervisor_snapshot =
+                    Some(pending_parallel_mode_supervisor_snapshot(
+                        &workspace_directory,
+                        self.parallel_mode_enabled(),
+                        None,
+                        ParallelModeLoadingStage::Entering,
+                    ));
+            }
+            return;
+        };
+
+        let workspace_directory = self.planning_workspace_directory();
+        if self.parallel_mode_supervisor_snapshot.is_none() {
+            self.parallel_mode_supervisor_snapshot =
+                Some(pending_parallel_mode_supervisor_snapshot(
+                    &workspace_directory,
+                    self.parallel_mode_enabled(),
+                    Some(&readiness_snapshot),
+                    ParallelModeLoadingStage::RefreshingBoard,
+                ));
+        }
+        self.spawn_parallel_mode_supervisor_snapshot_refresh(
+            workspace_directory,
+            readiness_snapshot,
+        );
     }
 
     pub(crate) fn refresh_parallel_mode_readiness_snapshot(
@@ -156,16 +183,44 @@ impl NativeTuiApp {
                 let workspace_directory = self.planning_workspace_directory();
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
-                self.parallel_mode_supervisor_snapshot = Some(
-                    pending_parallel_mode_supervisor_snapshot(&workspace_directory, true, None),
-                );
+                self.parallel_mode_supervisor_snapshot =
+                    Some(pending_parallel_mode_supervisor_snapshot(
+                        &workspace_directory,
+                        true,
+                        None,
+                        ParallelModeLoadingStage::Entering,
+                    ));
                 self.show_supersession_overlay();
                 self.spawn_parallel_mode_enter_worker(workspace_directory);
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: "parallel mode: preparing / readiness, pool reconcile, and first dispatch are running".to_string(),
+                    status_text:
+                        "parallel mode: loading 1/4 / checking readiness before pool setup"
+                            .to_string(),
                 });
             }
         }
+    }
+
+    fn spawn_parallel_mode_supervisor_snapshot_refresh(
+        &self,
+        workspace_directory: String,
+        readiness_snapshot: ParallelModeReadinessSnapshot,
+    ) {
+        let parallel_mode_service = self.parallel_mode_service.clone();
+        let mode_enabled = self.parallel_mode_enabled();
+        let tx = self.tx.clone();
+
+        thread::spawn(move || {
+            let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
+                &workspace_directory,
+                mode_enabled,
+                Some(&readiness_snapshot),
+            );
+            let _ = tx.send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
+                workspace_directory,
+                supervisor_snapshot: Box::new(supervisor_snapshot),
+            });
+        });
     }
 
     fn spawn_parallel_mode_enter_worker(&self, workspace_directory: String) {
@@ -183,6 +238,19 @@ impl NativeTuiApp {
                 parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
 
             let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
+                let _ = tx.send(BackgroundMessage::ParallelModeEnterProgress {
+                    workspace_directory: workspace_directory.clone(),
+                    readiness_snapshot: Some(readiness_snapshot.clone()),
+                    supervisor_snapshot: Box::new(pending_parallel_mode_supervisor_snapshot(
+                        &workspace_directory,
+                        true,
+                        Some(&readiness_snapshot),
+                        ParallelModeLoadingStage::ReconcilingPool,
+                    )),
+                    status_text:
+                        "parallel mode: loading 2/4 / readiness complete; reconciling pool and planning dispatch"
+                            .to_string(),
+                });
                 let dispatch_status = dispatch_parallel_queue_pool(
                     &workspace_directory,
                     &planning_snapshot,
@@ -232,6 +300,28 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn apply_parallel_mode_enter_progress(
+        &mut self,
+        workspace_directory: &str,
+        readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
+        supervisor_snapshot: ParallelModeSupervisorSnapshot,
+        status_text: String,
+    ) {
+        if !self.parallel_mode_enabled()
+            || self.planning_workspace_directory() != workspace_directory
+        {
+            return;
+        }
+
+        if let Some(readiness_snapshot) = readiness_snapshot {
+            self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
+        }
+        self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
     pub(super) fn apply_parallel_mode_entered(
         &mut self,
         workspace_directory: &str,
@@ -256,6 +346,18 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
+    }
+
+    pub(super) fn apply_parallel_mode_supervisor_snapshot_refreshed(
+        &mut self,
+        workspace_directory: &str,
+        supervisor_snapshot: ParallelModeSupervisorSnapshot,
+    ) {
+        if self.planning_workspace_directory() != workspace_directory {
+            return;
+        }
+
+        self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
     }
 }
 
@@ -351,29 +453,107 @@ fn dispatch_parallel_queue_pool(
     status
 }
 
+#[derive(Clone, Copy)]
+enum ParallelModeLoadingStage {
+    Entering,
+    ReconcilingPool,
+    RefreshingBoard,
+}
+
+impl ParallelModeLoadingStage {
+    fn pool_root_label(self) -> &'static str {
+        match self {
+            Self::Entering => "loading: readiness checks",
+            Self::ReconcilingPool => "loading: pool reconcile",
+            Self::RefreshingBoard => "loading: supervisor refresh",
+        }
+    }
+
+    fn pool_status(self) -> &'static str {
+        match self {
+            Self::Entering => "1/4 readiness checks running",
+            Self::ReconcilingPool => "2/4 pool reconcile and queue dispatch running",
+            Self::RefreshingBoard => "4/4 refreshing supervisor board",
+        }
+    }
+
+    fn roster_empty_state(self) -> &'static str {
+        match self {
+            Self::Entering => "waiting for readiness before slots can be assigned",
+            Self::ReconcilingPool => "waiting for pool leases and worker launch results",
+            Self::RefreshingBoard => "refreshing active agent roster",
+        }
+    }
+
+    fn detail_empty_state(self) -> &'static str {
+        match self {
+            Self::Entering => "loading 1/4: readiness checks",
+            Self::ReconcilingPool => "loading 2/4: pool reconcile and dispatch",
+            Self::RefreshingBoard => "loading 4/4: board refresh",
+        }
+    }
+
+    fn distributor_head(self) -> &'static str {
+        match self {
+            Self::Entering => "waiting for readiness",
+            Self::ReconcilingPool => "dispatch planning in progress",
+            Self::RefreshingBoard => "refreshing distributor state",
+        }
+    }
+
+    fn distributor_note(self) -> &'static str {
+        match self {
+            Self::Entering => {
+                "pipeline: [running] readiness -> [next] pool -> [next] dispatch -> [next] board"
+            }
+            Self::ReconcilingPool => {
+                "pipeline: [done] readiness -> [running] pool/dispatch -> [next] board"
+            }
+            Self::RefreshingBoard => {
+                "pipeline: [done] readiness -> [done] pool/dispatch -> [running] board"
+            }
+        }
+    }
+
+    fn top_notice(self) -> &'static str {
+        match self {
+            Self::Entering => {
+                "loading 1/4: checking repository, planning, branch, pool, and GitHub readiness"
+            }
+            Self::ReconcilingPool => {
+                "loading 2/4: readiness passed; reconciling pool and reserving dispatch slots"
+            }
+            Self::RefreshingBoard => {
+                "loading 4/4: worker state changed; refreshing the supervisor board"
+            }
+        }
+    }
+}
+
 fn pending_parallel_mode_supervisor_snapshot(
     workspace_directory: &str,
     mode_enabled: bool,
     readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+    stage: ParallelModeLoadingStage,
 ) -> ParallelModeSupervisorSnapshot {
     ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::derive(mode_enabled, readiness_snapshot),
         workspace_directory,
         ParallelModePoolBoardSnapshot::new(
             0,
-            "pending reconcile",
-            "background reconcile pending",
+            stage.pool_root_label(),
+            stage.pool_status(),
             Vec::new(),
         ),
-        ParallelModeAgentRosterSnapshot::new(Vec::new(), "agent roster pending"),
-        ParallelModeSupervisorDetailSnapshot::new(None, "supervisor detail pending"),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), stage.roster_empty_state()),
+        ParallelModeSupervisorDetailSnapshot::new(None, stage.detail_empty_state()),
         ParallelModeDistributorSnapshot::new(
             Vec::new(),
             Vec::new(),
-            "pending",
-            "background distributor inspection pending",
+            stage.distributor_head(),
+            stage.distributor_note(),
         ),
-        Some("parallel preparation is running in the background".to_string()),
+        Some(stage.top_notice().to_string()),
     )
 }
 

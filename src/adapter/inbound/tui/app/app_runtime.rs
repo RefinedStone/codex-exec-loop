@@ -43,11 +43,21 @@ pub(super) enum BackgroundMessage {
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
     InvalidateParallelModeSupervisorSnapshot,
+    ParallelModeEnterProgress {
+        workspace_directory: String,
+        readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
+        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
+        status_text: String,
+    },
     ParallelModeEntered {
         workspace_directory: String,
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         status_text: String,
+    },
+    ParallelModeSupervisorSnapshotRefreshed {
+        workspace_directory: String,
+        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
     },
     PostTurnEvaluated {
         thread_id: String,

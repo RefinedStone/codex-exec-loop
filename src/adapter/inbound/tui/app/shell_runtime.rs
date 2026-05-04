@@ -124,6 +124,19 @@ impl ShellRuntime {
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
+                BackgroundMessage::ParallelModeEnterProgress {
+                    workspace_directory,
+                    readiness_snapshot,
+                    supervisor_snapshot,
+                    status_text,
+                } => {
+                    self.app.apply_parallel_mode_enter_progress(
+                        &workspace_directory,
+                        readiness_snapshot,
+                        *supervisor_snapshot,
+                        status_text,
+                    );
+                }
                 BackgroundMessage::ParallelModeEntered {
                     workspace_directory,
                     readiness_snapshot,
@@ -135,6 +148,15 @@ impl ShellRuntime {
                         readiness_snapshot,
                         *supervisor_snapshot,
                         status_text,
+                    );
+                }
+                BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
+                    workspace_directory,
+                    supervisor_snapshot,
+                } => {
+                    self.app.apply_parallel_mode_supervisor_snapshot_refreshed(
+                        &workspace_directory,
+                        *supervisor_snapshot,
                     );
                 }
                 BackgroundMessage::PostTurnEvaluated {

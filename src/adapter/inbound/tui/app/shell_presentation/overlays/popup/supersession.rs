@@ -30,15 +30,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     refresh stay testable outside ratatui rendering.
     */
     let summary_lines = build_summary_lines(mode_label, readiness_snapshot, &supervisor_snapshot);
-    let capability_lines = readiness_snapshot
-        .map(|snapshot| {
-            snapshot
-                .capabilities
-                .iter()
-                .map(|capability| Line::from(capability.summary()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec![Line::from("parallel readiness has not been inspected yet")]);
+    let capability_lines = build_capability_lines(readiness_snapshot, &supervisor_snapshot);
     let pool_lines = build_pool_lines(&supervisor_snapshot.pool);
     let roster_lines = build_roster_lines(&supervisor_snapshot);
     let detail_lines = build_detail_lines(&supervisor_snapshot);
@@ -96,12 +88,12 @@ fn build_summary_lines(
         Line::from(format!("workspace: {}", supervisor_snapshot.workspace_path)),
         Line::from(format!(
             "pool: {}",
-            supervisor_snapshot.pool.compact_summary()
+            pool_summary_label(&supervisor_snapshot.pool)
         )),
         Line::from(format!(
             "agents: {}  |  queue: {}",
-            supervisor_snapshot.roster.compact_summary(),
-            supervisor_snapshot.distributor.compact_summary()
+            roster_summary_label(supervisor_snapshot),
+            distributor_summary_label(&supervisor_snapshot.distributor)
         )),
     ];
     if let Some(alert) = readiness_snapshot.and_then(|snapshot| snapshot.top_alert.as_deref()) {
@@ -113,12 +105,73 @@ fn build_summary_lines(
     lines
 }
 
+fn build_capability_lines(
+    readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+) -> Vec<Line<'static>> {
+    if let Some(snapshot) = readiness_snapshot {
+        return snapshot
+            .capabilities
+            .iter()
+            .map(|capability| Line::from(capability.summary()))
+            .collect::<Vec<_>>();
+    }
+
+    vec![
+        Line::from("loading pipeline"),
+        Line::from("readiness: running"),
+        Line::from("pool reconcile: next"),
+        Line::from("queue dispatch: next"),
+        Line::from("board refresh: next"),
+        Line::from(format!(
+            "stage: {}",
+            supervisor_snapshot
+                .top_notice
+                .as_deref()
+                .unwrap_or("parallel preparation is starting")
+        )),
+    ]
+}
+
+fn pool_summary_label(pool: &ParallelModePoolBoardSnapshot) -> String {
+    if is_pending_pool_board(pool) {
+        return pool.reconcile_status.clone();
+    }
+
+    pool.compact_summary()
+}
+
+fn roster_summary_label(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> String {
+    if is_pending_pool_board(&supervisor_snapshot.pool) {
+        return "pending".to_string();
+    }
+
+    supervisor_snapshot.roster.compact_summary()
+}
+
+fn distributor_summary_label(distributor: &ParallelModeDistributorSnapshot) -> String {
+    if is_pending_distributor(distributor) {
+        return distributor.head_summary.clone();
+    }
+
+    distributor.compact_summary()
+}
+
 fn build_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<Line<'static>> {
     /*
     Pool state is rendered before roster state because a missing or blocked slot
     explains why a seemingly idle lane cannot accept work. The per-slot rows keep
     branch, worktree, and owner together for quick cleanup decisions.
     */
+    if is_pending_pool_board(pool) {
+        return vec![
+            Line::from("loading pool board"),
+            Line::from(format!("stage: {}", pool.reconcile_status)),
+            Line::from(format!("focus: {}", pool.pool_root_label)),
+            Line::from("slots: waiting for baseline, leases, and worktree scan"),
+        ];
+    }
+
     let mut lines = vec![
         Line::from(format!("configured size: {}", pool.configured_size)),
         Line::from(format!("pool root: {}", pool.pool_root_label)),
@@ -152,6 +205,15 @@ fn build_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<Line<'static>> 
 
 fn build_roster_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> Vec<Line<'static>> {
     let roster = &supervisor_snapshot.roster;
+    if is_pending_pool_board(&supervisor_snapshot.pool) {
+        return vec![
+            Line::from("loading agent roster"),
+            Line::from(format!("state: {}", supervisor_snapshot.state_label())),
+            Line::from(format!("stage: {}", roster.empty_state)),
+            Line::from("row shape: agent / task / slot / branch / state / age / summary"),
+        ];
+    }
+
     let mut lines = vec![
         Line::from(format!("active count: {}", roster.active_count())),
         Line::from(format!("state: {}", supervisor_snapshot.state_label())),
@@ -284,6 +346,15 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
         .map(str::trim)
         .filter(|detail| !detail.is_empty());
 
+    if is_pending_distributor(distributor) {
+        return vec![
+            Line::from("loading distributor board"),
+            Line::from(format!("stage: {}", distributor.head_summary)),
+            Line::from(format!("pipeline: {}", distributor.note)),
+            Line::from("queue: will appear after dispatch and completion feed scan"),
+        ];
+    }
+
     let mut lines = vec![
         Line::from(format!("head: {}", distributor.head_summary)),
         Line::from(format!("queue depth: {}", distributor.queue_depth())),
@@ -342,6 +413,18 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
             .map(|entry| Line::from(format!("{}: {}", entry.stage_label, entry.summary))),
     );
     lines
+}
+
+fn is_pending_pool_board(pool: &ParallelModePoolBoardSnapshot) -> bool {
+    pool.configured_size == 0 && pool.slots.is_empty()
+}
+
+fn is_pending_distributor(distributor: &ParallelModeDistributorSnapshot) -> bool {
+    distributor.queue_items.is_empty()
+        && distributor.completion_feed.is_empty()
+        && (distributor.head_summary.starts_with("waiting ")
+            || distributor.head_summary.contains("progress")
+            || distributor.head_summary.contains("refreshing"))
 }
 
 fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
