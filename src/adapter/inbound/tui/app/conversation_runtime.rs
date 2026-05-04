@@ -18,7 +18,9 @@ use crate::adapter::inbound::tui::conversation_text::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningTaskHandoff};
+use crate::diagnostics::raw_event_log;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
     /*
@@ -140,12 +142,34 @@ pub(super) fn reduce_conversation_runtime(
             if prompt.is_empty() || !state.can_accept_runtime_prompt() {
                 // Empty prompts and prompts sent while the runtime is not ready
                 // are ignored rather than turned into provider calls.
+                raw_event_log::emit_lazy("prompt_submission_ignored", || {
+                    json!({
+                        "origin": prompt_origin_label(&origin),
+                        "reason": if prompt.is_empty() {
+                            "empty_prompt"
+                        } else {
+                            "runtime_prompt_not_acceptable"
+                        },
+                        "status_text": state.status_text,
+                        "input_ready": state.can_accept_runtime_prompt(),
+                        "manual_input_ready": state.can_accept_manual_prompt(),
+                    })
+                });
                 return ConversationRuntimeReduction { state, effects };
             }
             if matches!(origin, PromptOrigin::Manual) && !state.can_accept_manual_prompt() {
                 // Manual prompts are stricter than internal auto-follow prompts:
                 // startup gates and input state can block the operator even when
                 // an internally queued follow-up is allowed to continue.
+                raw_event_log::emit_lazy("prompt_submission_ignored", || {
+                    json!({
+                        "origin": "Manual",
+                        "reason": "manual_prompt_not_acceptable",
+                        "status_text": state.status_text,
+                        "input_ready": state.can_accept_runtime_prompt(),
+                        "manual_input_ready": state.can_accept_manual_prompt(),
+                    })
+                });
                 return ConversationRuntimeReduction { state, effects };
             }
             let thread_id = state.has_active_thread().then(|| state.thread_id.clone());
@@ -294,6 +318,13 @@ pub(super) fn reduce_conversation_runtime(
                 // state.
                 let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
                 state.begin_auto_followup_evaluation();
+                raw_event_log::emit_lazy("post_turn_evaluation_queued", || {
+                    json!({
+                        "turn_id": turn_id,
+                        "workspace_directory": workspace_directory,
+                        "changed_planning_file_count": changed_planning_file_paths.len(),
+                    })
+                });
                 effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
                     workspace_directory,
                     queued_from_turn_id: turn_id,
@@ -357,4 +388,11 @@ pub(super) fn reduce_conversation_runtime(
     }
 
     ConversationRuntimeReduction { state, effects }
+}
+
+fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
+    match origin {
+        PromptOrigin::Manual => "manual",
+        PromptOrigin::AutoFollow(_) => "auto_follow",
+    }
 }

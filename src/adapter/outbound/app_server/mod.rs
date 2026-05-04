@@ -46,9 +46,11 @@ use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, emit_codex_app_server_launch_attachment,
     emit_codex_app_server_reattach_attachment,
 };
+use crate::diagnostics::raw_event_log;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+use serde_json::json;
 
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
@@ -183,6 +185,18 @@ impl CodexAppServerAdapter {
          * ephemeral/service_name/developer_instructions identify the sub-session, and planning_worker_turn_input puts
          * the queue-mutation skill before the prompt so the worker returns planning task mutations instead of prose.
          */
+        let skill_path = self
+            .planning_worker_skill_adapter
+            .queue_mutation_skill_path();
+        raw_event_log::emit_lazy("hidden_planning_thread_starting", || {
+            json!({
+                "workspace_directory": workspace_directory,
+                "model": PLANNING_WORKER_MODEL,
+                "service_name": PLANNING_WORKER_SERVICE_NAME,
+                "prompt_chars": prompt.chars().count(),
+                "skill_path": skill_path,
+            })
+        });
         let result = self.with_isolated_streaming_runtime(|connection| {
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace_directory.to_string()),
@@ -211,6 +225,21 @@ impl CodexAppServerAdapter {
                 &event_sender,
             )
         });
+        match &result {
+            Ok(()) => raw_event_log::emit_lazy("hidden_planning_thread_completed", || {
+                json!({
+                    "workspace_directory": workspace_directory,
+                    "service_name": PLANNING_WORKER_SERVICE_NAME,
+                })
+            }),
+            Err(error) => raw_event_log::emit_lazy("hidden_planning_thread_failed", || {
+                json!({
+                    "workspace_directory": workspace_directory,
+                    "service_name": PLANNING_WORKER_SERVICE_NAME,
+                    "error": error.to_string(),
+                })
+            }),
+        }
 
         finish_stream_result(result, &event_sender)
     }
