@@ -398,7 +398,8 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(rendered.contains("Pool Board"));
     assert!(rendered.contains("Agent Roster"));
     assert!(rendered.contains("Distributor / Queue"));
-    assert!(rendered.contains("configured size: 3"));
+    assert!(rendered.contains("configured size: 0"));
+    assert!(rendered.contains("pending"));
     assert!(rendered.contains("active count: 0"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));

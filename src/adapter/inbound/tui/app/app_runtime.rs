@@ -11,6 +11,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
+use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -42,6 +43,12 @@ pub(super) enum BackgroundMessage {
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
     InvalidateParallelModeSupervisorSnapshot,
+    ParallelModeEntered {
+        workspace_directory: String,
+        readiness_snapshot: ParallelModeReadinessSnapshot,
+        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
+        status_text: String,
+    },
     PostTurnEvaluated {
         thread_id: String,
         queued_from_turn_id: String,

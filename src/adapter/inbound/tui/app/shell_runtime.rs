@@ -124,6 +124,19 @@ impl ShellRuntime {
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
+                BackgroundMessage::ParallelModeEntered {
+                    workspace_directory,
+                    readiness_snapshot,
+                    supervisor_snapshot,
+                    status_text,
+                } => {
+                    self.app.apply_parallel_mode_entered(
+                        &workspace_directory,
+                        readiness_snapshot,
+                        *supervisor_snapshot,
+                        status_text,
+                    );
+                }
                 BackgroundMessage::PostTurnEvaluated {
                     thread_id,
                     queued_from_turn_id,
