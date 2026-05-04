@@ -356,6 +356,54 @@ impl ParallelModeDistributorService {
                 &mut record,
             )?;
             context.distributor_queue_records[index] = record.clone();
+            if !matches!(
+                record.queue_state,
+                ParallelModeQueueItemState::Idle
+                    | ParallelModeQueueItemState::Done
+                    | ParallelModeQueueItemState::Failed
+            ) && matching_lease.is_none()
+                && record_is_cleanup_recovery_candidate(&record)
+                && !branch_exists(&context.repo_root, &record.branch_name)
+            {
+                /*
+                Reconcile can finish slot cleanup before distributor recovery
+                sees the blocked/cleaning record. With no lease and no source
+                branch left, the durable queue item should close as recovered
+                instead of remaining a permanent blocked head.
+                */
+                recover_integrated_queue_record(
+                    self.planning_authority.as_ref(),
+                    &context,
+                    None,
+                    &mut record,
+                )?;
+                context.distributor_queue_records[index] = record;
+                continue;
+            }
+            if !matches!(
+                record.queue_state,
+                ParallelModeQueueItemState::Idle
+                    | ParallelModeQueueItemState::Done
+                    | ParallelModeQueueItemState::Failed
+            ) && branch_is_integrated_into(
+                &context.repo_root,
+                &record.branch_name,
+                DISTRIBUTOR_INTEGRATION_BRANCH,
+            ) {
+                /*
+                Integration proof also recovers cleanup-time blocks. A queue
+                item that already landed in prerelease should converge toward
+                slot return instead of staying blocked at the head forever.
+                */
+                recover_integrated_queue_record(
+                    self.planning_authority.as_ref(),
+                    &context,
+                    matching_lease.as_ref(),
+                    &mut record,
+                )?;
+                context.distributor_queue_records[index] = record;
+                continue;
+            }
             if matches!(
                 record.queue_state,
                 ParallelModeQueueItemState::Idle
@@ -379,25 +427,6 @@ impl ParallelModeDistributorService {
                     &mut record,
                     "recovered after restart: source worktree is missing; distributor cannot continue"
                         .to_string(),
-                )?;
-                context.distributor_queue_records[index] = record;
-                continue;
-            }
-            if branch_is_integrated_into(
-                &context.repo_root,
-                &record.branch_name,
-                DISTRIBUTOR_INTEGRATION_BRANCH,
-            ) {
-                /*
-                Integration proof outranks remote PR status. Once the source
-                branch is already contained in prerelease, recovery should move
-                toward cleanup rather than reopening GitHub delivery questions.
-                */
-                recover_integrated_queue_record(
-                    self.planning_authority.as_ref(),
-                    &context,
-                    matching_lease.as_ref(),
-                    &mut record,
                 )?;
                 context.distributor_queue_records[index] = record;
                 continue;
@@ -574,6 +603,18 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
         || detail.contains("push capability is unavailable for distributor delivery")
         || detail.contains("could not be pushed to")
         || detail.contains("source branch was pushed but GitHub automation is unavailable")
+}
+
+fn record_is_cleanup_recovery_candidate(record: &ParallelModeDistributorQueueRecord) -> bool {
+    record.queue_state == ParallelModeQueueItemState::Cleaning
+        || record
+            .integration_note
+            .contains("cleanup failed after distributor delivery")
+        || record.integration_note.contains("slot is entering cleanup")
+        || record.integration_note.contains("slot returned to idle")
+        || record
+            .integration_note
+            .contains("GitHub delivery completed")
 }
 
 /*
