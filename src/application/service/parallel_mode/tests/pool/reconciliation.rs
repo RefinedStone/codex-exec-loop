@@ -238,10 +238,10 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     );
 }
 
-// parallel mode를 off -> on으로 처음 켜는 순간 pool slot은 disposable cache로 취급한다.
+// parallel mode를 off -> on으로 켜는 순간 pool slot은 disposable cache로 취급한다.
 // 이전 실행의 lease/session/queue projection과 checkout branch를 모두 버리고 detached prerelease baseline으로 되돌린다.
 #[test]
-fn parallel_enable_reset_discards_stale_leases_and_resets_all_slot_worktrees() {
+fn parallel_entry_from_off_resets_stale_leases_and_all_slot_worktrees() {
     let repo = TempGitRepo::new("parallel-enable-reset");
     let service = test_parallel_mode_service();
     let lease = service
@@ -305,6 +305,29 @@ fn parallel_enable_reset_discards_stale_leases_and_resets_all_slot_worktrees() {
         )
         .expect("baseline head should resolve")
     );
+
+    service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-2", "Task Two", "agent-2", "task-two"),
+        )
+        .expect("second entry setup should acquire a slot lease");
+    let second_reset_count = service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect("parallel re-entry from off should reset again");
+    let second_snapshot = service.build_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+    assert_eq!(second_reset_count, DEFAULT_POOL_SIZE);
+    assert_eq!(second_snapshot.roster.active_count(), 0);
+    assert!(second_snapshot.detail.session.is_none());
 }
 
 // reconcile은 비어 있는 pool root를 실제 capacity로 바꾸는 provisioning 단계다.

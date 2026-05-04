@@ -204,8 +204,12 @@ impl NativeTuiApp {
                 // Bare `:parallel` is the only enable entrypoint. Open the
                 // control tower first, then let readiness/reconcile/dispatch run
                 // off the terminal event loop so prompt typing stays responsive.
+                // A destructive pool reset belongs to the local off -> on
+                // transition. Re-running `:parallel` while already enabled only
+                // refreshes/reconciles; after `:parallel off`, the next
+                // `:parallel` resets the disposable pool again.
                 let workspace_directory = self.planning_workspace_directory();
-                let reset_pool_on_enter = !self.parallel_mode_enabled;
+                let reset_pool_on_off_to_on_entry = !self.parallel_mode_enabled;
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
                 self.parallel_mode_supervisor_snapshot =
@@ -216,7 +220,10 @@ impl NativeTuiApp {
                         ParallelModeLoadingStage::Entering,
                     ));
                 self.show_supersession_overlay();
-                self.spawn_parallel_mode_enter_worker(workspace_directory, reset_pool_on_enter);
+                self.spawn_parallel_mode_enter_worker(
+                    workspace_directory,
+                    reset_pool_on_off_to_on_entry,
+                );
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text:
                         "parallel mode: loading 1/4 / checking readiness before pool setup"
@@ -251,7 +258,7 @@ impl NativeTuiApp {
     fn spawn_parallel_mode_enter_worker(
         &self,
         workspace_directory: String,
-        reset_pool_on_enter: bool,
+        reset_pool_on_off_to_on_entry: bool,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
@@ -280,10 +287,14 @@ impl NativeTuiApp {
                         "parallel mode: loading 2/4 / readiness complete; reconciling pool and planning dispatch"
                             .to_string(),
                 });
-                let reset_result = if reset_pool_on_enter {
+                let reset_result = if reset_pool_on_off_to_on_entry {
                     parallel_mode_service
                         .reset_pool_on_parallel_enable(&workspace_directory)
-                        .map(|count| format!("reset {count} pool slot worktree(s) to prerelease"))
+                        .map(|count| {
+                            format!(
+                                "reset {count} pool slot worktree(s) to prerelease after off->on entry"
+                            )
+                        })
                 } else {
                     Ok(String::new())
                 };
