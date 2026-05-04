@@ -1,4 +1,7 @@
-use super::{DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH};
+use super::{
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH, current_branch_name,
+    remote_branch_name, remote_tracking_branch_ref,
+};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
@@ -55,15 +58,17 @@ pub(super) fn inspect_git_worktree(
 }
 
 /*
-akra branch capability는 pool baseline이 될 remote integration branch를 찾는다. parallel
-pool은 `origin/prerelease`에서만 시작하므로 local `prerelease`나 현재 HEAD fallback은
-ready로 보지 않는다. local branch가 있어도 remote-tracking 기준이 없으면 reconcile이
-올바른 출발점을 확정할 수 없다.
+akra branch capability는 pool baseline이 될 표준 integration branch를 찾는다. remote tracking
+branch가 있으면 그대로 사용하고, fresh repository처럼 local/remote 표준 branch가 모두 없으면
+reconcile 단계가 현재 workspace HEAD를 표준 branch로 seed한 뒤 push할 수 있게 ready로 둔다.
+agent slot worktree에서 seed하면 병렬 작업 결과를 baseline으로 승격할 수 있으므로 그 경우는 막는다.
 */
 pub(super) fn inspect_akra_branch(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
+    let remote_branch = remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
+    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
     if runtime.command_succeeds(
         "git",
         &[
@@ -72,22 +77,46 @@ pub(super) fn inspect_akra_branch(
             "show-ref",
             "--verify",
             "--quiet",
-            &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
+            remote_ref.as_str(),
         ],
     ) {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::AkraBranch,
             ParallelModeCapabilityState::Ready,
-            format!("origin/{POOL_BASELINE_BRANCH} is available"),
+            format!("{remote_branch} is available"),
             None,
         );
     }
+
+    let agent_branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/");
+    if current_branch_name(Path::new(repo_root))
+        .is_some_and(|branch_name| branch_name.starts_with(&agent_branch_prefix))
+    {
+        return ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::AkraBranch,
+            ParallelModeCapabilityState::Blocked,
+            format!("{remote_branch} is missing"),
+            Some(format!(
+                "checkout a non-agent workspace before seeding {remote_branch}"
+            )),
+        );
+    }
+
+    if runtime.command_succeeds("git", &["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
+        return ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::AkraBranch,
+            ParallelModeCapabilityState::Ready,
+            format!("{remote_branch} will be seeded from current HEAD"),
+            None,
+        );
+    }
+
     ParallelModeCapabilitySnapshot::new(
         ParallelModeCapabilityKey::AkraBranch,
         ParallelModeCapabilityState::Blocked,
-        format!("origin/{POOL_BASELINE_BRANCH} is missing"),
+        format!("{remote_branch} is missing"),
         Some(format!(
-            "fetch origin/{POOL_BASELINE_BRANCH} before enabling parallel mode"
+            "fetch {remote_branch} or create a commit before enabling parallel mode"
         )),
     )
 }

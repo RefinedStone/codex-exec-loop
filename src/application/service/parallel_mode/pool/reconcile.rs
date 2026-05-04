@@ -3,7 +3,10 @@ use std::path::Path;
 
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
-use super::super::{DEFAULT_POOL_SIZE, POOL_BASELINE_BRANCH};
+use super::super::{
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH,
+    local_branch_ref, remote_tracking_branch_ref,
+};
 use super::{
     GitWorktreeRecord, SlotGitStatus, command_succeeds, current_branch_name,
     ensure_directory_exists, inspect_slot_git_status, reset_slot_worktree_to_akra,
@@ -12,15 +15,16 @@ use super::{
 
 /*
 reconcile은 pool baseline branch가 반드시 존재한다고 가정하고 slot worktree를 만든다. 이
-함수는 그 branch를 `origin/prerelease`에서 찾거나 만든다. 현재 workspace HEAD는 baseline
-source가 아니며, local `prerelease`가 drift한 경우에도 remote-tracking ref로 되돌린다.
+함수는 표준 branch의 remote-tracking ref가 있으면 거기에서 local branch를 맞추고, fresh
+repository처럼 local/remote 표준 branch가 모두 없으면 현재 workspace HEAD를 표준 branch로 seed한
+뒤 origin에 push한다. local 표준 branch가 drift한 경우에는 remote-tracking ref로 되돌린다.
 
 반환값의 bool은 branch를 새로 만들었는지를 나타낸다. 상위 reconcile summary는 이 값을
 사용해 사용자가 방금 어떤 pool 구조 변화가 일어났는지 알 수 있게 한다.
 */
 pub(super) fn ensure_pool_baseline_branch(repo_root: &str) -> Result<(String, bool), ()> {
-    let remote_ref = format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}");
-    if !command_succeeds(
+    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
+    if command_succeeds(
         "git",
         [
             "-C",
@@ -31,10 +35,17 @@ pub(super) fn ensure_pool_baseline_branch(repo_root: &str) -> Result<(String, bo
             remote_ref.as_str(),
         ],
     ) {
-        return Err(());
+        return sync_pool_baseline_branch_from_remote(repo_root, &remote_ref);
     }
 
-    let remote_head = resolve_branch_head(repo_root, remote_ref.as_str()).ok_or(())?;
+    seed_pool_baseline_branch_from_workspace_head(repo_root, &remote_ref)
+}
+
+fn sync_pool_baseline_branch_from_remote(
+    repo_root: &str,
+    remote_ref: &str,
+) -> Result<(String, bool), ()> {
+    let remote_head = resolve_branch_head(repo_root, remote_ref).ok_or(())?;
     let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
     if current_branch_name(Path::new(repo_root)).as_deref() == Some(POOL_BASELINE_BRANCH) {
         return if local_head.as_deref() == Some(remote_head.as_str()) {
@@ -53,13 +64,72 @@ pub(super) fn ensure_pool_baseline_branch(repo_root: &str) -> Result<(String, bo
             "branch",
             "-f",
             POOL_BASELINE_BRANCH,
-            remote_ref.as_str(),
+            remote_ref,
         ],
     ) {
         return Err(());
     }
 
     Ok((remote_head, !existed))
+}
+
+fn seed_pool_baseline_branch_from_workspace_head(
+    repo_root: &str,
+    remote_ref: &str,
+) -> Result<(String, bool), ()> {
+    let current_branch = current_branch_name(Path::new(repo_root)).ok_or(())?;
+    if current_branch.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/")) {
+        return Err(());
+    }
+
+    let workspace_head = resolve_branch_head(repo_root, "HEAD").ok_or(())?;
+    let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
+    let existed = local_head.is_some();
+    if current_branch != POOL_BASELINE_BRANCH
+        && !command_succeeds(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "branch",
+                "-f",
+                POOL_BASELINE_BRANCH,
+                "HEAD",
+            ],
+        )
+    {
+        return Err(());
+    }
+
+    let local_ref = local_branch_ref(POOL_BASELINE_BRANCH);
+    let push_refspec = format!("{local_ref}:{local_ref}");
+    if !command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "push",
+            DEFAULT_PUSH_REMOTE_NAME,
+            push_refspec.as_str(),
+        ],
+    ) {
+        return Err(());
+    }
+
+    if !command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "update-ref",
+            remote_ref,
+            workspace_head.as_str(),
+        ],
+    ) {
+        return Err(());
+    }
+
+    Ok((workspace_head, !existed))
 }
 
 /*

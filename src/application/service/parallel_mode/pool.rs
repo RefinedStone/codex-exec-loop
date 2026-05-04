@@ -15,9 +15,9 @@ use crate::domain::parallel_mode::{
 use super::current_branch_name;
 use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
 use super::{
-    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL,
-    NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION, POOL_BASELINE_BRANCH,
-    ensure_directory_exists,
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME,
+    NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
+    POOL_BASELINE_BRANCH, ensure_directory_exists, remote_tracking_branch_ref,
 };
 
 /*
@@ -266,9 +266,9 @@ pub(super) fn reconcile_pool_board_and_context(
     let created_pool_root = !pool_root_existed;
     let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
     /*
-    pool baseline은 현재 workspace HEAD가 아니라 `origin/prerelease`에서만 갱신한다.
-    local `prerelease`가 drift했더라도 reconcile은 remote-tracking ref로 되돌려 새 slot과
-    기존 idle slot의 출발점을 표준 branch에 맞춘다.
+    pool baseline은 표준 remote branch가 있으면 그 ref에서 갱신한다. fresh repository처럼
+    local/remote 표준 branch가 모두 없으면 reconcile이 현재 workspace HEAD를 표준 branch로
+    seed하고 push한 뒤 slot 출발점을 확정한다.
     */
     let Ok((_baseline_head, created_baseline_branch)) = ensure_pool_baseline_branch(&repo_root)
     else {
