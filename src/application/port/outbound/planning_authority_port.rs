@@ -29,6 +29,18 @@ pub enum PlanningAuthorityOfficialRefreshClaimStatus {
     AlreadyCompleted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/*
+ * official refresh worker가 시작 표시만 남긴 뒤 사라진 경우 recovery path가 실행 포인터를
+ * 한 칸 전진시킬 수 있어야 합니다. 상태 enum은 회수 성공, 회수할 예약 없음,
+ * 아직 살아 있는 claim 존재를 구분합니다.
+ */
+pub enum PlanningAuthorityOfficialRefreshRecoveryStatus {
+    Recovered { refresh_order: u64 },
+    NoPendingOrder,
+    WaitingForActiveClaim,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /*
  * distributor queue record는 parallel mode에서 한 agent 결과물을 통합 큐에 올릴 때의 영속 모델입니다.
@@ -217,6 +229,18 @@ pub trait PlanningAuthorityPort: Send + Sync {
     ) -> Result<()>;
 
     /*
+     * 다음 실행 포인터가 이미 예약된 order를 가리키지만 살아 있는 claim이 없을 때,
+     * 그 order를 abandoned로 표시하고 다음 order가 실행될 수 있게 합니다.
+     */
+    fn abandon_next_official_refresh_order(
+        &self,
+        // Authority namespace containing the official refresh metadata.
+        workspace_dir: &str,
+        // Operator-facing reason recorded in runtime events.
+        reason: &str,
+    ) -> Result<PlanningAuthorityOfficialRefreshRecoveryStatus>;
+
+    /*
      * distributor queue 항목 하나를 처리할 권리를 잡습니다.
      * queue head를 여러 dispatcher가 동시에 PR 생성/merge 처리하지 않게 하는 잠금이며,
      * bool 반환은 "내가 처리해도 되는가"만 알려 주고 대기 사유는 상위 정책이 결정합니다.
@@ -361,6 +385,14 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _owner_token: &str,
     ) -> Result<()> {
         Ok(())
+    }
+
+    fn abandon_next_official_refresh_order(
+        &self,
+        _workspace_dir: &str,
+        _reason: &str,
+    ) -> Result<PlanningAuthorityOfficialRefreshRecoveryStatus> {
+        Ok(PlanningAuthorityOfficialRefreshRecoveryStatus::NoPendingOrder)
     }
 
     // With no durable queue, every distributor claim succeeds to keep callers moving.

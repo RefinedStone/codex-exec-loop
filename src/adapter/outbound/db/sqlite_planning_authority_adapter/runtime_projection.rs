@@ -16,7 +16,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 // SQLite 세부 구조가 application layer로 새지 않도록 어댑터 내부에서 매핑을 끝낸다.
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
-    PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 // parallel mode의 slot lease와 agent session은 domain 타입이므로,
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
@@ -213,6 +213,68 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit official refresh release transaction")?;
         Ok(())
+    }
+
+    // abandoned official refresh order를 회수해 뒤 refresh가 영구 대기하지 않게 한다.
+    pub(crate) fn abandon_next_official_refresh_order(
+        workspace_dir: &str,
+        reason: &str,
+    ) -> Result<PlanningAuthorityOfficialRefreshRecoveryStatus> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open official refresh recovery transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+
+        let next_executable =
+            read_metadata_i64(&transaction, "next_executable_refresh_order")?.unwrap_or(1);
+        let next_official =
+            read_metadata_i64(&transaction, "next_official_refresh_order")?.unwrap_or(1);
+        if next_executable >= next_official {
+            transaction
+                .rollback()
+                .context("failed to roll back idle official refresh recovery")?;
+            return Ok(PlanningAuthorityOfficialRefreshRecoveryStatus::NoPendingOrder);
+        }
+
+        let stale_claim_cleared = clear_stale_runtime_claim(
+            &transaction,
+            "official-refresh",
+            OFFICIAL_REFRESH_SCOPE_KEY,
+        )?;
+        if !stale_claim_cleared
+            && load_runtime_claim(&transaction, "official-refresh", OFFICIAL_REFRESH_SCOPE_KEY)?
+                .is_some()
+        {
+            transaction
+                .rollback()
+                .context("failed to roll back active official refresh recovery")?;
+            return Ok(PlanningAuthorityOfficialRefreshRecoveryStatus::WaitingForActiveClaim);
+        }
+
+        let refresh_order = next_executable as u64;
+        upsert_metadata(
+            &transaction,
+            "next_executable_refresh_order",
+            &(refresh_order + 1).to_string(),
+        )?;
+        append_runtime_event(
+            &transaction,
+            "official_refresh_abandoned",
+            "official_refresh",
+            &refresh_order.to_string(),
+            &format!("official refresh order {refresh_order} abandoned during recovery: {reason}"),
+            &serde_json::json!({
+                "refresh_order": refresh_order,
+                "reason": reason,
+            })
+            .to_string(),
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit official refresh recovery transaction")?;
+        Ok(PlanningAuthorityOfficialRefreshRecoveryStatus::Recovered { refresh_order })
     }
 
     // distributor queue의 특정 item을 처리할 권한을 시도한다.

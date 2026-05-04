@@ -72,6 +72,71 @@ fn build_supervisor_snapshot_does_not_trigger_runtime_recovery_side_effects() {
     );
 }
 
+#[test]
+fn readiness_recovery_marks_stale_ledger_refreshing_session_failed() {
+    let repo = TempGitRepo::new("stale-ledger-refreshing");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-stale-ledger",
+            None,
+            Some("Completed before the refresh worker disappeared."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+
+    let session_key = lease.session_key();
+    let mut detail = read_agent_session_detail_record(&repo.pool_root(), &session_key)
+        .expect("session detail should be mirrored");
+    detail.updated_at = "2020-01-01T00:00:00+00:00".to_string();
+    if let Some(history) = detail.history.last_mut() {
+        history.timestamp = detail.updated_at.clone();
+    }
+    SqlitePlanningAuthorityAdapter::upsert_runtime_session_detail(&repo.workspace_dir(), &detail)
+        .expect("stale detail should update authority projection");
+    fs::write(
+        repo.session_detail_path(&session_key),
+        serde_json::to_string_pretty(&detail).expect("detail should serialize"),
+    )
+    .expect("stale detail mirror should update");
+
+    let readiness = service.inspect_readiness(
+        &repo.workspace_dir(),
+        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+            .with_workspace_present(true),
+    );
+    assert!(readiness.allows_parallel_mode());
+    let snapshot = service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+
+    let recovered = snapshot
+        .detail
+        .session
+        .expect("failed stale session should remain selected for operator recovery");
+    assert_eq!(recovered.state_label, "failed");
+    assert!(
+        recovered
+            .authority_refresh_outcome
+            .contains("stale official ledger refresh"),
+        "{}",
+        recovered.authority_refresh_outcome
+    );
+    assert_ne!(snapshot.distributor.head_summary, "ledger refreshing");
+}
+
 // official completion refresh order는 worker가 실제 완료를 보고하는 순서와 별도로
 // 예약된 순서를 따라야 한다. 늦게 시작한 completion이 먼저 보고되어도 feed와
 // distributor queue가 stable ordering을 유지하도록 reservation 값을 보존한다.

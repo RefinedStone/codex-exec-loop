@@ -19,7 +19,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityPort,
+    PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningDirectionAuthoritySnapshot,
@@ -567,6 +568,17 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         owner_token: &str,
     ) -> Result<()> {
         Self::release_official_refresh_claim(workspace_dir, refresh_order, owner_token)
+    }
+
+    /*
+    stale ledger refresh recovery가 다음 실행 포인터를 막는 abandoned order를 회수한다.
+    */
+    fn abandon_next_official_refresh_order(
+        &self,
+        workspace_dir: &str,
+        reason: &str,
+    ) -> Result<PlanningAuthorityOfficialRefreshRecoveryStatus> {
+        Self::abandon_next_official_refresh_order(workspace_dir, reason)
     }
 
     /*
