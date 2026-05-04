@@ -313,7 +313,12 @@ pub(super) fn reconcile_pool_board_and_context(
     {
         worktree_records = refreshed_records;
     }
-    let provisioned_slots = provision_missing_slots(&repo_root, &pool_root, &worktree_records);
+    let provisioned_slots = provision_missing_slots(
+        &repo_root,
+        &pool_root,
+        &worktree_records,
+        &runtime_projection.slot_leases,
+    );
     /*
     provision 직후 worktree list를 다시 읽는다. 새 slot worktree가 생긴 뒤의 inventory로
     cleanup과 board projection을 돌려야 missing slot이 같은 reconcile tick 안에서

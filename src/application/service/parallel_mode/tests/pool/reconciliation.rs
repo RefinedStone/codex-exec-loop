@@ -155,6 +155,8 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
     let repo = TempGitRepo::new("dirty-reusable-slot");
     let slot_path = repo.create_detached_slot(1);
     fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
+    fs::write(slot_path.join("scratch.tmp"), "transient\n")
+        .expect("untracked slot residue should be written");
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -166,6 +168,7 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
         fs::read_to_string(slot_path.join("README.md")).expect("README should be readable"),
         "seed\n"
     );
+    assert!(!slot_path.join("scratch.tmp").exists());
 }
 
 // 한 slot이 running인 동안에도 다른 idle baseline들은 표준 remote branch로 정리될 수
@@ -252,6 +255,29 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         assert!(repo.pool_root().join(slot_id(slot_number)).exists());
     }
+}
+
+// git worktree inventory에서 사라진 slot path라도 lease가 없으면 pool이 소유한
+// disposable residue다. reconcile은 남은 파일을 제거하고 같은 slot path를 clean
+// detached baseline worktree로 다시 만들어야 한다.
+#[test]
+fn reconcile_recreates_missing_slot_over_filesystem_residue() {
+    let repo = TempGitRepo::new("provision-over-residue");
+    let residue_path = repo.pool_root().join(slot_id(1));
+    fs::create_dir_all(&residue_path).expect("residue directory should be created");
+    fs::write(residue_path.join("scratch.tmp"), "transient\n")
+        .expect("residue file should be written");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.blocked_slots, 0);
+    assert!(!residue_path.join("scratch.tmp").exists());
+    assert_eq!(current_branch(&residue_path), "HEAD");
+    assert_eq!(pool.slots[0].branch_name, "prerelease (detached)");
 }
 
 // pool worktree는 repository 내부가 아니라 sibling `repo-akra-worktrees` 아래에 둔다.

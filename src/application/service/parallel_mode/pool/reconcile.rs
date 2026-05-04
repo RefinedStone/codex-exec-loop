@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
@@ -146,27 +147,33 @@ pub(super) fn provision_missing_slots(
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
+    slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
 ) -> usize {
     /*
-    provisioning은 missing slot을 "만들 수 있는 경우에만" 만든다. slot path가 이미 존재하면
-    그것이 빈 디렉터리인지, 사용자 파일인지, 깨진 worktree인지 여기서 추측하지 않는다. 그런
-    애매한 상태는 inspection/reconcile board에서 operator recovery 대상으로 드러내는 쪽이 자동
-    삭제보다 안전하다.
+    provisioning은 missing slot을 "pool이 소유한 disposable cache"로 취급한다. git worktree
+    inventory에는 없지만 slot path만 남은 경우, lease가 없으면 이전 실패나 수동 삭제 뒤의 잔여물로
+    보고 제거한 뒤 새 worktree를 만든다. lease가 남은 slot은 runtime projection이 아직 소유자를
+    말하고 있으므로 여기서 삭제하지 않고 inspection이 split-brain 상태를 드러내게 둔다.
     */
     let mut provisioned_slots = 0;
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
-        let slot_path = pool_root.join(slot_id(slot_number));
+        let slot_id = slot_id(slot_number);
+        let slot_path = pool_root.join(&slot_id);
         if worktree_records
             .iter()
             .any(|record| record.path == slot_path)
-            || slot_path.exists()
         {
             /*
-            worktree inventory에 있거나 파일시스템 path가 이미 있으면 skip한다. 둘 중 하나만 true인
-            경우도 중요하다. inventory에는 없지만 path가 있으면 git worktree가 아닌 충돌물이므로
-            `git worktree add`로 덮지 않는다.
+            worktree inventory에 있으면 이미 git이 관리하는 slot이다. stale/dirty detached 상태는
+            provisioning이 아니라 reset_reusable_detached_baseline_slots가 hard reset + clean으로
+            회수한다.
             */
+            continue;
+        }
+        if slot_path.exists()
+            && (slot_leases.contains_key(&slot_id) || remove_slot_residue(&slot_path).is_err())
+        {
             continue;
         }
 
@@ -206,6 +213,14 @@ pub(super) fn provision_missing_slots(
     }
 
     provisioned_slots
+}
+
+fn remove_slot_residue(slot_path: &Path) -> std::io::Result<()> {
+    if slot_path.is_dir() {
+        fs::remove_dir_all(slot_path)
+    } else {
+        fs::remove_file(slot_path)
+    }
 }
 
 /*
