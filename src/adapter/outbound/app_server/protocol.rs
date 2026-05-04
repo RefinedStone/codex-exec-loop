@@ -48,7 +48,7 @@ pub(super) fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary 
         model_provider: thread_record.model_provider,
         updated_at_epoch: thread_record.updated_at,
         status_type: thread_record.status.status_type,
-        path: thread_record.path,
+        path: thread_record.path.unwrap_or_default(),
         git_branch: thread_record.git_info.and_then(|git_info| git_info.branch),
     }
 }
@@ -457,7 +457,12 @@ pub(super) struct ThreadRecord {
     pub(super) source: String,
     pub(super) model_provider: String,
     pub(super) updated_at: i64,
-    pub(super) path: String,
+    /*
+     * Ephemeral app-server threads, including hidden planning workers, can report
+     * `path: null` because there is no durable session record yet. Catalog
+     * projections keep the existing domain String contract and fall back to "".
+     */
+    pub(super) path: Option<String>,
     pub(super) status: ThreadStatus,
     pub(super) git_info: Option<ThreadGitInfo>,
     // thread/list may omit turns; serde default lets the same ThreadRecord shape serve list and read responses.
@@ -482,4 +487,36 @@ pub(super) struct ThreadStatus {
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThreadGitInfo {
     branch: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{ThreadStartResponse, to_session_summary};
+
+    #[test]
+    fn thread_start_response_accepts_ephemeral_thread_with_null_path() {
+        let response = serde_json::from_value::<ThreadStartResponse>(json!({
+            "thread": {
+                "id": "thread-1",
+                "name": null,
+                "preview": "",
+                "cwd": "/repo",
+                "source": "vscode",
+                "modelProvider": "openai",
+                "updatedAt": 1777910591,
+                "path": null,
+                "status": { "type": "idle" },
+                "gitInfo": null,
+                "turns": []
+            }
+        }))
+        .expect("ephemeral thread/start response with null path should deserialize");
+
+        assert!(response.thread.path.is_none());
+
+        let summary = to_session_summary(response.thread);
+        assert_eq!(summary.path, "");
+    }
 }
