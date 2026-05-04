@@ -38,10 +38,10 @@ use self::board::{
     build_blocked_pool_board, build_pool_board_from_context,
     build_pool_slots as build_pool_slots_from_context, build_unavailable_pool_board,
 };
-use self::cleanup::cleanup_reusable_slots;
 pub(super) use self::cleanup::{
     branch_is_cleanup_ready, branch_is_integrated_into, cleanup_slot, reset_slot_worktree_to_akra,
 };
+use self::cleanup::{cleanup_reusable_slots, cleanup_stale_leased_startup_slots};
 #[cfg(test)]
 pub(super) use self::lease_store::slot_lease_file_path;
 pub(super) use self::lease_store::{remove_slot_lease, write_slot_lease};
@@ -264,7 +264,7 @@ pub(super) fn reconcile_pool_board_and_context(
         )));
     }
     let created_pool_root = !pool_root_existed;
-    let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
+    let mut runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
     /*
     pool baseline은 표준 remote branch가 있으면 그 ref에서 갱신한다. fresh repository처럼
     local/remote 표준 branch가 모두 없으면 reconcile이 현재 workspace HEAD를 표준 branch로
@@ -293,6 +293,20 @@ pub(super) fn reconcile_pool_board_and_context(
             "worktree list inspection failed".to_string(),
         )));
     };
+    let stale_startup_cleaned_slots = cleanup_stale_leased_startup_slots(
+        planning_authority,
+        &repo_root,
+        &pool_root,
+        &worktree_records,
+        &runtime_projection.slot_leases,
+        &runtime_projection.session_details,
+    );
+    if stale_startup_cleaned_slots > 0 {
+        runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
+        if let Some(refreshed_records) = load_worktree_records(&repo_root) {
+            worktree_records = refreshed_records;
+        }
+    }
     /*
     detached baseline slot은 이미 lease가 없고 clean하면 재사용 가능한 slot이다. reset 후
     worktree inventory를 다시 읽어 provision 단계가 stale head/branch 정보를 보지 않게 한다.
@@ -335,12 +349,13 @@ pub(super) fn reconcile_pool_board_and_context(
             "worktree list reload failed".to_string(),
         )));
     };
-    let cleaned_slots = cleanup_reusable_slots(
-        planning_authority,
-        &repo_root,
-        &pool_root,
-        &reloaded_worktree_records,
-    );
+    let cleaned_slots = stale_startup_cleaned_slots
+        + cleanup_reusable_slots(
+            planning_authority,
+            &repo_root,
+            &pool_root,
+            &reloaded_worktree_records,
+        );
     /*
     cleanup은 planning authority의 lease/session mirror를 바꿀 수 있으므로 context는
     cleanup 이후에 다시 로드한다. 이전 projection을 재사용하면 반환된 slot이 roster나

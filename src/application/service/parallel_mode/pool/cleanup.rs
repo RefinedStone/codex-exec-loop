@@ -2,16 +2,21 @@ use std::path::Path;
 
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
-    ParallelModePoolSlotCleanupDecision, ParallelModeSlotLeaseState,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolSlotCleanupDecision,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
+use chrono::{DateTime, TimeDelta, Utc};
 
 use super::super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::super::readiness::command_succeeds;
+use super::super::record_failed_start_session_detail;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, POOL_BASELINE_BRANCH,
     SlotGitStatus, inspect_slot_git_status, load_runtime_projection_snapshot, remove_slot_lease,
     slot_id,
 };
+
+const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
 
 /*
 reusable slot cleanup은 reconcile 과정에서 "이제 pool baseline으로 되돌려도 되는" slot을
@@ -90,6 +95,81 @@ pub(super) fn cleanup_reusable_slots(
     }
 
     cleaned_slots
+}
+
+pub(super) fn cleanup_stale_leased_startup_slots(
+    planning_authority: &dyn PlanningAuthorityPort,
+    repo_root: &str,
+    pool_root: &Path,
+    worktree_records: &[GitWorktreeRecord],
+    slot_leases: &std::collections::BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+    session_details: &[ParallelModeAgentSessionDetailSnapshot],
+) -> usize {
+    let mut cleaned_slots = 0;
+
+    for lease in slot_leases.values() {
+        if !stale_leased_startup_slot_can_be_released(lease, session_details) {
+            continue;
+        }
+        let slot_path = pool_root.join(&lease.slot_id);
+        let Some(worktree_record) = worktree_records
+            .iter()
+            .find(|record| record.path == slot_path)
+        else {
+            continue;
+        };
+        if worktree_record.branch_name.as_deref() != Some(lease.branch_name.as_str()) {
+            continue;
+        }
+        let Some(slot_status) = inspect_slot_git_status(&slot_path) else {
+            continue;
+        };
+        if !slot_status.is_clean_baseline() {
+            continue;
+        }
+        if cleanup_slot(
+            planning_authority,
+            repo_root,
+            pool_root,
+            &lease.slot_id,
+            &slot_path,
+            &lease.branch_name,
+        ) {
+            let _ =
+                record_failed_start_session_detail(planning_authority, repo_root, pool_root, lease);
+            cleaned_slots += 1;
+        }
+    }
+
+    cleaned_slots
+}
+
+fn stale_leased_startup_slot_can_be_released(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    session_details: &[ParallelModeAgentSessionDetailSnapshot],
+) -> bool {
+    if lease.state != ParallelModeSlotLeaseState::Leased || !leased_at_is_stale(&lease.leased_at) {
+        return false;
+    }
+
+    let Some(detail) = session_details
+        .iter()
+        .find(|detail| detail.session_key == lease.session_key())
+    else {
+        return true;
+    };
+
+    detail.thread_id.is_none()
+        && detail.state_label == "assigned"
+        && detail.completion_state_label == "in_progress"
+}
+
+fn leased_at_is_stale(leased_at: &str) -> bool {
+    let Ok(timestamp) = DateTime::parse_from_rfc3339(leased_at) else {
+        return false;
+    };
+    Utc::now().signed_duration_since(timestamp.with_timezone(&Utc))
+        >= TimeDelta::seconds(STALE_LEASED_SLOT_RELEASE_AFTER_SECS)
 }
 
 fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {

@@ -406,6 +406,37 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(!rendered.contains("┌"));
 }
 
+#[test]
+fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_overlay = ShellOverlay::Supersession;
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(0, "loading", "loading", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "loading"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+        None,
+    ));
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        [
+            "⠋ >", "⠙ >", "⠹ >", "⠸ >", "⠼ >", "⠴ >", "⠦ >", "⠧ >", "⠇ >", "⠏ >"
+        ]
+        .iter()
+        .any(|frame| rendered.contains(frame))
+    );
+    assert!(!rendered.contains("thinking"));
+}
+
 // The inline tail is the status surface that remains visible during app-server
 // execution, so catalog and parallel-mode summaries are tested without a full
 // frame render.

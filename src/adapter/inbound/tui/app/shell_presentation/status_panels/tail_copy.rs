@@ -1,4 +1,5 @@
 use ratatui::text::{Line, Span};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::capability_copy::{
     startup_attachment_summary_line, startup_diagnostics_summary_line,
@@ -71,6 +72,7 @@ pub(super) fn build_inline_tail_lines_with_context(
             build_inline_startup_overlay_tail_lines_with_context(context)
         };
         lines.extend(build_inline_tail_prompt_lines_with_context(
+            app,
             context,
             app.shell_action_availability(),
         ));
@@ -203,6 +205,7 @@ pub(super) fn build_inline_tail_lines_with_context(
     }
 
     lines.extend(build_inline_tail_prompt_lines_with_context(
+        app,
         context,
         app.shell_action_availability(),
     ));
@@ -444,6 +447,7 @@ fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) ->
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
+    app: &NativeTuiApp,
     context: &ShellCorePresentationContext<'_>,
     shell_action_availability: ShellActionAvailability,
 ) -> Vec<Line<'static>> {
@@ -452,7 +456,7 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
     this function to compute cursor offsets. Loading/failed states get static
     affordance rows; ready state delegates to the input-aware branch below.
     */
-    match context.conversation_state {
+    let mut lines = match context.conversation_state {
         ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
         ShellConversationState::Failed(message) => {
             vec![Line::from(format!("prompt: unavailable  |  {message}"))]
@@ -460,7 +464,28 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
         ShellConversationState::Ready(conversation) => {
             build_inline_ready_prompt_lines(conversation, shell_action_availability)
         }
+    };
+    if app.parallel_mode_loading_prompt_indicator_visible()
+        && let Some(first_line) = lines.first_mut()
+    {
+        first_line.spans.insert(
+            0,
+            Span::styled(
+                format!("{} ", parallel_loading_prompt_indicator_frame()),
+                AkraTheme::brand(),
+            ),
+        );
     }
+    lines
+}
+
+fn parallel_loading_prompt_indicator_frame() -> &'static str {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let tick = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| (duration.as_millis() / 120) as usize)
+        .unwrap_or(0);
+    FRAMES[tick % FRAMES.len()]
 }
 
 fn build_inline_ready_prompt_lines(

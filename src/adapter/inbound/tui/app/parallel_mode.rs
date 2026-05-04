@@ -69,6 +69,18 @@ impl NativeTuiApp {
             || snapshot.roster.active_count() > 0
     }
 
+    pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
+        if self.shell_overlay != ShellOverlay::Supersession || !self.parallel_mode_enabled() {
+            return false;
+        }
+
+        let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref() else {
+            return true;
+        };
+
+        snapshot.pool.configured_size == 0 && snapshot.pool.slots.is_empty()
+    }
+
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
         // Worker dispatch changes leases asynchronously. Keep the last concrete
         // board on screen and refresh a new snapshot off the input/render path.

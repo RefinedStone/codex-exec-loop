@@ -59,7 +59,7 @@ fn build_inline_prompt_cursor_offset_for_lines(
 
     // Rebuild only the prompt suffix to find where that suffix begins in the already assembled tail.
     let prompt_lines =
-        build_inline_tail_prompt_lines_with_context(context, app.shell_action_availability());
+        build_inline_tail_prompt_lines_with_context(app, context, app.shell_action_availability());
     // Saturating subtraction keeps degraded state from slicing before the beginning of tail_lines.
     let prompt_start_index = tail_lines.len().saturating_sub(prompt_lines.len());
 
