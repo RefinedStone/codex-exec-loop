@@ -37,8 +37,8 @@ use self::pool::{
     acquire_pool_allocation_lock, branch_is_cleanup_ready, branch_is_integrated_into,
     build_pool_board, build_pool_slots, cleanup_slot, inspect_pool_board_and_context,
     inspect_slot_git_status, load_pool_runtime_context, pool_operator_recovery_notice,
-    reconcile_pool_board, reconcile_pool_board_and_context, resolve_workspace_head_sha,
-    resolve_workspace_slot_lease, short_sha, write_slot_lease,
+    reconcile_pool_board, reconcile_pool_board_and_context, remove_slot_lease,
+    resolve_workspace_head_sha, resolve_workspace_slot_lease, short_sha, write_slot_lease,
 };
 #[cfg(test)]
 use self::pool::{derive_default_pool_root, slot_id, slot_lease_file_path};

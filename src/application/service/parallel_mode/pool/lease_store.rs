@@ -86,6 +86,12 @@ pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     // mirror directory는 authority write 이후에 만든다. directory 생성 실패는 authority에는
     // 이미 반영된 상태라 caller에게 오류를 돌려 cleanup/retry가 가능하게 한다.
     let leases_root = slot_leases_root(pool_root);
+    if leases_root.exists() && !leases_root.is_dir() {
+        return Err(format!(
+            "failed to create lease directory: `{}` is not a directory",
+            leases_root.display()
+        ));
+    }
     ensure_directory_exists(&leases_root)
         .map_err(|error| format!("failed to create lease directory: {error}"))?;
     // 최종 파일과 임시 파일 경로를 분리한다. 같은 slot의 lease를 덮어쓸 때도 기존 JSON은

@@ -42,6 +42,46 @@ fn acquire_slot_lease_persists_metadata_and_marks_slot_leased() {
     assert_eq!(pool.slots[0].owner_label, "agent-1 / task-1");
 }
 
+// lease write는 authority DB를 먼저 갱신하고 filesystem mirror를 나중에 쓴다. mirror write가
+// 실패하면 이미 저장된 authority lease를 되돌려야, 실패한 dispatch가 slot을 영구 점유하지 않는다.
+#[test]
+fn acquire_slot_lease_rolls_back_authority_when_mirror_write_fails() {
+    let repo = TempGitRepo::new("lease-mirror-write-fails");
+    let service = test_parallel_mode_service();
+    reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    fs::write(repo.pool_root().join(".leases"), "not a directory\n")
+        .expect("lease mirror namespace should be blocked by a file");
+    let error = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect_err("lease acquisition should fail when mirror path is blocked");
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let pool = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&readiness),
+    );
+
+    assert!(error.contains("failed to create lease directory"));
+    assert_eq!(pool.leased_slots, 0);
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert!(
+        pool.slots
+            .iter()
+            .all(|slot| !slot.branch_name.starts_with("akra-agent/"))
+    );
+}
+
 // agent branch는 현재 `prerelease` baseline에서 시작해야 distributor가 rebase 없이
 // 같은 기준으로 통합할 수 있다. lease worktree HEAD와 branch ref를 둘 다 검사해
 // worktree checkout과 repo branch가 서로 어긋나지 않도록 한다.
