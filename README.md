@@ -165,9 +165,9 @@ cargo clippy --all-targets --all-features -D warnings
 
 ## Diagnostics
 
-- `cargo run`: in debug Akra binaries, write full tracing JSONL to `.codex-exec-loop/runtime/akra-trace.jsonl`.
+- `cargo run`: in debug Akra binaries, write compact Akra diagnostics to `.codex-exec-loop/runtime/akra-raw.jsonl` and quiet trace JSONL to `.codex-exec-loop/runtime/akra-trace.jsonl`.
 - `AKRA_TRACE=0 cargo run`: disable the default debug trace file.
-- `AKRA_TRACE=1 cargo run`: explicitly enable the full trace filter.
+- `AKRA_TRACE=1 cargo run`: explicitly enable the full `trace` filter, including external crate logs and span payloads.
 - `AKRA_TRACE=codex_exec_loop_native::application::service::planning=debug cargo run`: trace a selected module filter.
 - `AKRA_TRACE_FILE=/tmp/akra-trace.jsonl`: override the trace JSONL destination.
 - `AKRA_RAW_LOG=/tmp/akra-raw.jsonl`: write targeted raw diagnostic events.
