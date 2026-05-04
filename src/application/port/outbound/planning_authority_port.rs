@@ -277,6 +277,9 @@ pub trait PlanningAuthorityPort: Send + Sync {
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot>;
 
+    // Clear current parallel runtime rows when the disposable pool is reset on enable.
+    fn clear_parallel_runtime_projections(&self, workspace_dir: &str, reason: &str) -> Result<()>;
+
     // Upsert a slot lease projection shared by pool reconciliation and supervisor roster.
     fn upsert_runtime_slot_lease(
         &self,
@@ -428,6 +431,15 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
         Ok(PlanningAuthorityRuntimeProjectionSnapshot::default())
+    }
+
+    // No runtime store exists in the fallback, so clearing is a no-op.
+    fn clear_parallel_runtime_projections(
+        &self,
+        _workspace_dir: &str,
+        _reason: &str,
+    ) -> Result<()> {
+        Ok(())
     }
 
     // Accept but discard slot leases so lightweight paths do not accumulate pool state.

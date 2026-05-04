@@ -205,6 +205,7 @@ impl NativeTuiApp {
                 // control tower first, then let readiness/reconcile/dispatch run
                 // off the terminal event loop so prompt typing stays responsive.
                 let workspace_directory = self.planning_workspace_directory();
+                let reset_pool_on_enter = !self.parallel_mode_enabled;
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
                 self.parallel_mode_supervisor_snapshot =
@@ -215,7 +216,7 @@ impl NativeTuiApp {
                         ParallelModeLoadingStage::Entering,
                     ));
                 self.show_supersession_overlay();
-                self.spawn_parallel_mode_enter_worker(workspace_directory);
+                self.spawn_parallel_mode_enter_worker(workspace_directory, reset_pool_on_enter);
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text:
                         "parallel mode: loading 1/4 / checking readiness before pool setup"
@@ -247,7 +248,11 @@ impl NativeTuiApp {
         });
     }
 
-    fn spawn_parallel_mode_enter_worker(&self, workspace_directory: String) {
+    fn spawn_parallel_mode_enter_worker(
+        &self,
+        workspace_directory: String,
+        reset_pool_on_enter: bool,
+    ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
         let parallel_mode_turn_service = self.parallel_mode_turn_service();
@@ -275,6 +280,35 @@ impl NativeTuiApp {
                         "parallel mode: loading 2/4 / readiness complete; reconciling pool and planning dispatch"
                             .to_string(),
                 });
+                let reset_result = if reset_pool_on_enter {
+                    parallel_mode_service
+                        .reset_pool_on_parallel_enable(&workspace_directory)
+                        .map(|count| format!("reset {count} pool slot worktree(s) to prerelease"))
+                } else {
+                    Ok(String::new())
+                };
+                let reset_status = match reset_result {
+                    Ok(status) => status,
+                    Err(error) => {
+                        let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
+                            &workspace_directory,
+                            true,
+                            Some(&readiness_snapshot),
+                        );
+                        let status_text = format!(
+                            "parallel mode: blocked / readiness: {} / pool reset failed: {error}",
+                            readiness_snapshot.readiness_label()
+                        );
+                        return {
+                            let _ = tx.send(BackgroundMessage::ParallelModeEntered {
+                                workspace_directory,
+                                readiness_snapshot,
+                                supervisor_snapshot: Box::new(supervisor_snapshot),
+                                status_text,
+                            });
+                        };
+                    }
+                };
                 let dispatch_status = dispatch_parallel_queue_pool(
                     &workspace_directory,
                     &planning_snapshot,
@@ -296,6 +330,10 @@ impl NativeTuiApp {
                 if !dispatch_status.trim().is_empty() {
                     status_text.push_str(" / ");
                     status_text.push_str(&dispatch_status);
+                }
+                if !reset_status.trim().is_empty() {
+                    status_text.push_str(" / ");
+                    status_text.push_str(&reset_status);
                 }
                 (supervisor_snapshot, status_text)
             } else {
