@@ -41,7 +41,7 @@ impl NativeTuiApp {
         &self.parallel_mode_service
     }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         if let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref()
             && snapshot.workspace_path == workspace_directory
         {
@@ -124,7 +124,7 @@ impl NativeTuiApp {
         // Readiness depends on both repository/runtime checks and planning
         // workspace state. Reload planning first so queue-idle and authority
         // issues are reflected before enabling or dispatching parallel mode.
-        let workspace_directory = self.current_workspace_directory();
+        let workspace_directory = self.planning_workspace_directory();
         let planning_snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
         let snapshot = self
             .parallel_mode_service()
@@ -142,13 +142,13 @@ impl NativeTuiApp {
         // into it only when the user explicitly enables/refreshes active control.
         let snapshot = if execute_pool_actions {
             self.parallel_mode_service().reconcile_supervisor_snapshot(
-                &self.current_workspace_directory(),
+                &self.planning_workspace_directory(),
                 self.parallel_mode_enabled(),
                 self.parallel_mode_readiness_snapshot(),
             )
         } else {
             self.parallel_mode_service().build_supervisor_snapshot(
-                &self.current_workspace_directory(),
+                &self.planning_workspace_directory(),
                 self.parallel_mode_enabled(),
                 self.parallel_mode_readiness_snapshot(),
             )
