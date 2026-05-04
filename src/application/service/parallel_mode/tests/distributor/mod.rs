@@ -318,6 +318,153 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
     );
 }
 
+#[test]
+fn process_distributor_queue_treats_remote_patch_equivalent_push_rejection_as_integrated() {
+    let repo = TempGitRepo::new("distributor-remote-already-integrated");
+    repo.create_bare_origin_remote();
+    run_git(&repo.repo_root, &["push", "-u", "origin", "prerelease"]);
+    let github = FakeGithubAutomationPort::with_integration_push_error("non-fast-forward");
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-remote-integrated")
+        .expect("thread prepared should be recorded");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    let source_commit = run_command(
+        "git",
+        ["-C", lease.worktree_path.as_str(), "rev-parse", "HEAD"],
+        None,
+    )
+    .expect("source commit should resolve");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-remote-integrated",
+            None,
+            Some("Remote already integrated slice completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: remote integration recovery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should be enqueued")
+        .expect("queue item should be created");
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    run_git(&repo.repo_root, &["cherry-pick", source_commit.as_str()]);
+    run_git(
+        &repo.repo_root,
+        &["commit", "--amend", "-qm", "external rebase merge"],
+    );
+    run_git(&repo.repo_root, &["push", "origin", "prerelease"]);
+    let remote_prerelease = run_command(
+        "git",
+        [
+            "-C",
+            repo.workspace_dir().as_str(),
+            "rev-parse",
+            "prerelease",
+        ],
+        None,
+    )
+    .expect("remote-equivalent prerelease head should resolve");
+    run_git(&repo.repo_root, &["reset", "--hard", "HEAD~1"]);
+    assert_ne!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "rev-parse",
+                "prerelease",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some(remote_prerelease.as_str()),
+        "local prerelease should be behind the remote-equivalent head before delivery"
+    );
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "remote patch-equivalent push rejection should still converge through cleanup: {notices:?}"
+    );
+    let queue_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
+    assert!(
+        queue_record
+            .integration_note
+            .contains("slot returned to idle"),
+        "final queue note should reflect cleanup completion: {}",
+        queue_record.integration_note
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "rev-parse",
+                "prerelease",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some(remote_prerelease.as_str()),
+        "local integration branch should be aligned to the remote-equivalent head"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "prerelease:feature.txt",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some("done")
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .contains(&"push-integration:prerelease".to_string()),
+        "integration push should still be attempted before remote-equivalence recovery"
+    );
+}
+
 // hidden worker의 official completion 성공 경로는 slot worktree에서 호출된다. 이때 뒤따르는
 // orchestrator tick은 slot checkout이 아니라 canonical integration worktree에서 queue를 처리해야 한다.
 #[test]

@@ -6,8 +6,9 @@ use super::{
     record_cleaned_session_detail, record_cleanup_pending_session_detail,
     record_integrating_session_detail, record_merge_pending_session_detail,
     record_merge_queued_session_detail, record_official_completion_recovery_needed_session_detail,
-    record_pr_pending_session_detail, record_pushing_session_detail, resolve_workspace_head_sha,
-    resolve_workspace_slot_lease, run_command, short_sha, write_slot_lease,
+    record_pr_pending_session_detail, record_pushing_session_detail, remote_branch_name,
+    remote_tracking_branch_ref, resolve_workspace_head_sha, resolve_workspace_slot_lease,
+    run_command, short_sha, write_slot_lease,
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
