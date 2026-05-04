@@ -9,7 +9,8 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
-use std::collections::BTreeSet;
+use chrono::DateTime;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 mod branch_names;
 mod completion;
@@ -102,6 +103,38 @@ pub struct ParallelModeDispatchPlan {
     pub excluded_task_ids: Vec<String>,
     pub candidates: Vec<PriorityQueueTask>,
 }
+
+fn failed_start_dispatch_blockers(context: &PoolRuntimeContext) -> BTreeMap<String, i64> {
+    let mut blockers = BTreeMap::new();
+    for detail in &context.session_details {
+        let task_id = detail.task_id.trim();
+        if task_id.is_empty() {
+            continue;
+        }
+        let Ok(failed_at) = DateTime::parse_from_rfc3339(detail.updated_at.trim())
+            .map(|timestamp| timestamp.timestamp_millis())
+        else {
+            continue;
+        };
+        if detail.state_label == "failed"
+            && detail.completion_state_label == "aborted"
+            && detail
+                .latest_summary
+                .contains("launch failed before the session reached the running state")
+        {
+            blockers
+                .entry(task_id.to_string())
+                .and_modify(|current| {
+                    if failed_at > *current {
+                        *current = failed_at;
+                    }
+                })
+                .or_insert(failed_at);
+        }
+    }
+    blockers
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
 orchestrator trigger는 queue processing을 왜 실행했는지 남기는 provenance다. main turn이 끝나서
@@ -366,17 +399,36 @@ impl ParallelModeService {
         queue records. It is kept as a returned field so the TUI can explain why
         fewer tasks were dispatched than the planning queue appears to contain.
         */
+        let failed_start_blockers = failed_start_dispatch_blockers(&context);
         let excluded = excluded_task_ids
             .iter()
             .map(|task_id| task_id.trim().to_string())
             .collect::<BTreeSet<_>>();
+        let mut reported_excluded = excluded.clone();
         let candidates = planning_snapshot
             .queue_projection()
             .map(|projection| {
                 projection
                     .active_tasks
                     .iter()
-                    .filter(|task| !excluded.contains(task.task_id.trim()))
+                    .filter(|task| {
+                        let task_id = task.task_id.trim();
+                        if excluded.contains(task_id) {
+                            return false;
+                        }
+                        let task_updated_at =
+                            DateTime::parse_from_rfc3339(task.updated_at.as_str())
+                                .map(|timestamp| timestamp.timestamp_millis())
+                                .unwrap_or(i64::MAX);
+                        if failed_start_blockers
+                            .get(task_id)
+                            .is_some_and(|failed_at| *failed_at >= task_updated_at)
+                        {
+                            reported_excluded.insert(task_id.to_string());
+                            return false;
+                        }
+                        true
+                    })
                     /*
                     Capacity is applied after exclusion, not before. Otherwise a
                     leased task near the front of the queue could consume one of
@@ -389,7 +441,7 @@ impl ParallelModeService {
             .unwrap_or_default();
         Ok(ParallelModeDispatchPlan {
             idle_slot_count,
-            excluded_task_ids,
+            excluded_task_ids: reported_excluded.into_iter().collect(),
             candidates,
         })
     }

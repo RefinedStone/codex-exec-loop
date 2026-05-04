@@ -142,6 +142,90 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
     );
 }
 
+// startup 실패는 lease가 제거되어 pool board만 보면 idle slot처럼 보인다. 하지만 같은
+// planning task가 그대로 ready이면 dispatcher가 즉시 같은 실패를 반복할 수 있으므로,
+// task가 다시 갱신되기 전까지는 dispatch 후보에서 제외한다.
+#[test]
+fn build_dispatch_plan_excludes_failed_start_tasks_until_task_changes() {
+    let repo = TempGitRepo::new("dispatch-excludes-failed-start");
+    let service = test_parallel_mode_service();
+    let planning_snapshot = planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3"]);
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task-1 lease should be acquired");
+
+    service
+        .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+        .expect("failed start should release slot")
+        .expect("lease should be released");
+
+    let plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .expect("dispatch plan should build");
+
+    assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE);
+    assert_eq!(plan.excluded_task_ids, vec!["task-1"]);
+    assert_eq!(
+        plan.candidates
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-2", "task-3"]
+    );
+}
+
+// failed-start 차단은 영구 blacklist가 아니다. planning task가 실패 기록보다 새로
+// 갱신되면 사용자가 큐를 수정하거나 재준비한 것으로 보고 다시 dispatch할 수 있어야 한다.
+#[test]
+fn build_dispatch_plan_allows_failed_start_task_after_task_changes() {
+    let repo = TempGitRepo::new("dispatch-retries-updated-task");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task-1 lease should be acquired");
+
+    service
+        .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+        .expect("failed start should release slot")
+        .expect("lease should be released");
+
+    let mut task = queue_task(1, "task-1");
+    task.updated_at = "2999-01-01T00:00:00Z".to_string();
+    let queue_projection = PriorityQueueProjection {
+        next_task: Some(task.clone()),
+        active_tasks: vec![task],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    let planning_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        "prompt".to_string(),
+        queue_projection.queue_summary(),
+        None,
+        queue_projection.next_task.clone(),
+        queue_projection,
+    );
+
+    let plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .expect("dispatch plan should build");
+
+    assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE);
+    assert!(plan.excluded_task_ids.is_empty());
+    assert_eq!(
+        plan.candidates
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-1"]
+    );
+}
+
 // lease 획득은 여러 agent가 동시에 idle slot을 잡으려는 첫 관문이다. barrier로
 // 경쟁을 한 번에 시작시킨 뒤 성공 수가 pool 크기와 같고, 초과 요청은 같은
 // exhaustion 오류로 떨어지는지 확인해 allocation lock의 직렬화 계약을 고정한다.
