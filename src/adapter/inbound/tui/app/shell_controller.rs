@@ -446,10 +446,10 @@ impl NativeTuiApp {
             return true;
         }
         if self.shell_overlay == ShellOverlay::Supersession {
-            // Supersession has consumed every key it understands. Unknown keys
-            // should be available to the caller instead of falling into session
-            // list handling below.
-            return false;
+            // Supersession is an operator board. While it is open, ordinary
+            // prompt editing is blocked so loading/worker controls remain the
+            // only active input surface.
+            return true;
         }
         if self.shell_overlay == ShellOverlay::TaskIntake {
             return self.handle_task_intake_overlay_key(key);

@@ -3,11 +3,12 @@ use super::{
     sample_startup_diagnostics,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
     ParallelModePoolBoardSnapshot, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use std::time::Instant;
 
 /*
 이 테스트 모듈은 production terminal event loop의 key routing contract를 고정한다.
@@ -39,10 +40,10 @@ fn plain_character_input_uses_empty_modifier_check() {
 }
 
 #[test]
-fn supersession_overlay_allows_prompt_input() {
+fn supersession_overlay_blocks_prompt_input() {
     /*
-     * Supersession overlay는 상태를 보여 주는 비차단 overlay다. prompt 작성은 계속 가능해야
-     * 오래된 PR/turn 상태 확인 화면이 새 작업 입력을 막는 modal처럼 동작하지 않는다.
+     * Supersession overlay는 병렬 제어면이다. overlay가 열려 있는 동안 일반 prompt 입력은
+     * 막아, loading/worker control과 새 prompt 작성이 같은 화면에서 섞이지 않게 한다.
      */
     let mut runtime = make_test_runtime();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
@@ -55,7 +56,7 @@ fn supersession_overlay_allows_prompt_input() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "a");
+    assert!(conversation.input_buffer.is_empty());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }
@@ -96,10 +97,45 @@ fn supervisor_invalidation_keeps_cached_board_visible() {
 }
 
 #[test]
-fn supersession_overlay_allows_r_prompt_input() {
+fn supersession_active_worker_requests_live_pulse() {
     /*
-     * `r`은 Ctrl-R refresh shortcut과 같은 문자라 modifier check가 느슨해지면 regression이 나기 쉽다.
-     * modifier가 없으면 overlay command가 아니라 prompt text로 남아야 한다.
+     * Active parallel workers need periodic redraws even when no stream event arrives,
+     * otherwise the Supersession board looks frozen while a worker is running.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Task One",
+                    "slot-1",
+                    "akra-agent/slot-1/task-one",
+                    "running",
+                    "12s",
+                    "working",
+                )],
+                "no active agents",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+
+    assert!(runtime.app().live_activity_pulse(Instant::now()).is_some());
+}
+
+#[test]
+fn supersession_overlay_blocks_plain_r_prompt_input() {
+    /*
+     * `r`은 Ctrl-R refresh shortcut과 같은 문자다. modifier가 없으면 overlay control도 아니지만,
+     * Supersession이 열려 있는 동안 prompt text로도 내려가면 안 된다.
      */
     let mut runtime = make_test_runtime();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
@@ -112,7 +148,7 @@ fn supersession_overlay_allows_r_prompt_input() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "r");
+    assert!(conversation.input_buffer.is_empty());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }
@@ -145,11 +181,11 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
 }
 
 #[test]
-fn supersession_overlay_allows_enter_to_submit_prompt() {
+fn supersession_overlay_blocks_enter_submit_prompt() {
     /*
-     * Supersession overlay가 떠 있어도 Enter는 prompt submit 흐름으로 들어가야 한다.
-     * startup diagnostics를 Ready로 만든 이유는 이 테스트가 overlay routing을 보려는 것이지,
-     * startup readiness guard를 검증하려는 것이 아니기 때문이다.
+     * Supersession overlay가 떠 있으면 Enter도 prompt submit으로 내려가지 않는다.
+     * startup diagnostics를 Ready로 만든 이유는 startup guard가 아니라 overlay routing을
+     * 직접 검증하기 위해서다.
      */
     let mut runtime = make_test_runtime();
     runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
@@ -168,8 +204,8 @@ fn supersession_overlay_allows_enter_to_submit_prompt() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
-    assert!(conversation.has_running_turn());
+    assert_eq!(conversation.input_buffer, "run next");
+    assert!(!conversation.has_running_turn());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }

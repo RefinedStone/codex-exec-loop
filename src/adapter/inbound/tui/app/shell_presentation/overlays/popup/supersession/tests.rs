@@ -199,7 +199,7 @@ fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
     let snapshot = ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/workspace",
-        ParallelModePoolBoardSnapshot::new(0, "/tmp/pool", "idle", Vec::new()),
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
         /*
         Roster and detail deliberately disagree on the lifecycle phase: the roster
         row uses the agent-facing reported state, while the selected detail has
@@ -258,7 +258,7 @@ fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "official", "queued"),
         None,
     );
-    let roster_rendered = build_roster_lines(&snapshot)
+    let roster_rendered = build_roster_lines(&snapshot, "|")
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -346,7 +346,7 @@ fn roster_and_detail_lines_surface_missing_slot_worktree_health() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queued"),
         None,
     );
-    let roster_rendered = build_roster_lines(&snapshot)
+    let roster_rendered = build_roster_lines(&snapshot, "|")
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
