@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 
 use super::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
-    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeLiveSessionDetailDefaults, ParallelModePoolSlotCleanupDecision,
-    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
+    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeDispatchBlockReason,
+    ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
+    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorState,
 };
 
 // readiness 집계의 최우선 안전 규칙을 고정한다. 하나라도 Blocked가 있으면 다른
@@ -115,6 +117,56 @@ fn supervisor_state_recovers_when_enabled_readiness_blocks_parallel_mode() {
         ParallelModeSupervisorState::derive(false, Some(&readiness)),
         ParallelModeSupervisorState::Prepare
     );
+}
+
+// parallel entry state machine은 `:parallel`을 off -> on으로 진입할 때만 pool reset을
+// 요청한다. reset scope는 pool-only로 고정되어 planning task authority를 건드리지 않는다.
+#[test]
+fn orchestrator_entry_plan_resets_pool_only_on_off_to_on_entry() {
+    let first_entry = ParallelModeOrchestratorStateMachine::plan_parallel_entry(false, true);
+    let refresh_entry = ParallelModeOrchestratorStateMachine::plan_parallel_entry(true, true);
+    let blocked_entry = ParallelModeOrchestratorStateMachine::plan_parallel_entry(false, false);
+
+    assert_eq!(
+        first_entry.state,
+        ParallelModeOrchestratorState::PoolResetting
+    );
+    assert_eq!(
+        first_entry.reset_scope,
+        Some(ParallelModePoolResetScope::PoolOnly)
+    );
+    assert_eq!(
+        refresh_entry.state,
+        ParallelModeOrchestratorState::Dispatching
+    );
+    assert_eq!(refresh_entry.reset_scope, None);
+    assert_eq!(
+        blocked_entry.state,
+        ParallelModeOrchestratorState::ReadinessBlocked
+    );
+    assert_eq!(blocked_entry.reset_scope, None);
+}
+
+// dispatch eligibility도 같은 state machine이 판단한다. runtime이 이미 소유한 task는
+// 중복 실행하지 않고, startup 실패 후 task가 갱신되기 전까지는 같은 실패를 반복하지 않는다.
+#[test]
+fn orchestrator_dispatch_eligibility_blocks_runtime_and_stale_failed_start_tasks() {
+    let runtime_owned =
+        ParallelModeOrchestratorStateMachine::dispatch_eligibility(true, None, Some(10));
+    let stale_failed_start =
+        ParallelModeOrchestratorStateMachine::dispatch_eligibility(false, Some(20), Some(10));
+    let changed_after_failure =
+        ParallelModeOrchestratorStateMachine::dispatch_eligibility(false, Some(10), Some(20));
+
+    assert_eq!(
+        runtime_owned.block_reason,
+        Some(ParallelModeDispatchBlockReason::RuntimeAlreadyOwnsTask)
+    );
+    assert_eq!(
+        stale_failed_start.block_reason,
+        Some(ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges)
+    );
+    assert!(changed_after_failure.is_dispatchable());
 }
 
 // roster projection은 lease 생명주기와 runtime detail을 합쳐 TUI 목록을 만든다.

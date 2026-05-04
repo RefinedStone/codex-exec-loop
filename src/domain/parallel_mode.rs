@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 // 서비스와 TUI가 공유하는 supervisor/slot/lease/pool board 어휘를 한곳에 모은다.
 mod agent_session;
 mod distributor;
+mod orchestrator;
 mod readiness;
 
 // 호출자는 `domain::parallel_mode::*`만 알면 된다. 하위 모듈 경로는 이 퍼사드가
@@ -19,6 +20,11 @@ pub use self::distributor::{
     ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
     ParallelModeSupervisorSnapshot,
+};
+pub use self::orchestrator::{
+    ParallelModeDispatchBlockReason, ParallelModeDispatchEligibility, ParallelModeEntryPlan,
+    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
+    ParallelModePoolResetScope,
 };
 pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,

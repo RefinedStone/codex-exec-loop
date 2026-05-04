@@ -237,7 +237,7 @@ pub(super) fn reset_pool_for_parallel_enable(
     planning_authority
         .clear_parallel_runtime_projections(
             &repo_root,
-            "parallel mode enabled; disposable pool reset to baseline",
+            "parallel mode enabled; pool-only runtime reset to baseline; planning tasks preserved",
         )
         .map_err(|error| format!("parallel runtime projection reset failed: {error}"))?;
     clear_pool_runtime_mirrors(&pool_root);

@@ -330,6 +330,64 @@ fn parallel_entry_from_off_resets_stale_leases_and_all_slot_worktrees() {
     assert!(second_snapshot.detail.session.is_none());
 }
 
+// `:parallel` 진입 reset의 범위는 disposable pool runtime으로 한정된다. 기존
+// planning task authority와 queue projection은 사용자가 만든 작업 원장이므로 보존해야 한다.
+#[test]
+fn parallel_entry_reset_preserves_existing_planning_tasks() {
+    let repo = TempGitRepo::new("parallel-reset-preserves-tasks");
+    let service = test_parallel_mode_service();
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let queue_task = queue_task(1, "task-1");
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![TaskDefinition {
+            id: "task-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_relation_note: "covers the reset scope contract".to_string(),
+            title: "Keep existing task".to_string(),
+            description: "This task must survive parallel pool reset.".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 99,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            updated_at: queue_task.updated_at.clone(),
+        }],
+    };
+    let queue_projection = PriorityQueueProjection {
+        next_task: Some(queue_task.clone()),
+        active_tasks: vec![queue_task],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    adapter
+        .commit_task_authority_snapshot(
+            &repo.workspace_dir(),
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("planning task authority should commit");
+
+    service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect("parallel pool reset should succeed");
+
+    let snapshot = adapter
+        .load_task_authority_snapshot(&repo.workspace_dir())
+        .expect("planning task authority should load after reset")
+        .expect("planning task authority should remain present");
+    assert_eq!(snapshot.task_authority, task_authority);
+    assert_eq!(snapshot.queue_projection, queue_projection);
+}
+
 // reconcile은 비어 있는 pool root를 실제 capacity로 바꾸는 provisioning 단계다.
 // 모든 slot worktree가 생성되고 missing count가 사라져야 dispatcher가 곧바로
 // idle slot을 사용할 수 있다.
