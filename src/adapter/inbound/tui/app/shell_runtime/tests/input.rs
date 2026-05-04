@@ -2,6 +2,11 @@ use super::{
     ConversationState, InlineShellCommand, ShellOverlay, StartupState, make_test_runtime,
     sample_startup_diagnostics,
 };
+use crate::domain::parallel_mode::{
+    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 /*
@@ -53,6 +58,41 @@ fn supersession_overlay_allows_prompt_input() {
     assert_eq!(conversation.input_buffer, "a");
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn supervisor_invalidation_keeps_cached_board_visible() {
+    /*
+     * Worker updates invalidate supervisor data after dispatch. The visible board
+     * must not fall back to the loading placeholder while the replacement snapshot
+     * is being refreshed in the background.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+
+    runtime
+        .app_mut()
+        .invalidate_parallel_mode_supervisor_snapshot();
+
+    assert_eq!(
+        runtime
+            .app()
+            .parallel_mode_supervisor_snapshot()
+            .pool
+            .configured_size,
+        3
+    );
 }
 
 #[test]
