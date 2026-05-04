@@ -51,7 +51,10 @@ impl ParallelModeAgentRosterEntry {
     }
 
     pub fn counts_as_active(&self) -> bool {
-        self.state_label != "failed"
+        !matches!(
+            self.state_label.as_str(),
+            "official_refresh_recovery_needed" | "failed"
+        )
     }
 }
 
@@ -524,6 +527,7 @@ fn roster_duration_label(
             "pr_pending" => return "pr pending".to_string(),
             "merge_pending" => return "merge pending".to_string(),
             "integrating" => return "integrating".to_string(),
+            "official_refresh_recovery_needed" => return "recovery needed".to_string(),
             "failed" => return "blocked".to_string(),
             _ => {}
         }

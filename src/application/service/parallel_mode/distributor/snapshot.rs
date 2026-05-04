@@ -79,6 +79,10 @@ pub(super) fn build_distributor_snapshot_from_context(
             "blocked".to_string(),
             detail.authority_refresh_outcome.clone(),
         ),
+        "official_refresh_recovery_needed" => (
+            "recovery needed".to_string(),
+            detail.authority_refresh_outcome.clone(),
+        ),
         _ => (
             ParallelModeQueueItemState::Idle.label().to_string(),
             "no distributor queue items are waiting".to_string(),

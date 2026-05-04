@@ -5,7 +5,7 @@ use super::{
     lease_session_key, load_pool_runtime_context, reconcile_pool_board,
     record_cleaned_session_detail, record_cleanup_pending_session_detail,
     record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_official_completion_failed_session_detail,
+    record_merge_queued_session_detail, record_official_completion_recovery_needed_session_detail,
     record_pr_pending_session_detail, record_pushing_session_detail, resolve_workspace_head_sha,
     resolve_workspace_slot_lease, run_command, short_sha, write_slot_lease,
 };
@@ -530,13 +530,13 @@ fn recover_stale_ledger_refreshing_sessions(
         )? {
             StaleOfficialRefreshRecoveryOutcome::WaitingForActiveClaim => continue,
             StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle => {
-                record_official_completion_failed_session_detail(
+                record_official_completion_recovery_needed_session_detail(
                     planning_authority,
                     &context.repo_root,
                     &context.pool_root,
                     lease,
                     &format!(
-                        "{recovery_reason}; mark the slot failed so supervisor stops reporting ledger refresh as active"
+                        "{recovery_reason}; manual official refresh recovery is needed before distributor handoff"
                     ),
                 )?;
             }

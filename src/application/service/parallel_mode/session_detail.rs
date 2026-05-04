@@ -467,6 +467,43 @@ pub(super) fn record_official_completion_failed_session_detail(
     )
 }
 
+pub(super) fn record_official_completion_recovery_needed_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    recovery_detail: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    // stale ledger_refreshing은 오류가 아니라 orphaned intermediate state다.
+    // 자동 로딩은 멈추되 실제 작업 실패로 오인하지 않도록 별도 복구 상태로 남긴다.
+    update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "official_refresh_recovery_needed".to_string();
+            detail.completion_state_label = "official_refresh_recovery_needed".to_string();
+            detail.latest_summary = "official completion refresh needs recovery".to_string();
+            detail.authority_refresh_outcome = recovery_detail.trim().to_string();
+            detail.distributor_outcome = Some(
+                "not queued for distributor integration because official refresh needs recovery"
+                    .to_string(),
+            );
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "official_refresh_recovery_needed",
+                timestamp,
+                recovery_detail.trim().to_string(),
+            );
+            detail
+        },
+    )
+}
+
 /*
 cleanup pending 기록은 "변경은 baseline에 들어갔고 slot 반환만 남았다"는 상태를
 history에 두 단계로 남긴다. 먼저 merged를 기록해 completion feed의 merged 항목이 채워지게
