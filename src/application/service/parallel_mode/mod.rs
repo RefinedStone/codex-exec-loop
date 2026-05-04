@@ -439,7 +439,7 @@ fn default_supervisor_notice(
             Some("control tower is live in read-only supervisor mode".to_string())
         }
         (true, Some(_)) => Some("repair readiness blockers before assigning agents".to_string()),
-        (false, Some(_)) => Some("run `:parallel on` after reviewing the board".to_string()),
+        (false, Some(_)) => Some("run `:parallel` after reviewing the board".to_string()),
         (true, None) => Some("rerun readiness to hydrate the supervisor board".to_string()),
         (false, None) => None,
     }

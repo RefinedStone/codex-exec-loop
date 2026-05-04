@@ -12,7 +12,7 @@ use super::SupersessionOverlayView;
 
 /* Supersession is the operator board for parallel mode. It intentionally keeps
  * readiness, pool capacity, active roster, selected detail, and distributor state
- * as separate line groups so the popup can answer "can I dispatch?", "who is
+ * as separate line groups so the popup can answer "can work start?", "who is
  * running?", and "why is integration blocked?" without requiring navigation.
  */
 pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> SupersessionOverlayView {
@@ -48,10 +48,10 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     if app.parallel_mode_enabled() {
         key_lines.push(AkraTheme::key_line("Ctrl+P: parallel off"));
     } else if readiness_snapshot.is_some_and(|snapshot| snapshot.allows_parallel_mode()) {
-        key_lines.push(AkraTheme::key_line("next action: type :parallel on"));
+        key_lines.push(AkraTheme::key_line("next action: type :parallel"));
     } else {
         key_lines.push(AkraTheme::key_line(
-            "next action: fix readiness blockers, then type :parallel on",
+            "next action: fix readiness blockers, then type :parallel",
         ));
     }
     key_lines.push(AkraTheme::key_line("Ctrl+O or Esc/Ctrl+C: close"));

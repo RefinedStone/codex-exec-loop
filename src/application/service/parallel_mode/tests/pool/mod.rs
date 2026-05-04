@@ -343,7 +343,7 @@ fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() 
 }
 
 // 표준 remote branch를 새로 seed해야 하는 상태에서는 push remote가 필수다. remote-tracking ref도
-// push remote도 없는데 readiness가 degraded로 통과하면 `:parallel on`이 곧바로 reconcile 실패로
+// push remote도 없는데 readiness가 degraded로 통과하면 `:parallel`이 곧바로 reconcile 실패로
 // 이어진다.
 #[test]
 fn inspect_readiness_blocks_missing_standard_branch_when_push_remote_is_absent() {

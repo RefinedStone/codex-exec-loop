@@ -130,68 +130,6 @@ impl NativeTuiApp {
                     status_text: "parallel mode: off / shell returned to normal mode".to_string(),
                 });
             }
-            Some(value) if value.eq_ignore_ascii_case("on") => {
-                // Enabling is gated by a fresh readiness snapshot. When allowed,
-                // reconcile the pool because active supervision expects slot
-                // worktrees to exist and stale cleanup candidates to be handled.
-                let snapshot = self.refresh_parallel_mode_readiness_snapshot();
-                let status_text = if snapshot.allows_parallel_mode() {
-                    self.parallel_mode_enabled = true;
-                    self.sync_parallel_mode_supervisor_snapshot(true);
-                    format!(
-                        "parallel mode: on / readiness: {} / control tower opened",
-                        snapshot.readiness_label()
-                    )
-                } else {
-                    // A blocked readiness state turns the flag back off so later
-                    // dispatch cannot proceed on a stale successful state.
-                    self.parallel_mode_enabled = false;
-                    self.sync_parallel_mode_supervisor_snapshot(false);
-                    let cause = snapshot
-                        .top_alert
-                        .as_deref()
-                        .unwrap_or("inspect the readiness panel before retrying");
-                    format!(
-                        "parallel mode: blocked / readiness: {} / {cause}",
-                        snapshot.readiness_label()
-                    )
-                };
-                self.show_supersession_overlay();
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text,
-                });
-            }
-            Some(value) if value.eq_ignore_ascii_case("dispatch") => {
-                // Dispatch uses the same readiness gate as enable. The worker
-                // launch path leases slots first, so the UI only calls it after
-                // the service says pool/repo state can support parallel work.
-                let snapshot = self.refresh_parallel_mode_readiness_snapshot();
-                let status_text = if !self.parallel_mode_enabled {
-                    self.sync_parallel_mode_supervisor_snapshot(false);
-                    "parallel mode: off / use `:parallel on` before dispatching queue head"
-                        .to_string()
-                } else if snapshot.allows_parallel_mode() {
-                    self.sync_parallel_mode_supervisor_snapshot(true);
-                    self.dispatch_parallel_queue_pool()
-                } else {
-                    // If readiness regressed while parallel mode was on, fail
-                    // closed and require the operator to inspect before retrying.
-                    self.parallel_mode_enabled = false;
-                    self.sync_parallel_mode_supervisor_snapshot(false);
-                    let cause = snapshot
-                        .top_alert
-                        .as_deref()
-                        .unwrap_or("inspect the readiness panel before retrying");
-                    format!(
-                        "parallel mode: blocked / readiness: {} / {cause}",
-                        snapshot.readiness_label()
-                    )
-                };
-                self.show_supersession_overlay();
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text,
-                });
-            }
             Some(value) => {
                 // Unsupported arguments still open the control tower. That makes
                 // the supported commands and current readiness visible next to
@@ -199,26 +137,43 @@ impl NativeTuiApp {
                 self.inspect_parallel_mode_shell();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "parallel mode command: unsupported argument `{value}` / supported: on, off, dispatch"
+                        "parallel mode command: unsupported argument `{value}` / supported: :parallel, :parallel off"
                     ),
                 });
             }
             None => {
-                // Bare `:parallel` is an inspect command. It refreshes readiness
-                // and opens the overlay without changing enabled/off state.
+                // Bare `:parallel` is the only enable entrypoint. It refreshes
+                // readiness, reconciles the pool when allowed, and opens the
+                // control tower without requiring a separate `on` argument.
                 let snapshot = self.refresh_parallel_mode_readiness_snapshot();
-                self.sync_parallel_mode_supervisor_snapshot(false);
+                let status_text = if snapshot.allows_parallel_mode() {
+                    self.parallel_mode_enabled = true;
+                    self.sync_parallel_mode_supervisor_snapshot(true);
+                    let dispatch_status = self.dispatch_parallel_queue_pool();
+                    let mut status_text = format!(
+                        "parallel mode: on / readiness: {} / control tower opened",
+                        snapshot.readiness_label()
+                    );
+                    if !dispatch_status.trim().is_empty() {
+                        status_text.push_str(" / ");
+                        status_text.push_str(&dispatch_status);
+                    }
+                    status_text
+                } else {
+                    self.parallel_mode_enabled = false;
+                    self.sync_parallel_mode_supervisor_snapshot(false);
+                    let cause = snapshot
+                        .top_alert
+                        .as_deref()
+                        .unwrap_or("inspect the readiness panel before retrying");
+                    format!(
+                        "parallel mode: blocked / readiness: {} / {cause}",
+                        snapshot.readiness_label()
+                    )
+                };
                 self.show_supersession_overlay();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!(
-                        "parallel mode: {} / readiness: {}",
-                        if self.parallel_mode_enabled {
-                            "on"
-                        } else {
-                            "off"
-                        },
-                        snapshot.readiness_label()
-                    ),
+                    status_text,
                 });
             }
         }
@@ -249,20 +204,20 @@ impl NativeTuiApp {
         ) {
             Ok(plan) => plan,
             Err(error) => {
-                return format!("parallel mode: on / dispatch blocked / {error}");
+                return format!("auto dispatch blocked / {error}");
             }
         };
         // Distinguish infrastructure capacity from queue availability so the
         // operator can decide whether to wait for slots or change planning tasks.
         if dispatch_plan.idle_slot_count == 0 {
-            return "parallel mode: on / no idle slot is available for dispatch".to_string();
+            return "no idle slot is available for auto dispatch".to_string();
         }
         if dispatch_plan.candidates.is_empty() {
             return if dispatch_plan.excluded_task_ids.is_empty() {
-                "parallel mode: on / no actionable queue task to dispatch".to_string()
+                "no actionable queue task to auto dispatch".to_string()
             } else {
                 format!(
-                    "parallel mode: on / no undispatched queue task available / excluded: {}",
+                    "no undispatched queue task available for auto dispatch / excluded: {}",
                     dispatch_plan.excluded_task_ids.join(", ")
                 )
             };
@@ -306,13 +261,13 @@ impl NativeTuiApp {
         let launched_count = launched_titles.len();
         if launched_count == 0 {
             return format!(
-                "parallel mode: on / dispatch blocked before worker launch / {}",
+                "auto dispatch blocked before worker launch / {}",
                 blocked_details.join(" | ")
             );
         }
 
         let mut status = format!(
-            "parallel mode: on / dispatched {launched_count} worker(s) / tasks: {}",
+            "auto dispatched {launched_count} worker(s) / tasks: {}",
             launched_titles.join(" | ")
         );
         if !blocked_details.is_empty() {

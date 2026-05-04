@@ -175,7 +175,7 @@ impl ParallelModeCapabilitySnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
  * Readiness snapshot은 inbound presentation code에 넘기는 domain boundary object다. service는 probe
- * 결과를 모두 모아 미리 verdict를 계산하고, TUI는 이 snapshot을 저장했다가 `:parallel on`, Ctrl+R,
+ * 결과를 모두 모아 미리 verdict를 계산하고, TUI는 이 snapshot을 저장했다가 `:parallel`, Ctrl+R,
  * supervisor popup rendering에서 같은 gate 판단을 재사용한다.
  */
 pub struct ParallelModeReadinessSnapshot {

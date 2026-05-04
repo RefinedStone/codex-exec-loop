@@ -341,7 +341,7 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
 }
 
 // fresh repository처럼 local/remote 표준 branch가 모두 없으면 reconcile이 현재 작업 branch HEAD를
-// 표준 branch로 만들고 origin에 push해야 한다. 이 흐름이 `:parallel on`의 첫 pool 생성 완충 장치다.
+// 표준 branch로 만들고 origin에 push해야 한다. 이 흐름이 `:parallel`의 첫 pool 생성 완충 장치다.
 #[test]
 fn reconcile_seeds_missing_standard_branch_from_current_head_and_pushes_origin() {
     let repo = TempGitRepo::new("seed-standard-branch");
