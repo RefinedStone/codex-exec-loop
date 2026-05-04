@@ -57,8 +57,8 @@ use self::session_detail::{
     record_cleaned_session_detail, record_cleanup_pending_session_detail,
     record_distributor_failed_session_detail, record_failed_start_session_detail,
     record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_pr_pending_session_detail,
-    record_pushing_session_detail, record_running_session_detail,
+    record_merge_queued_session_detail, record_official_completion_failed_session_detail,
+    record_pr_pending_session_detail, record_pushing_session_detail, record_running_session_detail,
     record_thread_prepared_session_detail,
 };
 use self::supervisor::ParallelModeSupervisorService;

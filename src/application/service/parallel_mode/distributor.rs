@@ -5,20 +5,25 @@ use super::{
     lease_session_key, load_pool_runtime_context, reconcile_pool_board,
     record_cleaned_session_detail, record_cleanup_pending_session_detail,
     record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_pr_pending_session_detail,
-    record_pushing_session_detail, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    run_command, short_sha, write_slot_lease,
+    record_merge_queued_session_detail, record_official_completion_failed_session_detail,
+    record_pr_pending_session_detail, record_pushing_session_detail, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease, run_command, short_sha, write_slot_lease,
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
-    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshRecoveryStatus,
+    PlanningAuthorityPort,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeDistributorQueueItem, ParallelModeDistributorSnapshot, ParallelModeQueueItemState,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorQueueItem,
+    ParallelModeDistributorSnapshot, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
+use chrono::{DateTime, TimeDelta, Utc};
 use std::path::Path;
 use std::sync::Arc;
+
+const STALE_LEDGER_REFRESHING_AFTER_SECS: i64 = 300;
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
 mod delivery;
 mod queue_keys;
@@ -333,6 +338,13 @@ impl ParallelModeDistributorService {
         let mut context =
             load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
                 .map_err(|(_, detail)| detail.to_string())?;
+        recover_stale_ledger_refreshing_sessions(
+            self.planning_authority.as_ref(),
+            workspace_dir,
+            &context,
+        )?;
+        context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
         for index in 0..context.distributor_queue_records.len() {
             let mut record = context.distributor_queue_records[index].clone();
             let matching_lease = matching_lease_for_queue_record(&context, &record).cloned();
@@ -483,6 +495,96 @@ impl ParallelModeDistributorService {
         }
         Ok(context)
     }
+}
+
+fn recover_stale_ledger_refreshing_sessions(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    context: &PoolRuntimeContext,
+) -> Result<(), String> {
+    for detail in &context.session_details {
+        if detail.state_label != "ledger_refreshing" || !ledger_refreshing_detail_is_stale(detail) {
+            continue;
+        }
+        let Some(lease) = context
+            .slot_leases
+            .values()
+            .find(|lease| lease.session_key() == detail.session_key)
+        else {
+            continue;
+        };
+        if context.distributor_queue_records.iter().any(|record| {
+            record.session_key == detail.session_key && record.queue_state.is_active()
+        }) {
+            continue;
+        }
+
+        let recovery_reason = format!(
+            "stale official ledger refresh for `{}` exceeded {} seconds without queue handoff",
+            detail.task_title, STALE_LEDGER_REFRESHING_AFTER_SECS
+        );
+        match abandon_stale_official_refresh_orders(
+            planning_authority,
+            workspace_dir,
+            &recovery_reason,
+        )? {
+            StaleOfficialRefreshRecoveryOutcome::WaitingForActiveClaim => continue,
+            StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle => {
+                record_official_completion_failed_session_detail(
+                    planning_authority,
+                    &context.repo_root,
+                    &context.pool_root,
+                    lease,
+                    &format!(
+                        "{recovery_reason}; mark the slot failed so supervisor stops reporting ledger refresh as active"
+                    ),
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+enum StaleOfficialRefreshRecoveryOutcome {
+    RecoveredOrIdle,
+    WaitingForActiveClaim,
+}
+
+fn abandon_stale_official_refresh_orders(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    recovery_reason: &str,
+) -> Result<StaleOfficialRefreshRecoveryOutcome, String> {
+    let mut recovered_any = false;
+    loop {
+        match planning_authority
+            .abandon_next_official_refresh_order(workspace_dir, recovery_reason)
+            .map_err(|error| error.to_string())?
+        {
+            PlanningAuthorityOfficialRefreshRecoveryStatus::Recovered { .. } => {
+                recovered_any = true;
+            }
+            PlanningAuthorityOfficialRefreshRecoveryStatus::NoPendingOrder => {
+                return Ok(StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle);
+            }
+            PlanningAuthorityOfficialRefreshRecoveryStatus::WaitingForActiveClaim => {
+                return if recovered_any {
+                    Ok(StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle)
+                } else {
+                    Ok(StaleOfficialRefreshRecoveryOutcome::WaitingForActiveClaim)
+                };
+            }
+        }
+    }
+}
+
+fn ledger_refreshing_detail_is_stale(detail: &ParallelModeAgentSessionDetailSnapshot) -> bool {
+    let Ok(timestamp) = DateTime::parse_from_rfc3339(&detail.updated_at) else {
+        return true;
+    };
+    Utc::now().signed_duration_since(timestamp.with_timezone(&Utc))
+        >= TimeDelta::seconds(STALE_LEDGER_REFRESHING_AFTER_SECS)
 }
 
 /*
