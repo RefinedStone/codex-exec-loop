@@ -1,13 +1,14 @@
 use super::distributor::load_distributor_queue_records;
 use super::{
-    DEFAULT_POOL_SIZE, MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey,
-    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeService, agent_session_detail_record_path,
-    allocate_agent_branch_name, build_pool_board, command_succeeds, derive_default_pool_root,
-    detect_canonical_repo_root, inspect_gh_auth, inspect_gh_binary, lease_session_key,
-    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
-    resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash, slot_id,
-    slot_lease_file_path,
+    DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, MAX_AGENT_BRANCH_SLUG_LEN, POOL_BASELINE_BRANCH,
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
+    agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
+    command_succeeds, derive_default_pool_root, detect_canonical_repo_root, inspect_gh_auth,
+    inspect_gh_binary, lease_session_key, local_branch_ref, parse_https_remote,
+    read_agent_session_detail_record, reconcile_pool_board, remote_branch_name,
+    remote_tracking_branch_ref, resolve_workspace_slot_lease, run_command, sanitize_task_slug,
+    short_branch_slug_hash, slot_id, slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -62,10 +63,14 @@ impl TempGitRepo {
         run_git(&repo_root, &["add", ".gitignore"]);
         run_git(&repo_root, &["commit", "-qm", "init"]);
         run_git(&repo_root, &["branch", "akra"]);
-        run_git(&repo_root, &["branch", "prerelease"]);
+        run_git(&repo_root, &["branch", POOL_BASELINE_BRANCH]);
         run_git(
             &repo_root,
-            &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
+            &[
+                "update-ref",
+                &remote_standard_tracking_ref(),
+                POOL_BASELINE_BRANCH,
+            ],
         );
 
         Self { root, repo_root }
@@ -107,7 +112,7 @@ impl TempGitRepo {
                 "add",
                 "--detach",
                 slot_path.to_str().expect("slot path should be valid utf-8"),
-                "prerelease",
+                POOL_BASELINE_BRANCH,
             ],
         );
         slot_path
@@ -133,7 +138,7 @@ impl TempGitRepo {
                 "-b",
                 branch_name.as_str(),
                 slot_path.to_str().expect("slot path should be valid utf-8"),
-                "prerelease",
+                POOL_BASELINE_BRANCH,
             ],
         );
         slot_path
@@ -162,7 +167,40 @@ impl TempGitRepo {
         worktree_path
     }
     fn delete_local_prerelease_branch(&self) {
-        run_git(&self.repo_root, &["branch", "-D", "prerelease"]);
+        run_git(&self.repo_root, &["branch", "-D", POOL_BASELINE_BRANCH]);
+    }
+    fn delete_remote_standard_tracking_branch(&self) {
+        run_git(
+            &self.repo_root,
+            &["update-ref", "-d", &remote_standard_tracking_ref()],
+        );
+    }
+    fn create_bare_origin_remote(&self) -> PathBuf {
+        let remote_path = self.root.join("origin.git");
+        let output = Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&remote_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git init --bare should spawn");
+        assert!(
+            output.status.success(),
+            "git init --bare should succeed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        run_git(
+            &self.repo_root,
+            &[
+                "remote",
+                "add",
+                DEFAULT_PUSH_REMOTE_NAME,
+                remote_path
+                    .to_str()
+                    .expect("remote path should be valid utf-8"),
+            ],
+        );
+        remote_path
     }
     fn commit_file_in_slot(
         &self,
@@ -178,12 +216,12 @@ impl TempGitRepo {
     fn merge_agent_slot_into_akra(&self, slot_path: &Path) {
         let branch_name = current_branch(slot_path);
         let original_branch = current_branch(&self.repo_root);
-        run_git(&self.repo_root, &["checkout", "prerelease"]);
+        run_git(&self.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
         run_git(
             &self.repo_root,
             &["merge", "--ff-only", branch_name.as_str()],
         );
-        self.set_remote_tracking_branch("origin/prerelease", "prerelease");
+        self.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
         run_git(&self.repo_root, &["checkout", original_branch.as_str()]);
     }
 
@@ -228,8 +266,8 @@ impl TempGitRepo {
         fs::write(self.repo_root.join(file_name), contents).expect("repo file should write");
         run_git(&self.repo_root, &["add", file_name]);
         run_git(&self.repo_root, &["commit", "-qm", message]);
-        if current_branch(&self.repo_root) == "prerelease" {
-            self.set_remote_tracking_branch("origin/prerelease", "prerelease");
+        if current_branch(&self.repo_root) == POOL_BASELINE_BRANCH {
+            self.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
         }
     }
 }
@@ -272,6 +310,15 @@ fn current_branch(repo_root: &Path) -> String {
         .expect("branch name should be utf-8")
         .trim()
         .to_string()
+}
+fn remote_standard_branch_name() -> String {
+    remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH)
+}
+fn remote_standard_tracking_ref() -> String {
+    remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH)
+}
+fn local_standard_ref() -> String {
+    local_branch_ref(POOL_BASELINE_BRANCH)
 }
 fn sample_lease_request(
     task_id: &str,
@@ -418,7 +465,7 @@ impl FakeGithubAutomationPort {
                 77,
                 "https://github.com/RefinedStone/codex-exec-loop/pull/77",
                 "OPEN",
-                "prerelease",
+                POOL_BASELINE_BRANCH,
                 "placeholder",
                 false,
             ),
@@ -510,7 +557,7 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             .lock()
             .expect("fake github base branch mutex poisoned")
             .clone()
-            .unwrap_or_else(|| "prerelease".to_string());
+            .unwrap_or_else(|| POOL_BASELINE_BRANCH.to_string());
         let head_branch = self
             .head_branch
             .lock()

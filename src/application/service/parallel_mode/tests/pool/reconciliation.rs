@@ -168,9 +168,9 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
     );
 }
 
-// 한 slot이 running인 동안에도 다른 idle baseline들은 origin/prerelease로 정리될 수
+// 한 slot이 running인 동안에도 다른 idle baseline들은 표준 remote branch로 정리될 수
 // 있어야 한다. 이 테스트는 실행 중인 lease를 보존하면서 reusable slot만 reset하고,
-// canonical prerelease ref가 현재 작업 branch HEAD로 이동하지 않는지도 함께 확인한다.
+// canonical 표준 ref가 현재 작업 branch HEAD로 이동하지 않는지도 함께 확인한다.
 #[test]
 fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     let repo = TempGitRepo::new("dirty-reusable-slot-with-running-lease");
@@ -181,7 +181,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
             "-C",
             repo.repo_root.to_str().expect("repo root should be utf-8"),
             "rev-parse",
-            "refs/remotes/origin/prerelease",
+            &remote_standard_tracking_ref(),
         ],
         None,
     )
@@ -226,7 +226,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
                 "-C",
                 repo.repo_root.to_str().expect("repo root should be utf-8"),
                 "rev-parse",
-                "prerelease",
+                POOL_BASELINE_BRANCH,
             ],
             None,
         )
@@ -273,26 +273,29 @@ fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
     );
 }
 
-// 사용자가 로컬 `prerelease` branch를 지웠더라도 reconcile은 baseline ref를 먼저
+// 사용자가 로컬 표준 branch를 지웠더라도 reconcile은 baseline ref를 먼저
 // 복구한 뒤 slot을 provision해야 한다. slot 생성과 branch 복구가 같은 흐름에서
 // 일어나야 이후 slot들이 모두 동일한 기준 commit을 바라본다.
 #[test]
 fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
     let repo = TempGitRepo::new("create-akra");
     repo.delete_local_prerelease_branch();
-    assert!(!repo.branch_exists("prerelease"));
+    assert!(!repo.branch_exists(POOL_BASELINE_BRANCH));
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
     );
 
-    assert!(repo.branch_exists("prerelease"));
+    assert!(repo.branch_exists(POOL_BASELINE_BRANCH));
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert!(pool.reconcile_status.contains("created `prerelease`"));
+    assert!(
+        pool.reconcile_status
+            .contains(&format!("created `{POOL_BASELINE_BRANCH}`"))
+    );
 }
 
 // local baseline이 현재 작업 branch HEAD로 drift해도 reconcile은 현재 workspace가 아니라
-// `origin/prerelease`를 authoritative baseline으로 삼아야 한다. 이 테스트는 pool slot이
+// 표준 remote branch를 authoritative baseline으로 삼아야 한다. 이 테스트는 pool slot이
 // 사용자의 feature HEAD에서 시작하는 회귀를 막는다.
 #[test]
 fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
@@ -303,7 +306,7 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
             "-C",
             repo.repo_root.to_str().expect("repo root should be utf-8"),
             "rev-parse",
-            "refs/remotes/origin/prerelease",
+            &remote_standard_tracking_ref(),
         ],
         None,
     )
@@ -311,7 +314,10 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
     let current_head = repo.head_sha();
     assert_ne!(origin_prerelease_head, current_head);
-    run_git(&repo.repo_root, &["branch", "-f", "prerelease", "HEAD"]);
+    run_git(
+        &repo.repo_root,
+        &["branch", "-f", POOL_BASELINE_BRANCH, "HEAD"],
+    );
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -324,12 +330,69 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
                 "-C",
                 repo.repo_root.to_str().expect("repo root should be utf-8"),
                 "rev-parse",
-                "prerelease",
+                POOL_BASELINE_BRANCH,
             ],
             None,
         )
         .expect("prerelease should resolve"),
         origin_prerelease_head
+    );
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+}
+
+// fresh repository처럼 local/remote 표준 branch가 모두 없으면 reconcile이 현재 작업 branch HEAD를
+// 표준 branch로 만들고 origin에 push해야 한다. 이 흐름이 `:parallel on`의 첫 pool 생성 완충 장치다.
+#[test]
+fn reconcile_seeds_missing_standard_branch_from_current_head_and_pushes_origin() {
+    let repo = TempGitRepo::new("seed-standard-branch");
+    let origin_root = repo.create_bare_origin_remote();
+    repo.delete_local_prerelease_branch();
+    repo.delete_remote_standard_tracking_branch();
+    let expected_head = repo.head_sha();
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    let remote_head = run_command(
+        "git",
+        [
+            "--git-dir",
+            origin_root.to_str().expect("origin root should be utf-8"),
+            "rev-parse",
+            &local_standard_ref(),
+        ],
+        None,
+    )
+    .expect("pushed standard branch should resolve in origin");
+
+    assert_eq!(remote_head, expected_head);
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "rev-parse",
+                POOL_BASELINE_BRANCH,
+            ],
+            None,
+        )
+        .expect("local standard branch should resolve"),
+        expected_head
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "rev-parse",
+                &remote_standard_tracking_ref(),
+            ],
+            None,
+        )
+        .expect("remote tracking standard branch should resolve"),
+        expected_head
     );
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
@@ -355,13 +418,13 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     assert_eq!(refreshed_pool.idle_slots, DEFAULT_POOL_SIZE);
     assert_eq!(refreshed_pool.blocked_slots, 0);
     assert!(refreshed_pool.slots.iter().all(|slot| {
-        !slot
-            .worktree_label
-            .contains("detached away from `prerelease` baseline")
+        !slot.worktree_label.contains(&format!(
+            "detached away from `{POOL_BASELINE_BRANCH}` baseline"
+        ))
     }));
 }
 
-// agent slot worktree에서 reconcile을 호출해도 canonical `prerelease`는 agent
+// agent slot worktree에서 reconcile을 호출해도 canonical 표준 branch는 agent
 // branch HEAD로 갱신되면 안 된다. root detection이 slot workspace를 원본 repo로
 // 되돌려 계산하는지 확인하는 회귀 테스트다.
 #[test]
@@ -374,7 +437,7 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
             "-C",
             repo.repo_root.to_str().expect("repo root should be utf-8"),
             "rev-parse",
-            "prerelease",
+            POOL_BASELINE_BRANCH,
         ],
         None,
     )
@@ -406,7 +469,7 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
                 "-C",
                 repo.repo_root.to_str().expect("repo root should be utf-8"),
                 "rev-parse",
-                "prerelease",
+                POOL_BASELINE_BRANCH,
             ],
             None,
         )
@@ -418,7 +481,7 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
 
 // merged agent slot은 cleanup pending 상태에서 reconcile이 완전히 회수할 수 있어야
 // 한다. untracked scratch 파일, agent branch, lease mirror가 모두 제거되고 slot이
-// detached prerelease idle 상태로 돌아오는 end-to-end cleanup 계약을 고정한다.
+// detached 표준 branch idle 상태로 돌아오는 end-to-end cleanup 계약을 고정한다.
 #[test]
 fn reconcile_cleans_merged_agent_slot_back_to_idle() {
     let repo = TempGitRepo::new("cleanup-execution");
@@ -448,7 +511,7 @@ fn reconcile_cleans_merged_agent_slot_back_to_idle() {
     let slot = &pool.slots[0];
 
     assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
-    assert!(slot.branch_name.starts_with("prerelease"));
+    assert!(slot.branch_name.starts_with(POOL_BASELINE_BRANCH));
     assert!(!slot_path.join("scratch.tmp").exists());
     assert!(!repo.branch_exists(&branch_name));
     assert!(!repo.slot_lease_path(1).exists());

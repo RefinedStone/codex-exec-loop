@@ -76,6 +76,18 @@ const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL: &str =
     "agent branch is not integrated into `prerelease` and has no lease metadata";
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
     "inspect the slot branch, merge or discard it manually, then rerun reconcile";
+fn remote_branch_name(remote_name: &str, branch_name: &str) -> String {
+    format!("{remote_name}/{branch_name}")
+}
+fn remote_tracking_branch_ref(remote_name: &str, branch_name: &str) -> String {
+    format!(
+        "refs/remotes/{}",
+        remote_branch_name(remote_name, branch_name)
+    )
+}
+fn local_branch_ref(branch_name: &str) -> String {
+    format!("refs/heads/{branch_name}")
+}
 pub type ParallelModeOfficialCompletionReport = PlanningOfficialCompletionRefreshContract;
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*

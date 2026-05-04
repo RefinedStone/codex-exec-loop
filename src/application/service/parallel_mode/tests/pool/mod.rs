@@ -224,8 +224,8 @@ fn concurrent_slot_lease_requests_are_serialized_across_idle_slots() {
     assert_eq!(pool.idle_slots, 0);
 }
 
-// 사용자가 로컬 `prerelease` branch를 삭제한 linked-worktree 상태에서도 pool
-// baseline은 `origin/prerelease`를 기준으로 계산되어야 한다. remote fallback이
+// 사용자가 로컬 표준 branch를 삭제한 linked-worktree 상태에서도 pool baseline은 표준 remote
+// branch를 기준으로 계산되어야 한다. remote fallback이
 // 없으면 정상 slot들이 blocked로 오인되어 parallel mode가 불필요하게 멈춘다.
 #[test]
 fn build_pool_board_uses_remote_prerelease_when_local_branch_is_missing() {
@@ -238,7 +238,7 @@ fn build_pool_board_uses_remote_prerelease_when_local_branch_is_missing() {
     );
     let head_sha = repo.head_sha();
     repo.delete_local_prerelease_branch();
-    repo.set_remote_tracking_branch("origin/prerelease", &head_sha);
+    repo.set_remote_tracking_branch(&remote_standard_branch_name(), &head_sha);
     let pool = build_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -316,15 +316,12 @@ fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
     assert!(!capability.detail.contains("version = 0"));
 }
 
-// parallel pool은 local branch나 현재 HEAD가 아니라 `origin/prerelease`에서만 시작한다.
-// remote-tracking baseline이 없으면 readiness 단계에서 막아 잘못된 작업 branch를 만들지 않는다.
+// 표준 remote branch가 아직 없더라도 일반 workspace HEAD가 있으면 readiness는 통과시킨다.
+// 실제 표준 branch 생성과 push는 mutating reconcile 단계에서 한 번에 수행된다.
 #[test]
-fn inspect_readiness_blocks_when_origin_prerelease_is_missing() {
+fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() {
     let repo = TempGitRepo::new("missing-origin-prerelease");
-    run_git(
-        &repo.repo_root,
-        &["update-ref", "-d", "refs/remotes/origin/prerelease"],
-    );
+    repo.delete_remote_standard_tracking_branch();
     let service = test_parallel_mode_service();
     let snapshot = service.inspect_readiness(
         &repo.workspace_dir(),
@@ -335,8 +332,13 @@ fn inspect_readiness_blocks_when_origin_prerelease_is_missing() {
         .capability(ParallelModeCapabilityKey::AkraBranch)
         .expect("akra branch capability should exist");
 
-    assert_eq!(capability.state, ParallelModeCapabilityState::Blocked);
-    assert!(capability.summary().contains("origin/prerelease"));
+    assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+    assert!(
+        capability
+            .summary()
+            .contains(&remote_standard_branch_name())
+    );
+    assert!(capability.summary().contains("current HEAD"));
 }
 
 // pool board의 reconciliation 세부 규칙은 missing/blocked/leased 상태 조합이 많아

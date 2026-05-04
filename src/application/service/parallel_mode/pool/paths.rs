@@ -48,14 +48,14 @@ fn stable_short_hash(value: &str) -> String {
 }
 
 /*
-pool baseline head는 origin branch를 먼저 보고, read-only inspection에서만 local branch를
-fallback으로 쓴다. mutating reconcile은 별도 guard에서 `origin/prerelease`를 요구하므로
-현재 HEAD를 baseline으로 해석하지 않는다.
+pool baseline head는 표준 remote branch를 먼저 보고, read-only inspection에서만 local branch를
+fallback으로 쓴다. mutating reconcile은 별도 guard에서 missing remote 표준 branch를 현재 HEAD로
+seed하거나 remote 기준으로 local branch를 맞춘다.
 */
 pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
     resolve_branch_head(
         repo_root,
-        &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
+        &remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH),
     )
     .or_else(|| resolve_branch_head(repo_root, POOL_BASELINE_BRANCH))
 }
