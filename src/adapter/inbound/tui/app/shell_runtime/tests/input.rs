@@ -108,6 +108,50 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
 }
 
 #[test]
+fn supersession_uses_planning_workspace_snapshot_after_loading_finishes() {
+    /*
+     * Startup shell workspace와 active draft/thread planning workspace가 다를 수 있다.
+     * Supersession은 parallel worker가 사용한 planning workspace snapshot을 기준으로 렌더링해야 하며,
+     * shell workspace 불일치 때문에 loading placeholder를 다시 합성하면 안 된다.
+     */
+    let mut runtime = make_test_runtime();
+    let planning_workspace = "/tmp/planning-workspace".to_string();
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/startup-workspace"));
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.draft_workspace_directory = planning_workspace.clone();
+    conversation.cwd = planning_workspace.clone();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            planning_workspace.clone(),
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+
+    let snapshot = runtime.app().parallel_mode_supervisor_snapshot();
+
+    assert_eq!(
+        runtime.app().current_workspace_directory(),
+        "/tmp/startup-workspace"
+    );
+    assert_eq!(
+        runtime.app().planning_workspace_directory(),
+        planning_workspace
+    );
+    assert_eq!(snapshot.pool.pool_root_label, "/tmp/pool");
+    assert!(!snapshot.pool.pool_root_label.starts_with("loading:"));
+    assert!(snapshot.top_notice.is_none());
+}
+
+#[test]
 fn supervisor_invalidation_keeps_cached_board_visible() {
     /*
      * Worker updates invalidate supervisor data after dispatch. The visible board
