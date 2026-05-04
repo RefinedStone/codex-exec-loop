@@ -23,10 +23,6 @@ fn parse_recognizes_supported_aliases() {
         ),
         (":parallel", Some((InlineShellCommand::Parallel, None))),
         (
-            ":parallel on",
-            Some((InlineShellCommand::Parallel, Some("on"))),
-        ),
-        (
             ":parallel off",
             Some((InlineShellCommand::Parallel, Some("off"))),
         ),
@@ -246,7 +242,7 @@ fn help_entries_use_renderable_command_forms() {
         .join("\n");
 
     assert!(rendered.contains(":diag - diagnostics"));
-    assert!(rendered.contains(":parallel [on|off|dispatch] - parallel mode"));
+    assert!(rendered.contains(":parallel [off] - parallel mode"));
     assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
     assert!(rendered.contains(":stop - stop active sessions"));
     assert!(!rendered.contains(":auto"));
@@ -306,31 +302,17 @@ fn queue_command_hint_is_argument_aware() {
 #[test]
 fn parallel_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":parallel").expect("command should parse");
-    let on = InlineShellCommandInput::parse(":parallel on").expect("command should parse");
     let off = InlineShellCommandInput::parse(":parallel off").expect("command should parse");
-    let dispatch =
-        InlineShellCommandInput::parse(":parallel dispatch").expect("command should parse");
     let invalid = InlineShellCommandInput::parse(":parallel later").expect("command should parse");
 
-    assert_eq!(
-        plain.buffered_hint(),
-        "Press Enter to inspect parallel mode readiness."
-    );
-    assert_eq!(
-        on.buffered_hint(),
-        "Press Enter to inspect readiness and enter parallel mode without dispatching."
-    );
+    assert_eq!(plain.buffered_hint(), "Press Enter to enter parallel mode.");
     assert_eq!(
         off.buffered_hint(),
         "Press Enter to turn parallel mode off."
     );
     assert_eq!(
-        dispatch.buffered_hint(),
-        "Press Enter to dispatch the current queue head to an agent slot."
-    );
-    assert_eq!(
         invalid.buffered_hint(),
-        "Press Enter to apply `:parallel later`. Supported arguments: on, off, dispatch."
+        "Press Enter to apply `:parallel later`. Supported command forms: :parallel, :parallel off."
     );
 }
 

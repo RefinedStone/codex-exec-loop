@@ -49,7 +49,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [on|off|dispatch]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -68,7 +68,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":parallel",
         aliases: &[":parallel"],
         suggestion_detail: "parallel mode",
-        buffered_hint: "Press Enter to inspect parallel mode readiness.",
+        buffered_hint: "Press Enter to enter parallel mode.",
         execution_status: None,
         requires_argument: false,
     },
@@ -201,16 +201,8 @@ impl InlineShellCommandInput {
                 Some(value) if value.eq_ignore_ascii_case("off") => {
                     "Press Enter to turn parallel mode off.".to_string()
                 }
-                Some(value) if value.eq_ignore_ascii_case("on") => {
-                    "Press Enter to inspect readiness and enter parallel mode without dispatching."
-                        .to_string()
-                }
-                Some(value) if value.eq_ignore_ascii_case("dispatch") => {
-                    "Press Enter to dispatch the current queue head to an agent slot."
-                        .to_string()
-                }
                 Some(value) => format!(
-                    "Press Enter to apply `:parallel {value}`. Supported arguments: on, off, dispatch."
+                    "Press Enter to apply `:parallel {value}`. Supported command forms: :parallel, :parallel off."
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
@@ -417,7 +409,7 @@ impl InlineShellCommand {
     }
     fn help_usage(self) -> &'static str {
         match self {
-            InlineShellCommand::Parallel => ":parallel [on|off|dispatch]",
+            InlineShellCommand::Parallel => ":parallel [off]",
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Task => ":task [prompt]",
