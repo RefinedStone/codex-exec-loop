@@ -55,9 +55,10 @@ pub(super) fn inspect_git_worktree(
 }
 
 /*
-akra branch capability는 pool baseline이 될 integration branch를 찾는다. local `prerelease`가
-있거나 origin의 remote tracking branch가 있으면 ready이고, 둘 다 없어도 HEAD가 있으면 최초
-reconcile에서 baseline을 만들 수 있으므로 ready로 둔다. 완전히 HEAD가 없는 repo만 blocked다.
+akra branch capability는 pool baseline이 될 remote integration branch를 찾는다. parallel
+pool은 `origin/prerelease`에서만 시작하므로 local `prerelease`나 현재 HEAD fallback은
+ready로 보지 않는다. local branch가 있어도 remote-tracking 기준이 없으면 reconcile이
+올바른 출발점을 확정할 수 없다.
 */
 pub(super) fn inspect_akra_branch(
     runtime: &dyn ParallelModeRuntimePort,
@@ -71,39 +72,23 @@ pub(super) fn inspect_akra_branch(
             "show-ref",
             "--verify",
             "--quiet",
-            &format!("refs/heads/{POOL_BASELINE_BRANCH}"),
-        ],
-    ) || runtime.command_succeeds(
-        "git",
-        &[
-            "-C",
-            repo_root,
-            "show-ref",
-            "--verify",
-            "--quiet",
             &format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}"),
         ],
     ) {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::AkraBranch,
             ParallelModeCapabilityState::Ready,
-            format!("{POOL_BASELINE_BRANCH} is available"),
-            None,
-        );
-    }
-    if runtime.command_succeeds("git", &["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
-        return ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::AkraBranch,
-            ParallelModeCapabilityState::Ready,
-            format!("{POOL_BASELINE_BRANCH} is missing locally but can be created from HEAD"),
+            format!("origin/{POOL_BASELINE_BRANCH} is available"),
             None,
         );
     }
     ParallelModeCapabilitySnapshot::new(
         ParallelModeCapabilityKey::AkraBranch,
         ParallelModeCapabilityState::Blocked,
-        format!("{POOL_BASELINE_BRANCH} is missing and this repository has no usable HEAD yet"),
-        Some("create an initial commit or restore the integration branch before enabling parallel mode".to_string()),
+        format!("origin/{POOL_BASELINE_BRANCH} is missing"),
+        Some(format!(
+            "fetch origin/{POOL_BASELINE_BRANCH} before enabling parallel mode"
+        )),
     )
 }
 

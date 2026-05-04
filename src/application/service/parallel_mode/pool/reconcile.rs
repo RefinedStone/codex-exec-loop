@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
-use crate::domain::parallel_mode::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
+use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
-use super::super::{AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, POOL_BASELINE_BRANCH};
+use super::super::{DEFAULT_POOL_SIZE, POOL_BASELINE_BRANCH};
 use super::{
     GitWorktreeRecord, SlotGitStatus, command_succeeds, current_branch_name,
     ensure_directory_exists, inspect_slot_git_status, reset_slot_worktree_to_akra,
@@ -12,104 +11,16 @@ use super::{
 };
 
 /*
-pool baseline branch는 idle slot worktree들이 되돌아갈 기준점이다. 이 함수는 현재 workspace
-HEAD로 baseline을 새로 잡아도 되는지를 결정한다. distributor queue가 비어 있어야 하고,
-slot lease가 있더라도 아직 Leased/Running인 작업만 있어야 하며, 현재 workspace branch가
-baseline branch나 agent branch가 아니어야 한다.
-
-이 조건은 baseline refresh가 진행 중인 통합 결과나 agent branch를 기준점으로 삼는 일을
-막는다. baseline은 pool의 공통 출발선이므로, queue/slot pipeline이 안정적인 순간에만
-갱신할 수 있다.
-*/
-pub(super) fn can_refresh_pool_baseline_from_workspace(
-    repo_root: &str,
-    runtime_projection: &PlanningAuthorityRuntimeProjectionSnapshot,
-) -> bool {
-    /*
-    이 predicate는 "현재 workspace HEAD를 pool baseline으로 삼아도 되는가"를 single boolean으로
-    압축한다. pool baseline을 잘못 움직이면 이후 새 agent branch가 잘못된 출발점에서
-    만들어지므로, distributor queue가 비어 있고 현재 branch가 통합/agent 전용 branch가 아닌
-    아주 제한된 상황만 허용한다.
-    */
-    runtime_projection.distributor_queue_records.is_empty()
-        && runtime_projection.slot_leases.values().all(|lease| {
-            /*
-            여기서는 Leased/Running만 허용한다. 직관과 달리 lease가 아예 없거나 CleanupPending이
-            섞인 상태보다, 아직 완료되지 않은 active lease만 있는 상태가 baseline refresh에 더
-            안전하다. 완료/통합 대기 산출물이 queue나 cleanup 경계에 걸려 있으면 baseline 이동이
-            그 산출물의 통합 여부 판단을 흐릴 수 있기 때문이다.
-            */
-            matches!(
-                lease.state,
-                ParallelModeSlotLeaseState::Leased | ParallelModeSlotLeaseState::Running
-            )
-        })
-        && current_branch_name(Path::new(repo_root)).is_some_and(|branch_name| {
-            /*
-            current branch guard는 사용자가 이미 `prerelease`나 `akra-agent/...`에 들어와 있는
-            상황을 제외한다. baseline branch 위에서 baseline을 다시 잡는 것은 의미가 없고, agent
-            branch 위에서 baseline을 잡으면 아직 distributor를 통과하지 않은 작업 결과가 pool
-            전체 출발선이 될 수 있다.
-            */
-            branch_name != POOL_BASELINE_BRANCH
-                && !branch_name.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/"))
-        })
-}
-
-/*
 reconcile은 pool baseline branch가 반드시 존재한다고 가정하고 slot worktree를 만든다. 이
-함수는 그 branch를 찾거나 만든다. `reset_to_current_head`가 true이면 현재 HEAD로 baseline을
-강제로 맞추고, 아니면 기존 local baseline, origin baseline, 마지막으로 현재 HEAD 순서로
-기준점을 찾는다.
+함수는 그 branch를 `origin/prerelease`에서 찾거나 만든다. 현재 workspace HEAD는 baseline
+source가 아니며, local `prerelease`가 drift한 경우에도 remote-tracking ref로 되돌린다.
 
 반환값의 bool은 branch를 새로 만들었는지를 나타낸다. 상위 reconcile summary는 이 값을
 사용해 사용자가 방금 어떤 pool 구조 변화가 일어났는지 알 수 있게 한다.
 */
-pub(super) fn ensure_pool_baseline_branch(
-    repo_root: &str,
-    reset_to_current_head: bool,
-) -> Result<(String, bool), ()> {
-    if reset_to_current_head && let Some(head_sha) = resolve_branch_head(repo_root, "HEAD") {
-        /*
-        reset_to_current_head는 readiness/reconcile이 "지금 workspace HEAD를 새 baseline으로
-        고정해도 된다"고 판단한 뒤에만 true로 들어온다. `branch -f prerelease HEAD`는 local
-        baseline ref를 이동시키는 강한 작업이므로, 위 predicate를 통과한 경로에서만 사용되어야
-        한다.
-        */
-        // existed flag는 "새 baseline을 만들었는가"와 "기존 baseline을 이동했는가"를 summary에서 구분하게 한다.
-        let existed = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH).is_some();
-        if command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "branch",
-                "-f",
-                POOL_BASELINE_BRANCH,
-                "HEAD",
-            ],
-        ) {
-            return Ok((head_sha, !existed));
-        }
-    }
-
-    if let Some(baseline_head) = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH) {
-        /*
-        이미 local baseline branch가 있으면 그것이 가장 명확한 기준이다. remote나 HEAD fallback보다
-        먼저 반환해, 사용자가 의도적으로 local prerelease를 고정해 둔 경우 reconcile이 그 선택을
-        덮어쓰지 않게 한다.
-        */
-        return Ok((baseline_head, false));
-    }
-
-    /*
-    local baseline이 없을 때만 origin/prerelease 또는 HEAD fallback으로 branch를 만든다. fresh
-    clone에서는 remote tracking branch만 있을 수 있고, 테스트 repo나 초기 로컬 repo에서는 HEAD만
-    있을 수 있다. created flag는 실제 `git branch` 성공 여부만 반영한다.
-    */
-    // remote ref를 명시 경로로 확인해 로컬 branch 이름과 remote tracking branch 이름을 혼동하지 않는다.
+pub(super) fn ensure_pool_baseline_branch(repo_root: &str) -> Result<(String, bool), ()> {
     let remote_ref = format!("refs/remotes/origin/{POOL_BASELINE_BRANCH}");
-    let created = if command_succeeds(
+    if !command_succeeds(
         "git",
         [
             "-C",
@@ -120,32 +31,35 @@ pub(super) fn ensure_pool_baseline_branch(
             remote_ref.as_str(),
         ],
     ) {
-        command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "branch",
-                POOL_BASELINE_BRANCH,
-                remote_ref.as_str(),
-            ],
-        )
-    } else if command_succeeds("git", ["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
-        command_succeeds(
-            "git",
-            ["-C", repo_root, "branch", POOL_BASELINE_BRANCH, "HEAD"],
-        )
-    } else {
-        false
-    };
-
-    if !created {
         return Err(());
     }
 
-    resolve_branch_head(repo_root, POOL_BASELINE_BRANCH)
-        .map(|baseline_head| (baseline_head, true))
-        .ok_or(())
+    let remote_head = resolve_branch_head(repo_root, remote_ref.as_str()).ok_or(())?;
+    let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
+    if current_branch_name(Path::new(repo_root)).as_deref() == Some(POOL_BASELINE_BRANCH) {
+        return if local_head.as_deref() == Some(remote_head.as_str()) {
+            Ok((remote_head, false))
+        } else {
+            Err(())
+        };
+    }
+
+    let existed = local_head.is_some();
+    if !command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "branch",
+            "-f",
+            POOL_BASELINE_BRANCH,
+            remote_ref.as_str(),
+        ],
+    ) {
+        return Err(());
+    }
+
+    Ok((remote_head, !existed))
 }
 
 /*

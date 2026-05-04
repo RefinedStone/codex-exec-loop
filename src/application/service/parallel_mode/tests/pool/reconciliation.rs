@@ -168,13 +168,24 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
     );
 }
 
-// 한 slot이 running인 동안에도 다른 idle baseline들은 최신 prerelease로 정리될 수
+// 한 slot이 running인 동안에도 다른 idle baseline들은 origin/prerelease로 정리될 수
 // 있어야 한다. 이 테스트는 실행 중인 lease를 보존하면서 reusable slot만 reset하고,
-// canonical prerelease ref도 현재 head로 갱신되는지 함께 확인한다.
+// canonical prerelease ref가 현재 작업 branch HEAD로 이동하지 않는지도 함께 확인한다.
 #[test]
 fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     let repo = TempGitRepo::new("dirty-reusable-slot-with-running-lease");
     let service = test_parallel_mode_service();
+    let origin_prerelease_head = run_command(
+        "git",
+        [
+            "-C",
+            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            "rev-parse",
+            "refs/remotes/origin/prerelease",
+        ],
+        None,
+    )
+    .expect("origin prerelease should resolve");
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -191,6 +202,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
         .expect("slot lease should transition to running");
     repo.commit_on_current_branch("baseline.txt", "new baseline\n", "advance baseline");
     let current_head = repo.head_sha();
+    assert_ne!(origin_prerelease_head, current_head);
     let reusable_slot_path = repo.pool_root().join(slot_id(2));
     fs::write(reusable_slot_path.join("README.md"), "dirty\n")
         .expect("idle slot should become dirty");
@@ -219,7 +231,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
             None,
         )
         .expect("prerelease should resolve"),
-        current_head
+        origin_prerelease_head
     );
 }
 
@@ -279,16 +291,27 @@ fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
     assert!(pool.reconcile_status.contains("created `prerelease`"));
 }
 
-// empty baseline은 과거 `prerelease` head에 머물 수 있으므로 reconcile이 현재
-// workspace head를 새 baseline으로 채택해야 한다. 이 테스트는 branch ref 자체가
-// 이동했는지 확인해 단순 slot count 성공에 가려지는 stale baseline을 잡는다.
+// local baseline이 현재 작업 branch HEAD로 drift해도 reconcile은 현재 workspace가 아니라
+// `origin/prerelease`를 authoritative baseline으로 삼아야 한다. 이 테스트는 pool slot이
+// 사용자의 feature HEAD에서 시작하는 회귀를 막는다.
 #[test]
-fn reconcile_resets_empty_prerelease_baseline_to_current_head() {
+fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
     let repo = TempGitRepo::new("reset-akra");
-    let old_prerelease_head = repo.head_sha();
+    let origin_prerelease_head = run_command(
+        "git",
+        [
+            "-C",
+            repo.repo_root.to_str().expect("repo root should be utf-8"),
+            "rev-parse",
+            "refs/remotes/origin/prerelease",
+        ],
+        None,
+    )
+    .expect("origin prerelease should resolve");
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
     let current_head = repo.head_sha();
-    assert_ne!(old_prerelease_head, current_head);
+    assert_ne!(origin_prerelease_head, current_head);
+    run_git(&repo.repo_root, &["branch", "-f", "prerelease", "HEAD"]);
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &repo.workspace_dir(),
@@ -306,7 +329,7 @@ fn reconcile_resets_empty_prerelease_baseline_to_current_head() {
             None,
         )
         .expect("prerelease should resolve"),
-        current_head
+        origin_prerelease_head
     );
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
