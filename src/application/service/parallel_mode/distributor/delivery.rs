@@ -10,7 +10,9 @@ use self::github::{
 };
 use self::integration::{
     collect_cherry_pick_conflict_files, commit_patch_equivalent_in_branch,
-    ensure_distributor_integration_worktree_ready, format_conflict_file_suffix,
+    commit_patch_equivalent_in_remote_integration_branch,
+    ensure_distributor_integration_worktree_ready, fetch_integration_remote_branch,
+    format_conflict_file_suffix, reset_integration_branch_to_remote,
 };
 
 /*
@@ -322,17 +324,36 @@ fn distributor_integrate_branch(
     if let Err(error) =
         github_automation.push_integration_branch(&repo_root, DISTRIBUTOR_INTEGRATION_BRANCH)
     {
-        // local integration이 성공해도 remote push 실패는 operator가 다시 밀어야 하는 delivery block이다.
-        return block_distributor_queue_record(
-            planning_authority,
-            &resolution.context.repo_root,
-            &resolution.context.pool_root,
-            Some(&resolution.lease),
-            record,
-            format!(
-                "`{DISTRIBUTOR_INTEGRATION_BRANCH}` could not be pushed to `{DEFAULT_PUSH_REMOTE_NAME}`: {error}"
-            ),
-        );
+        if fetch_integration_remote_branch(&repo_root)
+            && commit_patch_equivalent_in_remote_integration_branch(&repo_root, &source_commit_sha)
+            && reset_integration_branch_to_remote(&repo_root)
+        {
+            record.integration_state = "done".to_string();
+            record.integration_note = format!(
+                "remote `{DEFAULT_PUSH_REMOTE_NAME}/{DISTRIBUTOR_INTEGRATION_BRANCH}` already contains commit `{}` from `{}`; local integration branch was aligned to remote after push rejection",
+                short_sha(&source_commit_sha),
+                source_branch
+            );
+            record.updated_at = current_timestamp();
+            write_distributor_queue_record(
+                planning_authority,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                record,
+            )?;
+        } else {
+            // local integration이 성공해도 remote push 실패는 operator가 다시 밀어야 하는 delivery block이다.
+            return block_distributor_queue_record(
+                planning_authority,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                format!(
+                    "`{DISTRIBUTOR_INTEGRATION_BRANCH}` could not be pushed to `{DEFAULT_PUSH_REMOTE_NAME}`: {error}"
+                ),
+            );
+        }
     }
     if let Some(pr_number) = record.pull_request_number {
         // PR close 전 다시 inspect해 URL을 최신화하고, 이미 닫힌 PR은 close 호출을 생략한다.

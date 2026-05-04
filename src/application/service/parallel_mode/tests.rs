@@ -445,6 +445,7 @@ struct FakeGithubAutomationPort {
     head_branch: Arc<Mutex<Option<String>>>,
     operations: Arc<Mutex<Vec<String>>>,
     force_push_error: Arc<Mutex<Option<String>>>,
+    integration_push_error: Arc<Mutex<Option<String>>>,
 }
 impl FakeGithubAutomationPort {
     fn ready() -> Self {
@@ -481,6 +482,7 @@ impl FakeGithubAutomationPort {
             head_branch: Arc::new(Mutex::new(None)),
             operations: Arc::new(Mutex::new(Vec::new())),
             force_push_error: Arc::new(Mutex::new(None)),
+            integration_push_error: Arc::new(Mutex::new(None)),
         }
     }
     fn with_capabilities(capabilities: GithubAutomationCapabilities) -> Self {
@@ -498,6 +500,15 @@ impl FakeGithubAutomationPort {
             .force_push_error
             .lock()
             .expect("fake github force-push error mutex poisoned") = Some(error.to_string());
+        github
+    }
+
+    fn with_integration_push_error(error: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .integration_push_error
+            .lock()
+            .expect("fake github integration-push error mutex poisoned") = Some(error.to_string());
         github
     }
 }
@@ -590,6 +601,14 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             .lock()
             .expect("fake github operations mutex poisoned")
             .push(format!("push-integration:{branch_name}"));
+        if let Some(error) = self
+            .integration_push_error
+            .lock()
+            .expect("fake github integration-push error mutex poisoned")
+            .clone()
+        {
+            anyhow::bail!(error);
+        }
         Ok(())
     }
     fn close_pull_request(&self, _repo_root: &str, pr_number: u64) -> anyhow::Result<()> {

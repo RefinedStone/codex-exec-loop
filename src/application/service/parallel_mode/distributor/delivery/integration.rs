@@ -133,6 +133,45 @@ pub(super) fn commit_patch_equivalent_in_branch(
         .any(|line| line.trim_start().starts_with('-'))
 }
 
+pub(super) fn fetch_integration_remote_branch(repo_root: &str) -> bool {
+    command_succeeds(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "fetch",
+            "--quiet",
+            DEFAULT_PUSH_REMOTE_NAME,
+            &format!(
+                "{DISTRIBUTOR_INTEGRATION_BRANCH}:{}",
+                remote_tracking_branch_ref(
+                    DEFAULT_PUSH_REMOTE_NAME,
+                    DISTRIBUTOR_INTEGRATION_BRANCH
+                )
+            ),
+        ],
+    )
+}
+
+pub(super) fn commit_patch_equivalent_in_remote_integration_branch(
+    repo_root: &str,
+    commit_sha: &str,
+) -> bool {
+    let remote_branch =
+        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH);
+    branch_is_integrated_into(repo_root, commit_sha, &remote_branch)
+        || commit_patch_equivalent_in_branch(repo_root, &remote_branch, commit_sha)
+}
+
+pub(super) fn reset_integration_branch_to_remote(repo_root: &str) -> bool {
+    let remote_branch =
+        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH);
+    command_succeeds(
+        "git",
+        ["-C", repo_root, "reset", "--hard", remote_branch.as_str()],
+    )
+}
+
 /*
 cherry-pick이 충돌하면 Git은 conflicted file 목록을 index에 남긴다. 이 함수는
 unmerged file만 수집해 queue record의 conflict_files에 저장할 짧은 목록으로 바꾼다.
