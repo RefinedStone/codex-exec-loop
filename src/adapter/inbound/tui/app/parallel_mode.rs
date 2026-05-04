@@ -10,7 +10,8 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolBoardSnapshot,
+    ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
@@ -277,6 +278,10 @@ impl NativeTuiApp {
                 .load_runtime_snapshot_or_invalid(&workspace_directory);
             let readiness_snapshot =
                 parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
+            let entry_plan = ParallelModeOrchestratorStateMachine::plan_parallel_entry(
+                !reset_pool_on_off_to_on_entry,
+                readiness_snapshot.allows_parallel_mode(),
+            );
 
             let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
                 let _ = tx.send(BackgroundMessage::ParallelModeEnterProgress {
@@ -292,12 +297,15 @@ impl NativeTuiApp {
                         "parallel mode: loading 2/4 / readiness complete; reconciling pool and planning dispatch"
                             .to_string(),
                 });
-                let reset_result = if reset_pool_on_off_to_on_entry {
+                let reset_result = if entry_plan.reset_scope
+                    == Some(ParallelModePoolResetScope::PoolOnly)
+                {
                     parallel_mode_service
                         .reset_pool_on_parallel_enable(&workspace_directory)
                         .map(|count| {
                             format!(
-                                "reset {count} pool slot worktree(s) to prerelease after off->on entry"
+                                "reset {count} pool slot worktree(s) to prerelease after off->on entry / {}",
+                                ParallelModePoolResetScope::PoolOnly.status_detail()
                             )
                         })
                 } else {

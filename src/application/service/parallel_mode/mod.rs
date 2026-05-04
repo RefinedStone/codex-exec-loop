@@ -4,8 +4,9 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -156,6 +157,7 @@ worktree 자체가 잘못되어 queue processing에 들어가지 못한 것이�
 */
 pub struct ParallelModeOrchestratorTickResult {
     pub trigger: ParallelModeOrchestratorTrigger,
+    pub state: ParallelModeOrchestratorState,
     pub blocked: bool,
     pub notices: Vec<String>,
 }
@@ -413,17 +415,17 @@ impl ParallelModeService {
                     .iter()
                     .filter(|task| {
                         let task_id = task.task_id.trim();
-                        if excluded.contains(task_id) {
-                            return false;
-                        }
                         let task_updated_at =
                             DateTime::parse_from_rfc3339(task.updated_at.as_str())
                                 .map(|timestamp| timestamp.timestamp_millis())
-                                .unwrap_or(i64::MAX);
-                        if failed_start_blockers
-                            .get(task_id)
-                            .is_some_and(|failed_at| *failed_at >= task_updated_at)
-                        {
+                                .ok();
+                        let eligibility =
+                            ParallelModeOrchestratorStateMachine::dispatch_eligibility(
+                                excluded.contains(task_id),
+                                failed_start_blockers.get(task_id).copied(),
+                                task_updated_at,
+                            );
+                        if !eligibility.is_dispatchable() {
                             reported_excluded.insert(task_id.to_string());
                             return false;
                         }
@@ -469,6 +471,7 @@ impl ParallelModeService {
             */
             return Ok(ParallelModeOrchestratorTickResult {
                 trigger,
+                state: ParallelModeOrchestratorStateMachine::tick_state(true),
                 blocked: true,
                 notices: vec![blocked_notice],
             });
@@ -476,6 +479,7 @@ impl ParallelModeService {
         let notices = self.distributor_service.process_queue(workspace_dir)?;
         Ok(ParallelModeOrchestratorTickResult {
             trigger,
+            state: ParallelModeOrchestratorStateMachine::tick_state(false),
             blocked: false,
             notices,
         })
