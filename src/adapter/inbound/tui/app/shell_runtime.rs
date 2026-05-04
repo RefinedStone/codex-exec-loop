@@ -161,6 +161,19 @@ impl ShellRuntime {
                         *supervisor_snapshot,
                     );
                 }
+                BackgroundMessage::ParallelModeDispatchRefreshed {
+                    workspace_directory,
+                    readiness_snapshot,
+                    supervisor_snapshot,
+                    status_text,
+                } => {
+                    self.app.apply_parallel_mode_dispatch_refreshed(
+                        &workspace_directory,
+                        readiness_snapshot,
+                        *supervisor_snapshot,
+                        status_text,
+                    );
+                }
                 BackgroundMessage::PostTurnEvaluated {
                     thread_id,
                     queued_from_turn_id,

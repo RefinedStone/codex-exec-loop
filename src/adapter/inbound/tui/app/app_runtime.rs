@@ -59,6 +59,12 @@ pub(super) enum BackgroundMessage {
         workspace_directory: String,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
     },
+    ParallelModeDispatchRefreshed {
+        workspace_directory: String,
+        readiness_snapshot: ParallelModeReadinessSnapshot,
+        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
+        status_text: String,
+    },
     PostTurnEvaluated {
         thread_id: String,
         queued_from_turn_id: String,

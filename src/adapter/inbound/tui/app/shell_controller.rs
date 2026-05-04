@@ -292,6 +292,7 @@ impl NativeTuiApp {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!("task accepted into planning queue: {committed_task_id}"),
                 });
+                self.refresh_parallel_mode_dispatch_after_task_update(&committed_task_id);
                 self.task_intake_overlay_ui_state.reset();
                 self.show_queue_overlay();
             }

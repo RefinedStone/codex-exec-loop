@@ -386,6 +386,86 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn refresh_parallel_mode_dispatch_after_task_update(&self, task_id: &str) {
+        if !self.parallel_mode_enabled() {
+            return;
+        }
+
+        let workspace_directory = self.planning_workspace_directory();
+        self.spawn_parallel_mode_dispatch_refresh_worker(
+            workspace_directory,
+            format!("task update: {task_id}"),
+        );
+    }
+
+    fn spawn_parallel_mode_dispatch_refresh_worker(
+        &self,
+        workspace_directory: String,
+        reason: String,
+    ) {
+        let parallel_mode_service = self.parallel_mode_service.clone();
+        let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
+        let parallel_mode_turn_service = self.parallel_mode_turn_service();
+        let planning = self.planning.clone();
+        let tx = self.tx.clone();
+
+        thread::spawn(move || {
+            let planning_snapshot = planning
+                .runtime
+                .load_runtime_snapshot_or_invalid(&workspace_directory);
+            let readiness_snapshot =
+                parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
+
+            let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
+                let dispatch_status = dispatch_parallel_queue_pool(
+                    &workspace_directory,
+                    &planning_snapshot,
+                    &parallel_mode_service,
+                    parallel_agent_worker_port,
+                    parallel_mode_turn_service,
+                    planning,
+                    tx.clone(),
+                );
+                let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
+                    &workspace_directory,
+                    true,
+                    Some(&readiness_snapshot),
+                );
+                let mut status_text = format!(
+                    "parallel mode: queue refreshed / {reason} / readiness: {}",
+                    readiness_snapshot.readiness_label()
+                );
+                if !dispatch_status.trim().is_empty() {
+                    status_text.push_str(" / ");
+                    status_text.push_str(&dispatch_status);
+                }
+                (supervisor_snapshot, status_text)
+            } else {
+                let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
+                    &workspace_directory,
+                    false,
+                    Some(&readiness_snapshot),
+                );
+                let cause = readiness_snapshot
+                    .top_alert
+                    .as_deref()
+                    .unwrap_or("inspect the readiness panel before retrying");
+                let status_text = format!(
+                    "parallel mode: queue refresh blocked / {reason} / readiness: {} / {cause}",
+                    readiness_snapshot.readiness_label()
+                );
+                (supervisor_snapshot, status_text)
+            };
+
+            let _ = tx.send(BackgroundMessage::ParallelModeDispatchRefreshed {
+                workspace_directory,
+                readiness_snapshot,
+                supervisor_snapshot: Box::new(supervisor_snapshot),
+                status_text,
+            });
+        });
+    }
+
     pub(super) fn apply_parallel_mode_enter_progress(
         &mut self,
         workspace_directory: &str,
@@ -444,6 +524,30 @@ impl NativeTuiApp {
         }
 
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+    }
+
+    pub(super) fn apply_parallel_mode_dispatch_refreshed(
+        &mut self,
+        workspace_directory: &str,
+        readiness_snapshot: ParallelModeReadinessSnapshot,
+        supervisor_snapshot: ParallelModeSupervisorSnapshot,
+        status_text: String,
+    ) {
+        if !self.parallel_mode_enabled()
+            || self.planning_workspace_directory() != workspace_directory
+        {
+            return;
+        }
+
+        self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
+        self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
+        self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            workspace_directory,
+        );
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
     }
 }
 
