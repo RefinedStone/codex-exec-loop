@@ -280,6 +280,42 @@ fn reconcile_recreates_missing_slot_over_filesystem_residue() {
     assert_eq!(pool.slots[0].branch_name, "prerelease (detached)");
 }
 
+// worker launch가 중간에 사라져 Leased 상태만 오래 남으면 roster가 계속 active로
+// 보인다. reconcile은 오래된 launch-pending lease와 clean worktree를 startup
+// failure로 회수해 slot을 다시 idle pool로 돌려야 한다.
+#[test]
+fn reconcile_releases_stale_leased_startup_slot() {
+    let repo = TempGitRepo::new("stale-leased-startup");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
+        .expect("stale lease should be persisted");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.leased_slots, 0);
+    assert_eq!(pool.running_slots, 0);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.branch_exists(&lease.branch_name));
+    assert_eq!(current_branch(&PathBuf::from(&lease.worktree_path)), "HEAD");
+    assert_eq!(
+        read_agent_session_detail_record(&repo.pool_root(), &lease.session_key())
+            .expect("failed startup detail should be recorded")
+            .state_label,
+        "failed"
+    );
+}
+
 // pool worktree는 repository 내부가 아니라 sibling `repo-akra-worktrees` 아래에 둔다.
 // 이렇게 해야 원본 checkout의 status와 nested worktree 탐색이 agent slot 파일들로
 // 오염되지 않는다.
