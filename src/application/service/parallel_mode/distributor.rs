@@ -714,6 +714,7 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
     detail.contains("pull request ensure failed")
         || detail.contains("could not be inspected")
         || detail.contains("could not cherry-pick")
+        || detail.contains("integration worktree must be checked out to `prerelease`")
         || detail.contains("integration worktree must be clean before cherry-pick delivery")
         || detail.contains("push capability is unavailable for distributor delivery")
         || detail.contains("source branch `") && detail.contains("` could not be pushed to `")
@@ -839,6 +840,9 @@ mod tests {
         ));
         assert!(!is_retryable_distributor_block(
             "`feature` could not be pushed to `origin`: unsupported integration branch"
+        ));
+        assert!(is_retryable_distributor_block(
+            "integration worktree must be checked out to `prerelease` before cherry-pick delivery"
         ));
     }
 }
