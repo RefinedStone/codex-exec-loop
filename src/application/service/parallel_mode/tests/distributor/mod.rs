@@ -318,6 +318,73 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
     );
 }
 
+// hidden worker의 official completion 성공 경로는 slot worktree에서 호출된다. 이때 뒤따르는
+// orchestrator tick은 slot checkout이 아니라 canonical integration worktree에서 queue를 처리해야 한다.
+#[test]
+fn official_completion_success_orchestrator_tick_uses_canonical_integration_worktree() {
+    let repo = TempGitRepo::new("official-success-canonical-orchestrator");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    let github = FakeGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-canonical-tick")
+        .expect("thread prepared should be recorded");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-canonical-tick",
+            None,
+            Some("Canonical orchestrator tick completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+
+    let turn_service =
+        crate::application::service::parallel_mode::turn::ParallelModeTurnService::new(
+            service.clone(),
+        );
+    let notices = turn_service.finalize_official_completion_success(
+        &lease.worktree_path,
+        "official ledger refresh succeeded: canonical tick approved",
+    );
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "slot-originated success should process the queue through the integration worktree: {notices:?}"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "prerelease:feature.txt",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some("done")
+    );
+}
+
 // supervisor detail pane은 단순히 가장 최근 running session을 고르면 안 된다.
 // distributor queue head가 있으면 아직 delivery를 기다리는 queued item이 운영상
 // 더 중요하므로, 뒤이어 실행된 다른 agent보다 queue head session을 선택해야 한다.

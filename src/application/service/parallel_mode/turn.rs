@@ -261,6 +261,35 @@ impl ParallelModeTurnService {
             };
         }
 
+        if should_promote_missing_turn_started_before_success(
+            saw_turn_started,
+            saw_failed_event,
+            terminal_failure_observed,
+        ) {
+            return match self
+                .parallel_mode_service
+                .mark_workspace_slot_running(workspace_directory)
+            {
+                Ok(Some(lease)) => ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: Some(format!(
+                        "slot lease running transition inferred from terminal completion / slot: {} / agent: {}",
+                        lease.slot_id, lease.agent_id
+                    )),
+                    invalidate_supervisor_snapshot: true,
+                },
+                Ok(None) => ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: None,
+                    invalidate_supervisor_snapshot: false,
+                },
+                Err(error) => ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: Some(format!(
+                        "slot lease running transition could not be inferred from terminal completion: {error}"
+                    )),
+                    invalidate_supervisor_snapshot: false,
+                },
+            };
+        }
+
         ParallelTurnStreamCompletionOutcome {
             runtime_notice: None,
             invalidate_supervisor_snapshot: false,
@@ -405,11 +434,24 @@ fn should_mark_cleanup_pending_after_success(
     */
     saw_turn_started && !saw_failed_event && !terminal_failure_observed
 }
+fn should_promote_missing_turn_started_before_success(
+    saw_turn_started: bool,
+    saw_failed_event: bool,
+    terminal_failure_observed: bool,
+) -> bool {
+    /*
+    TurnCompleted without TurnStarted is an event-ordering anomaly, but terminal
+    success still proves the worker executed. Promote the slot to Running so
+    official completion can capture the result instead of leaving a Leased slot
+    orphaned.
+    */
+    !saw_turn_started && !saw_failed_event && !terminal_failure_observed
+}
 #[cfg(test)]
 mod tests {
     use super::{
         ParallelModeTurnService, should_mark_cleanup_pending_after_success,
-        should_release_unstarted_slot_lease,
+        should_promote_missing_turn_started_before_success, should_release_unstarted_slot_lease,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -489,6 +531,18 @@ mod tests {
     fn successful_running_turn_is_cleanup_candidate() {
         assert!(should_mark_cleanup_pending_after_success(
             true, false, false
+        ));
+    }
+    #[test]
+    fn terminal_success_without_turn_started_promotes_running_state() {
+        assert!(should_promote_missing_turn_started_before_success(
+            false, false, false
+        ));
+        assert!(!should_promote_missing_turn_started_before_success(
+            true, false, false
+        ));
+        assert!(!should_promote_missing_turn_started_before_success(
+            false, true, false
         ));
     }
     #[test]
