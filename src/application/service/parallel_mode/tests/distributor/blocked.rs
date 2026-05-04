@@ -286,6 +286,89 @@ fn distributor_retries_blocked_pull_request_ensure_after_recovery() {
     );
 }
 
+// source branch push 실패도 네트워크/auth 같은 일시 조건 때문에 생길 수 있다. 조건이 복구된
+// 다음 tick에서는 같은 queue item을 retryable block으로 보고 delivery를 다시 진행해야 한다.
+#[test]
+fn distributor_retries_blocked_source_branch_push_after_recovery() {
+    let repo = TempGitRepo::new("distributor-recovers-source-push-block");
+    let github = FakeGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-source-push-recovery",
+            None,
+            Some("Distributor source push recovery completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: distributor delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should enqueue")
+        .expect("queue item should be created");
+    let mut record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record.queue_state = ParallelModeQueueItemState::Blocked;
+    record.integration_state = "blocked".to_string();
+    record.integration_note = format!(
+        "source branch `{}` could not be pushed to `origin`: temporary remote failure",
+        lease.branch_name
+    );
+    record.recovery_note = Some(record.integration_note.clone());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("blocked queue record should be stored");
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should recover and process");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("distributor integrated queue head into prerelease")
+            || notice.contains("distributor returned slot to idle")
+    }));
+    let recovered_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should remain available");
+    assert_eq!(
+        recovered_record.queue_state,
+        ParallelModeQueueItemState::Done
+    );
+    assert!(
+        recovered_record
+            .recovery_note
+            .as_deref()
+            .is_some_and(|note| note.contains("retryable distributor block"))
+    );
+}
+
 // worker branch의 source commit이 이미 prerelease에 patch-equivalent 형태로 들어간
 // 경우에는 SHA가 달라도 같은 변경을 다시 merge하려 하면 안 된다. distributor는
 // patch-id 동등성을 통합 완료로 취급하고 slot을 idle로 반환해야 한다.

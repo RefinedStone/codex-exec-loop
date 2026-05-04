@@ -571,6 +571,8 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
         || detail.contains("could not be inspected")
         || detail.contains("could not cherry-pick")
         || detail.contains("integration worktree must be clean before cherry-pick delivery")
+        || detail.contains("push capability is unavailable for distributor delivery")
+        || detail.contains("could not be pushed to")
         || detail.contains("source branch was pushed but GitHub automation is unavailable")
 }
 
