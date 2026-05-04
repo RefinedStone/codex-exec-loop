@@ -26,6 +26,15 @@ pub mod domain;
  * app-server shell을 시작한다. 그래서 bin target들은 이름이 달라도 동일한 실행 정책을 공유한다.
  */
 pub fn run() -> anyhow::Result<i32> {
+    diagnostics::raw_event_log::emit_lazy("akra_process_started", || {
+        serde_json::json!({
+            "cwd": std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()),
+            "debug_assertions": cfg!(debug_assertions),
+            "arg_count": std::env::args_os().count(),
+        })
+    });
     /*
      * CLI adapter는 report/doctor/init 결과를 stdout에 직접 쓸 수 있어야 한다. writer를 주입하면
      * CLI parsing과 output formatting을 TUI startup과 분리해서 테스트할 수 있다.
