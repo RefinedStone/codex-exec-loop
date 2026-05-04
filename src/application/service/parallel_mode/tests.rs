@@ -16,7 +16,9 @@ use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDistributorQueueRecord;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
+};
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };

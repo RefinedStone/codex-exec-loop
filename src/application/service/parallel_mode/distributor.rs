@@ -502,6 +502,12 @@ fn recover_stale_ledger_refreshing_sessions(
     workspace_dir: &str,
     context: &PoolRuntimeContext,
 ) -> Result<(), String> {
+    let pipeline_outcome = abandon_stale_official_refresh_order(
+        planning_authority,
+        workspace_dir,
+        "stale ledger refresh recovery",
+    )?;
+    let mut recovered_order_consumed = false;
     for detail in &context.session_details {
         if detail.state_label != "ledger_refreshing" || !ledger_refreshing_detail_is_stale(detail) {
             continue;
@@ -523,13 +529,24 @@ fn recover_stale_ledger_refreshing_sessions(
             "stale official ledger refresh for `{}` exceeded {} seconds without queue handoff",
             detail.task_title, STALE_LEDGER_REFRESHING_AFTER_SECS
         );
-        match abandon_stale_official_refresh_orders(
-            planning_authority,
-            workspace_dir,
-            &recovery_reason,
-        )? {
+        match pipeline_outcome {
             StaleOfficialRefreshRecoveryOutcome::WaitingForActiveClaim => continue,
-            StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle => {
+            StaleOfficialRefreshRecoveryOutcome::NoPendingOrder => {
+                record_official_completion_recovery_needed_session_detail(
+                    planning_authority,
+                    &context.repo_root,
+                    &context.pool_root,
+                    lease,
+                    &format!(
+                        "{recovery_reason}; manual official refresh recovery is needed before distributor handoff"
+                    ),
+                )?;
+            }
+            StaleOfficialRefreshRecoveryOutcome::RecoveredOrder => {
+                if recovered_order_consumed {
+                    continue;
+                }
+                recovered_order_consumed = true;
                 record_official_completion_recovery_needed_session_detail(
                     planning_authority,
                     &context.repo_root,
@@ -547,34 +564,28 @@ fn recover_stale_ledger_refreshing_sessions(
 }
 
 enum StaleOfficialRefreshRecoveryOutcome {
-    RecoveredOrIdle,
+    RecoveredOrder,
+    NoPendingOrder,
     WaitingForActiveClaim,
 }
 
-fn abandon_stale_official_refresh_orders(
+fn abandon_stale_official_refresh_order(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
     recovery_reason: &str,
 ) -> Result<StaleOfficialRefreshRecoveryOutcome, String> {
-    let mut recovered_any = false;
-    loop {
-        match planning_authority
-            .abandon_next_official_refresh_order(workspace_dir, recovery_reason)
-            .map_err(|error| error.to_string())?
-        {
-            PlanningAuthorityOfficialRefreshRecoveryStatus::Recovered { .. } => {
-                recovered_any = true;
-            }
-            PlanningAuthorityOfficialRefreshRecoveryStatus::NoPendingOrder => {
-                return Ok(StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle);
-            }
-            PlanningAuthorityOfficialRefreshRecoveryStatus::WaitingForActiveClaim => {
-                return if recovered_any {
-                    Ok(StaleOfficialRefreshRecoveryOutcome::RecoveredOrIdle)
-                } else {
-                    Ok(StaleOfficialRefreshRecoveryOutcome::WaitingForActiveClaim)
-                };
-            }
+    match planning_authority
+        .abandon_next_official_refresh_order(workspace_dir, recovery_reason)
+        .map_err(|error| error.to_string())?
+    {
+        PlanningAuthorityOfficialRefreshRecoveryStatus::Recovered { .. } => {
+            Ok(StaleOfficialRefreshRecoveryOutcome::RecoveredOrder)
+        }
+        PlanningAuthorityOfficialRefreshRecoveryStatus::NoPendingOrder => {
+            Ok(StaleOfficialRefreshRecoveryOutcome::NoPendingOrder)
+        }
+        PlanningAuthorityOfficialRefreshRecoveryStatus::WaitingForActiveClaim => {
+            Ok(StaleOfficialRefreshRecoveryOutcome::WaitingForActiveClaim)
         }
     }
 }
@@ -703,7 +714,7 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
         || detail.contains("could not cherry-pick")
         || detail.contains("integration worktree must be clean before cherry-pick delivery")
         || detail.contains("push capability is unavailable for distributor delivery")
-        || detail.contains("could not be pushed to")
+        || detail.contains("source branch `") && detail.contains("` could not be pushed to `")
         || detail.contains("source branch was pushed but GitHub automation is unavailable")
 }
 
@@ -809,4 +820,19 @@ fn find_distributor_queue_record_by_session_key(
         .iter()
         .find(|record| record.session_key == session_key)
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_retryable_distributor_block;
+
+    #[test]
+    fn retryable_push_block_matching_is_limited_to_source_branch_pushes() {
+        assert!(is_retryable_distributor_block(
+            "source branch `akra-agent/slot-1/task-one` could not be pushed to `origin`: temporary remote failure"
+        ));
+        assert!(!is_retryable_distributor_block(
+            "`prerelease` could not be pushed to `origin`: non-fast-forward"
+        ));
+    }
 }
