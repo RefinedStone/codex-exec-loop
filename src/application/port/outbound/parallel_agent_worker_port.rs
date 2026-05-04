@@ -13,6 +13,16 @@ use anyhow::Result;
 // final assistant text, completion, failure, tool activity를 기존 reducer 관점으로 관찰할 수 있다.
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+// `ParallelAgentWorkerStreamRequest`는 application layer가 확정한 sub-session prompt 경계이다.
+// adapter는 thread metadata와 turn prompt를 재조립하지 않고 app-server protocol로만 매핑한다.
+pub struct ParallelAgentWorkerStreamRequest<'a> {
+    pub cwd: &'a str,
+    pub prompt: &'a str,
+    pub developer_instructions: &'a str,
+    pub service_name: &'a str,
+}
+
 // `ParallelAgentWorkerPort`는 parallel mode가 leased worktree에서 isolated Codex session을
 // 시작하기 위해 outbound app-server adapter에 요구하는 최소 계약이다. 일반
 // `InteractiveTurnRuntimePort`와 달리 기존 user thread에 붙지 않고, distributor가 slot에 배정한
@@ -28,12 +38,8 @@ pub trait ParallelAgentWorkerPort: Send + Sync {
     // completion/failure event를 dispatch worker가 환원해 결정한다.
     fn run_isolated_new_thread_stream(
         &self,
-        // slot이 lease한 worktree root이다. main workspace와 분리되어 worker가 수정할 수 있는
-        // 파일 범위를 해당 branch/worktree로 제한한다.
-        cwd: &str,
-        // distributor가 만든 handoff prompt이다. worker는 여기 담긴 한 작업 범위만 수행하고,
-        // 결과 요약은 stream completion 쪽으로 되돌려야 한다.
-        prompt: &str,
+        // slot worktree, turn prompt, thread metadata를 담은 실행 요청이다.
+        request: ParallelAgentWorkerStreamRequest<'_>,
         // dispatch worker가 소유한 stream receiver와 짝을 이루는 sender이다. outbound adapter는
         // thread prepared, message completed, tool activity, terminal completion 같은 app-server
         // event를 이 통로로 전달하고, dispatch worker는 그 흐름을 slot 상태로 축약한다.
@@ -52,10 +58,8 @@ impl ParallelAgentWorkerPort for NoopParallelAgentWorkerPort {
     // 만족하지만 사용하지 않는다"는 의도를 Rust 경고 없이 표현한다.
     fn run_isolated_new_thread_stream(
         &self,
-        // noop에서는 worktree root를 사용하지 않는다.
-        _cwd: &str,
-        // noop에서는 handoff prompt를 실행하지 않는다.
-        _prompt: &str,
+        // noop에서는 실행 요청을 사용하지 않는다.
+        _request: ParallelAgentWorkerStreamRequest<'_>,
         // noop은 stream events를 보내지 않으므로 sender도 사용하지 않는다.
         _event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {

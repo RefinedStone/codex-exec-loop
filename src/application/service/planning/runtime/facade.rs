@@ -81,6 +81,8 @@ pub struct PlanningMainSessionHandoff {
 // sub-session handoff는 hidden work를 시작한다. prompt와 task identity만 필요하고 visible transcript marker는 없다.
 pub struct PlanningSubSessionHandoff {
     pub prompt: String,
+    pub developer_instructions: String,
+    pub service_name: String,
     pub task: PlanningTaskHandoff,
 }
 
@@ -188,7 +190,9 @@ impl PlanningRuntimeFacadeService {
             .expect("queued sub session handoff prompt should not be empty");
 
         PlanningSubSessionHandoff {
-            prompt,
+            prompt: prompt.turn_prompt,
+            developer_instructions: prompt.developer_instructions,
+            service_name: prompt.service_name,
             task: planning_task_handoff_from_queue_task(task),
         }
     }

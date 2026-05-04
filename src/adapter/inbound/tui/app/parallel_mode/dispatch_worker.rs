@@ -1,4 +1,6 @@
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
+use crate::application::port::outbound::parallel_agent_worker_port::{
+    ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
@@ -23,6 +25,9 @@ pub(super) struct ParallelDispatchWorkerRequest {
     pub(super) worktree_directory: String,
     // prompt는 queue head handoff를 worker thread에 전달하는 최종 user-facing 입력이다.
     pub(super) prompt: String,
+    // developer_instructions/service_name은 application prompt assembly가 정한 app-server thread metadata다.
+    pub(super) developer_instructions: String,
+    pub(super) service_name: String,
     // handoff_task는 notice, completion contract, refresh prompt가 같은 task를 가리키게 하는 연결 키이다.
     pub(super) handoff_task: PlanningTaskHandoff,
 }
@@ -94,8 +99,12 @@ fn run_parallel_dispatch_worker(
          * is still running, then joins to capture transport-level errors.
          */
         worker_port.run_isolated_new_thread_stream(
-            &service_request.worktree_directory,
-            &service_request.prompt,
+            ParallelAgentWorkerStreamRequest {
+                cwd: &service_request.worktree_directory,
+                prompt: &service_request.prompt,
+                developer_instructions: &service_request.developer_instructions,
+                service_name: &service_request.service_name,
+            },
             event_tx,
         )
     });

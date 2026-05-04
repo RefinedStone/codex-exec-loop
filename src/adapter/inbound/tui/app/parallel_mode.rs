@@ -668,6 +668,8 @@ fn dispatch_parallel_queue_pool(
                     planning_workspace_directory: workspace_directory.to_string(),
                     worktree_directory: lease.worktree_path.clone(),
                     prompt: handoff.prompt,
+                    developer_instructions: handoff.developer_instructions,
+                    service_name: handoff.service_name,
                     handoff_task: handoff.task.clone(),
                 };
                 spawn_parallel_dispatch_worker(

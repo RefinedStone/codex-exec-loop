@@ -41,7 +41,9 @@ use self::runtime::{
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
+use crate::application::port::outbound::parallel_agent_worker_port::{
+    ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+};
 use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, emit_codex_app_server_launch_attachment,
     emit_codex_app_server_reattach_attachment,
@@ -54,15 +56,10 @@ use serde_json::json;
 
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
-const PARALLEL_WORKER_SERVICE_NAME: &str = "akra-parallel-worker";
 const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning-only sub session.
 Evaluate accepted DB direction authority, accepted DB task authority, and DB queue projection only.
 Do not edit planning files, source files, SQL, or JSON authority directly.
 Use the attached queue-mutation skill and `akra planning-tool run .` before falling back to final planning_task_commands."#;
-const PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra parallel task sub session running in a leased worktree.
-Execute only the queued-task handoff supplied in the turn prompt.
-Keep changes scoped to that task and leave a small reviewable commit when source changes are needed.
-Do not push, open pull requests, merge, rebase shared branches, or clean up the worktree; Akra distributor handles delivery after completion."#;
 
 #[derive(Clone)]
 pub struct CodexAppServerAdapter {
@@ -644,20 +641,19 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
     #[tracing::instrument(level = "trace", skip(self, event_sender))]
     fn run_isolated_new_thread_stream(
         &self,
-        cwd: &str,
-        prompt: &str,
+        request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         // Parallel worker sessions are isolated and ephemeral; distributor code handles commits/PRs after the worker exits.
         let result = self.with_isolated_streaming_runtime(|connection| {
             let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(cwd.to_string()),
+                cwd: Some(request.cwd.to_string()),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
                 model: None,
-                developer_instructions: Some(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
-                service_name: Some(PARALLEL_WORKER_SERVICE_NAME.to_string()),
+                developer_instructions: Some(request.developer_instructions.to_string()),
+                service_name: Some(request.service_name.to_string()),
                 ephemeral: Some(true),
             })?;
             let thread_id = thread_response.thread.id.clone();
@@ -671,7 +667,7 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
             self.start_turn_and_wait_for_stream(
                 connection,
                 &thread_id,
-                vec![TurnInputItem::text(prompt)],
+                vec![TurnInputItem::text(request.prompt)],
                 None,
                 None,
                 &event_sender,
@@ -704,9 +700,7 @@ fn finish_stream_result(
 mod tests {
     use super::protocol::ThreadStartParams;
     use super::{
-        CodexAppServerAdapter, PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS,
-        PARALLEL_WORKER_SERVICE_NAME, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS,
-        PLANNING_WORKER_SERVICE_NAME,
+        CodexAppServerAdapter, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
     };
 
     #[test]
@@ -730,8 +724,11 @@ mod tests {
         // app-server thread/start serialization must preserve metadata used to distinguish hidden worker sessions.
         let params = ThreadStartParams {
             cwd: Some("/repo".to_string()),
-            developer_instructions: Some(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
-            service_name: Some(PARALLEL_WORKER_SERVICE_NAME.to_string()),
+            developer_instructions: Some(
+                "You are an Akra parallel task sub session running in a leased worktree."
+                    .to_string(),
+            ),
+            service_name: Some("akra-parallel-worker".to_string()),
             ephemeral: Some(true),
             ..ThreadStartParams::default()
         };
@@ -739,7 +736,7 @@ mod tests {
         let serialized = serde_json::to_value(params).expect("params should serialize");
 
         assert_eq!(serialized["cwd"], "/repo");
-        assert_eq!(serialized["serviceName"], PARALLEL_WORKER_SERVICE_NAME);
+        assert_eq!(serialized["serviceName"], "akra-parallel-worker");
         assert_eq!(serialized["ephemeral"], true);
         assert!(
             serialized["developerInstructions"]
@@ -749,12 +746,10 @@ mod tests {
     }
 
     #[test]
-    fn sub_session_developer_instructions_separate_planning_and_parallel_contracts() {
-        // Planning and parallel workers have different authority boundaries, so their service names/instructions must not drift together.
+    fn planning_worker_developer_instructions_keep_planning_contract() {
+        // Parallel sub-session instructions are assembled in application services; this adapter owns only the planning worker contract.
         assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("planning-only sub session"));
         assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("akra planning-tool run ."));
-        assert!(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.contains("parallel task sub session"));
-        assert!(PARALLEL_WORKER_DEVELOPER_INSTRUCTIONS.contains("Do not push"));
-        assert_ne!(PLANNING_WORKER_SERVICE_NAME, PARALLEL_WORKER_SERVICE_NAME);
+        assert_eq!(PLANNING_WORKER_SERVICE_NAME, "akra-planning-worker");
     }
 }
