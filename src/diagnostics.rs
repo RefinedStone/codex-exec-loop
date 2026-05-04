@@ -247,13 +247,17 @@ pub mod trace_event_log {
             trimmed.to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         ) {
-            return Some(default_trace_filter());
+            return Some(full_trace_filter());
         }
         Some(trimmed.to_string())
     }
 
-    fn default_trace_filter() -> String {
+    fn full_trace_filter() -> String {
         "trace".to_string()
+    }
+
+    fn default_trace_filter() -> String {
+        "codex_exec_loop_native=info,warn".to_string()
     }
 
     #[cfg(debug_assertions)]
