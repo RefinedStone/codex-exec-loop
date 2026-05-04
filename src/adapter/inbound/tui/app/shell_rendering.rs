@@ -106,12 +106,11 @@ fn draw_inline_conversation_shell(
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
-    render_inline_body(
-        frame,
-        inline_body_render_area(layout[1], &tail_view.lines),
-        tail_view.lines,
-        false,
-    );
+    let tail_area = inline_body_render_area(layout[1], &tail_view.lines);
+    render_inline_body(frame, tail_area, tail_view.lines, false);
+    if app.shell_overlay == ShellOverlay::Supersession && !app.parallel_mode_prompt_input_locked() {
+        set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
+    }
 }
 
 fn render_inline_live_transcript(

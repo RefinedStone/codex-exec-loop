@@ -446,10 +446,11 @@ impl NativeTuiApp {
             return true;
         }
         if self.shell_overlay == ShellOverlay::Supersession {
-            // Supersession is an operator board. While it is open, ordinary
-            // prompt editing is blocked so loading/worker controls remain the
-            // only active input surface.
-            return true;
+            // Supersession only owns ordinary prompt keys while its loading
+            // pipeline is active. Once the board has a concrete snapshot, prompt
+            // editing falls through so the operator can keep working while the
+            // board remains visible.
+            return self.parallel_mode_prompt_input_locked();
         }
         if self.shell_overlay == ShellOverlay::TaskIntake {
             return self.handle_task_intake_overlay_key(key);
