@@ -321,6 +321,7 @@ fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
 #[test]
 fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() {
     let repo = TempGitRepo::new("missing-origin-prerelease");
+    repo.create_bare_origin_remote();
     repo.delete_remote_standard_tracking_branch();
     let service = test_parallel_mode_service();
     let snapshot = service.inspect_readiness(
@@ -339,6 +340,28 @@ fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() 
             .contains(&remote_standard_branch_name())
     );
     assert!(capability.summary().contains("current HEAD"));
+}
+
+// 표준 remote branch를 새로 seed해야 하는 상태에서는 push remote가 필수다. remote-tracking ref도
+// push remote도 없는데 readiness가 degraded로 통과하면 `:parallel on`이 곧바로 reconcile 실패로
+// 이어진다.
+#[test]
+fn inspect_readiness_blocks_missing_standard_branch_when_push_remote_is_absent() {
+    let repo = TempGitRepo::new("missing-standard-no-push-remote");
+    repo.delete_remote_standard_tracking_branch();
+    let service = test_parallel_mode_service();
+    let snapshot = service.inspect_readiness(
+        &repo.workspace_dir(),
+        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+            .with_workspace_present(true),
+    );
+    let capability = snapshot
+        .capability(ParallelModeCapabilityKey::AkraBranch)
+        .expect("akra branch capability should exist");
+
+    assert_eq!(capability.state, ParallelModeCapabilityState::Blocked);
+    assert!(capability.summary().contains("cannot be seeded"));
+    assert!(!snapshot.allows_parallel_mode());
 }
 
 // pool board의 reconciliation 세부 규칙은 missing/blocked/leased 상태 조합이 많아

@@ -102,6 +102,27 @@ pub(super) fn inspect_akra_branch(
         );
     }
 
+    if !runtime.command_succeeds(
+        "git",
+        &[
+            "-C",
+            repo_root,
+            "remote",
+            "get-url",
+            "--push",
+            DEFAULT_PUSH_REMOTE_NAME,
+        ],
+    ) {
+        return ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::AkraBranch,
+            ParallelModeCapabilityState::Blocked,
+            format!("{remote_branch} is missing and cannot be seeded"),
+            Some(format!(
+                "configure push remote `{DEFAULT_PUSH_REMOTE_NAME}` before seeding {remote_branch}"
+            )),
+        );
+    }
+
     if runtime.command_succeeds("git", &["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::AkraBranch,
