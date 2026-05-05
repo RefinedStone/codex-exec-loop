@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use anyhow::{Result, anyhow};
 
 use crate::application::port::outbound::planning_worker_port::{
-    PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
+    PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::diagnostics::raw_event_log;
@@ -60,7 +60,9 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let (tx, rx) = mpsc::channel();
         raw_event_log::emit_lazy("planning_worker_session_starting", || {
             json!({
-                "operation": format!("{:?}", request.operation),
+                "thread_id": serde_json::Value::Null,
+                "operation": operation_label(request.operation),
+                "phase": "starting",
                 "workspace_directory": &request.workspace_directory,
                 "prompt_chars": request.prompt.chars().count(),
             })
@@ -74,6 +76,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut final_agent_message = None;
         let mut changed_planning_file_paths = Vec::new();
         let mut failure_message = None;
+        let mut worker_thread_id = None;
 
         /*
          * A launch error means no reliable stream exists to drain. Once launch
@@ -83,7 +86,9 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         if let Err(error) = stream_result {
             raw_event_log::emit_lazy("planning_worker_session_launch_failed", || {
                 json!({
-                    "operation": format!("{:?}", request.operation),
+                    "thread_id": serde_json::Value::Null,
+                    "operation": operation_label(request.operation),
+                    "phase": "launch_failed",
                     "workspace_directory": &request.workspace_directory,
                     "error": error.to_string(),
                 })
@@ -115,8 +120,10 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                      */
                     changed_planning_file_paths = paths;
                 }
+                ConversationStreamEvent::ThreadPrepared { thread_id, .. } => {
+                    worker_thread_id = Some(thread_id);
+                }
                 ConversationStreamEvent::AttachmentObserved { .. }
-                | ConversationStreamEvent::ThreadPrepared { .. }
                 | ConversationStreamEvent::TurnStarted { .. }
                 | ConversationStreamEvent::StatusUpdated { .. }
                 | ConversationStreamEvent::AgentMessageDelta { .. }
@@ -136,7 +143,9 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         if let Some(message) = failure_message {
             raw_event_log::emit_lazy("planning_worker_session_stream_failed", || {
                 json!({
-                    "operation": format!("{:?}", request.operation),
+                    "thread_id": worker_thread_id.as_deref(),
+                    "operation": operation_label(request.operation),
+                    "phase": "stream_failed",
                     "workspace_directory": &request.workspace_directory,
                     "message": &message,
                     "changed_planning_file_count": changed_planning_file_paths.len(),
@@ -148,7 +157,9 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
 
         raw_event_log::emit_lazy("planning_worker_session_reduced", || {
             json!({
-                "operation": format!("{:?}", request.operation),
+                "thread_id": worker_thread_id.as_deref(),
+                "operation": operation_label(request.operation),
+                "phase": "reduced",
                 "workspace_directory": &request.workspace_directory,
                 "changed_planning_file_count": changed_planning_file_paths.len(),
                 "has_final_agent_message": final_agent_message.is_some(),
@@ -162,6 +173,13 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
             final_agent_message,
             changed_planning_file_paths,
         })
+    }
+}
+
+fn operation_label(operation: PlanningWorkerOperation) -> &'static str {
+    match operation {
+        PlanningWorkerOperation::RefreshQueue => "refresh",
+        PlanningWorkerOperation::RepairTaskAuthority => "repair",
     }
 }
 

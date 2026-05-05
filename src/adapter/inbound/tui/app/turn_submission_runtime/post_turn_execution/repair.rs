@@ -5,12 +5,15 @@ use crate::application::service::planning::{
     PlanningLedgerRepairRequest, PlanningRepairRequest, PlanningRepairRetryReason,
     PlanningTaskHandoff,
 };
+use crate::diagnostics::raw_event_log;
+use serde_json::json;
 
 // Repair 진행 상태는 TUI의 planner worker panel에 남는다. 사용자는 hidden prompt를
 // 직접 조작하지 않지만, panel status가 실행/성공/실패와 마지막 prompt를 추적한다.
 use super::super::super::PlannerWorkerStatus;
 // 이 파일은 post-turn executor의 retry loop만 분리한다. 최대 시도 횟수와 반환 DTO는
 // parent module이 소유해 official completion과 normal post-turn path가 같은 repair contract를 쓴다.
+use super::logging::{PostTurnWorkerLogContext, post_turn_worker_event_detail};
 use super::{
     HiddenPlanningRepairOutcome, MAX_PLANNING_REPAIR_ATTEMPTS, PostTurnEvaluationExecutor,
 };
@@ -24,6 +27,8 @@ impl PostTurnEvaluationExecutor {
     // 진행되고, 실패하면 resolved=false로 caller가 block reason을 유지한다.
     pub(super) fn run_hidden_planning_repairs(
         &mut self,
+        // Thread id ties hidden repair attempts back to the visible conversation without logging prompt text.
+        thread_id: &str,
         // Runtime snapshot load와 worker prompt의 기준 workspace다. Post-turn, official
         // completion, builtin refresh repair가 모두 이 같은 filesystem boundary를 공유한다.
         workspace_directory: &str,
@@ -40,6 +45,8 @@ impl PostTurnEvaluationExecutor {
             .planning
             .runtime
             .load_runtime_snapshot_or_invalid(workspace_directory);
+        let log_context =
+            PostTurnWorkerLogContext::new(thread_id, root_turn_id, workspace_directory);
         // next_request는 retry마다 바뀔 수 있는 repair instruction이다.
         let mut next_request = repair_request.clone();
         // 첫 시도에는 retry reason이 없다. 두 번째부터는 이전 attempt가 왜 충분하지 않았는지 prompt에 싣는다.
@@ -68,6 +75,28 @@ impl PostTurnEvaluationExecutor {
                 .planning
                 .worker
                 .render_repair_task_authority_prompt(&worker_request);
+            raw_event_log::emit_lazy("planner_repair_attempt_started", || {
+                post_turn_worker_event_detail(
+                    log_context,
+                    "repair",
+                    "attempt_started",
+                    Some("run_worker"),
+                    Some(&runtime_snapshot),
+                    [
+                        ("attempt_number", json!(attempt_number)),
+                        ("max_attempts", json!(MAX_PLANNING_REPAIR_ATTEMPTS)),
+                        (
+                            "retry_reason",
+                            json!(next_retry_reason.map(|reason| format!("{:?}", reason))),
+                        ),
+                        (
+                            "has_previous_handoff",
+                            json!(previous_handoff_task.is_some()),
+                        ),
+                        ("worker_prompt_chars", json!(worker_prompt.chars().count())),
+                    ],
+                )
+            });
             self.record_planner_worker_running(
                 // RepairRunning은 hidden repair가 planner worker panel을 차지한다는 신호다.
                 PlannerWorkerStatus::RepairRunning,
@@ -93,6 +122,20 @@ impl PostTurnEvaluationExecutor {
                         &detail,
                         &runtime_snapshot,
                     );
+                    raw_event_log::emit_lazy("planner_repair_attempt_failed", || {
+                        post_turn_worker_event_detail(
+                            log_context,
+                            "repair",
+                            "attempt_failed",
+                            Some("abort"),
+                            Some(&runtime_snapshot),
+                            [
+                                ("attempt_number", json!(attempt_number)),
+                                ("max_attempts", json!(MAX_PLANNING_REPAIR_ATTEMPTS)),
+                                ("error", json!(error.to_string())),
+                            ],
+                        )
+                    });
                     // resolved=false는 repair path가 planning runtime을 신뢰 가능한 상태로 만들지 못했다는 신호다.
                     return HiddenPlanningRepairOutcome {
                         runtime_snapshot,
@@ -104,9 +147,49 @@ impl PostTurnEvaluationExecutor {
             // Worker가 정상 종료되면 panel에는 성공 outcome을 기록하고 이후 판단은 outcome snapshot 기준으로 한다.
             self.record_planner_worker_outcome(PlannerWorkerStatus::RepairSucceeded, &outcome);
             runtime_snapshot = outcome.runtime_snapshot.clone();
+            raw_event_log::emit_lazy("planner_repair_attempt_succeeded", || {
+                post_turn_worker_event_detail(
+                    log_context,
+                    "repair",
+                    "attempt_succeeded",
+                    if outcome.repair_request.is_some() {
+                        Some("continue_repair")
+                    } else {
+                        Some("resolved")
+                    },
+                    Some(&runtime_snapshot),
+                    [
+                        ("attempt_number", json!(attempt_number)),
+                        (
+                            "task_authority_changed",
+                            json!(outcome.task_authority_changed),
+                        ),
+                        ("repair_requested", json!(outcome.repair_request.is_some())),
+                        ("notices_count", json!(outcome.notices.len())),
+                        (
+                            "has_worker_summary",
+                            json!(outcome.worker_summary.is_some()),
+                        ),
+                        (
+                            "has_rejected_summary",
+                            json!(outcome.rejected_summary.is_some()),
+                        ),
+                    ],
+                )
+            });
 
             // repair_request가 None이면 service 재검증 결과 더 고칠 task authority가 없다는 뜻이다.
             let Some(repair_request) = outcome.repair_request else {
+                raw_event_log::emit_lazy("planner_repair_completed", || {
+                    post_turn_worker_event_detail(
+                        log_context,
+                        "repair",
+                        "completed",
+                        Some("resolved"),
+                        Some(&runtime_snapshot),
+                        [("attempt_number", json!(attempt_number))],
+                    )
+                });
                 return HiddenPlanningRepairOutcome {
                     runtime_snapshot,
                     resolved: true,
@@ -124,6 +207,23 @@ impl PostTurnEvaluationExecutor {
                     &detail,
                     &runtime_snapshot,
                 );
+                raw_event_log::emit_lazy("planner_repair_exhausted", || {
+                    post_turn_worker_event_detail(
+                        log_context,
+                        "repair",
+                        "exhausted",
+                        Some("block_auto_follow"),
+                        Some(&runtime_snapshot),
+                        [
+                            ("attempt_number", json!(attempt_number)),
+                            ("max_attempts", json!(MAX_PLANNING_REPAIR_ATTEMPTS)),
+                            (
+                                "repair_failure_summary",
+                                json!(repair_request.failure_summary.as_str()),
+                            ),
+                        ],
+                    )
+                });
                 // Exhausted failure는 worker가 실행됐지만 제한 횟수 안에 valid state를 만들지 못했다는 신호다.
                 return HiddenPlanningRepairOutcome {
                     runtime_snapshot,
@@ -137,6 +237,26 @@ impl PostTurnEvaluationExecutor {
                 PlanningRepairRetryReason::TaskAuthorityStillInvalid
             } else {
                 PlanningRepairRetryReason::TaskAuthorityUnchanged
+            });
+            raw_event_log::emit_lazy("planner_repair_retrying", || {
+                post_turn_worker_event_detail(
+                    log_context,
+                    "repair",
+                    "retrying",
+                    Some("retry"),
+                    Some(&runtime_snapshot),
+                    [
+                        ("attempt_number", json!(attempt_number)),
+                        (
+                            "retry_reason",
+                            json!(next_retry_reason.map(|reason| format!("{:?}", reason))),
+                        ),
+                        (
+                            "repair_failure_summary",
+                            json!(repair_request.failure_summary.as_str()),
+                        ),
+                    ],
+                )
             });
             // Service가 반환한 새 request를 소유값으로 저장해 다음 prompt가 최신 validation 실패를 겨냥하게 한다.
             next_request = repair_request;

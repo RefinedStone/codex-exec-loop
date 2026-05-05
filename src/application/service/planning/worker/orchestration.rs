@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[path = "orchestration/logging.rs"]
+mod logging;
 mod prompts;
+use self::logging::{operation_label, orchestration_event_detail};
 use self::prompts::{
     build_planning_official_completion_prompt, build_planning_queue_idle_derive_prompt,
     build_planning_queue_refresh_prompt,
@@ -319,13 +322,18 @@ impl PlanningWorkerOrchestrationService {
         // worker execution 전에 execution snapshot을 capture한다. protected file reconciliation이 worker file change를
         // synthetic planning turn 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
         raw_event_log::emit_lazy("planning_worker_orchestration_started", || {
-            json!({
-                "workspace_directory": workspace_directory,
-                "synthetic_turn_id": synthetic_turn_id,
-                "operation": operation_label(operation),
-                "prompt_chars": prompt.chars().count(),
-                "has_previous_handoff": _previous_handoff.is_some(),
-            })
+            orchestration_event_detail(
+                workspace_directory,
+                synthetic_turn_id,
+                operation,
+                "started",
+                Some("capture_execution_snapshot"),
+                None,
+                [
+                    ("prompt_chars", json!(prompt.chars().count())),
+                    ("has_previous_handoff", json!(_previous_handoff.is_some())),
+                ],
+            )
         });
         let execution_snapshot = match self
             .runtime_facade
@@ -334,13 +342,15 @@ impl PlanningWorkerOrchestrationService {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
-                    json!({
-                        "workspace_directory": workspace_directory,
-                        "synthetic_turn_id": synthetic_turn_id,
-                        "operation": operation_label(operation),
-                        "phase": "load_execution_snapshot",
-                        "error": error.to_string(),
-                    })
+                    orchestration_event_detail(
+                        workspace_directory,
+                        synthetic_turn_id,
+                        operation,
+                        "load_execution_snapshot",
+                        Some("abort"),
+                        None,
+                        [("error", json!(error.to_string()))],
+                    )
                 });
                 return Err(error);
             }
@@ -358,13 +368,15 @@ impl PlanningWorkerOrchestrationService {
                 Ok(response) => response,
                 Err(error) => {
                     raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
-                        json!({
-                            "workspace_directory": workspace_directory,
-                            "synthetic_turn_id": synthetic_turn_id,
-                            "operation": operation_label(operation),
-                            "phase": "run_planning_session",
-                            "error": error.to_string(),
-                        })
+                        orchestration_event_detail(
+                            workspace_directory,
+                            synthetic_turn_id,
+                            operation,
+                            "run_planning_session",
+                            Some("abort"),
+                            None,
+                            [("error", json!(error.to_string()))],
+                        )
                     });
                     return Err(error);
                 }
@@ -442,14 +454,21 @@ impl PlanningWorkerOrchestrationService {
             Ok(result) => result,
             Err(error) => {
                 raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
-                    json!({
-                        "workspace_directory": workspace_directory,
-                        "synthetic_turn_id": synthetic_turn_id,
-                        "operation": operation_label(operation),
-                        "phase": "reconcile_after_turn",
-                        "changed_planning_file_count": worker_response.changed_planning_file_paths.len(),
-                        "error": error.to_string(),
-                    })
+                    orchestration_event_detail(
+                        workspace_directory,
+                        synthetic_turn_id,
+                        operation,
+                        "reconcile_after_turn",
+                        Some("abort"),
+                        None,
+                        [
+                            (
+                                "changed_planning_file_count",
+                                json!(worker_response.changed_planning_file_paths.len()),
+                            ),
+                            ("error", json!(error.to_string())),
+                        ],
+                    )
                 });
                 return Err(error);
             }
@@ -483,20 +502,31 @@ impl PlanningWorkerOrchestrationService {
             ));
         }
         raw_event_log::emit_lazy("planning_worker_orchestration_completed", || {
-            json!({
-                "workspace_directory": workspace_directory,
-                "synthetic_turn_id": synthetic_turn_id,
-                "operation": operation_label(operation),
-                "changed_planning_file_count": worker_response.changed_planning_file_paths.len(),
-                "task_authority_changed": task_authority_changed,
-                "repair_requested": reconciliation_result.repair_request.is_some(),
-                "auto_followup_blocked": reconciliation_result.auto_followup_block_reason.is_some(),
-                "runtime_status": format!("{:?}", runtime_snapshot.workspace_status()),
-                "runtime_failure_reason": runtime_snapshot.failure_reason(),
-                "runtime_pause_reason": runtime_snapshot.auto_followup_pause_reason(),
-                "notices_count": notices.len(),
-                "has_worker_summary": worker_summary.is_some(),
-            })
+            orchestration_event_detail(
+                workspace_directory,
+                synthetic_turn_id,
+                operation,
+                "completed",
+                Some("return_outcome"),
+                Some(&runtime_snapshot),
+                [
+                    (
+                        "changed_planning_file_count",
+                        json!(worker_response.changed_planning_file_paths.len()),
+                    ),
+                    ("task_authority_changed", json!(task_authority_changed)),
+                    (
+                        "repair_requested",
+                        json!(reconciliation_result.repair_request.is_some()),
+                    ),
+                    (
+                        "auto_followup_blocked",
+                        json!(reconciliation_result.auto_followup_block_reason.is_some()),
+                    ),
+                    ("notices_count", json!(notices.len())),
+                    ("has_worker_summary", json!(worker_summary.is_some())),
+                ],
+            )
         });
         Ok(PlanningWorkerRunOutcome {
             runtime_snapshot,
@@ -632,13 +662,6 @@ fn authority_claim_owner_token(prefix: &str, nonce: u64) -> String {
 fn first_non_empty_line(text: &str) -> Option<&str> {
     // notice는 첫 non-empty worker line만 사용한다. full final agent message로 UI가 과도하게 길어지는 것을 막는다.
     text.lines().map(str::trim).find(|line| !line.is_empty())
-}
-
-fn operation_label(operation: PlanningWorkerOperation) -> &'static str {
-    match operation {
-        PlanningWorkerOperation::RefreshQueue => "refresh",
-        PlanningWorkerOperation::RepairTaskAuthority => "repair",
-    }
 }
 
 fn merge_reconciliation_results(

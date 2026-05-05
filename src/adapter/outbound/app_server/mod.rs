@@ -190,6 +190,9 @@ impl CodexAppServerAdapter {
         raw_event_log::emit_lazy("hidden_planning_thread_starting", || {
             json!({
                 "workspace_directory": workspace_directory,
+                "operation": "planning_worker_thread",
+                "phase": "starting",
+                "decision": "start_hidden_thread",
                 "model": PLANNING_WORKER_MODEL,
                 "service_name": PLANNING_WORKER_SERVICE_NAME,
                 "prompt_chars": prompt.chars().count(),
@@ -228,12 +231,18 @@ impl CodexAppServerAdapter {
             Ok(()) => raw_event_log::emit_lazy("hidden_planning_thread_completed", || {
                 json!({
                     "workspace_directory": workspace_directory,
+                    "operation": "planning_worker_thread",
+                    "phase": "completed",
+                    "decision": "stream_completed",
                     "service_name": PLANNING_WORKER_SERVICE_NAME,
                 })
             }),
             Err(error) => raw_event_log::emit_lazy("hidden_planning_thread_failed", || {
                 json!({
                     "workspace_directory": workspace_directory,
+                    "operation": "planning_worker_thread",
+                    "phase": "failed",
+                    "decision": "return_error",
                     "service_name": PLANNING_WORKER_SERVICE_NAME,
                     "error": error.to_string(),
                 })

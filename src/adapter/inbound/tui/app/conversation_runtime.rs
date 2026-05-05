@@ -320,8 +320,12 @@ pub(super) fn reduce_conversation_runtime(
                 state.begin_auto_followup_evaluation();
                 raw_event_log::emit_lazy("post_turn_evaluation_queued", || {
                     json!({
-                        "turn_id": turn_id,
+                        "thread_id": state.thread_id.as_str(),
+                        "queued_from_turn_id": turn_id,
                         "workspace_directory": workspace_directory,
+                        "operation": "post_turn",
+                        "phase": "queued",
+                        "decision": "evaluate",
                         "changed_planning_file_count": changed_planning_file_paths.len(),
                     })
                 });

@@ -7,12 +7,15 @@ use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeSnapshot,
     PlanningRuntimeWorkspaceStatus,
 };
+use crate::diagnostics::raw_event_log;
+use serde_json::json;
 
 // The refresh path reads conversation context and reports progress through the same
 // planner worker panel used by builtin queue refresh and hidden repair.
 use super::super::super::{ConversationViewModel, PlannerWorkerStatus};
 // Repeated-head detection is shared with builtin refresh so official completion
 // cannot requeue a slot task that failed to advance planning.
+use super::logging::post_turn_event_detail;
 use super::queue_head_detail::repeated_queue_head_detail;
 // The parent post-turn module owns the failure constant and DTOs; this file owns
 // only the official-completion branch of the executor.
@@ -67,6 +70,23 @@ impl PostTurnEvaluationExecutor {
                 // Capture failure means the supervisor could not create the
                 // official-completion report; the current planning snapshot is
                 // still the most truthful state for the panel.
+                raw_event_log::emit_lazy("official_completion_capture_failed", || {
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "official_completion",
+                        "capture_failed",
+                        Some("skip_official_refresh"),
+                        Some(&conversation.planning_runtime_snapshot),
+                        [
+                            ("error", json!(error.to_string())),
+                            (
+                                "changed_planning_file_count",
+                                json!(request.changed_planning_file_paths.len()),
+                            ),
+                        ],
+                    )
+                });
                 self.record_planner_worker_failure(
                     PlannerWorkerStatus::RefreshFailed,
                     &format!("parallel completion capture failed: {error}"),
@@ -122,6 +142,23 @@ impl PostTurnEvaluationExecutor {
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot =
                 official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
+            raw_event_log::emit_lazy("official_completion_refresh_blocked", || {
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "official_completion",
+                    "planning_workspace_unavailable",
+                    Some("block_slot_finalization"),
+                    Some(&failure_snapshot),
+                    [
+                        (
+                            "planning_workspace_directory",
+                            json!(planning_workspace_directory),
+                        ),
+                        ("failure_detail", json!(failure_detail)),
+                    ],
+                )
+            });
             self.record_planner_worker_failure(
                 PlannerWorkerStatus::RefreshFailed,
                 failure_detail,
@@ -164,6 +201,36 @@ impl PostTurnEvaluationExecutor {
             .planning
             .worker
             .render_official_completion_refresh_prompt(&worker_request);
+        raw_event_log::emit_lazy("official_completion_refresh_started", || {
+            post_turn_event_detail(
+                conversation,
+                request,
+                "official_completion",
+                "refresh_started",
+                Some("run_worker"),
+                Some(&planning_workspace_snapshot),
+                [
+                    (
+                        "planning_workspace_directory",
+                        json!(planning_workspace_directory),
+                    ),
+                    (
+                        "latest_main_reply_chars",
+                        json!(latest_main_reply.chars().count()),
+                    ),
+                    (
+                        "has_latest_user_message",
+                        json!(worker_request.latest_user_message.is_some()),
+                    ),
+                    (
+                        "has_previous_handoff",
+                        json!(worker_request.previous_handoff_task.is_some()),
+                    ),
+                    ("refresh_order", json!(completion_report.refresh_order)),
+                    ("worker_prompt_chars", json!(worker_prompt.chars().count())),
+                ],
+            )
+        });
         self.record_planner_worker_running(
             PlannerWorkerStatus::RefreshRunning,
             "official-refresh",
@@ -186,6 +253,24 @@ impl PostTurnEvaluationExecutor {
                     .mark_official_completion_failed(&request.workspace_directory, &detail);
                 let failure_snapshot =
                     official_completion_failure_snapshot(&planning_workspace_snapshot, &detail);
+                raw_event_log::emit_lazy("official_completion_refresh_failed", || {
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "official_completion",
+                        "worker_failed",
+                        Some("block_slot_finalization"),
+                        Some(&failure_snapshot),
+                        [
+                            (
+                                "planning_workspace_directory",
+                                json!(planning_workspace_directory),
+                            ),
+                            ("refresh_order", json!(completion_report.refresh_order)),
+                            ("error", json!(error.to_string())),
+                        ],
+                    )
+                });
                 self.record_planner_worker_failure(
                     PlannerWorkerStatus::RefreshFailed,
                     &detail,
@@ -202,12 +287,44 @@ impl PostTurnEvaluationExecutor {
         // Outcome snapshot may still carry a repair request; keep it mutable so hidden
         // repair and repeated-head checks can refine the final decision snapshot.
         let mut runtime_snapshot = outcome.runtime_snapshot.clone();
+        raw_event_log::emit_lazy("official_completion_refresh_succeeded", || {
+            post_turn_event_detail(
+                conversation,
+                request,
+                "official_completion",
+                "worker_succeeded",
+                Some("apply_outcome"),
+                Some(&runtime_snapshot),
+                [
+                    (
+                        "planning_workspace_directory",
+                        json!(planning_workspace_directory),
+                    ),
+                    ("refresh_order", json!(completion_report.refresh_order)),
+                    ("repair_requested", json!(outcome.repair_request.is_some())),
+                    (
+                        "task_authority_changed",
+                        json!(outcome.task_authority_changed),
+                    ),
+                    ("notices_count", json!(outcome.notices.len())),
+                    (
+                        "has_worker_summary",
+                        json!(outcome.worker_summary.is_some()),
+                    ),
+                    (
+                        "has_rejected_summary",
+                        json!(outcome.rejected_summary.is_some()),
+                    ),
+                ],
+            )
+        });
 
         // Official refresh can discover broken task authority. Reuse the hidden repair
         // loop, but if it cannot resolve the issue, convert the snapshot into the
         // official-completion block reason rather than letting the slot continue.
         if let Some(repair_request) = outcome.repair_request.as_ref() {
             let repair_outcome = self.run_hidden_planning_repairs(
+                &conversation.thread_id,
                 planning_workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
@@ -216,6 +333,31 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
             } else {
+                raw_event_log::emit_lazy("official_completion_repair_unresolved", || {
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "repair",
+                        "unresolved_after_official_completion",
+                        Some("block_slot_finalization"),
+                        Some(&repair_outcome.runtime_snapshot),
+                        [
+                            (
+                                "planning_workspace_directory",
+                                json!(planning_workspace_directory),
+                            ),
+                            ("refresh_order", json!(completion_report.refresh_order)),
+                            (
+                                "repair_failure_summary",
+                                json!(repair_request.failure_summary.as_str()),
+                            ),
+                            (
+                                "invalid_reason",
+                                json!(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON),
+                            ),
+                        ],
+                    )
+                });
                 official_completion_failure_snapshot(
                     &repair_outcome.runtime_snapshot,
                     OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
@@ -230,6 +372,24 @@ impl PostTurnEvaluationExecutor {
             &planning_workspace_snapshot,
             &runtime_snapshot,
         ) {
+            raw_event_log::emit_lazy("official_completion_paused_repeated_queue_head", || {
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "official_completion",
+                    "repeated_queue_head_guard",
+                    Some("pause_auto_follow"),
+                    Some(&runtime_snapshot),
+                    [
+                        (
+                            "planning_workspace_directory",
+                            json!(planning_workspace_directory),
+                        ),
+                        ("refresh_order", json!(completion_report.refresh_order)),
+                        ("pause_reason", json!(detail.as_str())),
+                    ],
+                )
+            });
             runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail);
         }
 
@@ -243,6 +403,24 @@ impl PostTurnEvaluationExecutor {
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot =
                 official_completion_failure_snapshot(&runtime_snapshot, failure_detail);
+            raw_event_log::emit_lazy("official_completion_refresh_blocked", || {
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "official_completion",
+                    "finalization_blocked",
+                    Some("block_slot_finalization"),
+                    Some(&failure_snapshot),
+                    [
+                        (
+                            "planning_workspace_directory",
+                            json!(planning_workspace_directory),
+                        ),
+                        ("refresh_order", json!(completion_report.refresh_order)),
+                        ("failure_detail", json!(failure_detail)),
+                    ],
+                )
+            });
             self.record_planner_worker_failure(
                 PlannerWorkerStatus::RefreshFailed,
                 failure_detail,
@@ -268,6 +446,28 @@ impl PostTurnEvaluationExecutor {
                     &authority_refresh_outcome,
                 ),
         );
+        raw_event_log::emit_lazy("official_completion_refresh_finalized", || {
+            post_turn_event_detail(
+                conversation,
+                request,
+                "official_completion",
+                "finalized",
+                Some("finalize_slot"),
+                Some(&runtime_snapshot),
+                [
+                    (
+                        "planning_workspace_directory",
+                        json!(planning_workspace_directory),
+                    ),
+                    ("refresh_order", json!(completion_report.refresh_order)),
+                    (
+                        "authority_refresh_outcome_chars",
+                        json!(authority_refresh_outcome.chars().count()),
+                    ),
+                    ("runtime_notices_count", json!(runtime_notices.len())),
+                ],
+            )
+        });
 
         OfficialCompletionRefreshOutcome {
             runtime_snapshot,

@@ -24,7 +24,7 @@ use crate::application::service::planning::{
 };
 use crate::diagnostics::raw_event_log;
 use crate::domain::planning::QueueIdlePolicy;
-use serde_json::{Value, json};
+use serde_json::json;
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 #[cfg(not(test))]
 const POST_TURN_EVALUATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
@@ -32,6 +32,8 @@ const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
     "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
 const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
     "official completion refresh failed; the leased slot stays reserved until planning is repaired";
+#[path = "post_turn_execution/logging.rs"]
+mod logging;
 #[path = "post_turn_execution/official_completion.rs"]
 mod official_completion;
 #[path = "post_turn_execution/planner_worker_panel.rs"]
@@ -42,6 +44,10 @@ mod queue_head_detail;
 mod repair;
 use self::planner_worker_panel::planner_queue_summary;
 use self::queue_head_detail::repeated_queue_head_detail;
+use logging::{
+    planner_refresh_skipped_detail, planning_refresh_mode_label, post_turn_action_decision,
+    post_turn_action_log_detail, post_turn_event_detail,
+};
 
 // Post-turn evaluation is the handoff between a completed Codex turn and the
 // planning/parallel-mode automation that may schedule the next prompt. The
@@ -109,17 +115,32 @@ impl PostTurnEvaluationExecutor {
     ) -> PostTurnEvaluationExecution {
         let planning_workspace_directory = planning_workspace_directory(conversation, request);
         raw_event_log::emit_lazy("post_turn_evaluation_started", || {
-            json!({
-                "thread_id": conversation.thread_id,
-                "queued_from_turn_id": request.queued_from_turn_id,
-                "workspace_directory": request.workspace_directory,
-                "planning_workspace_directory": planning_workspace_directory,
-                "changed_planning_file_count": request.changed_planning_file_paths.len(),
-                "initial_runtime": planning_snapshot_log_detail(&conversation.planning_runtime_snapshot),
-                "post_turn_continuation_paused": conversation
-                    .auto_follow_state
-                    .post_turn_continuation_paused(),
-            })
+            post_turn_event_detail(
+                conversation,
+                request,
+                "post_turn",
+                "started",
+                Some("evaluate"),
+                Some(&conversation.planning_runtime_snapshot),
+                [
+                    (
+                        "planning_workspace_directory",
+                        json!(planning_workspace_directory),
+                    ),
+                    (
+                        "changed_planning_file_count",
+                        json!(request.changed_planning_file_paths.len()),
+                    ),
+                    (
+                        "post_turn_continuation_paused",
+                        json!(
+                            conversation
+                                .auto_follow_state
+                                .post_turn_continuation_paused()
+                        ),
+                    ),
+                ],
+            )
         });
         let reconciliation_result = self.reconcile_planning_after_turn(request);
         let mut runtime_notices = reconciliation_result.notices.clone();
@@ -137,6 +158,7 @@ impl PostTurnEvaluationExecutor {
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
         {
             let repair_outcome = self.run_hidden_planning_repairs(
+                &conversation.thread_id,
                 &request.workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
@@ -179,15 +201,22 @@ impl PostTurnEvaluationExecutor {
             )
         };
         raw_event_log::emit_lazy("post_turn_evaluation_completed", || {
-            json!({
-                "thread_id": conversation.thread_id,
-                "queued_from_turn_id": request.queued_from_turn_id,
-                "workspace_directory": request.workspace_directory,
-                "handled_parallel_completion": handled_parallel_completion,
-                "runtime": planning_snapshot_log_detail(&planning_runtime_snapshot),
-                "runtime_notices_count": runtime_notices.len(),
-                "action": post_turn_action_log_detail(&action),
-            })
+            post_turn_event_detail(
+                conversation,
+                request,
+                "post_turn",
+                "completed",
+                Some(post_turn_action_decision(&action)),
+                Some(&planning_runtime_snapshot),
+                [
+                    (
+                        "handled_parallel_completion",
+                        json!(handled_parallel_completion),
+                    ),
+                    ("runtime_notices_count", json!(runtime_notices.len())),
+                    ("action", post_turn_action_log_detail(&action)),
+                ],
+            )
         });
 
         PostTurnEvaluationExecution {
@@ -288,12 +317,12 @@ impl PostTurnEvaluationExecutor {
                 | PlanningRuntimeWorkspaceStatus::ReadyWithTask
         ) {
             raw_event_log::emit_lazy("planner_refresh_skipped", || {
-                json!({
-                    "queued_from_turn_id": request.queued_from_turn_id,
-                    "workspace_directory": request.workspace_directory,
-                    "reason": "planning_runtime_not_ready",
-                    "runtime": planning_snapshot_log_detail(&current_snapshot),
-                })
+                planner_refresh_skipped_detail(
+                    conversation,
+                    request,
+                    "planning_runtime_not_ready",
+                    &current_snapshot,
+                )
             });
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
@@ -305,12 +334,12 @@ impl PostTurnEvaluationExecutor {
             .filter(|message: &&str| !message.is_empty())
         else {
             raw_event_log::emit_lazy("planner_refresh_skipped", || {
-                json!({
-                    "queued_from_turn_id": request.queued_from_turn_id,
-                    "workspace_directory": request.workspace_directory,
-                    "reason": "latest_main_reply_empty",
-                    "runtime": planning_snapshot_log_detail(&current_snapshot),
-                })
+                planner_refresh_skipped_detail(
+                    conversation,
+                    request,
+                    "latest_main_reply_empty",
+                    &current_snapshot,
+                )
             });
             return BuiltinNextTaskRefreshOutcome {
                 runtime_snapshot: current_snapshot,
@@ -327,12 +356,12 @@ impl PostTurnEvaluationExecutor {
                     Ok(context) => context,
                     Err(_) => {
                         raw_event_log::emit_lazy("planner_refresh_skipped", || {
-                            json!({
-                                "queued_from_turn_id": request.queued_from_turn_id,
-                                "workspace_directory": request.workspace_directory,
-                                "reason": "queue_idle_review_context_unavailable",
-                                "runtime": planning_snapshot_log_detail(&current_snapshot),
-                            })
+                            planner_refresh_skipped_detail(
+                                conversation,
+                                request,
+                                "queue_idle_review_context_unavailable",
+                                &current_snapshot,
+                            )
                         });
                         return BuiltinNextTaskRefreshOutcome {
                             runtime_snapshot: current_snapshot,
@@ -342,12 +371,12 @@ impl PostTurnEvaluationExecutor {
                 match review_context.policy {
                     QueueIdlePolicy::Stop => {
                         raw_event_log::emit_lazy("planner_refresh_skipped", || {
-                            json!({
-                                "queued_from_turn_id": request.queued_from_turn_id,
-                                "workspace_directory": request.workspace_directory,
-                                "reason": "queue_idle_policy_stop",
-                                "runtime": planning_snapshot_log_detail(&current_snapshot),
-                            })
+                            planner_refresh_skipped_detail(
+                                conversation,
+                                request,
+                                "queue_idle_policy_stop",
+                                &current_snapshot,
+                            )
                         });
                         return BuiltinNextTaskRefreshOutcome {
                             runtime_snapshot: current_snapshot,
@@ -356,12 +385,12 @@ impl PostTurnEvaluationExecutor {
                     QueueIdlePolicy::ReviewAndEnqueue => {
                         let Some(prompt_markdown) = review_context.prompt_markdown else {
                             raw_event_log::emit_lazy("planner_refresh_skipped", || {
-                                json!({
-                                    "queued_from_turn_id": request.queued_from_turn_id,
-                                    "workspace_directory": request.workspace_directory,
-                                    "reason": "queue_idle_prompt_missing",
-                                    "runtime": planning_snapshot_log_detail(&current_snapshot),
-                                })
+                                planner_refresh_skipped_detail(
+                                    conversation,
+                                    request,
+                                    "queue_idle_prompt_missing",
+                                    &current_snapshot,
+                                )
                             });
                             return BuiltinNextTaskRefreshOutcome {
                                 runtime_snapshot: current_snapshot,
@@ -408,16 +437,30 @@ impl PostTurnEvaluationExecutor {
             .worker
             .render_refresh_queue_prompt(&worker_request);
         raw_event_log::emit_lazy("planner_refresh_started", || {
-            json!({
-                "queued_from_turn_id": request.queued_from_turn_id,
-                "workspace_directory": request.workspace_directory,
-                "mode": planning_refresh_mode_label(&mode),
-                "runtime_before": planning_snapshot_log_detail(&current_snapshot),
-                "latest_main_reply_chars": latest_main_reply.chars().count(),
-                "has_latest_user_message": worker_request.latest_user_message.is_some(),
-                "has_previous_handoff": worker_request.previous_handoff_task.is_some(),
-                "worker_prompt_chars": worker_prompt.chars().count(),
-            })
+            post_turn_event_detail(
+                conversation,
+                request,
+                "refresh",
+                "started",
+                Some("run_worker"),
+                Some(&current_snapshot),
+                [
+                    ("mode", json!(planning_refresh_mode_label(&mode))),
+                    (
+                        "latest_main_reply_chars",
+                        json!(latest_main_reply.chars().count()),
+                    ),
+                    (
+                        "has_latest_user_message",
+                        json!(worker_request.latest_user_message.is_some()),
+                    ),
+                    (
+                        "has_previous_handoff",
+                        json!(worker_request.previous_handoff_task.is_some()),
+                    ),
+                    ("worker_prompt_chars", json!(worker_prompt.chars().count())),
+                ],
+            )
         });
         self.record_planner_worker_running(
             PlannerWorkerStatus::RefreshRunning,
@@ -445,13 +488,22 @@ impl PostTurnEvaluationExecutor {
                 let invalid_snapshot =
                     PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
                 raw_event_log::emit_lazy("planner_refresh_failed", || {
-                    json!({
-                        "queued_from_turn_id": request.queued_from_turn_id,
-                        "workspace_directory": request.workspace_directory,
-                        "mode": planning_refresh_mode_label(&mode),
-                        "error": error.to_string(),
-                        "invalid_reason": PLANNER_REFRESH_FAILURE_BLOCK_REASON,
-                    })
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "refresh",
+                        "worker_failed",
+                        Some("block_auto_follow"),
+                        Some(&invalid_snapshot),
+                        [
+                            ("mode", json!(planning_refresh_mode_label(&mode))),
+                            ("error", json!(error.to_string())),
+                            (
+                                "invalid_reason",
+                                json!(PLANNER_REFRESH_FAILURE_BLOCK_REASON),
+                            ),
+                        ],
+                    )
                 });
                 self.record_planner_worker_failure(
                     PlannerWorkerStatus::RefreshFailed,
@@ -466,21 +518,36 @@ impl PostTurnEvaluationExecutor {
 
         self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
         raw_event_log::emit_lazy("planner_refresh_succeeded", || {
-            json!({
-                "queued_from_turn_id": request.queued_from_turn_id,
-                "workspace_directory": request.workspace_directory,
-                "mode": planning_refresh_mode_label(&mode),
-                "runtime": planning_snapshot_log_detail(&outcome.runtime_snapshot),
-                "repair_requested": outcome.repair_request.is_some(),
-                "task_authority_changed": outcome.task_authority_changed,
-                "notices_count": outcome.notices.len(),
-                "has_worker_summary": outcome.worker_summary.is_some(),
-                "has_rejected_summary": outcome.rejected_summary.is_some(),
-            })
+            post_turn_event_detail(
+                conversation,
+                request,
+                "refresh",
+                "worker_succeeded",
+                Some("apply_outcome"),
+                Some(&outcome.runtime_snapshot),
+                [
+                    ("mode", json!(planning_refresh_mode_label(&mode))),
+                    ("repair_requested", json!(outcome.repair_request.is_some())),
+                    (
+                        "task_authority_changed",
+                        json!(outcome.task_authority_changed),
+                    ),
+                    ("notices_count", json!(outcome.notices.len())),
+                    (
+                        "has_worker_summary",
+                        json!(outcome.worker_summary.is_some()),
+                    ),
+                    (
+                        "has_rejected_summary",
+                        json!(outcome.rejected_summary.is_some()),
+                    ),
+                ],
+            )
         });
         let mut runtime_snapshot = outcome.runtime_snapshot.clone();
         if let Some(repair_request) = outcome.repair_request.as_ref() {
             let repair_outcome = self.run_hidden_planning_repairs(
+                &conversation.thread_id,
                 &request.workspace_directory,
                 &request.queued_from_turn_id,
                 repair_request,
@@ -490,12 +557,24 @@ impl PostTurnEvaluationExecutor {
                 repair_outcome.runtime_snapshot
             } else {
                 raw_event_log::emit_lazy("planner_refresh_repair_unresolved", || {
-                    json!({
-                        "queued_from_turn_id": request.queued_from_turn_id,
-                        "workspace_directory": request.workspace_directory,
-                        "repair_failure_summary": repair_request.failure_summary,
-                        "invalid_reason": PLANNER_REFRESH_FAILURE_BLOCK_REASON,
-                    })
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "repair",
+                        "unresolved_after_refresh",
+                        Some("block_auto_follow"),
+                        Some(&repair_outcome.runtime_snapshot),
+                        [
+                            (
+                                "repair_failure_summary",
+                                json!(repair_request.failure_summary.as_str()),
+                            ),
+                            (
+                                "invalid_reason",
+                                json!(PLANNER_REFRESH_FAILURE_BLOCK_REASON),
+                            ),
+                        ],
+                    )
                 });
                 PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON)
             };
@@ -514,12 +593,22 @@ impl PostTurnEvaluationExecutor {
                 Ok(promotion_outcome) => {
                     runtime_snapshot = promotion_outcome.runtime_snapshot;
                     raw_event_log::emit_lazy("planner_proposal_promotion_completed", || {
-                        json!({
-                            "queued_from_turn_id": request.queued_from_turn_id,
-                            "workspace_directory": request.workspace_directory,
-                            "promoted_task_title": promotion_outcome.promoted_task_title,
-                            "runtime": planning_snapshot_log_detail(&runtime_snapshot),
-                        })
+                        post_turn_event_detail(
+                            conversation,
+                            request,
+                            "proposal_promotion",
+                            "completed",
+                            promotion_outcome
+                                .promoted_task_title
+                                .as_ref()
+                                .map(|_| "promoted")
+                                .or(Some("no_promotable_proposal")),
+                            Some(&runtime_snapshot),
+                            [(
+                                "promoted_task_title",
+                                json!(promotion_outcome.promoted_task_title.as_deref()),
+                            )],
+                        )
                     });
                     self.planner_worker_panel_state.last_queue_summary =
                         planner_queue_summary(&runtime_snapshot);
@@ -535,12 +624,21 @@ impl PostTurnEvaluationExecutor {
                     let invalid_snapshot =
                         PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
                     raw_event_log::emit_lazy("planner_proposal_promotion_failed", || {
-                        json!({
-                            "queued_from_turn_id": request.queued_from_turn_id,
-                            "workspace_directory": request.workspace_directory,
-                            "error": error.to_string(),
-                            "invalid_reason": PLANNER_REFRESH_FAILURE_BLOCK_REASON,
-                        })
+                        post_turn_event_detail(
+                            conversation,
+                            request,
+                            "proposal_promotion",
+                            "failed",
+                            Some("block_auto_follow"),
+                            Some(&invalid_snapshot),
+                            [
+                                ("error", json!(error.to_string())),
+                                (
+                                    "invalid_reason",
+                                    json!(PLANNER_REFRESH_FAILURE_BLOCK_REASON),
+                                ),
+                            ],
+                        )
                     });
                     self.record_planner_worker_failure(
                         PlannerWorkerStatus::RefreshFailed,
@@ -573,12 +671,15 @@ impl PostTurnEvaluationExecutor {
             self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
             self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
             raw_event_log::emit_lazy("planner_refresh_paused_repeated_queue_head", || {
-                json!({
-                    "queued_from_turn_id": request.queued_from_turn_id,
-                    "workspace_directory": request.workspace_directory,
-                    "pause_reason": detail,
-                    "runtime": planning_snapshot_log_detail(&runtime_snapshot),
-                })
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "refresh",
+                    "repeated_queue_head_guard",
+                    Some("pause_auto_follow"),
+                    Some(&runtime_snapshot),
+                    [("pause_reason", json!(detail.as_str()))],
+                )
             });
             runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail.clone());
         }
@@ -601,13 +702,15 @@ impl PostTurnEvaluationExecutor {
             .post_turn_continuation_paused()
         {
             raw_event_log::emit_lazy("auto_follow_decision", || {
-                json!({
-                    "queued_from_turn_id": request.queued_from_turn_id,
-                    "workspace_directory": request.workspace_directory,
-                    "decision": "skip",
-                    "reason": "PostTurnContinuationPaused",
-                    "runtime": planning_snapshot_log_detail(planning_runtime_snapshot),
-                })
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "auto_follow",
+                    "decision",
+                    Some("skip"),
+                    Some(planning_runtime_snapshot),
+                    [("reason", json!("PostTurnContinuationPaused"))],
+                )
             });
             return ConversationPostTurnAction::SkipAutoFollowup {
                 reason: AutoFollowupSkipReason::PostTurnContinuationPaused,
@@ -618,13 +721,15 @@ impl PostTurnEvaluationExecutor {
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
         {
             raw_event_log::emit_lazy("auto_follow_decision", || {
-                json!({
-                    "queued_from_turn_id": request.queued_from_turn_id,
-                    "workspace_directory": request.workspace_directory,
-                    "decision": "skip",
-                    "reason": "PlanningQueueIdlePolicyStop",
-                    "runtime": planning_snapshot_log_detail(planning_runtime_snapshot),
-                })
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "auto_follow",
+                    "decision",
+                    Some("skip"),
+                    Some(planning_runtime_snapshot),
+                    [("reason", json!("PlanningQueueIdlePolicyStop"))],
+                )
             });
             return ConversationPostTurnAction::SkipAutoFollowup {
                 reason: AutoFollowupSkipReason::PlanningQueueIdlePolicyStop,
@@ -635,19 +740,34 @@ impl PostTurnEvaluationExecutor {
         {
             AutoFollowupDecision::QueuePrompt(queued_prompt) => {
                 raw_event_log::emit_lazy("auto_follow_decision", || {
-                    json!({
-                        "queued_from_turn_id": request.queued_from_turn_id,
-                        "workspace_directory": request.workspace_directory,
-                        "decision": "queue",
-                        "mode_label": conversation.auto_follow_state.mode_label(),
-                        "runtime": planning_snapshot_log_detail(planning_runtime_snapshot),
-                        "prompt_chars": queued_prompt.prompt.chars().count(),
-                        "transcript_text_chars": queued_prompt.transcript_text.chars().count(),
-                        "handoff_task_id": queued_prompt
-                            .handoff_task
-                            .as_ref()
-                            .map(|task| task.task_id.as_str()),
-                    })
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "auto_follow",
+                        "decision",
+                        Some("queue"),
+                        Some(planning_runtime_snapshot),
+                        [
+                            (
+                                "mode_label",
+                                json!(conversation.auto_follow_state.mode_label()),
+                            ),
+                            ("prompt_chars", json!(queued_prompt.prompt.chars().count())),
+                            (
+                                "transcript_text_chars",
+                                json!(queued_prompt.transcript_text.chars().count()),
+                            ),
+                            (
+                                "handoff_task_id",
+                                json!(
+                                    queued_prompt
+                                        .handoff_task
+                                        .as_ref()
+                                        .map(|task| task.task_id.as_str())
+                                ),
+                            ),
+                        ],
+                    )
                 });
                 ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
                     prompt: queued_prompt.prompt,
@@ -659,13 +779,15 @@ impl PostTurnEvaluationExecutor {
             }
             AutoFollowupDecision::Skip(reason) => {
                 raw_event_log::emit_lazy("auto_follow_decision", || {
-                    json!({
-                        "queued_from_turn_id": request.queued_from_turn_id,
-                        "workspace_directory": request.workspace_directory,
-                        "decision": "skip",
-                        "reason": format!("{:?}", reason),
-                        "runtime": planning_snapshot_log_detail(planning_runtime_snapshot),
-                    })
+                    post_turn_event_detail(
+                        conversation,
+                        request,
+                        "auto_follow",
+                        "decision",
+                        Some("skip"),
+                        Some(planning_runtime_snapshot),
+                        [("reason", json!(format!("{:?}", reason)))],
+                    )
                 });
                 ConversationPostTurnAction::SkipAutoFollowup { reason }
             }
@@ -820,58 +942,5 @@ fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResul
         notices: vec![message.clone()],
         auto_followup_block_reason: Some(message),
         ..PlanningReconciliationResult::default()
-    }
-}
-
-fn planning_refresh_mode_label(mode: &PlanningQueueRefreshMode<'_>) -> &'static str {
-    match mode {
-        PlanningQueueRefreshMode::FromLatestReply => "from_latest_reply",
-        PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => {
-            "derive_next_task_when_queue_idle"
-        }
-    }
-}
-
-fn planning_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) -> Value {
-    let queue_head = snapshot.queue_head().map(|task| {
-        json!({
-            "task_id": task.task_id,
-            "task_title": task.task_title,
-            "status": format!("{:?}", task.status),
-            "rank": task.rank,
-            "combined_priority": task.combined_priority,
-        })
-    });
-    json!({
-        "workspace_present": snapshot.workspace_present(),
-        "workspace_status": format!("{:?}", snapshot.workspace_status()),
-        "queue_idle_policy": format!("{:?}", snapshot.queue_idle_policy()),
-        "queue_summary": snapshot.queue_summary(),
-        "proposal_summary": snapshot.proposal_summary(),
-        "queue_head": queue_head,
-        "failure_reason": snapshot.failure_reason(),
-        "pause_reason": snapshot.auto_followup_pause_reason(),
-        "has_actionable_queue_head": snapshot.has_actionable_queue_head(),
-        "has_proposal_candidates": snapshot.has_proposal_candidates(),
-    })
-}
-
-fn post_turn_action_log_detail(action: &ConversationPostTurnAction) -> Value {
-    match action {
-        ConversationPostTurnAction::QueueAutoPrompt(prompt) => json!({
-            "type": "queue_auto_prompt",
-            "queued_from_turn_id": prompt.queued_from_turn_id,
-            "mode_label": prompt.mode_label,
-            "prompt_chars": prompt.prompt.chars().count(),
-            "transcript_text_chars": prompt.transcript_text.chars().count(),
-            "handoff_task_id": prompt
-                .handoff_task
-                .as_ref()
-                .map(|task| task.task_id.as_str()),
-        }),
-        ConversationPostTurnAction::SkipAutoFollowup { reason } => json!({
-            "type": "skip_auto_followup",
-            "reason": format!("{:?}", reason),
-        }),
     }
 }
