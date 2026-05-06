@@ -89,7 +89,7 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 2. Move into the workspace you want to operate on.
 3. Launch `akra`.
 4. Use `Ctrl+o` or `:sessions` to resume an existing thread, or start typing into a fresh draft.
-5. Use `:doctor` to inspect planning state, or `:init` to create the default planning scaffold.
+5. Use `:doctor` to inspect planning state, or `:planning` to create the default planning scaffold.
 6. Use `:queue` to inspect the current queue task and proposed tasks, and `:planning` or `:directions` to manage accepted planning.
 
 ## Core Surfaces
@@ -118,7 +118,6 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | `:planning` | open planning controls |
 | `:directions` | manage direction-side planning artifacts |
 | `:doctor` | inspect planning health inside the shell |
-| `:init` | open the default planning scaffold review |
 | `:reset <queue|directions|all>` | reset planning state with explicit target semantics |
 | `:new` | start a new draft |
 | `:help` | list available shell commands |
@@ -130,7 +129,6 @@ Supported aliases remain available for common commands such as `:q`, `:diagnosti
 | Command | Purpose |
 | --- | --- |
 | `akra doctor [workspace_dir]` | read-only planning inspection |
-| `akra init [workspace_dir]` | create the default simple planning scaffold |
 | `akra reset <queue|directions|all> [workspace_dir]` | rewrite planning state with shared reset rules |
 
 ## Planning And Internal Continuation

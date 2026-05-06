@@ -21,15 +21,14 @@ use std::sync::Arc;
 mod reports;
 
 use self::reports::{
-    DoctorReport, InitReport, PlanningToolErrorReport, ResetReport, render_doctor_report,
-    render_init_report, render_json_line, render_reset_report,
+    DoctorReport, PlanningToolErrorReport, ResetReport, render_doctor_report, render_json_line,
+    render_reset_report,
 };
 
 // usage string은 help copy이면서 arity mistake에 대한 정확한 error message다. dispatcher 옆에 두어 route와 copy가 함께 바뀌게 한다.
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
 const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
-const INIT_USAGE: &str = "Usage: akra init [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
 const PLANNING_TOOL_USAGE: &str = "Usage: akra planning-tool <contract|run> [workspace_dir]";
 const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";
@@ -55,7 +54,6 @@ where
             writeln!(stdout, "{TELEGRAM_BOT_USAGE}")?;
             writeln!(stdout, "{TELEGRAM_BOT_ALIAS_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
-            writeln!(stdout, "{INIT_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
             writeln!(stdout, "{PLANNING_TOOL_USAGE}")?;
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
@@ -69,10 +67,6 @@ where
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
             Ok(Some(run_doctor(Some(workspace.as_os_str()), stdout)?))
-        }
-        [command] if command == OsStr::new("init") => Ok(Some(run_init(None, stdout)?)),
-        [command, workspace] if command == OsStr::new("init") => {
-            Ok(Some(run_init(Some(workspace.as_os_str()), stdout)?))
         }
         // planning maintenance command는 optional workspace를 받고, 없으면 cwd를 사용한다.
         [command, target] if command == OsStr::new("reset") => {
@@ -100,9 +94,6 @@ where
         // arity-specific branch를 먼저 두어 unsupported-command error가 정말 unknown command에만 쓰이게 한다.
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
-        }
-        [command, _, ..] if command == OsStr::new("init") => {
-            bail!("{INIT_USAGE}");
         }
         [command, _, _, ..] if command == OsStr::new("reset") => {
             bail!("{RESET_USAGE}");
@@ -157,13 +148,6 @@ fn run_doctor(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     let report = inspect_workspace(&workspace_path);
     render_doctor_report(stdout, &report)?;
-    Ok(report.exit_code())
-}
-
-fn run_init(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i32> {
-    let workspace_path = resolve_workspace_path(workspace_arg)?;
-    let report = initialize_workspace(&workspace_path);
-    render_init_report(stdout, &report)?;
     Ok(report.exit_code())
 }
 
@@ -343,27 +327,6 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     DoctorReport::from_service_report(workspace_label, report)
 }
 
-fn initialize_workspace(workspace_path: &Path) -> InitReport {
-    let workspace_label = workspace_path.display().to_string();
-    if let Err(issue) = validate_workspace_path(workspace_path) {
-        return InitReport::path_issue(workspace_label, issue);
-    }
-    let planning = build_production_planning_services();
-    match planning
-        .workspace
-        .initialize_simple_workspace(workspace_path.to_string_lossy().as_ref())
-    {
-        Ok(result) => {
-            // init output이 즉시 queue/direction state를 보여 주도록 runtime snapshot을 함께 포함한다.
-            let snapshot = planning
-                .runtime
-                .load_runtime_snapshot_or_invalid(workspace_path.to_string_lossy().as_ref());
-            InitReport::success(workspace_label, &result, &snapshot)
-        }
-        Err(error) => InitReport::failure(workspace_label, error.to_string()),
-    }
-}
-
 fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetReport {
     let workspace_label = workspace_path.display().to_string();
     if let Err(issue) = validate_workspace_path(workspace_path) {
@@ -407,6 +370,7 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(rendered.contains("akra planning-tool <contract|run>"));
         assert!(rendered.contains("akra parallel-tick [workspace_dir]"));
+        assert!(!rendered.contains("akra init"));
     }
     #[test]
     fn planning_tool_contract_is_json_and_llm_oriented() {

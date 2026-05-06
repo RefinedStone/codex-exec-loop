@@ -256,34 +256,10 @@ impl NativeTuiApp {
             status_text: planning_doctor_status_text(&report),
         });
     }
-    pub(in crate::adapter::inbound::tui::app) fn handle_init_shell_command(&mut self) {
-        let workspace_directory = self.planning_workspace_directory();
-        match self
-            .planning
-            .workspace
-            .has_planning_workspace(&workspace_directory)
-        {
-            Ok(true) => {
-                self.show_planning_init_overlay();
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: "planning workspace already exists / next action: review existing controls or use :reset before replacing it".to_string(),
-                });
-            }
-            Ok(false) => {
-                self.open_first_run_planning_simple_review();
-            }
-            Err(error) => {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("planning init unavailable: {error}"),
-                });
-            }
-        }
-    }
-
     // Reset is a destructive workspace operation, so directions/all resets use
     // a preview status unless the command argument already carried confirmation.
-    // On missing workspace errors the UI falls back to init instead of leaving
-    // the operator in a dead command state.
+    // On missing workspace errors the UI falls back to planning setup instead
+    // of leaving the operator in a dead command state.
     pub(in crate::adapter::inbound::tui::app) fn handle_reset_shell_command(
         &mut self,
         argument: Option<&str>,

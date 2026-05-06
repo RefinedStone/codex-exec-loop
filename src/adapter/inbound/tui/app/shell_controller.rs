@@ -140,7 +140,6 @@ impl NativeTuiApp {
             InlineShellCommand::Turns => self.handle_turns_shell_command(command_input.argument()),
             InlineShellCommand::Stop => self.handle_stop_shell_command(),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
-            InlineShellCommand::Init => self.handle_init_shell_command(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
             }
