@@ -73,6 +73,11 @@ pub(super) enum BackgroundMessage {
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         outcome: ParallelModeDispatchOutcome,
     },
+    ParallelModeOrchestratorTickCompleted {
+        workspace_directory: String,
+        blocked: bool,
+        notices: Vec<String>,
+    },
     PostTurnEvaluated {
         thread_id: String,
         queued_from_turn_id: String,
@@ -118,6 +123,8 @@ impl NativeTuiApp {
             parallel_mode_supervisor_snapshot: None,
             parallel_mode_supervisor_refresh_in_flight: false,
             parallel_mode_dispatch_refresh_in_flight: false,
+            parallel_mode_orchestrator_tick_in_flight: false,
+            last_parallel_mode_orchestrator_tick_signature: None,
             parallel_mode_automation_epoch_id: None,
             next_parallel_mode_automation_epoch_id: 1,
             pending_parallel_mode_dispatch_trigger: None,

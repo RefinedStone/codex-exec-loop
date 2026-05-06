@@ -303,6 +303,8 @@ struct NativeTuiApp {
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     parallel_mode_supervisor_refresh_in_flight: bool,
     parallel_mode_dispatch_refresh_in_flight: bool,
+    parallel_mode_orchestrator_tick_in_flight: bool,
+    last_parallel_mode_orchestrator_tick_signature: Option<String>,
     parallel_mode_automation_epoch_id: Option<u64>,
     next_parallel_mode_automation_epoch_id: u64,
     pending_parallel_mode_dispatch_trigger: Option<ParallelModeAutomationTrigger>,

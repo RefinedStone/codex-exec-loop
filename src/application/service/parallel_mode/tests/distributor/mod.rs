@@ -532,6 +532,129 @@ fn official_completion_success_orchestrator_tick_uses_canonical_integration_work
     );
 }
 
+// official completion이 끝났지만 integration worktree가 다른 브랜치에 있으면 queue record는
+// queued 상태로 남아야 한다. 이후 planning queue가 모두 idle/done이어도 supervisor retry가 같은
+// distributor head를 다시 tick할 수 있어야 현재 운영 중인 "all tasks done, distributor queued" 정체가 풀린다.
+#[test]
+fn blocked_official_completion_queue_retries_after_integration_worktree_recovers() {
+    let repo = TempGitRepo::new("official-success-blocked-retry");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .record_workspace_slot_thread_prepared(&lease.worktree_path, "thread-blocked-retry")
+        .expect("thread prepared should be recorded");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "retry.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-blocked-retry",
+            None,
+            Some("Official completion should queue and wait for the integration worktree."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+
+    let turn_service =
+        crate::application::service::parallel_mode::turn::ParallelModeTurnService::new(
+            service.clone(),
+        );
+    let blocked_notices = turn_service.finalize_official_completion_success(
+        &lease.worktree_path,
+        "official ledger refresh succeeded: distributor delivery approved",
+    );
+
+    assert!(
+        blocked_notices
+            .iter()
+            .any(|notice| notice.contains("commit-ready result entered the distributor queue")),
+        "official completion should enqueue the result before the integration blocker: {blocked_notices:?}"
+    );
+    assert!(
+        blocked_notices.iter().any(|notice| notice
+            .contains("orchestrator blocked / integration worktree must be checked out")),
+        "wrong integration branch should block the first tick without consuming the queue: {blocked_notices:?}"
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty(),
+        "blocked integration worktree should prevent any GitHub delivery operation"
+    );
+    let blocked_snapshot =
+        service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+    assert_eq!(blocked_snapshot.distributor.head_summary, "queued");
+    assert_eq!(blocked_snapshot.distributor.queue_depth(), 1);
+    assert!(
+        blocked_snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+            .contains("blocked:"),
+        "snapshot should keep the queued head and surface the worktree blocker: {}",
+        blocked_snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+    );
+
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+    let retry = service
+        .run_orchestrator_tick(
+            &repo.workspace_dir(),
+            crate::application::service::parallel_mode::ParallelModeOrchestratorTrigger::ManualDispatch,
+        )
+        .expect("manual distributor retry should run after worktree recovery");
+
+    assert!(!retry.blocked);
+    assert!(
+        retry
+            .notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "retry should consume the queued head after the integration worktree is ready: {:?}",
+        retry.notices
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "prerelease:retry.txt",
+            ],
+            None,
+        )
+        .as_deref(),
+        Some("done")
+    );
+    let recovered_snapshot =
+        service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+    assert_eq!(recovered_snapshot.distributor.head_summary, "idle");
+}
+
 // supervisor detail pane은 단순히 가장 최근 running session을 고르면 안 된다.
 // distributor queue head가 있으면 아직 delivery를 기다리는 queued item이 운영상
 // 더 중요하므로, 뒤이어 실행된 다른 agent보다 queue head session을 선택해야 한다.

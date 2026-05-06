@@ -5,8 +5,10 @@ use std::thread;
 
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
-use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::parallel_mode::{
+    ParallelModeOrchestratorTrigger, ParallelModeService,
+};
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::diagnostics::raw_event_log;
 use crate::domain::parallel_mode::{
@@ -28,7 +30,10 @@ mod dispatch_worker;
 
 use self::dispatch_worker::{ParallelDispatchWorkerRequest, spawn_parallel_dispatch_worker};
 use super::turn_submission_runtime::parallel_mode_slot_lease_request;
-use super::{BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, NativeTuiApp};
+use super::{
+    BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent,
+    NativeTuiApp,
+};
 
 impl NativeTuiApp {
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
@@ -77,6 +82,7 @@ impl NativeTuiApp {
 
         parallel_mode_supervisor_snapshot_is_loading(snapshot)
             || parallel_mode_supervisor_snapshot_has_running_slot(snapshot)
+            || parallel_mode_supervisor_snapshot_has_active_distributor_queue(snapshot)
     }
 
     pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
@@ -203,6 +209,8 @@ impl NativeTuiApp {
                 self.parallel_mode_enabled = false;
                 self.parallel_mode_supervisor_refresh_in_flight = false;
                 self.parallel_mode_dispatch_refresh_in_flight = false;
+                self.parallel_mode_orchestrator_tick_in_flight = false;
+                self.last_parallel_mode_orchestrator_tick_signature = None;
                 self.pending_parallel_mode_dispatch_trigger = None;
                 self.sync_parallel_mode_supervisor_snapshot(false);
                 if self.shell_overlay == ShellOverlay::Supersession {
@@ -236,6 +244,7 @@ impl NativeTuiApp {
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
                 self.parallel_mode_supervisor_refresh_in_flight = false;
+                self.last_parallel_mode_orchestrator_tick_signature = None;
                 self.parallel_mode_supervisor_snapshot =
                     Some(pending_parallel_mode_supervisor_snapshot(
                         &workspace_directory,
@@ -290,6 +299,86 @@ impl NativeTuiApp {
             let _ = tx.send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
                 workspace_directory,
                 supervisor_snapshot: Box::new(supervisor_snapshot),
+            });
+        });
+    }
+
+    fn maybe_spawn_parallel_mode_orchestrator_tick(&mut self, workspace_directory: &str) {
+        if !self.parallel_mode_enabled()
+            || self.planning_workspace_directory() != workspace_directory
+            || self.parallel_mode_orchestrator_tick_in_flight
+            || self.parallel_mode_supervisor_refresh_in_flight
+            || self.parallel_mode_dispatch_refresh_in_flight
+        {
+            return;
+        }
+        if !self
+            .parallel_mode_readiness_snapshot
+            .as_ref()
+            .is_some_and(ParallelModeReadinessSnapshot::allows_parallel_mode)
+        {
+            return;
+        }
+        let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref() else {
+            return;
+        };
+        let Some(signature) = parallel_mode_distributor_tick_signature(snapshot) else {
+            return;
+        };
+        if self
+            .last_parallel_mode_orchestrator_tick_signature
+            .as_deref()
+            == Some(signature.as_str())
+        {
+            return;
+        }
+
+        self.last_parallel_mode_orchestrator_tick_signature = Some(signature.clone());
+        self.parallel_mode_orchestrator_tick_in_flight = true;
+        self.spawn_parallel_mode_orchestrator_tick_worker(
+            workspace_directory.to_string(),
+            signature,
+        );
+    }
+
+    fn spawn_parallel_mode_orchestrator_tick_worker(
+        &self,
+        workspace_directory: String,
+        signature: String,
+    ) {
+        let parallel_mode_service = self.parallel_mode_service.clone();
+        let tx = self.tx.clone();
+
+        thread::spawn(move || {
+            raw_event_log::emit_lazy("parallel_orchestrator_retry_started", || {
+                serde_json::json!({
+                    "workspace": &workspace_directory,
+                    "signature": &signature,
+                    "trigger": "supervisor_active_distributor_queue",
+                })
+            });
+            let (blocked, notices) = match parallel_mode_service.run_orchestrator_tick(
+                &workspace_directory,
+                ParallelModeOrchestratorTrigger::ManualDispatch,
+            ) {
+                Ok(result) => (result.blocked, result.notices),
+                Err(error) => (
+                    true,
+                    vec![format!("orchestrator retry tick failed: {error}")],
+                ),
+            };
+            raw_event_log::emit_lazy("parallel_orchestrator_retry_completed", || {
+                serde_json::json!({
+                    "workspace": &workspace_directory,
+                    "signature": &signature,
+                    "blocked": blocked,
+                    "notices_count": notices.len(),
+                })
+            });
+            let _ = tx.send(BackgroundMessage::ParallelModeOrchestratorTickCompleted {
+                workspace_directory,
+                blocked,
+                notices,
             });
         });
     }
@@ -764,6 +853,7 @@ impl NativeTuiApp {
         });
         if self.parallel_mode_enabled {
             self.spawn_pending_parallel_mode_dispatch_if_ready();
+            self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
         } else {
             self.pending_parallel_mode_dispatch_trigger = None;
         }
@@ -782,6 +872,7 @@ impl NativeTuiApp {
         }
 
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
     }
 
     pub(super) fn apply_parallel_mode_dispatch_refreshed(
@@ -828,6 +919,40 @@ impl NativeTuiApp {
             })
         });
         self.spawn_pending_parallel_mode_dispatch_if_ready();
+        self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
+    }
+
+    pub(super) fn apply_parallel_mode_orchestrator_tick_completed(
+        &mut self,
+        workspace_directory: &str,
+        blocked: bool,
+        notices: Vec<String>,
+    ) {
+        self.parallel_mode_orchestrator_tick_in_flight = false;
+        if !self.parallel_mode_enabled()
+            || self.planning_workspace_directory() != workspace_directory
+        {
+            return;
+        }
+
+        let notice_count = notices.len();
+        for notice in notices {
+            self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamExecutionObserved {
+                notice,
+            });
+        }
+        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+            workspace_directory,
+        );
+        self.invalidate_parallel_mode_supervisor_snapshot();
+        let status_text = if blocked {
+            format!("parallel mode: distributor retry blocked / notices: {notice_count}")
+        } else {
+            format!("parallel mode: distributor retry completed / notices: {notice_count}")
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
     }
 }
 
@@ -843,6 +968,30 @@ fn parallel_mode_supervisor_snapshot_has_running_slot(
     snapshot: &ParallelModeSupervisorSnapshot,
 ) -> bool {
     snapshot.pool.running_slots > 0
+}
+
+fn parallel_mode_supervisor_snapshot_has_active_distributor_queue(
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> bool {
+    !snapshot.distributor.queue_items.is_empty()
+}
+
+fn parallel_mode_distributor_tick_signature(
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> Option<String> {
+    let head = snapshot.distributor.queue_items.first()?;
+    Some(format!(
+        "{}|{}|{}|{}|{}|{}",
+        snapshot.workspace_path,
+        head.source_agent,
+        head.branch_name,
+        head.commit_short_sha,
+        head.queue_state.label(),
+        snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+    ))
 }
 
 struct ParallelModeDispatchExecutionContext<'a> {
@@ -1154,5 +1303,84 @@ impl NativeTuiApp {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod orchestrator_retry_tests {
+    use super::*;
+    use crate::domain::parallel_mode::{
+        ParallelModeDistributorQueueItem, ParallelModeOrchestratorStatus,
+        ParallelModeQueueItemState,
+    };
+
+    #[test]
+    fn distributor_tick_signature_changes_when_integration_worktree_recovers() {
+        let blocked = supervisor_with_distributor_readiness(
+            "blocked: expected `prerelease` but checked out `feature`",
+        );
+        let ready = supervisor_with_distributor_readiness("ready: prerelease worktree clean");
+
+        let blocked_signature = parallel_mode_distributor_tick_signature(&blocked)
+            .expect("active queue should produce retry signature");
+        let ready_signature = parallel_mode_distributor_tick_signature(&ready)
+            .expect("active queue should produce retry signature");
+
+        assert_ne!(
+            blocked_signature, ready_signature,
+            "integration readiness must be part of the retry signature so a fixed worktree retries the same queued head"
+        );
+        assert!(parallel_mode_supervisor_snapshot_has_active_distributor_queue(&ready));
+    }
+
+    #[test]
+    fn distributor_tick_signature_ignores_idle_distributor() {
+        let snapshot = ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/workspace",
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        );
+
+        assert!(parallel_mode_distributor_tick_signature(&snapshot).is_none());
+        assert!(!parallel_mode_supervisor_snapshot_has_active_distributor_queue(&snapshot));
+    }
+
+    fn supervisor_with_distributor_readiness(readiness: &str) -> ParallelModeSupervisorSnapshot {
+        let distributor = ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-1",
+                "Task One",
+                ParallelModeQueueItemState::Queued,
+                "akra-agent/slot-1/task-one",
+                "abc1234",
+                "commit-ready result accepted into distributor queue",
+            )],
+            Vec::new(),
+            "queued",
+            "commit-ready result accepted into distributor queue",
+        )
+        .with_orchestrator_status(ParallelModeOrchestratorStatus {
+            queue_head: "agent-1 / task-1 / queued".to_string(),
+            barrier_state: "head queued".to_string(),
+            blocked_reason: None,
+            conflict_files: Vec::new(),
+            held_queue_count: 0,
+            integration_worktree_readiness: readiness.to_string(),
+            slot_return_wait_reason: None,
+        });
+
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/workspace",
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            distributor,
+            None,
+        )
     }
 }

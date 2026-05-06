@@ -185,6 +185,17 @@ impl ShellRuntime {
                         outcome,
                     );
                 }
+                BackgroundMessage::ParallelModeOrchestratorTickCompleted {
+                    workspace_directory,
+                    blocked,
+                    notices,
+                } => {
+                    self.app.apply_parallel_mode_orchestrator_tick_completed(
+                        &workspace_directory,
+                        blocked,
+                        notices,
+                    );
+                }
                 BackgroundMessage::PostTurnEvaluated {
                     thread_id,
                     queued_from_turn_id,
@@ -238,6 +249,7 @@ impl ShellRuntime {
     fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
         if self.app.parallel_mode_supervisor_refresh_in_flight
             || self.app.parallel_mode_dispatch_refresh_in_flight
+            || self.app.parallel_mode_orchestrator_tick_in_flight
         {
             return false;
         }
