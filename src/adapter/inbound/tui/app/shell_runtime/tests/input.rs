@@ -133,6 +133,63 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
 }
 
 #[test]
+fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finishes() {
+    /*
+     * Supersession MUD navigation must not steal ordinary composer keys once the
+     * supervisor board is concrete. The footer still advertises Enter send, so a
+     * ready board has to let Space edit the prompt and Enter start the turn.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
+        &runtime.app().current_workspace_directory(),
+    ));
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    for character in "run".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::empty(),
+    )));
+    for character in "next".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(conversation.input_buffer.is_empty());
+    assert_eq!(conversation.status_text, "starting turn");
+    assert!(
+        conversation
+            .messages
+            .iter()
+            .any(|message| message.text == "run next"),
+        "Enter should submit the buffered prompt into the transcript"
+    );
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert!(runtime.take_redraw_request());
+}
+
+#[test]
 fn supersession_mud_navigation_changes_only_ui_selection_state() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
