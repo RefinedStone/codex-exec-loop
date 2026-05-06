@@ -8,16 +8,23 @@ use crate::adapter::inbound::tui::app::{
     PlannerWorkerStatus,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::codex_app_server_port::{
     AppServerStartupContext, CodexAppServerPort,
 };
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::parallel_agent_worker_port::{
+    ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+};
+use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
+use crate::application::service::planning::{
+    PlanningRuntimeSnapshot, PlanningServices, PlanningTaskIntakeRequest,
+};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
@@ -30,6 +37,9 @@ use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 use anyhow::Result;
 use crossterm::event::KeyEventState;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -125,6 +135,26 @@ impl SessionCatalogPort for FakeSessionCatalogPort {
         .into())
     }
 }
+#[derive(Debug)]
+struct CountingParallelAgentWorkerPort {
+    launch_count: Arc<AtomicUsize>,
+}
+
+impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
+    fn run_isolated_new_thread_stream(
+        &self,
+        _request: ParallelAgentWorkerStreamRequest<'_>,
+        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+    ) -> Result<()> {
+        self.launch_count.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct ShellRuntimeParallelFixture {
+    runtime: ShellRuntime,
+    launch_count: Arc<AtomicUsize>,
+}
 
 // Runtime fixtures use real services around fake ports so tests cover
 // ShellRuntime orchestration instead of isolated state mutations.
@@ -160,6 +190,53 @@ fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>
         );
     ShellRuntime::new(app)
 }
+fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
+    let workspace_dir = create_temp_git_repo(prefix);
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        authority.clone(),
+        authority,
+        Arc::new(NoopPlanningWorkerPort),
+    );
+    bootstrap_active_planning_workspace_with_services(&planning, &workspace_dir);
+    let proposal = planning
+        .runtime
+        .prepare_task_intake(PlanningTaskIntakeRequest {
+            workspace_directory: workspace_dir.clone(),
+            raw_prompt: "verify parallel entry does not auto dispatch".to_string(),
+            active_turn_id: None,
+            requested_direction_id: None,
+            observed_planning_revision: None,
+        })
+        .expect("task intake proposal should prepare");
+    planning
+        .runtime
+        .commit_task_intake(&proposal)
+        .expect("task intake proposal should commit");
+
+    let launch_count = Arc::new(AtomicUsize::new(0));
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort {
+        launch_count: launch_count.clone(),
+    });
+    let codex_port = Arc::new(FakeCodexAppServerPort);
+    let mut app = NativeTuiApp::new(
+        StartupService::new(codex_port.clone()),
+        SessionService::new(codex_port.clone()),
+        ConversationService::new(codex_port),
+        worker_port,
+        crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+        planning,
+    );
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
+    app.sync_draft_shell_workspace(&workspace_dir);
+    app.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(&workspace_dir);
+
+    ShellRuntimeParallelFixture {
+        runtime: ShellRuntime::new(app),
+        launch_count,
+    }
+}
 fn sample_startup_diagnostics(workspace_path: &str) -> StartupDiagnostics {
     StartupDiagnostics {
         cwd: workspace_path.to_string(),
@@ -186,6 +263,44 @@ fn create_temp_workspace(prefix: &str) -> String {
     fs::create_dir_all(&path).expect("temp workspace should be created");
     path.display().to_string()
 }
+fn create_temp_git_repo(prefix: &str) -> String {
+    let root = PathBuf::from(create_temp_workspace(prefix)).join("repo");
+    fs::create_dir_all(&root).expect("temp git repo should be created");
+
+    run_git(&root, &["init", "-q"]);
+    run_git(&root, &["config", "user.name", "RefinedStone"]);
+    run_git(&root, &["config", "user.email", "chem.en.9273@gmail.com"]);
+    fs::write(root.join("README.md"), "seed\n").expect("seed file should write");
+    fs::write(root.join(".gitignore"), "*.tmp\n").expect("gitignore should write");
+    run_git(&root, &["add", "README.md", ".gitignore"]);
+    run_git(&root, &["commit", "-qm", "init"]);
+    run_git(&root, &["branch", "prerelease"]);
+    run_git(
+        &root,
+        &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
+    );
+
+    fs::canonicalize(&root)
+        .expect("temp git repo should canonicalize")
+        .display()
+        .to_string()
+}
+
+fn run_git(repo_root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git command should spawn");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
 
 // Planning-aware session tests need an actual workspace on disk because the
 // runtime status row is built from the same filesystem-backed authority that
@@ -193,6 +308,13 @@ fn create_temp_workspace(prefix: &str) -> String {
 fn bootstrap_active_planning_workspace(workspace_dir: &str) {
     let planning =
         PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    bootstrap_active_planning_workspace_with_services(&planning, workspace_dir);
+}
+
+fn bootstrap_active_planning_workspace_with_services(
+    planning: &PlanningServices,
+    workspace_dir: &str,
+) {
     let stage_result = planning
         .workspace
         .stage_simple_mode_draft(workspace_dir)

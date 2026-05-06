@@ -1,6 +1,6 @@
 use super::{
-    ConversationState, InlineShellCommand, ShellOverlay, StartupState, make_test_runtime,
-    sample_startup_diagnostics,
+    ConversationState, InlineShellCommand, ShellOverlay, StartupState,
+    make_dispatch_ready_parallel_runtime, make_test_runtime, sample_startup_diagnostics,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey,
@@ -11,6 +11,9 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorState,
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use std::sync::atomic::Ordering;
+use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 
 /*
@@ -62,7 +65,7 @@ fn plain_character_input_uses_empty_modifier_check() {
 fn supersession_overlay_blocks_prompt_input_while_loading() {
     /*
      * Supersession overlay는 loading 중에만 일반 prompt 입력을 막는다. 이 시점에는
-     * pool reset/reconcile/dispatch가 진행 중이라 새 prompt 작성과 섞이면 상태를 읽기 어렵다.
+     * pool reset/reconcile이 진행 중이라 새 prompt 작성과 섞이면 상태를 읽기 어렵다.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
@@ -76,7 +79,7 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
             ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
-            Some("loading 2/4: pool reconcile".to_string()),
+            Some("loading 2/3: pool reconcile".to_string()),
         ));
     runtime.take_redraw_request();
 
@@ -146,7 +149,7 @@ fn parallel_task_update_dispatch_defers_while_entry_is_loading() {
             ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
-            Some("loading 2/4: pool reconcile".to_string()),
+            Some("loading 2/3: pool reconcile".to_string()),
         ));
 
     runtime
@@ -199,6 +202,48 @@ fn parallel_task_update_dispatch_defers_while_entry_is_loading() {
             .app()
             .pending_parallel_mode_task_update_dispatch
             .is_none()
+    );
+}
+
+#[test]
+fn bare_parallel_enter_does_not_auto_dispatch_ready_queue() {
+    /*
+     * :parallel entry is a control-plane action: readiness, disposable pool reset,
+     * and supervisor hydration. A ready queue item must not lease a slot or launch
+     * an isolated worker until a later task-update dispatch path asks for it.
+     */
+    let fixture = make_dispatch_ready_parallel_runtime("parallel-enter-no-dispatch");
+    let mut runtime = fixture.runtime;
+    for character in ":parallel".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let mut final_status = String::new();
+    for _ in 0..250 {
+        runtime.poll_background_messages();
+        if let ConversationState::Ready(conversation) = &runtime.app().conversation_state {
+            final_status = conversation.status_text.clone();
+            if final_status.contains("control tower ready") || final_status.contains("blocked /") {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(
+        final_status.contains("control tower ready"),
+        "parallel entry should finish successfully, got `{final_status}`"
+    );
+    assert_eq!(
+        fixture.launch_count.load(Ordering::SeqCst),
+        0,
+        "bare :parallel entry must not launch isolated workers"
     );
 }
 
@@ -345,7 +390,7 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
             ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
-            Some("loading 2/4: pool reconcile".to_string()),
+            Some("loading 2/3: pool reconcile".to_string()),
         ));
     runtime.take_redraw_request();
 
@@ -410,7 +455,7 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
             ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
-            Some("loading 2/4: pool reconcile".to_string()),
+            Some("loading 2/3: pool reconcile".to_string()),
         ));
     for character in "run next".chars() {
         runtime.app_mut().push_input_character(character);

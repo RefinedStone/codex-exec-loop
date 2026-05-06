@@ -149,7 +149,6 @@ fn build_capability_lines(
         Line::from(format!("loading pipeline {activity_frame}")),
         Line::from(format!("readiness: running {activity_frame}")),
         Line::from("pool reconcile: next"),
-        Line::from("queue dispatch: next"),
         Line::from("board refresh: next"),
         Line::from(format!(
             "stage: {}",
