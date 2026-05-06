@@ -67,6 +67,9 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("aria-label=\"Admin navigation\""));
     assert!(BASE_TEMPLATE.contains("class=\"workspace-chip\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/legacy\""));
+    assert!(BASE_TEMPLATE.contains("href=\"#pool\""));
+    assert!(BASE_TEMPLATE.contains("href=\"#pipeline\""));
+    assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
 
     for route in [
         "href=\"/admin/tasks\"",
@@ -91,10 +94,24 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "배포 파이프라인",
         "실시간 이벤트",
         "운영 지표",
+        "akra_admin",
+        "길드 성과",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(copy),
             "graphic dashboard should expose {copy}"
+        );
+    }
+
+    for anchor in [
+        "id=\"pool\"",
+        "id=\"agents\"",
+        "id=\"pipeline\"",
+        "id=\"metrics\"",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(anchor),
+            "graphic dashboard should expose sidebar target {anchor}"
         );
     }
 

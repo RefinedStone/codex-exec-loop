@@ -41,6 +41,146 @@
         --accent-soft: rgba(53, 208, 127, 0.13);
         --sidebar: #07101d;
       }
+      body.akra-graphic .admin-layout {
+        grid-template-columns: 228px minmax(0, 1fr);
+        background:
+          radial-gradient(circle at 86% 8%, rgba(61, 91, 147, 0.18), transparent 28%),
+          linear-gradient(180deg, #08111f, #07101d 64%, #050b14);
+      }
+      body.akra-graphic .sidebar {
+        gap: 20px;
+        padding: 16px 16px 18px;
+        background: linear-gradient(180deg, #07111f, #091827);
+        border-right: 1px solid rgba(137, 163, 202, 0.16);
+      }
+      body.akra-graphic .shell {
+        padding: 18px 18px 24px;
+      }
+      body.akra-graphic .page-header {
+        display: none;
+      }
+      .graphic-brand {
+        display: grid;
+        grid-template-columns: 54px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        padding-bottom: 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+      }
+      .graphic-building {
+        position: relative;
+        width: 50px;
+        height: 50px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background:
+          linear-gradient(90deg, transparent 10px, rgba(255,255,255,0.08) 10px 12px, transparent 12px 22px, rgba(255,255,255,0.08) 22px 24px, transparent 24px),
+          linear-gradient(#1d3457 0 48%, #6a4d31 48% 100%);
+        box-shadow: inset 0 0 0 3px rgba(0,0,0,0.22), 0 12px 24px rgba(0,0,0,0.26);
+      }
+      .graphic-building::before {
+        content: "";
+        position: absolute;
+        left: 11px;
+        right: 11px;
+        top: 9px;
+        height: 22px;
+        border-radius: 3px;
+        background:
+          linear-gradient(90deg, #f0c64c 0 5px, transparent 5px 11px, #f0c64c 11px 16px, transparent 16px 22px, #f0c64c 22px),
+          linear-gradient(#0e1a2c, #1d3457);
+      }
+      .graphic-brand .brand-title {
+        font-size: 22px;
+      }
+      .graphic-beta {
+        display: inline-block;
+        margin-left: 7px;
+        padding: 3px 7px;
+        border-radius: 6px;
+        color: #ded8ff;
+        background: rgba(125, 100, 255, 0.36);
+        font-size: 11px;
+        vertical-align: middle;
+      }
+      .graphic-nav {
+        gap: 8px;
+      }
+      .graphic-nav a {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 9px;
+        align-items: center;
+        min-height: 40px;
+        color: #dce7f6;
+      }
+      .graphic-nav a.active {
+        background: rgba(55, 123, 220, 0.22);
+        border-color: rgba(93, 169, 255, 0.28);
+      }
+      .nav-icon {
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.14);
+        color: #85baff;
+        background: rgba(255,255,255,0.06);
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .graphic-progress {
+        display: grid;
+        gap: 16px;
+        margin-top: auto;
+        padding-top: 14px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+        color: #dce7f6;
+      }
+      .graphic-rank {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+      }
+      .rank-medal {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        color: #071120;
+        background: linear-gradient(135deg, #f4c84a, #35d07f);
+        font-weight: 900;
+      }
+      .achievement-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 32px);
+        gap: 8px;
+      }
+      .achievement {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background:
+          radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px),
+          linear-gradient(135deg, #35d07f, #1c4b78);
+        box-shadow: inset 0 0 0 3px rgba(0,0,0,0.18);
+      }
+      .achievement:nth-child(2) { background: radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px), linear-gradient(135deg, #f4c84a, #6d431f); }
+      .achievement:nth-child(3) { background: radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px), linear-gradient(135deg, #9d7cff, #3b266d); }
+      .achievement:nth-child(4) { background: radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px), linear-gradient(135deg, #ff6b6b, #5b1f2a); }
+      .system-ready-dot {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        margin-right: 8px;
+        border-radius: 999px;
+        background: #76e37f;
+        box-shadow: 0 0 0 4px rgba(118, 227, 127, 0.12);
+      }
       * { box-sizing: border-box; }
       body {
         margin: 0;
@@ -541,6 +681,9 @@
         .workspace-chip {
           margin-top: 0;
         }
+        .graphic-progress {
+          margin-top: 0;
+        }
         .shell {
           padding: 16px 14px 24px;
         }
@@ -676,6 +819,54 @@
   <body class="{% if current_nav == "akra_dashboard" %}akra-graphic{% endif %}">
     <div class="admin-layout">
       <aside class="sidebar">
+        {% if current_nav == "akra_dashboard" %}
+        <div class="graphic-brand">
+          <span class="graphic-building" aria-hidden="true"></span>
+          <div>
+            <div class="brand-title">게임발전국 <span class="graphic-beta">BETA</span></div>
+            <div class="eyebrow">AKRA ADMIN CONTROL CENTER</div>
+          </div>
+        </div>
+        <nav class="nav graphic-nav" aria-label="Admin navigation">
+          <div class="nav-label">메뉴</div>
+          <a href="/admin" class="active"><span class="nav-icon">D</span><span>대시보드</span></a>
+          <a href="#pool"><span class="nav-icon">P</span><span>워크트리 풀</span></a>
+          <a href="#agents"><span class="nav-icon">A</span><span>요원 관리</span></a>
+          <a href="#tasks"><span class="nav-icon">T</span><span>작업 관리</span></a>
+          <a href="#pipeline"><span class="nav-icon">R</span><span>배포 파이프라인</span></a>
+          <a href="#events"><span class="nav-icon">E</span><span>이벤트 로그</span></a>
+          <a href="#metrics"><span class="nav-icon">M</span><span>메트릭스</span></a>
+          <a href="/admin/controls"><span class="nav-icon">C</span><span>설정</span></a>
+          <a href="/admin/legacy"><span class="nav-icon">L</span><span>Legacy Admin</span></a>
+        </nav>
+        <div class="graphic-progress">
+          <div>
+            <div class="nav-label">국가 성과</div>
+            <div class="graphic-rank">
+              <span class="rank-medal">24</span>
+              <div>
+                <strong>Lv. 24</strong><br>
+                <small>프로젝트 명성 7,340</small><br>
+                <small style="color:#35d07f">+120 오늘</small>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="nav-label">이번 주 업적</div>
+            <div class="achievement-grid" aria-hidden="true">
+              <span class="achievement"></span>
+              <span class="achievement"></span>
+              <span class="achievement"></span>
+              <span class="achievement"></span>
+              <span class="achievement"></span>
+            </div>
+          </div>
+          <div>
+            <small>AKRA v0.9.0-beta</small><br>
+            <small><span class="system-ready-dot"></span>모든 시스템 정상</small>
+          </div>
+        </div>
+        {% else %}
         <div class="brand">
           <div class="eyebrow">AKRA Admin</div>
           <div class="brand-title">{% if current_nav == "akra_dashboard" %}게임발전국{% else %}Planning Admin{% endif %}</div>
@@ -692,6 +883,7 @@
           <span>Workspace</span>
           <span class="mono">{{ workspace_dir }}</span>
         </div>
+        {% endif %}
       </aside>
       <main class="shell">
         <header class="page-header">

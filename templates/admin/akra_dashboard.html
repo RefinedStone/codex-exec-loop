@@ -2,383 +2,778 @@
 {% block content %}
 <style>
   .akra-game {
-    --game-bg: #08111f;
-    --game-panel: #0e1b2d;
-    --game-panel-soft: #12243a;
-    --game-line: rgba(141, 164, 196, 0.26);
-    --game-ink: #edf6ff;
-    --game-muted: #94a8c0;
+    --game-bg: #071120;
+    --game-panel: rgba(12, 24, 41, 0.94);
+    --game-panel-strong: rgba(15, 30, 52, 0.98);
+    --game-line: rgba(130, 155, 193, 0.24);
+    --game-line-strong: rgba(154, 180, 220, 0.36);
+    --game-ink: #f2f7ff;
+    --game-muted: #98abc4;
     --game-green: #35d07f;
     --game-blue: #5da9ff;
-    --game-yellow: #f4c84a;
+    --game-yellow: #f5c84b;
     --game-red: #ff6b6b;
     --game-violet: #9d7cff;
-    max-width: 1480px;
-    margin: 0 auto;
+    min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
-  .akra-game .game-card,
-  .akra-game .kpi,
-  .akra-game .office-board,
-  .akra-game .game-panel {
-    background: linear-gradient(180deg, rgba(20, 36, 58, 0.96), rgba(9, 20, 35, 0.98));
-    border: 1px solid var(--game-line);
-    border-radius: 8px;
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
-  }
-  .akra-game .top-strip {
+  .akra-game * { min-width: 0; }
+  .akra-topbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 14px;
+    grid-template-columns: minmax(260px, 1fr) repeat(3, auto) minmax(180px, auto);
+    gap: 18px;
     align-items: center;
-    margin-bottom: 14px;
+    padding: 0 2px 16px;
+    border-bottom: 1px solid rgba(148, 170, 204, 0.12);
   }
-  .akra-game .title-block h2 {
+  .akra-title {
+    display: flex;
+    gap: 13px;
+    align-items: center;
+  }
+  .pixel-emblem,
+  .pixel-avatar {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background:
+      linear-gradient(90deg, transparent 12px, rgba(255,255,255,0.08) 12px 14px, transparent 14px),
+      linear-gradient(#203b63 0 48%, #5a442e 48% 100%);
+    box-shadow: inset 0 0 0 3px rgba(0,0,0,0.22), 0 10px 26px rgba(0,0,0,0.32);
+  }
+  .pixel-emblem::before,
+  .pixel-avatar::before {
+    content: "";
+    width: 24px;
+    height: 20px;
+    border-radius: 3px;
+    background:
+      linear-gradient(90deg, #f0c64c 0 5px, transparent 5px 9px, #f0c64c 9px 14px, transparent 14px 18px, #f0c64c 18px 100%),
+      linear-gradient(#1d304e 0 50%, #2b1720 50% 100%);
+  }
+  .pixel-avatar {
+    width: 38px;
+    height: 38px;
+    background: linear-gradient(#143b5e 0 45%, #513c28 45% 100%);
+  }
+  .akra-title h2 {
     margin: 0;
-    font-size: 22px;
+    font-size: 27px;
+    line-height: 1.05;
+    letter-spacing: 0;
   }
-  .akra-game .title-block p,
+  .akra-title small,
+  .top-stat small,
   .akra-game p,
   .akra-game small {
     color: var(--game-muted);
   }
-  .akra-game .mode-chip,
-  .akra-game .status-chip {
-    padding: 8px 10px;
+  .top-stat {
+    display: grid;
+    gap: 4px;
+    min-width: 130px;
+    padding: 0 18px;
+    border-left: 1px solid rgba(148, 170, 204, 0.14);
+  }
+  .top-stat strong {
+    color: var(--game-ink);
+    font-size: 14px;
+  }
+  .mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+  }
+  .mode-toggle b {
+    padding: 4px 10px;
     border-radius: 999px;
-    border: 1px solid var(--game-line);
-    background: rgba(255,255,255,0.05);
-    font-size: 13px;
-  }
-  .akra-game .mode-chip strong,
-  .akra-game .status-chip.ready strong {
-    color: var(--game-green);
-  }
-  .akra-game .status-chip.blocked strong {
-    color: var(--game-red);
-  }
-  .akra-game .kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(8, minmax(8rem, 1fr));
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  .akra-game .kpi {
-    min-height: 92px;
-    padding: 13px;
-    display: grid;
-    align-content: space-between;
-  }
-  .akra-game .kpi span {
-    color: var(--game-muted);
+    color: #061525;
+    background: var(--game-green);
     font-size: 12px;
   }
-  .akra-game .kpi strong {
+  .admin-user {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+  }
+  .admin-user strong,
+  .admin-user small {
+    display: block;
+  }
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(116px, 1fr));
+    gap: 12px;
+    margin: 16px 0 12px;
+  }
+  .kpi,
+  .game-panel,
+  .office-board,
+  .pool-overlay {
+    border: 1px solid var(--game-line);
+    border-radius: 8px;
+    background: linear-gradient(180deg, var(--game-panel-strong), rgba(8, 18, 32, 0.98));
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+  }
+  .kpi {
+    min-height: 96px;
+    padding: 14px;
+    display: grid;
+    gap: 8px;
+  }
+  .kpi .kpi-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: var(--game-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .kpi strong {
     font-size: 26px;
     line-height: 1;
   }
-  .akra-game .board-row {
+  .kpi small.positive { color: var(--game-green); }
+  .kpi small.negative { color: var(--game-red); }
+  .kpi-icon {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    color: #061525;
+    background: var(--game-blue);
+    font-size: 12px;
+    font-weight: 900;
+  }
+  .kpi-icon.green { background: var(--game-green); }
+  .kpi-icon.yellow { background: var(--game-yellow); }
+  .kpi-icon.red { background: var(--game-red); }
+  .kpi-icon.violet { background: var(--game-violet); color: #fff; }
+  .board-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 316px;
     gap: 12px;
     align-items: stretch;
   }
-  .akra-game .office-board {
+  .office-board {
     position: relative;
-    min-height: 520px;
+    min-height: 540px;
     overflow: hidden;
     background:
-      linear-gradient(30deg, transparent 42%, rgba(82, 105, 135, 0.16) 43%, rgba(82, 105, 135, 0.16) 44%, transparent 45%),
-      linear-gradient(150deg, transparent 42%, rgba(82, 105, 135, 0.14) 43%, rgba(82, 105, 135, 0.14) 44%, transparent 45%),
-      radial-gradient(circle at 72% 20%, rgba(94, 169, 255, 0.2), transparent 32%),
-      #101929;
-    background-size: 54px 31px, 54px 31px, auto, auto;
+      linear-gradient(30deg, transparent 42%, rgba(122, 148, 184, 0.18) 43%, rgba(122, 148, 184, 0.18) 44%, transparent 45%),
+      linear-gradient(150deg, transparent 42%, rgba(122, 148, 184, 0.14) 43%, rgba(122, 148, 184, 0.14) 44%, transparent 45%),
+      radial-gradient(circle at 72% 12%, rgba(125, 91, 188, 0.18), transparent 28%),
+      linear-gradient(180deg, #142238, #0e1728);
+    background-size: 58px 33px, 58px 33px, auto, auto;
   }
-  .akra-game .room {
+  .office-board::before {
+    content: "";
     position: absolute;
-    inset: 34px 38px;
-    transform: skewY(-9deg);
-    border: 1px solid rgba(190, 210, 238, 0.18);
-    background: linear-gradient(135deg, rgba(58, 42, 31, 0.78), rgba(31, 48, 67, 0.88));
+    inset: 0;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 100%),
+      linear-gradient(rgba(255,255,255,0.04) 0 1px, transparent 1px 100%);
+    background-size: 34px 34px;
+    opacity: 0.35;
+    pointer-events: none;
   }
-  .akra-game .desk,
-  .akra-game .server,
-  .akra-game .distributor-desk,
-  .akra-game .event-board {
+  .room {
     position: absolute;
-    width: 132px;
-    min-height: 72px;
-    padding: 9px;
-    border: 1px solid rgba(230, 240, 255, 0.18);
-    background: linear-gradient(160deg, rgba(96, 73, 47, 0.95), rgba(37, 52, 72, 0.96));
-    box-shadow: 12px 16px 0 rgba(0,0,0,0.22);
+    left: 9%;
+    top: 7%;
+    width: 70%;
+    height: 82%;
+    transform: skewY(-10deg);
+    border: 1px solid rgba(215, 229, 250, 0.17);
+    background:
+      linear-gradient(90deg, rgba(70, 83, 109, 0.42) 0 1px, transparent 1px 100%),
+      linear-gradient(rgba(231, 189, 120, 0.12) 0 1px, transparent 1px 100%),
+      linear-gradient(135deg, rgba(90, 57, 36, 0.86), rgba(37, 55, 76, 0.88));
+    background-size: 74px 74px, 74px 74px, auto;
+    box-shadow: inset 0 0 70px rgba(0,0,0,0.28), 22px 30px 0 rgba(0,0,0,0.2);
   }
-  .akra-game .server {
-    width: 118px;
-    background: linear-gradient(160deg, #1b2d44, #0c1524);
+  .pool-overlay {
+    position: absolute;
+    z-index: 5;
+    left: 18px;
+    top: 16px;
+    width: 210px;
+    padding: 12px;
   }
-  .akra-game .distributor-desk {
-    right: 14%;
-    top: 18%;
+  .panel-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 10px;
   }
-  .akra-game .event-board {
-    right: 7%;
-    bottom: 12%;
-    background: linear-gradient(160deg, #25334b, #111b2b);
+  .panel-title h3 {
+    margin: 0;
+    color: var(--game-ink);
+    font-size: 15px;
   }
-  .akra-game .desk.agent-1 { left: 26%; top: 30%; }
-  .akra-game .desk.agent-2 { left: 38%; top: 48%; }
-  .akra-game .desk.agent-3 { left: 18%; top: 56%; }
-  .akra-game .server.slot-1 { left: 7%; top: 18%; }
-  .akra-game .server.slot-2 { left: 7%; top: 36%; }
-  .akra-game .server.slot-3 { left: 7%; top: 54%; }
-  .akra-game .sprite {
-    display: inline-grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
+  .slot-card {
+    display: grid;
+    grid-template-columns: 1fr 54px;
+    gap: 8px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid rgba(255,255,255,0.11);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+  }
+  .slot-card + .slot-card { margin-top: 8px; }
+  .slot-card strong,
+  .slot-card small {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+  .slot-card.severity-normal { border-color: rgba(53, 208, 127, 0.34); background: rgba(53, 208, 127, 0.09); }
+  .slot-card.severity-info { border-color: rgba(93, 169, 255, 0.34); background: rgba(93, 169, 255, 0.09); }
+  .slot-card.severity-warning { border-color: rgba(245, 200, 75, 0.38); background: rgba(245, 200, 75, 0.1); }
+  .slot-card.severity-danger { border-color: rgba(255, 107, 107, 0.38); background: rgba(255, 107, 107, 0.1); }
+  .slot-card.severity-muted { border-color: rgba(160, 172, 190, 0.25); background: rgba(160, 172, 190, 0.08); }
+  .mini-server {
+    height: 48px;
     border-radius: 6px;
-    background: var(--game-blue);
-    color: #05101e;
-    font-weight: 800;
+    border: 1px solid rgba(255,255,255,0.16);
+    background:
+      radial-gradient(circle at 24px 11px, var(--game-green) 0 3px, transparent 4px),
+      radial-gradient(circle at 34px 25px, var(--game-blue) 0 3px, transparent 4px),
+      linear-gradient(90deg, #263d5d 0 48%, #0f1b2d 48% 100%);
+    box-shadow: inset 0 0 0 3px rgba(0,0,0,0.22);
   }
-  .akra-game .severity-normal .sprite { background: var(--game-green); }
-  .akra-game .severity-info .sprite { background: var(--game-blue); }
-  .akra-game .severity-warning .sprite { background: var(--game-yellow); }
-  .akra-game .severity-danger .sprite { background: var(--game-red); }
-  .akra-game .severity-muted .sprite { background: #7e8b9d; }
-  .akra-game .bubble {
+  .scene-object {
     position: absolute;
-    top: -18px;
+    z-index: 2;
+    border: 1px solid rgba(232, 241, 255, 0.17);
+    background: linear-gradient(160deg, rgba(104, 76, 48, 0.96), rgba(35, 51, 71, 0.97));
+    box-shadow: 12px 16px 0 rgba(0,0,0,0.24);
+  }
+  .server-rack {
+    left: 16%;
+    top: 15%;
+    width: 190px;
+    height: 112px;
+    background:
+      repeating-linear-gradient(90deg, #101d30 0 28px, #233b5d 28px 32px),
+      linear-gradient(#1e334f, #0b1422);
+  }
+  .server-rack::after,
+  .whiteboard::after,
+  .couch::after {
+    content: "";
+    position: absolute;
+    inset: 10px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .whiteboard {
+    right: 22%;
+    top: 13%;
+    width: 168px;
+    height: 92px;
+    background: linear-gradient(#e7e2d3, #b7bdc5);
+    color: #1c2530;
+    padding: 14px;
+    font-size: 12px;
+    box-shadow: 9px 12px 0 rgba(0,0,0,0.18);
+  }
+  .couch {
+    right: 20%;
+    bottom: 17%;
+    width: 160px;
+    height: 70px;
+    background: linear-gradient(160deg, #61422d, #252d42);
+  }
+  .desk,
+  .distributor-desk,
+  .event-board {
+    width: 154px;
+    min-height: 90px;
+    padding: 12px;
+  }
+  .desk.agent-1 { left: 35%; top: 28%; }
+  .desk.agent-2 { left: 48%; top: 50%; }
+  .desk.agent-3 { left: 26%; top: 56%; }
+  .desk.agent-4 { left: 59%; top: 35%; }
+  .desk.agent-5 { left: 39%; top: 68%; }
+  .distributor-desk {
+    right: 12%;
+    top: 33%;
+    background: linear-gradient(160deg, rgba(48, 69, 92, 0.98), rgba(23, 34, 50, 0.99));
+  }
+  .event-board {
+    right: 6%;
+    bottom: 10%;
+    background: linear-gradient(160deg, rgba(87, 64, 42, 0.98), rgba(21, 34, 51, 0.99));
+  }
+  .speech {
+    position: absolute;
+    top: -21px;
     left: 22px;
+    z-index: 3;
+    max-width: 132px;
     padding: 5px 8px;
+    border: 1px solid rgba(24, 69, 42, 0.24);
     border-radius: 6px;
-    background: #f7fff8;
-    color: #122019;
+    color: #102015;
+    background: #f2fff4;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.18);
     font-size: 12px;
     font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .akra-game .label-line {
+  .agent-sprite {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    color: #05101e;
+    background:
+      linear-gradient(#f4c38d 0 38%, transparent 38%),
+      linear-gradient(90deg, #243c66 0 50%, #1b2841 50% 100%);
+    border: 2px solid rgba(0,0,0,0.3);
+    font-size: 11px;
+    font-weight: 900;
+  }
+  .severity-danger .agent-sprite { background: linear-gradient(#f4c38d 0 38%, transparent 38%), linear-gradient(90deg, #7d2f3f 0 50%, #3b1f2a 50% 100%); color: #fff; }
+  .severity-warning .agent-sprite { background: linear-gradient(#f4c38d 0 38%, transparent 38%), linear-gradient(90deg, #8b6b24 0 50%, #3f3218 50% 100%); }
+  .severity-normal .agent-sprite { background: linear-gradient(#f4c38d 0 38%, transparent 38%), linear-gradient(90deg, #2a7b52 0 50%, #183c2b 50% 100%); color: #fff; }
+  .object-label {
     display: grid;
     gap: 2px;
-    margin-top: 6px;
+    margin-top: 8px;
     font-size: 12px;
   }
-  .akra-game .right-stack,
-  .akra-game .bottom-grid {
+  .object-label span,
+  .object-label small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .right-stack,
+  .bottom-grid {
     display: grid;
     gap: 12px;
   }
-  .akra-game .game-panel {
+  .right-stack {
+    grid-template-rows: minmax(250px, 1.15fr) minmax(210px, 0.85fr);
+    max-height: 540px;
+  }
+  .game-panel {
     padding: 14px;
-    min-width: 0;
   }
-  .akra-game .game-panel h3 {
-    margin: 0 0 10px;
-    color: var(--game-ink);
+  .right-stack .game-panel {
+    overflow: hidden;
   }
-  .akra-game .event-row,
-  .akra-game .queue-row,
-  .akra-game .metric-line {
+  .right-stack #events {
+    overflow: auto;
+  }
+  .event-row,
+  .queue-row,
+  .metric-line,
+  .system-row {
     display: grid;
     gap: 4px;
     padding: 9px 0;
     border-bottom: 1px solid rgba(255,255,255,0.08);
   }
-  .akra-game .event-row:last-child,
-  .akra-game .queue-row:last-child,
-  .akra-game .metric-line:last-child {
+  .event-row:last-child,
+  .queue-row:last-child,
+  .metric-line:last-child,
+  .system-row:last-child {
     border-bottom: 0;
   }
-  .akra-game .bottom-grid {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr);
+  .event-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+    align-items: start;
+  }
+  .event-row strong,
+  .event-row small,
+  .queue-row strong,
+  .queue-row small,
+  .metric-line strong,
+  .metric-line small {
+    overflow-wrap: anywhere;
+  }
+  .event-icon {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    color: #071120;
+    background: var(--game-blue);
+    font-size: 10px;
+    font-weight: 900;
+  }
+  .event-row.severity-danger .event-icon { background: var(--game-red); color: #fff; }
+  .event-row.severity-warning .event-icon { background: var(--game-yellow); }
+  .event-row.severity-success .event-icon { background: var(--game-green); }
+  .radar {
+    position: relative;
+    width: 174px;
+    height: 136px;
+    margin: 8px auto 2px;
+    background:
+      radial-gradient(circle, rgba(53,208,127,0.16) 0 28%, transparent 29%),
+      linear-gradient(30deg, transparent 48%, rgba(53,208,127,0.32) 49% 51%, transparent 52%),
+      linear-gradient(90deg, transparent 48%, rgba(53,208,127,0.24) 49% 51%, transparent 52%),
+      linear-gradient(150deg, transparent 48%, rgba(53,208,127,0.24) 49% 51%, transparent 52%);
+    clip-path: polygon(50% 5%, 94% 35%, 78% 92%, 22% 92%, 6% 35%);
+    border: 1px solid rgba(53,208,127,0.34);
+  }
+  .radar::after {
+    content: "";
+    position: absolute;
+    inset: 26px 36px;
+    background: rgba(53,208,127,0.22);
+    clip-path: polygon(50% 0, 88% 40%, 72% 96%, 24% 82%, 8% 38%);
+  }
+  .bottom-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.05fr) minmax(0, 0.9fr);
     margin-top: 12px;
   }
-  .akra-game .pipeline {
+  .progress-track {
+    width: 100%;
+    height: 9px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.1);
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--game-blue), var(--game-green));
+  }
+  .timeline {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .trail-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .trail-list li {
+    position: relative;
+    padding-left: 18px;
+    color: var(--game-muted);
+    font-size: 13px;
+  }
+  .trail-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--game-green);
+    box-shadow: 0 0 0 3px rgba(53,208,127,0.12);
+  }
+  .pipeline {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: 7px;
+    gap: 8px;
+    align-items: start;
     margin-bottom: 12px;
   }
-  .akra-game .step {
-    min-height: 54px;
-    padding: 8px;
-    border-radius: 6px;
+  .step {
+    position: relative;
+    min-height: 60px;
+    padding: 10px 8px;
     border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 7px;
     background: rgba(255,255,255,0.05);
     color: var(--game-muted);
     font-size: 12px;
+    text-align: center;
   }
-  .akra-game .step.done,
-  .akra-game .step.active {
+  .step::before {
+    content: "";
+    display: block;
+    width: 14px;
+    height: 14px;
+    margin: 0 auto 7px;
+    border-radius: 999px;
+    background: rgba(152,171,196,0.45);
+  }
+  .step.done,
+  .step.active {
     color: var(--game-ink);
     border-color: rgba(53, 208, 127, 0.55);
-    background: rgba(53, 208, 127, 0.14);
+    background: rgba(53, 208, 127, 0.13);
   }
-  .akra-game .step.blocked,
-  .akra-game .step.failed {
+  .step.done::before,
+  .step.active::before { background: var(--game-green); }
+  .step.blocked,
+  .step.failed {
     color: var(--game-ink);
     border-color: rgba(255, 107, 107, 0.6);
-    background: rgba(255, 107, 107, 0.14);
+    background: rgba(255, 107, 107, 0.13);
   }
-  .akra-game .badges {
+  .step.blocked::before,
+  .step.failed::before { background: var(--game-red); }
+  .queue-row {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .queue-row .agent-token {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 7px;
+    color: #061525;
+    background: var(--game-yellow);
+    font-size: 11px;
+    font-weight: 900;
+  }
+  .queue-state {
+    min-width: 76px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    color: var(--game-blue);
+    background: rgba(93,169,255,0.12);
+    text-align: center;
+    font-size: 12px;
+  }
+  .badges,
+  .system-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 7px;
+    gap: 8px;
   }
-  .akra-game .badge {
-    padding: 6px 8px;
+  .badge,
+  .system-chip {
+    padding: 7px 9px;
+    border: 1px solid rgba(53, 208, 127, 0.42);
     border-radius: 999px;
-    border: 1px solid rgba(53, 208, 127, 0.45);
     color: var(--game-green);
     background: rgba(53, 208, 127, 0.08);
     font-size: 12px;
   }
-  @media (max-width: 1180px) {
-    .akra-game .kpi-grid { grid-template-columns: repeat(4, minmax(8rem, 1fr)); }
-    .akra-game .board-row,
-    .akra-game .bottom-grid { grid-template-columns: 1fr; }
+  .system-chip {
+    flex: 1 1 116px;
+    border-radius: 8px;
+    text-align: center;
   }
-  @media (max-width: 760px) {
-    .akra-game .top-strip,
-    .akra-game .kpi-grid,
-    .akra-game .pipeline { grid-template-columns: 1fr; }
-    .akra-game .office-board { min-height: 680px; }
-    .akra-game .desk,
-    .akra-game .server,
-    .akra-game .distributor-desk,
-    .akra-game .event-board {
+  .error-notice {
+    margin: 14px 0;
+    border-color: rgba(255, 107, 107, 0.34);
+    background: rgba(255, 107, 107, 0.1);
+    color: var(--game-ink);
+  }
+  @media (max-width: 1320px) {
+    .kpi-grid { grid-template-columns: repeat(4, minmax(128px, 1fr)); }
+    .board-row,
+    .bottom-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 860px) {
+    .akra-topbar,
+    .kpi-grid,
+    .pipeline,
+    .timeline { grid-template-columns: 1fr; }
+    .admin-user { justify-content: flex-start; }
+    .office-board {
+      display: grid;
+      gap: 12px;
+      min-height: 0;
+      padding: 14px;
+    }
+    .room,
+    .server-rack,
+    .whiteboard,
+    .couch { display: none; }
+    .pool-overlay,
+    .desk,
+    .distributor-desk,
+    .event-board {
       position: relative;
       left: auto !important;
       right: auto !important;
       top: auto !important;
       bottom: auto !important;
-      width: calc(100% - 32px);
-      margin: 14px 16px;
+      width: 100%;
+      z-index: 1;
     }
-    .akra-game .room { display: none; }
+    .speech { position: static; display: inline-block; margin-bottom: 8px; }
   }
 </style>
 
-<section class="akra-game">
-  <div class="top-strip">
-    <div class="title-block">
-      <h2>게임발전국 <span class="mode-chip">AKRA Admin Control Center</span></h2>
-      <p class="mono">{{ dashboard.workspace.path }}</p>
+<section class="akra-game" aria-label="게임발전국 AKRA Admin Control Center">
+  <header class="akra-topbar">
+    <div class="akra-title">
+      <span class="pixel-emblem" aria-hidden="true"></span>
+      <div>
+        <h2>게임발전국</h2>
+        <small>AKRA ADMIN CONTROL CENTER</small>
+      </div>
     </div>
-    <span class="mode-chip">Parallel Mode <strong>{{ dashboard.workspace.mode }}</strong></span>
-    <span class="status-chip {{ dashboard.workspace.readiness }}">준비도 <strong>{{ dashboard.workspace.readiness }}</strong></span>
-  </div>
+    <div class="top-stat mode-toggle">
+      <small>Parallel Mode</small>
+      <b>ON</b>
+    </div>
+    <div class="top-stat">
+      <small>Automation Epoch</small>
+      <strong>#{{ dashboard.automation_epoch }}</strong>
+    </div>
+    <div class="top-stat">
+      <small>Last Updated</small>
+      <strong>{{ dashboard.generated_time_label }}</strong>
+    </div>
+    <div class="admin-user">
+      <span class="pixel-avatar" aria-hidden="true"></span>
+      <div>
+        <strong>akra_admin</strong>
+        <small>최고 관리자</small>
+      </div>
+    </div>
+  </header>
 
   {% if let Some(notice) = dashboard.workspace.top_notice %}
   <div class="notice error-notice">{{ notice }}</div>
   {% endif %}
 
-  <div class="kpi-grid">
-    <div class="kpi"><span>총 작업</span><strong>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small>snapshot 기반</small></div>
-    <div class="kpi"><span>성공률</span><strong>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
-    <div class="kpi"><span>오늘 처리량</span><strong>{% if let Some(count) = dashboard.kpis.today_throughput %}{{ count }}{% else %}-{% endif %}</strong><small>미집계</small></div>
-    <div class="kpi"><span>활성 요원</span><strong>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong><small>roster snapshot</small></div>
-    <div class="kpi"><span>풀 슬롯</span><strong>{{ dashboard.kpis.pool_running }} / {{ dashboard.kpis.pool_configured_size }}</strong><small>여유 {{ dashboard.kpis.pool_idle }}</small></div>
-    <div class="kpi"><span>대기 작업</span><strong>{{ dashboard.kpis.queue_depth }}</strong><small>distributor depth</small></div>
-    <div class="kpi"><span>준비도</span><strong>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
-    <div class="kpi"><span>분배기 상태</span><strong>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
+  <div class="kpi-grid" aria-label="AKRA operation KPIs">
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon yellow">T</i>총 작업</span><strong>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small class="positive">snapshot 기반</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon green">S</i>성공률</span><strong>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon red">D</i>오늘 처리량</span><strong>{% if let Some(count) = dashboard.kpis.today_throughput %}{{ count }}{% else %}-{% endif %}</strong><small>미집계</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon">A</i>활성 요원</span><strong>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong><small class="positive">roster snapshot</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon yellow">P</i>풀 슬롯</span><strong>{{ dashboard.kpis.pool_running }} / {{ dashboard.kpis.pool_configured_size }}</strong><small>여유 {{ dashboard.kpis.pool_idle }}</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon red">Q</i>대기 작업</span><strong>{{ dashboard.kpis.queue_depth }}</strong><small>distributor depth</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon green">R</i>준비도</span><strong>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
+    <div class="kpi"><span class="kpi-head"><i class="kpi-icon violet">B</i>분배기 상태</span><strong>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
   </div>
 
   <div class="board-row">
-    <div class="office-board" aria-label="AKRA isometric office board">
-      <div class="room"></div>
-      {% for slot in dashboard.pool.slots %}
-      <div class="server slot-{{ loop.index }} severity-{{ slot.severity }}">
-        <span class="bubble">{{ slot.bubble_label }}</span>
-        <span class="sprite">S{{ loop.index }}</span>
-        <div class="label-line">
-          <strong>{{ slot.slot_id }}</strong>
-          <span>{{ slot.label }}</span>
-          <small>{{ slot.note }}</small>
+    <div class="office-board" id="agents" aria-label="AKRA isometric office board">
+      <div class="room" aria-hidden="true"></div>
+      <div class="scene-object server-rack" aria-hidden="true"></div>
+      <div class="scene-object whiteboard" aria-hidden="true">QUEUE<br>1. Plan<br>2. Pack<br>3. Refactor</div>
+      <div class="scene-object couch" aria-hidden="true"></div>
+
+      <aside class="pool-overlay" id="pool">
+        <div class="panel-title">
+          <h3>워크트리 풀</h3>
+          <small>{{ dashboard.pool.configured_size }} / {{ dashboard.pool.configured_size }}</small>
         </div>
-      </div>
-      {% endfor %}
+        {% for slot in dashboard.pool.slots %}
+        <div class="slot-card severity-{{ slot.severity }}">
+          <div>
+            <strong>{{ slot.slot_id }}</strong>
+            <small>{{ slot.label }}</small>
+            <small>{{ slot.owner_agent_id.as_deref().unwrap_or("-") }}</small>
+          </div>
+          <span class="mini-server" aria-hidden="true"></span>
+        </div>
+        {% endfor %}
+      </aside>
 
       {% for agent in dashboard.agents.entries %}
-      <div class="desk agent-{{ loop.index }}">
-        <span class="bubble">{{ agent.bubble_label }}</span>
-        <span class="sprite">{{ agent.display_name }}</span>
-        <div class="label-line">
+      <div class="scene-object desk agent-{{ loop.index }} severity-{% if agent.status == "blocked" %}danger{% else if agent.status == "cleanup" %}warning{% else %}normal{% endif %}">
+        <span class="speech">{{ agent.bubble_label }}</span>
+        <span class="agent-sprite">{{ agent.display_name }}</span>
+        <div class="object-label">
           <strong>{{ agent.agent_id }}</strong>
           <span>{{ agent.task_title }}</span>
-          <small>{{ agent.slot_id }} / {{ agent.lifecycle_state }}</small>
+          <small>{{ agent.slot_id }} · {{ agent.lifecycle_state }}</small>
         </div>
       </div>
       {% endfor %}
 
-      <div class="distributor-desk">
-        <span class="bubble">배포 파이프라인</span>
-        <span class="sprite">D</span>
-        <div class="label-line">
+      <div class="scene-object distributor-desk">
+        <span class="speech">배포 파이프라인</span>
+        <span class="agent-sprite">D</span>
+        <div class="object-label">
           <strong>분배관</strong>
           <span>{{ dashboard.distributor.head_summary }}</span>
           <small>queue {{ dashboard.distributor.queue_depth }}</small>
         </div>
       </div>
 
-      <div class="event-board">
-        <span class="bubble">이벤트 로그</span>
-        <span class="sprite">E</span>
-        <div class="label-line">
+      <div class="scene-object event-board">
+        <span class="speech">이벤트 로그</span>
+        <span class="agent-sprite">E</span>
+        <div class="object-label">
           <strong>실시간 이벤트</strong>
           <span>{{ dashboard.events.len() }} visible</span>
-          <small>{{ dashboard.generated_at }}</small>
+          <small>{{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</small>
         </div>
       </div>
     </div>
 
     <aside class="right-stack">
-      <section class="game-panel">
-        <h3>워크트리 풀</h3>
-        <p>{{ dashboard.pool.reconcile_status }}</p>
-        {% for slot in dashboard.pool.slots %}
-        <div class="metric-line">
-          <strong>{{ slot.slot_id }} · {{ slot.label }}</strong>
-          <small>{{ slot.branch_name }} / {{ slot.worktree_label }}</small>
-        </div>
-        {% endfor %}
-      </section>
-      <section class="game-panel">
-        <h3>실시간 이벤트</h3>
+      <section class="game-panel" id="events">
+        <div class="panel-title"><h3>실시간 이벤트</h3><small>LIVE</small></div>
         {% if dashboard.events.is_empty() %}
         <p>runtime event log가 아직 비어 있습니다.</p>
         {% else %}
         {% for event in dashboard.events %}
-        <div class="event-row">
-          <strong>#{{ event.sequence }} {{ event.event_kind }}</strong>
-          <small>{{ event.recorded_at }} · {{ event.projection_kind }}:{{ event.projection_key }}</small>
-          <small>{{ event.summary }}</small>
+        <div class="event-row severity-{{ event.severity }}">
+          <span class="event-icon">{{ event.icon }}</span>
+          <div>
+            <strong>{{ event.event_kind }}</strong>
+            <small>{{ event.recorded_at }} · {{ event.projection_key }}</small>
+            <small>{{ event.summary }}</small>
+          </div>
         </div>
         {% endfor %}
         {% endif %}
+      </section>
+      <section class="game-panel" id="metrics">
+        <div class="panel-title"><h3>길드 성과</h3><small>snapshot</small></div>
+        <div class="radar" aria-hidden="true"></div>
+        <div class="badges">
+          {% for badge in dashboard.metrics.badges %}
+          <span class="badge">{{ badge }}</span>
+          {% endfor %}
+        </div>
       </section>
     </aside>
   </div>
 
   <div class="bottom-grid">
-    <section class="game-panel">
-      <h3>작업 상세</h3>
+    <section class="game-panel" id="tasks">
+      <div class="panel-title"><h3>작업 상세</h3><small>selected session</small></div>
       {% if let Some(task) = dashboard.selected_task %}
-      <div class="metric-line"><strong>{{ task.task_id }}</strong><span>{{ task.task_title }}</span></div>
+      <div class="metric-line"><small>{{ task.task_id }}</small><strong>{{ task.task_title }}</strong></div>
       <div class="metric-line"><small>담당 요원</small><strong>{{ task.agent_id }} / {{ task.slot_id }}</strong></div>
       <div class="metric-line"><small>브랜치</small><strong>{{ task.branch_name }}</strong></div>
-      <div class="metric-line"><small>진행률</small><strong>{{ task.progress_percent }}%</strong></div>
+      <div class="metric-line">
+        <small>진행률 {{ task.progress_percent }}%</small>
+        <span class="progress-track"><span class="progress-fill" style="width: {{ task.progress_percent }}%"></span></span>
+      </div>
       <div class="metric-line"><small>검증 결과</small><strong>{{ task.validation_summary }}</strong></div>
-      <div class="metric-line"><small>트레일</small><span>{{ task.trail|join(" -> ") }}</span></div>
+      <div class="timeline">
+        <small>트레일</small>
+        <ul class="trail-list">
+          {% for trail in task.trail %}
+          <li>{{ trail }}</li>
+          {% endfor %}
+        </ul>
+      </div>
       {% else %}
       <p>{{ dashboard.agents.empty_state }}</p>
       {% endif %}
     </section>
 
-    <section class="game-panel">
-      <h3>배포 파이프라인</h3>
+    <section class="game-panel" id="pipeline">
+      <div class="panel-title"><h3>배포 파이프라인</h3><small>{{ dashboard.distributor.barrier_state }}</small></div>
       <div class="pipeline">
         {% for step in dashboard.distributor.pipeline %}
         <div class="step {{ step.state }}">
@@ -392,23 +787,28 @@
       {% else %}
       {% for item in dashboard.distributor.queue_items %}
       <div class="queue-row">
-        <strong>{{ item.task_title }}</strong>
-        <small>{{ item.source_agent }} / {{ item.queue_state }} / {{ item.branch_name }}</small>
+        <span class="agent-token">{{ item.source_agent }}</span>
+        <div>
+          <strong>{{ item.task_title }}</strong>
+          <small>{{ item.branch_name }} · {{ item.commit_short_sha }}</small>
+        </div>
+        <span class="queue-state">{{ item.queue_state }}</span>
       </div>
       {% endfor %}
       {% endif %}
     </section>
 
     <section class="game-panel">
-      <h3>운영 지표</h3>
+      <div class="panel-title"><h3>운영 지표</h3><small>system status</small></div>
       <div class="metric-line"><small>풀 활용률</small><strong>{{ dashboard.metrics.pool_utilization_percent }}%</strong></div>
       <div class="metric-line"><small>활성 요원</small><strong>{{ dashboard.metrics.active_agent_count }}</strong></div>
       <div class="metric-line"><small>대기 작업</small><strong>{{ dashboard.metrics.waiting_task_count }}</strong></div>
       <div class="metric-line"><small>blocked slot</small><strong>{{ dashboard.metrics.blocked_slot_count }}</strong></div>
-      <div class="badges">
-        {% for badge in dashboard.metrics.badges %}
-        <span class="badge">{{ badge }}</span>
-        {% endfor %}
+      <div class="system-grid">
+        <span class="system-chip">Git 상태 정상</span>
+        <span class="system-chip">GitHub 연동 정상</span>
+        <span class="system-chip">Worktree 풀 {{ dashboard.workspace.readiness }}</span>
+        <span class="system-chip">저장소 {{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</span>
       </div>
     </section>
   </div>

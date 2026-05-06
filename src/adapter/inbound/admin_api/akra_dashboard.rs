@@ -23,6 +23,8 @@ pub(super) struct AkraAdminDashboardView {
     pub events: Vec<RuntimeEventView>,
     pub metrics: GuildMetricsView,
     pub generated_at: String,
+    pub generated_time_label: String,
+    pub automation_epoch: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,6 +213,11 @@ pub(super) fn build_akra_dashboard_view(
     let agents = map_agents(&supervisor);
     let selected_task = map_selected_task(&supervisor);
     let distributor = map_distributor(&supervisor);
+    let automation_epoch = events
+        .entries
+        .first()
+        .map(|entry| entry.observed_planning_revision)
+        .unwrap_or_default();
     let events = events
         .entries
         .iter()
@@ -218,6 +225,7 @@ pub(super) fn build_akra_dashboard_view(
         .collect::<Vec<_>>();
     let metrics = map_metrics(&pool, &agents, &distributor);
     let readiness_label = readiness_label(&readiness).to_string();
+    let generated_at = Utc::now();
 
     AkraAdminDashboardView {
         workspace: AkraWorkspaceView {
@@ -251,7 +259,9 @@ pub(super) fn build_akra_dashboard_view(
         distributor,
         events,
         metrics,
-        generated_at: Utc::now().to_rfc3339(),
+        generated_at: generated_at.to_rfc3339(),
+        generated_time_label: generated_at.format("%H:%M:%S").to_string(),
+        automation_epoch,
     }
 }
 
