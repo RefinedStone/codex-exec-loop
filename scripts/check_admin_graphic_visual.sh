@@ -19,6 +19,7 @@ dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
 events_error_json="${output_dir}/events-error.json"
+sprites_svg="${output_dir}/admin-character-sprites.svg"
 screenshot_path="${output_dir}/admin-graphic.png"
 
 mkdir -p "${output_dir}"
@@ -108,6 +109,7 @@ curl -fsS "${base_url}/admin/legacy" >"${legacy_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
+curl -fsS "${base_url}/assets/admin/admin-character-sprites.svg" >"${sprites_svg}"
 events_error_status="$(curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
 if [[ "${events_error_status}" != "400" ]]; then
   echo "expected event limit validation to return 400, got ${events_error_status}" >&2
@@ -134,6 +136,8 @@ for token in \
   'data-focus-target="pipeline"' \
   'data-event-drawer' \
   'data-event-feed-status' \
+  '/assets/admin/admin-character-sprites.svg' \
+  'background-size: 240px 48px' \
   'prependEventRows' \
   'stale snapshot' \
   'skeleton-line' \
@@ -165,6 +169,16 @@ for token in \
   '"incremental"'; do
   require_contains "${events_json}" "${token}"
   require_contains "${events_incremental_json}" "${token}"
+done
+
+for token in \
+  '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="48"' \
+  'id="agent-normal"' \
+  'id="agent-warning"' \
+  'id="agent-danger"' \
+  'id="distributor"' \
+  'id="event-board"'; do
+  require_contains "${sprites_svg}" "${token}"
 done
 
 for token in \
