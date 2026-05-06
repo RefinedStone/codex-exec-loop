@@ -300,15 +300,15 @@
     cursor: pointer;
   }
   .object-sprite {
-    width: 144px;
-    height: 108px;
+    width: 132px;
+    height: 120px;
     padding: 0;
     border: 0;
     color: transparent;
     background-color: transparent;
-    background-image: url("/assets/admin/admin-character-sprites.svg");
+    background-image: var(--object-sprite-sheet);
     background-repeat: no-repeat;
-    background-size: 792px 144px;
+    background-size: 627px 627px;
     image-rendering: pixelated;
     box-shadow: none;
     cursor: default;
@@ -317,17 +317,21 @@
   .server-rack {
     left: 16%;
     top: 15%;
-    background-position: -360px 0;
+    width: 96px;
+    height: 170px;
+    background-position: -42px -53px;
   }
   .whiteboard {
     right: 22%;
     top: 13%;
-    background-position: -504px 0;
+    width: 132px;
+    height: 160px;
+    background-position: -480px -442px;
   }
   .couch {
     right: 20%;
     bottom: 17%;
-    background-position: -648px 0;
+    background-position: -334px -460px;
   }
   .desk,
   .distributor-desk,

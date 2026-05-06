@@ -142,10 +142,11 @@ for token in \
   'data-event-drawer' \
   'data-event-feed-status' \
   '/assets/admin/admin-character-sprites.svg' \
+  'background-image: var(--object-sprite-sheet)' \
   'akra-office-background.png' \
   'akra-object-sprites.png' \
   'background-size: 528px 96px' \
-  'background-size: 792px 144px' \
+  'background-size: 627px 627px' \
   'prependEventRows' \
   'stale snapshot' \
   'skeleton-line' \
