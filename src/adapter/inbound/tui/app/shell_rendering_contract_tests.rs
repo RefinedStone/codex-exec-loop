@@ -409,6 +409,50 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
 }
 
 #[test]
+fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
+    /*
+     * Supersession replaces the transcript with a dense inspection board while
+     * the prompt remains active below it. The compact tail must therefore keep
+     * the prompt suffix visible instead of letting planning detail rows consume
+     * the whole tail and leave the cursor over status copy.
+     */
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    ));
+    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    ));
+    app.shell_overlay = ShellOverlay::Supersession;
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.input_buffer = "안녕하세요?".to_string();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession prompt render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("> 안녕하세요?"));
+    assert!(rendered.contains("buffered prompt  |  Enter send  |  Ctrl+j nl"));
+    assert!(
+        !rendered.contains("now: none"),
+        "planning detail rows should be clipped before they can hide the prompt:\n{rendered}"
+    );
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
 fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     /*
      * The timeline is the first MUD-style read-only slice: slot/agent topology
