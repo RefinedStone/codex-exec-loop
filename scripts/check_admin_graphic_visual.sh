@@ -133,6 +133,8 @@ for token in \
   'data-poll-interval-ms' \
   'data-focus-target="pipeline"' \
   'data-event-drawer' \
+  'data-event-feed-status' \
+  'prependEventRows' \
   'stale snapshot' \
   'skeleton-line' \
   'grid-template-columns: repeat(8' \

@@ -699,6 +699,8 @@
   data-admin-graphic
   data-api-base="{{ api_base_url }}"
   data-poll-interval-ms="{{ polling_interval_ms }}"
+  data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
+  data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
   <header class="akra-topbar">
     <div class="akra-title">
@@ -829,9 +831,9 @@
 
     <aside class="right-stack">
       <section class="game-panel" id="events">
-        <div class="panel-title"><h3>실시간 이벤트</h3><small>LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}</small></div>
+        <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}</small></div>
         {% if dashboard.events.is_empty() %}
-        <p>{{ dashboard.event_feed.empty_state }}</p>
+        <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
         {% else %}
         {% for event in dashboard.events %}
         <button
@@ -969,6 +971,78 @@
   };
 
   const formatValue = (value, fallback = "-") => value === null || value === undefined ? fallback : String(value);
+  const eventPanel = root.querySelector("#events");
+  const eventDrawer = root.querySelector("[data-event-drawer]");
+  const eventFeedStatus = root.querySelector("[data-event-feed-status]");
+  const eventLimit = 50;
+
+  const setEventStatus = () => {
+    if (!eventFeedStatus) return;
+    const visible = root.querySelectorAll("[data-event-sequence]").length;
+    const total = Number(root.dataset.eventTotalCount || visible);
+    eventFeedStatus.textContent = `LIVE · ${visible}/${Math.max(total, visible)}`;
+  };
+
+  const severityClass = (severity) => `severity-${severity || "normal"}`;
+
+  const createEventRow = (event) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `event-row ${severityClass(event.severity)}`;
+    row.dataset.eventDetail = event.summary || "";
+    row.dataset.eventKind = event.eventKind || "";
+    row.dataset.eventSequence = String(event.sequence || "");
+    row.dataset.eventTarget = `${event.projectionKind || ""}:${event.projectionKey || ""}`;
+    row.title = `${event.recordedAt || ""} / ${event.summary || ""}`;
+
+    const icon = document.createElement("span");
+    icon.className = "event-icon";
+    icon.textContent = event.icon || "E";
+    row.appendChild(icon);
+
+    const body = document.createElement("div");
+    const kind = document.createElement("strong");
+    kind.textContent = event.eventKind || "runtime_event";
+    const meta = document.createElement("small");
+    meta.textContent = `${event.recordedAt || "-"} · ${event.projectionKey || "-"}`;
+    const summary = document.createElement("small");
+    summary.textContent = event.summary || "";
+    body.append(kind, meta, summary);
+    row.appendChild(body);
+    return row;
+  };
+
+  const removeEmptyEventCopy = () => {
+    root.querySelector("[data-event-empty]")?.remove();
+  };
+
+  const trimEventRows = () => {
+    const rows = [...root.querySelectorAll("[data-event-sequence]")];
+    for (const row of rows.slice(eventLimit)) row.remove();
+  };
+
+  const replaceEventRows = (events) => {
+    if (!eventPanel || !eventDrawer) return;
+    for (const row of eventPanel.querySelectorAll("[data-event-sequence]")) row.remove();
+    removeEmptyEventCopy();
+    for (const event of events) eventPanel.insertBefore(createEventRow(event), eventDrawer);
+    trimEventRows();
+    setEventStatus();
+  };
+
+  const prependEventRows = (events) => {
+    if (!eventPanel || !eventDrawer || events.length === 0) return;
+    removeEmptyEventCopy();
+    const existing = new Set([...eventPanel.querySelectorAll("[data-event-sequence]")].map((row) => row.dataset.eventSequence));
+    for (const event of [...events].reverse()) {
+      const sequence = String(event.sequence || "");
+      if (!sequence || existing.has(sequence)) continue;
+      eventPanel.insertBefore(createEventRow(event), eventPanel.querySelector("[data-event-sequence]") || eventDrawer);
+      existing.add(sequence);
+    }
+    trimEventRows();
+    setEventStatus();
+  };
 
   const updateDashboard = (dashboard) => {
     setText("[data-last-updated]", dashboard.generatedTimeLabel);
@@ -988,6 +1062,10 @@
     }
     const latest = dashboard.eventFeed?.newestSequence;
     if (Number.isFinite(latest)) root.dataset.latestEventSequence = String(latest);
+    if (Number.isFinite(dashboard.eventFeed?.totalEventCount)) {
+      root.dataset.eventTotalCount = String(dashboard.eventFeed.totalEventCount);
+    }
+    setEventStatus();
   };
 
   const markRelated = (source) => {
@@ -1061,8 +1139,19 @@
       const response = await fetch(url, { headers: { "Accept": "application/json" } });
       if (!response.ok) throw new Error(`events ${response.status}`);
       const payload = await response.json();
+      if (Array.isArray(payload.events)) {
+        if (payload.feed?.incremental) {
+          prependEventRows(payload.events);
+        } else {
+          replaceEventRows(payload.events);
+        }
+      }
       const newest = payload.feed?.newestSequence;
       if (Number.isFinite(newest)) root.dataset.latestEventSequence = String(newest);
+      if (Number.isFinite(payload.feed?.totalEventCount) && !payload.feed?.incremental) {
+        root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
+      }
+      setEventStatus();
     } catch (_error) {
       pollStatus.textContent = "stale events";
       pollStatus.classList.add("is-stale");

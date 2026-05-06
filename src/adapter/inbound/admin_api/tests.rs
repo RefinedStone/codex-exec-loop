@@ -107,6 +107,8 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "data-poll-interval-ms",
         "data-focus-target=\"pipeline\"",
         "data-event-drawer",
+        "data-event-feed-status",
+        "prependEventRows",
         "stale snapshot",
         "pollEvents",
         "skeleton-line",
