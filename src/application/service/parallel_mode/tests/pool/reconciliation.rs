@@ -238,10 +238,10 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     );
 }
 
-// parallel mode를 off -> on으로 켜는 순간에도 실행 중인 slot은 disposable cache로 취급하면 안 된다.
-// worker가 살아 있을 수 있는 Running lease가 있으면 reset을 막아 산출물과 branch를 보존한다.
+// parallel mode를 off -> on으로 켜는 순간 pool은 순수 disposable 작업장으로 취급한다.
+// Running lease와 dirty worktree가 남아 있어도 runtime projection을 비우고 slot을 baseline으로 강제 회수한다.
 #[test]
-fn parallel_entry_from_off_blocks_reset_when_slot_is_active() {
+fn parallel_entry_from_off_hard_resets_active_pool_slots() {
     let repo = TempGitRepo::new("parallel-enable-reset-active");
     let service = test_parallel_mode_service();
     let lease = service
@@ -257,9 +257,9 @@ fn parallel_entry_from_off_blocks_reset_when_slot_is_active() {
     repo.commit_file_in_slot(&slot_path, "stale.txt", "stale\n", "stale agent work");
     fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
 
-    let reset_error = service
+    let reset_count = service
         .reset_pool_on_parallel_enable(&repo.workspace_dir())
-        .expect_err("parallel enable reset should block active running slots");
+        .expect("parallel enable reset should reclaim active pool slots");
     let snapshot = service.build_supervisor_snapshot(
         &repo.workspace_dir(),
         true,
@@ -271,11 +271,12 @@ fn parallel_entry_from_off_blocks_reset_when_slot_is_active() {
         )),
     );
 
-    assert!(reset_error.contains("active slot slot-1"));
-    assert_eq!(snapshot.roster.active_count(), 1);
-    assert!(repo.slot_lease_path(1).exists());
-    assert!(slot_path.join("stale.txt").exists());
-    assert!(slot_path.join("scratch.tmp").exists());
+    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
+    assert_eq!(snapshot.roster.active_count(), 0);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!slot_path.join("stale.txt").exists());
+    assert!(!slot_path.join("scratch.tmp").exists());
+    assert_eq!(current_branch(&slot_path), "HEAD");
 }
 
 // Running lease라도 slot worktree가 더 이상 해당 agent branch에 있지 않으면 live worker로
@@ -319,8 +320,8 @@ fn parallel_entry_from_off_resets_stale_running_lease_when_slot_left_agent_branc
     assert_eq!(current_branch(&slot_path), "HEAD");
 }
 
-// Stale startup leases are different from active running work: no worker reached Running and the
-// assigned session detail is old enough to be considered abandoned, so off -> on reset may reclaim it.
+// Leased startup residue is also disposable on off -> on entry. The reset keeps planning task
+// authority but clears runtime/session mirrors before the next dispatch pass.
 #[test]
 fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
     let repo = TempGitRepo::new("parallel-enable-reset-stale-startup");

@@ -2,8 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, TimeDelta, Utc};
-
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
     PlanningAuthorityRuntimeProjectionSnapshot,
@@ -11,7 +9,7 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
     ParallelModeTaskDispatchBlockSnapshot,
 };
 
@@ -58,8 +56,6 @@ use self::reconcile::{
 };
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
 use self::slot_inspection::summarize_pool_reconcile_status;
-
-const LIVE_LEASED_SLOT_RESET_BLOCK_AFTER_SECS: i64 = 120;
 
 /*
 Git worktree inventory는 git porcelain 출력에서 얻은 최소 read model이다. 이 타입은
@@ -240,21 +236,8 @@ pub(super) fn reset_pool_for_parallel_enable(
         .map_err(|error| format!("pool root could not be created: {error}"))?;
     ensure_pool_baseline_branch(&repo_root)
         .map_err(|_| "pool baseline could not be created".to_string())?;
-    let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
     let worktree_records = load_worktree_records(&repo_root)
         .ok_or_else(|| "git worktree inventory could not be loaded".to_string())?;
-    if let Some(blocking_lease) = runtime_projection
-        .slot_leases
-        .values()
-        .find(|lease| lease_blocks_parallel_entry_reset(lease, &worktree_records))
-    {
-        return Err(format!(
-            "pool reset blocked by active slot {} / {} / {}",
-            blocking_lease.slot_id,
-            blocking_lease.state.label(),
-            blocking_lease.task_title
-        ));
-    }
     planning_authority
         .clear_parallel_runtime_projections(
             &repo_root,
@@ -277,35 +260,6 @@ pub(super) fn reset_pool_for_parallel_enable(
     }
 
     Ok(reset_slots)
-}
-
-fn lease_blocks_parallel_entry_reset(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    worktree_records: &[GitWorktreeRecord],
-) -> bool {
-    match lease.state {
-        ParallelModeSlotLeaseState::Running | ParallelModeSlotLeaseState::CleanupPending => {
-            lease_matches_current_slot_worktree(lease, worktree_records)
-        }
-        ParallelModeSlotLeaseState::Leased => {
-            let Ok(timestamp) = DateTime::parse_from_rfc3339(&lease.leased_at) else {
-                return true;
-            };
-            Utc::now().signed_duration_since(timestamp.with_timezone(&Utc))
-                < TimeDelta::seconds(LIVE_LEASED_SLOT_RESET_BLOCK_AFTER_SECS)
-                && lease_matches_current_slot_worktree(lease, worktree_records)
-        }
-    }
-}
-
-fn lease_matches_current_slot_worktree(
-    lease: &ParallelModeSlotLeaseSnapshot,
-    worktree_records: &[GitWorktreeRecord],
-) -> bool {
-    let lease_path = Path::new(&lease.worktree_path);
-    worktree_records.iter().any(|record| {
-        record.path == lease_path && record.branch_name.as_deref() == Some(&lease.branch_name)
-    })
 }
 
 fn clear_pool_runtime_mirrors(pool_root: &Path) -> Result<(), String> {
