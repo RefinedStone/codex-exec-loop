@@ -32,7 +32,7 @@ use self::dispatch_worker::{ParallelDispatchWorkerRequest, spawn_parallel_dispat
 use super::turn_submission_runtime::parallel_mode_slot_lease_request;
 use super::{
     BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent,
-    NativeTuiApp,
+    ConversationState, NativeTuiApp,
 };
 
 impl NativeTuiApp {
@@ -589,6 +589,9 @@ impl NativeTuiApp {
 
         effects
             .retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.record_auto_followup_parallel_dispatch();
+        }
         let epoch_id = self.open_parallel_mode_automation_epoch();
         let workspace_directory = self.planning_workspace_directory();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {

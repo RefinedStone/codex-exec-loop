@@ -400,3 +400,56 @@ fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
         PromptOrigin::AutoFollow(_) => "auto_follow",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::{AutoFollowupSubmitContext, PromptOrigin};
+
+    #[test]
+    fn auto_follow_turn_completion_advances_done_progress() {
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.thread_id = "thread-1".to_string();
+
+        let reduction = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue queue".to_string(),
+                transcript_text: "continue queue".to_string(),
+                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
+                    queued_from_turn_id: "turn-root".to_string(),
+                    mode_label: "planning queue".to_string(),
+                    transcript_text: "continue queue".to_string(),
+                    debug_detail: None,
+                    handoff_task: None,
+                })),
+            },
+        );
+        assert_eq!(reduction.state.auto_follow_state.progress_label(), "0/20");
+
+        let reduction = reduce_conversation_runtime(
+            reduction.state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-auto-1".to_string(),
+            }),
+        );
+        assert!(
+            reduction.state.auto_follow_state.has_live_activity(),
+            "auto turn should be live after provider start"
+        );
+
+        let reduction = reduce_conversation_runtime(
+            reduction.state,
+            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-auto-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            }),
+        );
+
+        assert_eq!(reduction.state.auto_follow_state.progress_label(), "1/20");
+        assert!(
+            !reduction.state.auto_follow_state.has_live_activity(),
+            "completed auto turn should not leave a stale running phase"
+        );
+    }
+}

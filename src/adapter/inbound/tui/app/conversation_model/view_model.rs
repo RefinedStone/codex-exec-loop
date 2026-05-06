@@ -481,6 +481,20 @@ impl ConversationViewModel {
                     .to_string(),
         });
     }
+    pub(crate) fn record_auto_followup_parallel_dispatch(&mut self) {
+        /*
+         * Parallel mode consumes the post-turn queue signal as a pool dispatch
+         * instead of submitting an in-session auto turn. Clear the queued phase so
+         * the footer does not show a forever-pending turn whose done counter can
+         * never advance.
+         */
+        self.auto_follow_state.clear_runtime_phase();
+        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+            summary: "delegated: parallel dispatch".to_string(),
+            detail: "post-turn queue handoff opened parallel mode dispatch instead of an auto turn"
+                .to_string(),
+        });
+    }
     pub(crate) fn begin_auto_followup_evaluation(&mut self) {
         // Keep the phase idle when an evaluation would immediately skip; this avoids stale spinners.
         if self.auto_follow_state.post_turn_continuation_paused()

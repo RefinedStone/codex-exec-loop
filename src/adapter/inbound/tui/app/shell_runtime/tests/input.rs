@@ -439,6 +439,17 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             .contains("queued auto follow-up with mode test"),
         "parallel mode should suppress the main-session auto-follow submit"
     );
+    assert!(
+        !conversation.auto_follow_state.has_live_activity(),
+        "parallel dispatch conversion must not leave a queued auto turn that can never finish"
+    );
+    assert_eq!(
+        conversation
+            .last_auto_followup_activity
+            .as_ref()
+            .map(|activity| activity.summary.as_str()),
+        Some("delegated: parallel dispatch")
+    );
 }
 
 #[test]
