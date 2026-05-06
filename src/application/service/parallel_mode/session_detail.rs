@@ -8,8 +8,9 @@ use crate::domain::parallel_mode::{
 use chrono::Utc;
 use std::path::Path;
 mod store;
+pub(super) use self::store::agent_session_detail_record_path;
 #[cfg(test)]
-pub(super) use self::store::{agent_session_detail_record_path, read_agent_session_detail_record};
+pub(super) use self::store::read_agent_session_detail_record;
 use self::store::{
     push_session_history, update_agent_session_detail_record, write_agent_session_detail_record,
 };

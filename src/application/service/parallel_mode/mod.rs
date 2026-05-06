@@ -5,8 +5,9 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDispatchBlockReason, ParallelModeOrchestratorState,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetReport, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -396,6 +397,27 @@ impl ParallelModeService {
 
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn reset_pool_on_parallel_enable(&self, workspace_dir: &str) -> Result<usize, String> {
+        let report = self.reset_pool_on_parallel_enable_report(workspace_dir)?;
+        if report.has_live_blockers() {
+            return Err(format!(
+                "pool reset blocked by {} live slot(s)",
+                report.live_blocker_count()
+            ));
+        }
+        if report.has_reset_failures() {
+            return Err(format!(
+                "pool reset partially failed for {} slot(s)",
+                report.failed_reset_count()
+            ));
+        }
+        Ok(report.succeeded_reset_slot_count())
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn reset_pool_on_parallel_enable_report(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<ParallelModePoolResetReport, String> {
         reset_pool_for_parallel_enable(self.planning_authority.as_ref(), workspace_dir)
     }
 

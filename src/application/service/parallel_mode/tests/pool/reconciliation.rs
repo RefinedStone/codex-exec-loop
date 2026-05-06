@@ -238,10 +238,10 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     );
 }
 
-// parallel mode를 off -> on으로 켜는 순간 pool은 순수 disposable 작업장으로 취급한다.
-// Running lease와 dirty worktree가 남아 있어도 runtime projection을 비우고 slot을 baseline으로 강제 회수한다.
+// parallel mode를 off -> on으로 켜더라도 Running lease는 live execution 증거다.
+// reset은 projection을 지우거나 worktree를 되돌리지 않고 blocked report만 남긴다.
 #[test]
-fn parallel_entry_from_off_hard_resets_active_pool_slots() {
+fn parallel_entry_from_off_blocks_reset_when_running_slot_is_live() {
     let repo = TempGitRepo::new("parallel-enable-reset-active");
     let service = test_parallel_mode_service();
     let lease = service
@@ -257,9 +257,9 @@ fn parallel_entry_from_off_hard_resets_active_pool_slots() {
     repo.commit_file_in_slot(&slot_path, "stale.txt", "stale\n", "stale agent work");
     fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
 
-    let reset_count = service
-        .reset_pool_on_parallel_enable(&repo.workspace_dir())
-        .expect("parallel enable reset should reclaim active pool slots");
+    let report = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("parallel enable reset should report live blockers");
     let snapshot = service.build_supervisor_snapshot(
         &repo.workspace_dir(),
         true,
@@ -271,37 +271,36 @@ fn parallel_entry_from_off_hard_resets_active_pool_slots() {
         )),
     );
 
-    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
-    assert_eq!(snapshot.roster.active_count(), 0);
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!slot_path.join("stale.txt").exists());
-    assert!(!slot_path.join("scratch.tmp").exists());
-    assert_eq!(current_branch(&slot_path), "HEAD");
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), 0);
+    assert_eq!(
+        report.slot_reports[0].action,
+        ParallelModePoolResetSlotAction::PreserveLive
+    );
+    assert_eq!(
+        report.slot_reports[0].outcome,
+        ParallelModePoolResetSlotOutcome::Blocked
+    );
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(slot_path.join("stale.txt").exists());
+    assert!(slot_path.join("scratch.tmp").exists());
+    assert!(current_branch(&slot_path).starts_with("akra-agent/slot-1/"));
 }
 
-// Dirty tracked files must not stop off -> on pool reset. Git checkout without --force
-// can fail before reset --hard runs when a slot branch has committed and uncommitted
-// edits to the same tracked file, which leaves the slot detached at stale work.
+// Dirty tracked files in no-lease reusable slots must not stop off -> on pool reset. Git checkout
+// without --force can fail before reset --hard runs when a slot has committed and uncommitted edits
+// to the same tracked file, which leaves the slot detached at stale work.
 #[test]
-fn parallel_entry_from_off_forces_dirty_tracked_slot_back_to_baseline() {
+fn parallel_entry_from_off_forces_dirty_no_lease_slot_back_to_baseline() {
     let repo = TempGitRepo::new("parallel-enable-reset-dirty-tracked");
     let service = test_parallel_mode_service();
-    let lease = service
-        .acquire_slot_lease(
-            &repo.workspace_dir(),
-            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
-        )
-        .expect("slot lease should be acquired");
-    let slot_path = PathBuf::from(lease.worktree_path.clone());
-    service
-        .mark_workspace_slot_running(&lease.worktree_path)
-        .expect("slot should transition to running");
-    repo.commit_file_in_slot(
-        &slot_path,
-        "README.md",
-        "agent branch version\n",
-        "agent edits tracked readme",
+    let initial_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
     );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+    let slot_path = repo.pool_root().join(slot_id(1));
     fs::write(slot_path.join("README.md"), "dirty local version\n")
         .expect("dirty tracked file should write");
 
@@ -332,11 +331,10 @@ fn parallel_entry_from_off_forces_dirty_tracked_slot_back_to_baseline() {
     );
 }
 
-// Running lease라도 slot worktree가 더 이상 해당 agent branch에 있지 않으면 live worker로
-// 보호할 수 없다. 재시작 후 남은 stale DB row가 off -> on pool reset을 막으면 사용자는
-// :parallel 진입 때마다 오래된 roster와 blocked pool을 다시 보게 된다.
+// Running lease는 slot worktree가 더 이상 해당 agent branch에 있지 않아도 자동 reset으로
+// 없애지 않는다. branch drift는 destructive reset보다 operator recovery로 남겨야 한다.
 #[test]
-fn parallel_entry_from_off_resets_stale_running_lease_when_slot_left_agent_branch() {
+fn parallel_entry_from_off_preserves_running_lease_when_slot_left_agent_branch() {
     let repo = TempGitRepo::new("parallel-enable-reset-stale-running");
     let service = test_parallel_mode_service();
     let lease = service
@@ -352,9 +350,9 @@ fn parallel_entry_from_off_resets_stale_running_lease_when_slot_left_agent_branc
     run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
     fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
 
-    let reset_count = service
-        .reset_pool_on_parallel_enable(&repo.workspace_dir())
-        .expect("stale running lease should not block parallel enable reset");
+    let report = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("running branch drift should be reported as live blocker");
     let snapshot = service.build_supervisor_snapshot(
         &repo.workspace_dir(),
         true,
@@ -366,10 +364,11 @@ fn parallel_entry_from_off_resets_stale_running_lease_when_slot_left_agent_branc
         )),
     );
 
-    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
-    assert_eq!(snapshot.roster.active_count(), 0);
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!slot_path.join("scratch.tmp").exists());
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), 0);
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(slot_path.join("scratch.tmp").exists());
     assert_eq!(current_branch(&slot_path), "HEAD");
 }
 
@@ -416,7 +415,7 @@ fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
     assert_eq!(snapshot.roster.active_count(), 0);
     assert!(snapshot.detail.session.is_none());
     assert!(!repo.slot_lease_path(1).exists());
-    assert!(!repo.pool_root().join(".agent-sessions").exists());
+    assert!(!repo.session_detail_path(&lease.session_key()).exists());
     assert!(!slot_path.join("scratch.tmp").exists());
     assert_eq!(current_branch(&slot_path), "HEAD");
 }

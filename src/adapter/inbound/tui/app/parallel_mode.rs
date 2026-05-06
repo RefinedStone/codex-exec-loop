@@ -346,19 +346,41 @@ impl NativeTuiApp {
                         })
                     });
                     parallel_mode_service
-                        .reset_pool_on_parallel_enable(&workspace_directory)
-                        .map(|count| {
+                        .reset_pool_on_parallel_enable_report(&workspace_directory)
+                        .and_then(|report| {
+                            if report.has_live_blockers() {
+                                raw_event_log::emit_lazy("parallel_pool_reset_blocked", || {
+                                    serde_json::json!({
+                                        "workspace": &workspace_directory,
+                                        "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+                                        "run_id": report.run_id.as_str(),
+                                        "live_blockers": report.live_blocker_count(),
+                                    })
+                                });
+                                return Err(format!(
+                                    "pool reset blocked by {} live slot(s)",
+                                    report.live_blocker_count()
+                                ));
+                            }
+                            if report.has_reset_failures() {
+                                return Err(format!(
+                                    "pool reset partially failed for {} slot(s)",
+                                    report.failed_reset_count()
+                                ));
+                            }
+                            let count = report.succeeded_reset_slot_count();
                             raw_event_log::emit_lazy("parallel_pool_reset_completed", || {
                                 serde_json::json!({
                                     "workspace": &workspace_directory,
                                     "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+                                    "run_id": report.run_id.as_str(),
                                     "slot_count": count,
                                 })
                             });
-                            format!(
+                            Ok(format!(
                                 "reset {count} pool slot worktree(s) to prerelease after off->on entry / {}",
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
-                            )
+                            ))
                         })
                 } else {
                     Ok(String::new())

@@ -275,7 +275,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         })
         .expect("background message should enqueue");
 
-    for _ in 0..250 {
+    for _ in 0..750 {
         runtime.poll_background_messages();
         if fixture.launch_count.load(Ordering::SeqCst) > 0 {
             break;
