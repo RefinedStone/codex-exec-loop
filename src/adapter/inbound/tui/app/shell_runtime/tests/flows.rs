@@ -22,10 +22,11 @@ use crate::domain::planning::TaskStatus;
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static FLOW_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const FLOW_POOL_SIZE: usize = 3;
@@ -49,7 +50,17 @@ struct NativeFlowHarness {
 struct FlowParallelAgentWorkerPort {
     launch_count: AtomicUsize,
     fail_launch: AtomicBool,
+    hold_streams: AtomicBool,
+    held_streams: Mutex<FlowHeldWorkerState>,
+    held_streams_released: Condvar,
     requests: Mutex<Vec<FlowWorkerLaunchRequest>>,
+}
+
+#[derive(Debug, Default)]
+struct FlowHeldWorkerState {
+    active_count: usize,
+    terminal_count: usize,
+    release_all: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,11 +80,59 @@ impl FlowParallelAgentWorkerPort {
         self.fail_launch.store(should_fail, Ordering::SeqCst);
     }
 
+    fn hold_worker_streams(self: &Arc<Self>) -> FlowHeldWorkerReleaseGuard {
+        {
+            let mut state = self
+                .held_streams
+                .lock()
+                .expect("held stream state mutex should not be poisoned");
+            *state = FlowHeldWorkerState::default();
+        }
+        self.hold_streams.store(true, Ordering::SeqCst);
+        FlowHeldWorkerReleaseGuard {
+            worker_port: self.clone(),
+        }
+    }
+
+    fn active_stream_count(&self) -> usize {
+        self.held_streams
+            .lock()
+            .expect("held stream state mutex should not be poisoned")
+            .active_count
+    }
+
+    fn terminal_stream_count(&self) -> usize {
+        self.held_streams
+            .lock()
+            .expect("held stream state mutex should not be poisoned")
+            .terminal_count
+    }
+
+    fn release_all_held_streams(&self) {
+        self.hold_streams.store(false, Ordering::SeqCst);
+        let mut state = self
+            .held_streams
+            .lock()
+            .expect("held stream state mutex should not be poisoned");
+        state.release_all = true;
+        self.held_streams_released.notify_all();
+    }
+
     fn requests(&self) -> Vec<FlowWorkerLaunchRequest> {
         self.requests
             .lock()
             .expect("worker request mutex should not be poisoned")
             .clone()
+    }
+}
+
+struct FlowHeldWorkerReleaseGuard {
+    worker_port: Arc<FlowParallelAgentWorkerPort>,
+}
+
+impl Drop for FlowHeldWorkerReleaseGuard {
+    fn drop(&mut self) {
+        self.worker_port.release_all_held_streams();
     }
 }
 
@@ -83,7 +142,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
         request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.launch_count.fetch_add(1, Ordering::SeqCst);
+        let launch_index = self.launch_count.fetch_add(1, Ordering::SeqCst) + 1;
         self.requests
             .lock()
             .expect("worker request mutex should not be poisoned")
@@ -96,6 +155,40 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
         if self.fail_launch.load(Ordering::SeqCst) {
             let _ = event_sender.send(ConversationStreamEvent::Failed {
                 message: "flow worker launch failed before stream start".to_string(),
+            });
+            return Ok(());
+        }
+        if self.hold_streams.load(Ordering::SeqCst) {
+            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
+                thread_id: format!("flow-thread-{launch_index}"),
+                title: format!("Flow Worker {launch_index}"),
+                cwd: request.cwd.to_string(),
+            });
+            let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
+                turn_id: format!("flow-turn-{launch_index}"),
+            });
+
+            let mut state = self
+                .held_streams
+                .lock()
+                .expect("held stream state mutex should not be poisoned");
+            state.active_count += 1;
+            self.held_streams_released.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !state.release_all {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    break;
+                };
+                let (next_state, _timeout) = self
+                    .held_streams_released
+                    .wait_timeout(state, remaining.min(Duration::from_millis(100)))
+                    .expect("held stream state mutex should not be poisoned");
+                state = next_state;
+            }
+            state.terminal_count += 1;
+            drop(state);
+            let _ = event_sender.send(ConversationStreamEvent::Failed {
+                message: "flow worker stream released by test harness".to_string(),
             });
         }
         Ok(())
@@ -362,6 +455,37 @@ impl NativeFlowHarness {
         );
     }
 
+    fn poll_until_worker_streams_active(&mut self, expected_active_streams: usize) {
+        for _ in 0..750 {
+            self.runtime.poll_background_messages();
+            if self.worker_port.active_stream_count() >= expected_active_streams
+                && self.worker_port.terminal_stream_count() == 0
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "expected {expected_active_streams} active held stream(s), got active={} terminal={}",
+            self.worker_port.active_stream_count(),
+            self.worker_port.terminal_stream_count()
+        );
+    }
+
+    fn poll_until_worker_streams_terminal(&mut self, expected_terminal_streams: usize) {
+        for _ in 0..750 {
+            self.runtime.poll_background_messages();
+            if self.worker_port.terminal_stream_count() >= expected_terminal_streams {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "expected {expected_terminal_streams} terminal held stream(s), got {}",
+            self.worker_port.terminal_stream_count()
+        );
+    }
+
     fn poll_until_dispatch_idle(&mut self) {
         for _ in 0..750 {
             self.runtime.poll_background_messages();
@@ -403,6 +527,30 @@ impl NativeFlowHarness {
         self.authority
             .load_runtime_projections(&self.workspace_dir)
             .expect("runtime projections should load")
+    }
+
+    fn poll_until_running_slot_leases(
+        &mut self,
+        expected_running_leases: usize,
+    ) -> crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot
+    {
+        for _ in 0..750 {
+            self.runtime.poll_background_messages();
+            let projections = self.runtime_projections();
+            let running_count = projections
+                .slot_leases
+                .values()
+                .filter(|lease| lease.state == ParallelModeSlotLeaseState::Running)
+                .count();
+            if running_count >= expected_running_leases {
+                return projections;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "expected {expected_running_leases} running slot lease(s), got {:?}",
+            self.runtime_projections().slot_leases
+        );
     }
 
     fn wait_until_task_timestamp_can_clear_failed_start_block(&mut self, task_id: &str) {
@@ -816,6 +964,91 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
             .contains("queued auto follow-up with mode flow"),
         "parallel mode should suppress the main-session auto-follow submit"
     );
+}
+
+#[test]
+fn post_turn_dispatch_launches_all_idle_slots_concurrently() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-post-turn-concurrent-dispatch");
+    let committed_task_ids = [
+        "dispatch parallel worker one",
+        "dispatch parallel worker two",
+        "dispatch parallel worker three",
+        "dispatch parallel worker four",
+    ]
+    .into_iter()
+    .map(|prompt| harness.committed_ready_task(prompt).committed_task_id)
+    .collect::<Vec<_>>();
+    let _release_guard = harness.worker_port.hold_worker_streams();
+    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
+        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
+        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
+    );
+
+    harness.send_post_turn_auto_prompt("turn-1");
+    harness.poll_until_worker_streams_active(FLOW_POOL_SIZE);
+    let status = harness.poll_until_status_contains("auto dispatched 3 worker(s)");
+    let projections = harness.poll_until_running_slot_leases(FLOW_POOL_SIZE);
+
+    assert!(
+        status.contains("dispatch refreshed"),
+        "dispatch status should report the parallel launch outcome, got `{status}`"
+    );
+    assert_eq!(harness.worker_port.launch_count(), FLOW_POOL_SIZE);
+    assert_eq!(harness.worker_port.active_stream_count(), FLOW_POOL_SIZE);
+    assert_eq!(
+        harness.worker_port.terminal_stream_count(),
+        0,
+        "all worker streams should still be active while concurrency is observed"
+    );
+
+    let requests = harness.worker_port.requests();
+    assert_eq!(requests.len(), FLOW_POOL_SIZE);
+    let request_cwds = requests
+        .iter()
+        .map(|request| request.cwd.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        request_cwds.len(),
+        FLOW_POOL_SIZE,
+        "parallel workers should launch in distinct slot worktrees: {requests:?}"
+    );
+    assert!(
+        request_cwds.iter().all(|cwd| cwd.contains("slot-")),
+        "parallel workers should launch inside pool slots: {request_cwds:?}"
+    );
+
+    let running_leases = projections
+        .slot_leases
+        .values()
+        .filter(|lease| lease.state == ParallelModeSlotLeaseState::Running)
+        .collect::<Vec<_>>();
+    assert_eq!(running_leases.len(), FLOW_POOL_SIZE);
+    let running_task_ids = running_leases
+        .iter()
+        .map(|lease| lease.task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        running_task_ids.len(),
+        FLOW_POOL_SIZE,
+        "running leases should belong to distinct tasks: {running_leases:?}"
+    );
+    let dispatched_committed_task_count = committed_task_ids
+        .iter()
+        .filter(|task_id| running_task_ids.contains(task_id.as_str()))
+        .count();
+    assert_eq!(dispatched_committed_task_count, FLOW_POOL_SIZE);
+    assert_eq!(
+        committed_task_ids.len() - dispatched_committed_task_count,
+        1,
+        "one ready task should remain undispatched because only three pool slots are idle"
+    );
+
+    harness.worker_port.release_all_held_streams();
+    harness.poll_until_worker_streams_terminal(FLOW_POOL_SIZE);
 }
 
 #[test]
