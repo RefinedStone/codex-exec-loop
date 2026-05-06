@@ -273,6 +273,11 @@ fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
     assert!(!roster_rendered.contains("reported_complete"));
     assert!(detail_rendered.contains("selection: agent-1 / slot-1 / official"));
     assert!(detail_rendered.contains("completion: official"));
+    assert!(detail_rendered.contains("timeline: slot-1 / slot-1:task-1"));
+    assert!(detail_rendered.contains("events: 00:01 reported -> 00:02 official"));
+    assert!(detail_rendered.contains(
+        "last event: 00:02 official / official ledger refresh accepted the completion report"
+    ));
     assert!(
         detail_rendered.contains("2026-04-17T00:01:00Z / reported / agent reported completion")
     );

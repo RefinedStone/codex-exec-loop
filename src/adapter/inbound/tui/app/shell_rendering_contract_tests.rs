@@ -2,10 +2,11 @@ use super::super::tui_testkit;
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeReadinessState,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
+    ParallelModePoolSlotState, ParallelModeReadinessState, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use ratatui::Terminal;
@@ -404,6 +405,101 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(rendered.contains("row shape: agent / task / slot"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
+    /*
+     * The timeline is the first MUD-style read-only slice: slot/agent topology
+     * stays in pool and roster panels, while the selected session lifecycle must
+     * remain visible in a narrow inline inspection without adding new controls.
+     */
+    let mut terminal = Terminal::new(TestBackend::new(72, 32)).expect("test terminal");
+    let mut app = make_test_app();
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    ));
+    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(
+            3,
+            "/tmp/pool",
+            "idle",
+            vec![ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                ParallelModePoolSlotState::Running,
+                "akra-agent/slot-1/timeline",
+                "akra-pool/slot-1",
+                "agent-1 / task-1",
+            )],
+        ),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![ParallelModeAgentRosterEntry::new(
+                "agent-1",
+                "Timeline UI",
+                "slot-1",
+                "akra-agent/slot-1/timeline",
+                "commit_ready",
+                "official",
+                "official ledger refresh accepted the completion report",
+            )],
+            "empty",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(
+            Some(ParallelModeAgentSessionDetailSnapshot::new(
+                "slot-1:task-1",
+                "agent-1",
+                "task-1",
+                "Timeline UI",
+                "slot-1",
+                Some("thread-1".to_string()),
+                "/tmp/pool/slot-1",
+                "akra-agent/slot-1/timeline",
+                "2026-04-17T00:00:00Z",
+                "commit_ready",
+                "commit_ready",
+                "official ledger refresh accepted the completion report",
+                "tests passed",
+                "official ledger refresh succeeded",
+                Some("commit-ready result accepted into distributor queue".to_string()),
+                vec![
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "assigned",
+                        "2026-04-17T00:00:00Z",
+                        "slot lease acquired and branch reserved for launch",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "running",
+                        "2026-04-17T00:01:00Z",
+                        "agent session is active in the leased slot",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "commit_ready",
+                        "2026-04-17T00:02:00Z",
+                        "official ledger refresh accepted the completion report",
+                    ),
+                ],
+                "2026-04-17T00:02:00Z",
+            )),
+            "empty",
+        ),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    ));
+    app.shell_overlay = ShellOverlay::Supersession;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession timeline render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("timeline: slot-1 /"));
+    assert!(rendered.contains("events: 00:00 assigned"));
+    assert!(rendered.contains("00:02 official"));
+    assert!(rendered.contains("last event: 00:02 official"));
+    assert!(!rendered.contains("commit_ready"));
 }
 
 #[test]
