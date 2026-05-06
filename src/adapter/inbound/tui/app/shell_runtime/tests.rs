@@ -43,6 +43,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+#[path = "tests/flows.rs"]
+mod flows;
 #[path = "tests/input.rs"]
 mod input;
 #[path = "tests/scheduler.rs"]
@@ -274,6 +276,7 @@ fn create_temp_git_repo(prefix: &str) -> String {
     fs::write(root.join(".gitignore"), "*.tmp\n").expect("gitignore should write");
     run_git(&root, &["add", "README.md", ".gitignore"]);
     run_git(&root, &["commit", "-qm", "init"]);
+    run_git(&root, &["branch", "akra"]);
     run_git(&root, &["branch", "prerelease"]);
     run_git(
         &root,

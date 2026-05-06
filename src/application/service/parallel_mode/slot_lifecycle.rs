@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolSlotState,
-    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchBlockReason,
+    ParallelModePoolSlotState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
 };
 
 use super::{
@@ -388,6 +389,11 @@ impl ParallelModeService {
         // cleanup 전에 git 상태를 읽지 못하면 lease를 남긴다. pool을 오염시키는 것보다
         // 사용자가 수동으로 확인할 수 있는 active lease가 안전하다.
         let Some(slot_status) = inspect_slot_git_status(&resolution.workspace_path) else {
+            let _ = record_failed_start_dispatch_block(
+                self.planning_authority.as_ref(),
+                &resolution.context.canonical_repo_root.display().to_string(),
+                &resolution.lease,
+            );
             return Err(format!(
                 "slot `{}` could not be inspected after startup failure",
                 resolution.lease.slot_id
@@ -397,6 +403,11 @@ impl ParallelModeService {
         // 시작 전 실패라도 dirty worktree는 의미 있는 산출물이나 진단 파일일 수 있다.
         // 자동 cleanup은 clean baseline에서만 허용한다.
         if !slot_status.is_clean_baseline() {
+            let _ = record_failed_start_dispatch_block(
+                self.planning_authority.as_ref(),
+                &resolution.context.canonical_repo_root.display().to_string(),
+                &resolution.lease,
+            );
             return Err(format!(
                 "slot `{}` could not be released after startup failure because worktree is not clean: {}",
                 resolution.lease.slot_id,
@@ -414,6 +425,11 @@ impl ParallelModeService {
             &resolution.workspace_path,
             &resolution.lease.branch_name,
         ) {
+            let _ = record_failed_start_dispatch_block(
+                self.planning_authority.as_ref(),
+                &resolution.context.canonical_repo_root.display().to_string(),
+                &resolution.lease,
+            );
             return Err(format!(
                 "slot `{}` could not be reset to `{POOL_BASELINE_BRANCH}` after startup failure",
                 resolution.lease.slot_id
@@ -430,4 +446,20 @@ impl ParallelModeService {
         )?;
         Ok(Some(resolution.lease))
     }
+}
+
+fn record_failed_start_dispatch_block(
+    planning_authority: &dyn crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort,
+    workspace_dir: &str,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<(), String> {
+    let block = ParallelModeTaskDispatchBlockSnapshot::new(
+        lease.task_id.clone(),
+        String::new(),
+        current_timestamp(),
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    planning_authority
+        .upsert_runtime_task_dispatch_block(workspace_dir, &block)
+        .map_err(|error| format!("failed to store startup failure dispatch block: {error}"))
 }
