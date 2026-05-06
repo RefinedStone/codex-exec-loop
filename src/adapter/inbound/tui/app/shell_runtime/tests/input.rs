@@ -5,7 +5,8 @@ use super::{
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey,
     ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
@@ -294,7 +295,18 @@ fn supersession_active_worker_requests_live_pulse() {
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
-            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModePoolBoardSnapshot::new(
+                3,
+                "/tmp/pool",
+                "running",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-1/task-one",
+                    "slot-1",
+                    "agent-1",
+                )],
+            ),
             ParallelModeAgentRosterSnapshot::new(
                 vec![ParallelModeAgentRosterEntry::new(
                     "agent-1",

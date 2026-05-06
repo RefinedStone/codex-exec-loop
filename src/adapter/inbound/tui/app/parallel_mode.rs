@@ -67,7 +67,8 @@ impl NativeTuiApp {
             return true;
         };
 
-        parallel_mode_supervisor_snapshot_is_loading(snapshot) || snapshot.roster.active_count() > 0
+        parallel_mode_supervisor_snapshot_is_loading(snapshot)
+            || parallel_mode_supervisor_snapshot_has_running_slot(snapshot)
     }
 
     pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
@@ -633,6 +634,12 @@ fn parallel_mode_supervisor_snapshot_is_loading(snapshot: &ParallelModeSuperviso
         .as_deref()
         .is_some_and(|notice| notice.starts_with("loading "))
         || snapshot.pool.pool_root_label.starts_with("loading:")
+}
+
+fn parallel_mode_supervisor_snapshot_has_running_slot(
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> bool {
+    snapshot.pool.running_slots > 0
 }
 
 fn dispatch_parallel_queue_pool(

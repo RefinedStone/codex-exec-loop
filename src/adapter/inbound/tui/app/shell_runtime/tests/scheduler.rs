@@ -7,8 +7,9 @@ use crossterm::event::Event;
 use super::{ShellOverlay, TuiFrameScheduler, make_test_runtime};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeSupervisorDetailSnapshot,
-    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 
 // A new runtime must request the first frame immediately; otherwise the TUI can sit blank until input or background work.
@@ -94,7 +95,18 @@ fn active_supersession_supervisor_refreshes_periodically() {
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
-            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModePoolBoardSnapshot::new(
+                3,
+                "/tmp/pool",
+                "running",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-1/task-one",
+                    "slot-1",
+                    "agent-1",
+                )],
+            ),
             ParallelModeAgentRosterSnapshot::new(
                 vec![ParallelModeAgentRosterEntry::new(
                     "agent-1",
@@ -117,6 +129,50 @@ fn active_supersession_supervisor_refreshes_periodically() {
     runtime.poll_background_messages_at(now);
     assert!(!runtime.parallel_supervisor_refresh_due(now + Duration::from_millis(999)));
     assert!(runtime.parallel_supervisor_refresh_due(now + Duration::from_secs(1)));
+}
+
+#[test]
+fn blocked_supersession_roster_does_not_refresh_periodically() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(
+                3,
+                "/tmp/pool",
+                "reconcile blocked / blocked: 1",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Blocked,
+                    "akra-agent/slot-1/task-one",
+                    "slot-1 / blocked",
+                    "agent-1",
+                )],
+            ),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Task One",
+                    "slot-1",
+                    "akra-agent/slot-1/task-one",
+                    "running",
+                    "12s",
+                    "working",
+                )],
+                "no active agents",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    let now = Instant::now();
+
+    assert!(!runtime.parallel_supervisor_refresh_due(now));
+    assert!(runtime.app().live_activity_pulse(now).is_none());
 }
 
 #[test]
