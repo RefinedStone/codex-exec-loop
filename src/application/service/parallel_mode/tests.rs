@@ -33,6 +33,7 @@ use crate::domain::planning::{
     PriorityQueueProjection, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
     TaskStatus,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -301,6 +302,23 @@ fn run_git(repo_root: &Path, args: &[&str]) {
         args,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
+    );
+}
+fn run_git_result(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|error| anyhow::anyhow!("git command should spawn: git {args:?}: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "git command failed: git {:?}\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 fn current_branch(repo_root: &Path) -> String {
@@ -616,6 +634,132 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         self.operations
             .lock()
             .expect("fake github operations mutex poisoned")
+            .push(format!("close-pr:{pr_number}"));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GitBackedGithubAutomationPort {
+    capabilities: GithubAutomationCapabilities,
+    operations: Arc<Mutex<Vec<String>>>,
+    next_pr_number: Arc<Mutex<u64>>,
+    pull_requests: Arc<Mutex<BTreeMap<u64, GithubAutomationPullRequest>>>,
+}
+impl GitBackedGithubAutomationPort {
+    fn ready() -> Self {
+        Self {
+            capabilities: GithubAutomationCapabilities::new(
+                ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::PushRemote,
+                    ParallelModeCapabilityState::Ready,
+                    "local origin push ready",
+                    None,
+                ),
+                ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::GhBinary,
+                    ParallelModeCapabilityState::Ready,
+                    "test PR facade ready",
+                    None,
+                ),
+                ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::GhAuth,
+                    ParallelModeCapabilityState::Ready,
+                    "test PR facade authenticated",
+                    None,
+                ),
+            ),
+            operations: Arc::new(Mutex::new(Vec::new())),
+            next_pr_number: Arc::new(Mutex::new(900)),
+            pull_requests: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+impl GithubAutomationPort for GitBackedGithubAutomationPort {
+    fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+        self.capabilities.clone()
+    }
+    fn push_branch(
+        &self,
+        repo_root: &str,
+        branch_name: &str,
+        force_with_lease: bool,
+    ) -> anyhow::Result<()> {
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .push(format!("push:{branch_name}:{force_with_lease}"));
+        let mut args = vec!["push"];
+        if force_with_lease {
+            args.push("--force-with-lease");
+        }
+        args.extend([DEFAULT_PUSH_REMOTE_NAME, branch_name]);
+        run_git_result(Path::new(repo_root), &args)?;
+        Ok(())
+    }
+    fn ensure_pull_request(
+        &self,
+        _repo_root: &str,
+        base_branch: &str,
+        head_branch: &str,
+        _title: &str,
+        _body: &str,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .push(format!("ensure-pr:{base_branch}:{head_branch}"));
+        let mut next_pr_number = self
+            .next_pr_number
+            .lock()
+            .expect("git-backed github PR counter mutex poisoned");
+        let pr_number = *next_pr_number;
+        *next_pr_number = next_pr_number.saturating_add(1);
+        let pull_request = GithubAutomationPullRequest::new(
+            pr_number,
+            format!("https://example.invalid/pr/{pr_number}"),
+            "OPEN",
+            base_branch,
+            head_branch,
+            false,
+        );
+        self.pull_requests
+            .lock()
+            .expect("git-backed github PR map mutex poisoned")
+            .insert(pr_number, pull_request.clone());
+        Ok(pull_request)
+    }
+    fn inspect_pull_request(
+        &self,
+        _repo_root: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .push(format!("inspect-pr:{pr_number}"));
+        self.pull_requests
+            .lock()
+            .expect("git-backed github PR map mutex poisoned")
+            .get(&pr_number)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("test pull request #{pr_number} was not ensured"))
+    }
+    fn push_integration_branch(&self, repo_root: &str, branch_name: &str) -> anyhow::Result<()> {
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .push(format!("push-integration:{branch_name}"));
+        run_git_result(
+            Path::new(repo_root),
+            &["push", DEFAULT_PUSH_REMOTE_NAME, branch_name],
+        )?;
+        Ok(())
+    }
+    fn close_pull_request(&self, _repo_root: &str, pr_number: u64) -> anyhow::Result<()> {
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
             .push(format!("close-pr:{pr_number}"));
         Ok(())
     }

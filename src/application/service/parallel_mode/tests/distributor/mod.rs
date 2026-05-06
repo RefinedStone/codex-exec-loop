@@ -147,6 +147,203 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
     );
 }
 
+// 운영 장애에서 보인 "여러 결과가 queued인데 head 이후가 멈춘다"는 증상을 고정한다.
+// fake PR facade는 쓰되 source branch와 integration branch push는 temp bare `origin`
+// 에 실제 수행해, queue drain이 로컬 통합만 끝내고 remote delivery를 빠뜨리지 않는지 검증한다.
+#[test]
+fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerelease() {
+    let repo = TempGitRepo::new("distributor-three-origin-push");
+    let origin_path = repo.create_bare_origin_remote();
+    run_git(
+        &repo.repo_root,
+        &["push", "-u", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    let github = GitBackedGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let mut leases = Vec::new();
+
+    for index in 1..=3 {
+        let task_id = format!("task-{index}");
+        let task_title = format!("Task {index}");
+        let agent_id = format!("agent-{index}");
+        let task_slug = format!("task-{index}");
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request(&task_id, &task_title, &agent_id, &task_slug),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        service
+            .record_workspace_slot_thread_prepared(&lease.worktree_path, &format!("thread-{index}"))
+            .expect("thread prepared should be recorded");
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(
+            &slot_path,
+            &format!("feature-{index}.txt"),
+            &format!("done {index}\n"),
+            &format!("agent {index} work"),
+        );
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                &format!("turn-{index}"),
+                None,
+                Some(&format!("Task {index} completed.")),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                &format!(
+                    "official ledger refresh succeeded: task {index} distributor delivery approved"
+                ),
+            )
+            .expect("commit-ready should be recorded");
+        let queued_item = service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should be enqueued")
+            .expect("queue item should be created");
+        assert_eq!(queued_item.queue_state, ParallelModeQueueItemState::Queued);
+        leases.push(lease);
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    let queued_snapshot =
+        service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+    assert_eq!(queued_snapshot.roster.active_count(), 3);
+    assert_eq!(queued_snapshot.distributor.head_summary, "queued");
+    assert_eq!(queued_snapshot.distributor.queue_depth(), 3);
+    assert_eq!(
+        queued_snapshot
+            .distributor
+            .orchestrator_status
+            .held_queue_count,
+        2
+    );
+
+    for expected_done_count in 1..=3 {
+        let notices = service
+            .process_distributor_queue(&repo.workspace_dir())
+            .expect("distributor queue should process");
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+            "queue tick should integrate the head: {notices:?}"
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor returned slot to idle")),
+            "queue tick should return the integrated slot: {notices:?}"
+        );
+        assert_eq!(
+            load_distributor_queue_records(&repo.pool_root())
+                .iter()
+                .filter(|record| record.queue_state == ParallelModeQueueItemState::Done)
+                .count(),
+            expected_done_count
+        );
+    }
+
+    let drained_snapshot =
+        service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
+    assert_eq!(drained_snapshot.roster.active_count(), 0);
+    assert_eq!(drained_snapshot.distributor.head_summary, "idle");
+    assert_eq!(drained_snapshot.distributor.queue_depth(), 0);
+    let records = load_distributor_queue_records(&repo.pool_root());
+    assert_eq!(records.len(), 3);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.queue_state == ParallelModeQueueItemState::Done),
+        "every queue record should finish after three distributor ticks: {records:?}"
+    );
+
+    for (index, lease) in leases.iter().enumerate() {
+        let number = index + 1;
+        let feature_file = format!("feature-{number}.txt");
+        let expected_contents = format!("done {number}");
+        assert!(!repo.slot_lease_path(number).exists());
+        assert!(!repo.branch_exists(&lease.branch_name));
+        assert_eq!(
+            run_command(
+                "git",
+                [
+                    "--git-dir",
+                    origin_path
+                        .to_str()
+                        .expect("origin path should be valid utf-8"),
+                    "show",
+                    &format!("{}:{feature_file}", lease.branch_name),
+                ],
+                None,
+            )
+            .as_deref(),
+            Some(expected_contents.as_str())
+        );
+        assert_eq!(
+            run_command(
+                "git",
+                [
+                    "--git-dir",
+                    origin_path
+                        .to_str()
+                        .expect("origin path should be valid utf-8"),
+                    "show",
+                    &format!("{POOL_BASELINE_BRANCH}:{feature_file}"),
+                ],
+                None,
+            )
+            .as_deref(),
+            Some(expected_contents.as_str())
+        );
+    }
+
+    assert_eq!(
+        operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", leases[0].branch_name),
+            format!("ensure-pr:prerelease:{}", leases[0].branch_name),
+            "inspect-pr:900".to_string(),
+            "push-integration:prerelease".to_string(),
+            "inspect-pr:900".to_string(),
+            "close-pr:900".to_string(),
+            format!("push:{}:false", leases[1].branch_name),
+            format!("ensure-pr:prerelease:{}", leases[1].branch_name),
+            "inspect-pr:901".to_string(),
+            "push-integration:prerelease".to_string(),
+            "inspect-pr:901".to_string(),
+            "close-pr:901".to_string(),
+            format!("push:{}:false", leases[2].branch_name),
+            format!("ensure-pr:prerelease:{}", leases[2].branch_name),
+            "inspect-pr:902".to_string(),
+            "push-integration:prerelease".to_string(),
+            "inspect-pr:902".to_string(),
+            "close-pr:902".to_string(),
+        ]
+    );
+}
+
 // lease branch는 현재 `prerelease` head에서 시작해야 한다. 사용자가 prerelease를
 // 먼저 전진시킨 뒤 lease를 얻는 상황에서 source parent가 최신 baseline인지,
 // distributor 통합 후 기존 prerelease-only 파일과 worker 파일이 모두 유지되는지
