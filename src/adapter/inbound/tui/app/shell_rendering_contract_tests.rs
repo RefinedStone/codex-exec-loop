@@ -397,9 +397,9 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(rendered.contains("Supersession / inline inspection"));
     assert!(rendered.contains("realm: supervise"));
     assert!(rendered.contains("Capabilities"));
-    assert!(rendered.contains("Pool Board"));
-    assert!(rendered.contains("Agent Roster"));
-    assert!(rendered.contains("Distributor / Queue"));
+    assert!(rendered.contains("Realm Map"));
+    assert!(rendered.contains("Actors"));
+    assert!(rendered.contains("Exit Corridor"));
     assert!(rendered.contains("loading pool board"));
     assert!(rendered.contains("loading agent roster"));
     assert!(rendered.contains("loading distributor board"));

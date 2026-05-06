@@ -265,30 +265,30 @@ pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiAp
     );
     frame.render_widget(
         Paragraph::new(pool_lines)
-            .block(AkraTheme::panel_block("Pool Board"))
+            .block(AkraTheme::panel_block("Realm Map"))
             .wrap(Wrap { trim: false }),
         left_layout[1],
     );
     frame.render_widget(
         Paragraph::new(roster_lines)
-            .block(AkraTheme::panel_block("Agent Roster"))
+            .block(AkraTheme::panel_block("Actors"))
             .wrap(Wrap { trim: false }),
         left_layout[2],
     );
     frame.render_widget(
         Paragraph::new(detail_lines)
-            .block(AkraTheme::panel_block("Selected Detail"))
+            .block(AkraTheme::panel_block("Quest Log"))
             .wrap(Wrap { trim: false }),
         right_layout[0],
     );
     frame.render_widget(
         Paragraph::new(distributor_lines)
-            .block(AkraTheme::panel_block("Distributor / Queue"))
+            .block(AkraTheme::panel_block("Exit Corridor"))
             .wrap(Wrap { trim: false }),
         right_layout[1],
     );
     frame.render_widget(
-        Paragraph::new(key_lines).block(AkraTheme::panel_block("Keys")),
+        Paragraph::new(key_lines).block(AkraTheme::panel_block("Command Hints")),
         layout[3],
     );
 }

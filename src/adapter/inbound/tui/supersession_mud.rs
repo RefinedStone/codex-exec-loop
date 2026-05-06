@@ -1,12 +1,147 @@
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
+    ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
 };
 
 const LINE_LIMIT: usize = 112;
 const FIELD_LIMIT: usize = 34;
 const SUMMARY_LIMIT: usize = 56;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupersessionMudFocusZone {
+    RealmMap,
+    Actors,
+    QuestLog,
+    ExitCorridor,
+}
+
+impl SupersessionMudFocusZone {
+    fn next(self) -> Self {
+        match self {
+            Self::RealmMap => Self::Actors,
+            Self::Actors => Self::QuestLog,
+            Self::QuestLog => Self::ExitCorridor,
+            Self::ExitCorridor => Self::RealmMap,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::RealmMap => Self::ExitCorridor,
+            Self::Actors => Self::RealmMap,
+            Self::QuestLog => Self::Actors,
+            Self::ExitCorridor => Self::QuestLog,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupersessionMudUiState {
+    focused_zone: SupersessionMudFocusZone,
+    selected_room_index: usize,
+    selected_actor_index: usize,
+    selected_quest_index: usize,
+}
+
+impl Default for SupersessionMudUiState {
+    fn default() -> Self {
+        Self {
+            focused_zone: SupersessionMudFocusZone::RealmMap,
+            selected_room_index: 0,
+            selected_actor_index: 0,
+            selected_quest_index: 0,
+        }
+    }
+}
+
+impl SupersessionMudUiState {
+    pub fn focused_zone(&self) -> SupersessionMudFocusZone {
+        self.focused_zone
+    }
+
+    pub fn selected_room_index(&self) -> usize {
+        self.selected_room_index
+    }
+
+    pub fn selected_actor_index(&self) -> usize {
+        self.selected_actor_index
+    }
+
+    pub fn selected_quest_index(&self) -> usize {
+        self.selected_quest_index
+    }
+
+    pub fn focus_next_zone(&mut self) {
+        self.focused_zone = self.focused_zone.next();
+    }
+
+    pub fn focus_previous_zone(&mut self) {
+        self.focused_zone = self.focused_zone.previous();
+    }
+
+    pub fn move_selection(&mut self, snapshot: &ParallelModeSupervisorSnapshot, delta: isize) {
+        match self.focused_zone {
+            SupersessionMudFocusZone::RealmMap => {
+                self.selected_room_index =
+                    moved_index(self.selected_room_index, snapshot.pool.slots.len(), delta);
+            }
+            SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog => {
+                self.selected_actor_index = moved_index(
+                    self.selected_actor_index,
+                    snapshot.roster.entries.len(),
+                    delta,
+                );
+            }
+            SupersessionMudFocusZone::ExitCorridor => {
+                self.selected_quest_index = moved_index(
+                    self.selected_quest_index,
+                    snapshot.distributor.queue_items.len(),
+                    delta,
+                );
+            }
+        }
+        self.clamp_to_snapshot(snapshot);
+    }
+
+    pub fn inspect_focused(&mut self, snapshot: &ParallelModeSupervisorSnapshot) {
+        match self.focused_zone {
+            SupersessionMudFocusZone::RealmMap => {
+                if let Some(slot) = snapshot.pool.slots.get(self.selected_room_index)
+                    && let Some(actor_index) = snapshot
+                        .roster
+                        .entries
+                        .iter()
+                        .position(|entry| entry.slot_id == slot.slot_id)
+                {
+                    self.selected_actor_index = actor_index;
+                    self.focused_zone = SupersessionMudFocusZone::QuestLog;
+                }
+            }
+            SupersessionMudFocusZone::Actors => {
+                self.focused_zone = SupersessionMudFocusZone::QuestLog;
+            }
+            SupersessionMudFocusZone::QuestLog => {
+                self.focused_zone = SupersessionMudFocusZone::ExitCorridor;
+            }
+            SupersessionMudFocusZone::ExitCorridor => {
+                self.focused_zone = SupersessionMudFocusZone::RealmMap;
+            }
+        }
+        self.clamp_to_snapshot(snapshot);
+    }
+
+    pub fn clamp_to_snapshot(&mut self, snapshot: &ParallelModeSupervisorSnapshot) {
+        self.selected_room_index = self
+            .selected_room_index
+            .min(snapshot.pool.slots.len().saturating_sub(1));
+        self.selected_actor_index = self
+            .selected_actor_index
+            .min(snapshot.roster.entries.len().saturating_sub(1));
+        self.selected_quest_index = self
+            .selected_quest_index
+            .min(snapshot.distributor.queue_items.len().saturating_sub(1));
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupersessionMudLines {
@@ -20,16 +155,26 @@ pub struct SupersessionMudLines {
 pub fn build_supersession_mud_lines(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
 ) -> SupersessionMudLines {
+    build_supersession_mud_view(supervisor_snapshot, &SupersessionMudUiState::default())
+}
+
+pub fn build_supersession_mud_view(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    ui_state: &SupersessionMudUiState,
+) -> SupersessionMudLines {
     SupersessionMudLines {
-        summary_lines: build_mud_summary_lines(supervisor_snapshot),
-        pool_lines: build_mud_pool_lines(&supervisor_snapshot.pool),
-        roster_lines: build_mud_roster_lines(supervisor_snapshot),
-        detail_lines: build_mud_detail_lines(supervisor_snapshot.detail.session.as_ref()),
-        distributor_lines: build_mud_distributor_lines(&supervisor_snapshot.distributor),
+        summary_lines: build_mud_summary_lines(supervisor_snapshot, ui_state),
+        pool_lines: build_mud_pool_lines(&supervisor_snapshot.pool, ui_state),
+        roster_lines: build_mud_roster_lines(supervisor_snapshot, ui_state),
+        detail_lines: build_mud_detail_lines(supervisor_snapshot, ui_state),
+        distributor_lines: build_mud_distributor_lines(&supervisor_snapshot.distributor, ui_state),
     }
 }
 
-fn build_mud_summary_lines(snapshot: &ParallelModeSupervisorSnapshot) -> Vec<String> {
+fn build_mud_summary_lines(
+    snapshot: &ParallelModeSupervisorSnapshot,
+    ui_state: &SupersessionMudUiState,
+) -> Vec<String> {
     vec![
         fit_line(format!(
             "realm: {} | lanes {} | actors {} | corridor {}",
@@ -47,18 +192,39 @@ fn build_mud_summary_lines(snapshot: &ParallelModeSupervisorSnapshot) -> Vec<Str
                 .unwrap_or_else(|| "no active notice".to_string()),
             truncate_text(&snapshot.workspace_path, FIELD_LIMIT)
         )),
+        fit_line(format!(
+            "focus: {} | move Tab/arrows | inspect Enter/Space",
+            zone_label(ui_state.focused_zone)
+        )),
     ]
 }
 
-fn build_mud_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<String> {
-    let mut lines = vec![fit_line(format!(
-        "lane map: {}",
-        pool.slots
-            .iter()
-            .map(slot_room_token)
-            .collect::<Vec<_>>()
-            .join(" ")
-    ))];
+fn build_mud_pool_lines(
+    pool: &ParallelModePoolBoardSnapshot,
+    ui_state: &SupersessionMudUiState,
+) -> Vec<String> {
+    let mut lines = vec![
+        fit_line(format!(
+            "realm map: {}",
+            pool.slots
+                .iter()
+                .enumerate()
+                .map(|(index, slot)| selected_token(
+                    slot_room_token(slot),
+                    is_selected_room(ui_state, index)
+                ))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )),
+        fit_line(format!(
+            "lane map: {}",
+            pool.slots
+                .iter()
+                .map(slot_room_token)
+                .collect::<Vec<_>>()
+                .join(" ")
+        )),
+    ];
     if pool.slots.is_empty() {
         lines.push(fit_line(format!(
             "rooms: waiting for {} lanes at {}",
@@ -68,9 +234,10 @@ fn build_mud_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<String> {
         return lines;
     }
 
-    lines.extend(pool.slots.iter().map(|slot| {
+    lines.extend(pool.slots.iter().enumerate().map(|(index, slot)| {
         fit_line(format!(
-            "room {} {} | branch {} | gate {} | owner {}",
+            "{}room {} {} | branch {} | gate {} | owner {}",
+            selection_prefix(is_selected_room(ui_state, index)),
             slot.slot_id,
             room_state_label(slot.state),
             truncate_text(&slot.branch_name, FIELD_LIMIT),
@@ -81,7 +248,10 @@ fn build_mud_pool_lines(pool: &ParallelModePoolBoardSnapshot) -> Vec<String> {
     lines
 }
 
-fn build_mud_roster_lines(snapshot: &ParallelModeSupervisorSnapshot) -> Vec<String> {
+fn build_mud_roster_lines(
+    snapshot: &ParallelModeSupervisorSnapshot,
+    ui_state: &SupersessionMudUiState,
+) -> Vec<String> {
     if snapshot.roster.entries.is_empty() {
         return vec![fit_line(format!(
             "actors: tavern quiet | {}",
@@ -93,21 +263,26 @@ fn build_mud_roster_lines(snapshot: &ParallelModeSupervisorSnapshot) -> Vec<Stri
         .roster
         .entries
         .iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(index, entry)| {
             fit_line(format!(
-                "actor {} in {} | quest {} | state {} | signal {}",
+                "{}actor {} in {} | quest {} | progress {} | signal {}",
+                selection_prefix(is_selected_actor(ui_state, index)),
                 entry.agent_id,
                 entry.slot_id,
                 truncate_text(&entry.task_title, FIELD_LIMIT),
-                entry.state_label.replace('_', " "),
+                lifecycle_progress_label(&entry.state_label),
                 truncate_text(&entry.latest_summary, SUMMARY_LIMIT)
             ))
         })
         .collect()
 }
 
-fn build_mud_detail_lines(detail: Option<&ParallelModeAgentSessionDetailSnapshot>) -> Vec<String> {
-    let Some(detail) = detail else {
+fn build_mud_detail_lines(
+    snapshot: &ParallelModeSupervisorSnapshot,
+    ui_state: &SupersessionMudUiState,
+) -> Vec<String> {
+    let Some(detail) = snapshot.detail.session.as_ref() else {
         return vec![
             "quest log: no selected actor".to_string(),
             "trail: room -> thread -> report -> ledger -> corridor".to_string(),
@@ -117,8 +292,10 @@ fn build_mud_detail_lines(detail: Option<&ParallelModeAgentSessionDetailSnapshot
         .history
         .iter()
         .filter(|entry| !entry.state_label.trim().is_empty())
-        .map(|entry| entry.state_label.replace('_', " "))
-        .chain(std::iter::once(detail.state_label.replace('_', " ")))
+        .map(|entry| lifecycle_progress_label(&entry.state_label).to_string())
+        .chain(std::iter::once(
+            lifecycle_progress_label(&detail.state_label).to_string(),
+        ))
         .fold(Vec::<String>::new(), |mut states, state| {
             if states.last() != Some(&state) {
                 states.push(state);
@@ -127,7 +304,8 @@ fn build_mud_detail_lines(detail: Option<&ParallelModeAgentSessionDetailSnapshot
         });
     let mut lines = vec![
         fit_line(format!(
-            "quest log: {} / {} / {}",
+            "{}quest log: {} / {} / {}",
+            selection_prefix(ui_state.focused_zone == SupersessionMudFocusZone::QuestLog),
             detail.slot_id,
             detail.agent_id,
             truncate_text(&detail.task_title, FIELD_LIMIT)
@@ -150,10 +328,14 @@ fn build_mud_detail_lines(detail: Option<&ParallelModeAgentSessionDetailSnapshot
     lines
 }
 
-fn build_mud_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<String> {
+fn build_mud_distributor_lines(
+    distributor: &ParallelModeDistributorSnapshot,
+    ui_state: &SupersessionMudUiState,
+) -> Vec<String> {
     let mut lines = vec![
         fit_line(format!(
-            "exit corridor: head {} | depth {} | barrier {}",
+            "{}exit corridor: head {} | depth {} | barrier {}",
+            selection_prefix(ui_state.focused_zone == SupersessionMudFocusZone::ExitCorridor),
             distributor.head_summary,
             distributor.queue_depth(),
             distributor.orchestrator_status.barrier_state
@@ -178,7 +360,8 @@ fn build_mud_distributor_lines(distributor: &ParallelModeDistributorSnapshot) ->
                 .enumerate()
                 .map(|(index, item)| {
                     fit_line(format!(
-                        "{} {} | actor {} | quest {} | branch {}",
+                        "{}{} {} | actor {} | quest {} | branch {}",
+                        selection_prefix(is_selected_quest(ui_state, index)),
                         if index == 0 { "head" } else { "held" },
                         item.queue_state.label(),
                         item.source_agent,
@@ -240,6 +423,75 @@ fn slot_exit_label(slot: &ParallelModePoolSlotSnapshot) -> &'static str {
         ParallelModePoolSlotState::Blocked
         | ParallelModePoolSlotState::Missing
         | ParallelModePoolSlotState::Unavailable => "blocked",
+    }
+}
+
+fn moved_index(current: usize, len: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let last = len - 1;
+    if delta < 0 {
+        current.saturating_sub(delta.unsigned_abs()).min(last)
+    } else {
+        current.saturating_add(delta as usize).min(last)
+    }
+}
+
+fn is_selected_room(ui_state: &SupersessionMudUiState, index: usize) -> bool {
+    ui_state.focused_zone == SupersessionMudFocusZone::RealmMap
+        && ui_state.selected_room_index == index
+}
+
+fn is_selected_actor(ui_state: &SupersessionMudUiState, index: usize) -> bool {
+    matches!(
+        ui_state.focused_zone,
+        SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog
+    ) && ui_state.selected_actor_index == index
+}
+
+fn is_selected_quest(ui_state: &SupersessionMudUiState, index: usize) -> bool {
+    ui_state.focused_zone == SupersessionMudFocusZone::ExitCorridor
+        && ui_state.selected_quest_index == index
+}
+
+fn selected_token(token: String, selected: bool) -> String {
+    if selected {
+        format!(">{token}<")
+    } else {
+        token
+    }
+}
+
+fn selection_prefix(selected: bool) -> &'static str {
+    if selected { "> " } else { "  " }
+}
+
+fn zone_label(zone: SupersessionMudFocusZone) -> &'static str {
+    match zone {
+        SupersessionMudFocusZone::RealmMap => "realm map",
+        SupersessionMudFocusZone::Actors => "actors",
+        SupersessionMudFocusZone::QuestLog => "quest log",
+        SupersessionMudFocusZone::ExitCorridor => "exit corridor",
+    }
+}
+
+fn lifecycle_progress_label(state_label: &str) -> &'static str {
+    let normalized = state_label.trim().to_ascii_lowercase().replace('-', "_");
+    if normalized.contains("block") || normalized.contains("fail") {
+        "blocked"
+    } else if normalized.contains("cleanup") || normalized.contains("clean") {
+        "cleaned"
+    } else if normalized.contains("deliver") || normalized.contains("queue") {
+        "delivery"
+    } else if normalized.contains("official") || normalized.contains("commit_ready") {
+        "official"
+    } else if normalized.contains("report") || normalized.contains("complete") {
+        "reported"
+    } else if normalized.contains("run") || normalized.contains("active") {
+        "running"
+    } else {
+        "assigned"
     }
 }
 

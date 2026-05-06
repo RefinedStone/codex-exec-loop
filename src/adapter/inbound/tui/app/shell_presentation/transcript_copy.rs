@@ -9,14 +9,43 @@ use super::{
 pub(in super::super) fn format_conversation_lines(
     messages: &[ConversationMessage],
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_with_debug(messages, false)
+    format_conversation_lines_capped(messages, false)
+}
+
+#[cfg(test)]
+pub(in super::super) fn format_conversation_lines_with_debug(
+    messages: &[ConversationMessage],
+    // Debug detail is operator-only transcript copy and stays out of cached/default message lines.
+    show_debug_details: bool,
+) -> Vec<Line<'static>> {
+    format_conversation_lines_capped(messages, show_debug_details)
+}
+
+pub(in super::super) fn format_conversation_scrollback_lines(
+    messages: &[ConversationMessage],
+    show_debug_details: bool,
+) -> Vec<Line<'static>> {
+    format_conversation_lines_uncapped(messages, show_debug_details)
+}
+
+fn format_conversation_lines_capped(
+    messages: &[ConversationMessage],
+    show_debug_details: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = format_conversation_lines_uncapped(messages, show_debug_details);
+
+    // Keep recent terminal history bounded; rendering and inline tail logic operate on this capped line buffer.
+    if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
+        lines.drain(0..lines.len() - MAX_CONVERSATION_HISTORY_LINES);
+    }
+
+    lines
 }
 
 // Project logical conversation messages into terminal transcript lines.
 // Each message becomes a styled label, indented body/debug lines, and a blank separator so history reads as blocks.
-pub(in super::super) fn format_conversation_lines_with_debug(
+fn format_conversation_lines_uncapped(
     messages: &[ConversationMessage],
-    // Debug detail is operator-only transcript copy and stays out of cached/default message lines.
     show_debug_details: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -51,11 +80,6 @@ pub(in super::super) fn format_conversation_lines_with_debug(
     // Empty threads still need visible transcript content so the panel does not look broken.
     if lines.is_empty() {
         lines.push(Line::from("No messages in this thread yet."));
-    }
-
-    // Keep recent terminal history bounded; rendering and inline scroll logic operate on this capped line buffer.
-    if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
-        lines.drain(0..lines.len() - MAX_CONVERSATION_HISTORY_LINES);
     }
 
     lines

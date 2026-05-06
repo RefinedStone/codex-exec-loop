@@ -121,6 +121,7 @@ impl NativeTuiApp {
             parallel_mode_enabled: false,
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
+            supersession_mud_ui_state: super::SupersessionMudUiState::default(),
             parallel_mode_supervisor_refresh_in_flight: false,
             parallel_mode_dispatch_refresh_in_flight: false,
             parallel_mode_orchestrator_tick_in_flight: false,

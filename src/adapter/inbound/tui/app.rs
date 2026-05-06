@@ -2,6 +2,7 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
+use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
@@ -301,6 +302,7 @@ struct NativeTuiApp {
     parallel_mode_enabled: bool,
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
+    supersession_mud_ui_state: SupersessionMudUiState,
     parallel_mode_supervisor_refresh_in_flight: bool,
     parallel_mode_dispatch_refresh_in_flight: bool,
     parallel_mode_orchestrator_tick_in_flight: bool,

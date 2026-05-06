@@ -133,6 +133,90 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
 }
 
 #[test]
+fn supersession_mud_navigation_changes_only_ui_selection_state() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        workspace_directory,
+        ParallelModePoolBoardSnapshot::new(
+            2,
+            "/tmp/pool",
+            "idle",
+            vec![
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Idle,
+                    "prerelease",
+                    "akra-pool/slot-1",
+                    "idle",
+                ),
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-2",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-2/mud",
+                    "akra-pool/slot-2",
+                    "agent-2 / task-2",
+                ),
+            ],
+        ),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![ParallelModeAgentRosterEntry::new(
+                "agent-2",
+                "MUD navigation",
+                "slot-2",
+                "akra-agent/slot-2/mud",
+                "running",
+                "01m00s",
+                "working",
+            )],
+            "no active agents",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    );
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot = Some(snapshot.clone());
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Down,
+        KeyModifiers::empty(),
+    )));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    )));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Tab,
+        KeyModifiers::empty(),
+    )));
+
+    assert_eq!(
+        runtime.app().parallel_mode_supervisor_snapshot,
+        Some(snapshot),
+        "MUD navigation must not mutate supervisor/domain state"
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .supersession_mud_ui_state
+            .selected_room_index(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .supersession_mud_ui_state
+            .selected_actor_index(),
+        0
+    );
+    assert!(runtime.take_redraw_request());
+}
+
+#[test]
 fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
     /*
      * Task intake before the first main-session post-turn epoch is data-plane

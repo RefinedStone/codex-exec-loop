@@ -9,7 +9,7 @@ use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::history_insertion::HistoryInsertionMode;
 use super::shell_presentation::{
-    build_inline_tail_view, build_startup_banner_lines, format_conversation_lines_with_debug,
+    build_inline_tail_view, build_startup_banner_lines, format_conversation_scrollback_lines,
 };
 use super::shell_rendering::{draw, prepare_render_state};
 use super::shell_runtime::ShellRuntime;
@@ -231,20 +231,15 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     }
     match &app.conversation_state {
         ConversationState::Ready(conversation) => {
-            if app.planner_shows_debug_details() {
-                /*
-                 * Debug mode recomputes lines from messages because the cached
-                 * conversation lines deliberately omit diagnostic annotations.
-                 */
-                format_conversation_lines_with_debug(&conversation.messages, true)
-            } else {
-                /*
-                 * Normal mode reuses cached conversation lines; inline rendering
-                 * runs every tick, so avoiding reformat work keeps terminal input
-                 * latency predictable.
-                 */
-                conversation.cached_conversation_lines.clone()
-            }
+            /*
+             * Host scrollback is the durable transcript surface, so it must not
+             * share the live screen's capped projection. Reformat from committed
+             * messages only: live agent deltas and prompt text stay in the tail.
+             */
+            format_conversation_scrollback_lines(
+                &conversation.messages,
+                app.planner_shows_debug_details(),
+            )
         }
         ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),
     }

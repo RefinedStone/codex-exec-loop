@@ -524,6 +524,97 @@ fn inline_history_shows_planner_debug_detail_when_visibility_is_debug() {
         .join("\n");
     assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
 }
+
+#[test]
+fn host_scrollback_preserves_long_single_completion_beyond_screen_cap() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 100, 30);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let body = (0..180)
+        .map(|index| match index {
+            0 => "LONG_SINGLE_MARKER_FIRST".to_string(),
+            90 => "LONG_SINGLE_MARKER_MIDDLE".to_string(),
+            179 => "LONG_SINGLE_MARKER_LAST".to_string(),
+            _ => format!("long completion filler {index}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    append_history_message(&mut app, &body);
+    let capped_lines = {
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.cached_conversation_lines.clone()
+    };
+    assert!(
+        !capped_lines
+            .iter()
+            .any(|line| line.to_string().contains("LONG_SINGLE_MARKER_FIRST")),
+        "fixture must prove the live screen projection is capped"
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("draw transaction");
+    let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
+    for marker in [
+        "LONG_SINGLE_MARKER_FIRST",
+        "LONG_SINGLE_MARKER_MIDDLE",
+        "LONG_SINGLE_MARKER_LAST",
+    ] {
+        assert!(
+            terminal_history.contains(marker),
+            "host scrollback lost {marker} from uncapped completion:\n{terminal_history}"
+        );
+        assert_eq!(
+            terminal_history.matches(marker).count(),
+            1,
+            "host scrollback duplicated {marker} from uncapped completion:\n{terminal_history}"
+        );
+    }
+}
+
+#[test]
+fn host_scrollback_preserves_multiturn_history_beyond_screen_cap_without_duplicates() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 100, 30);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let markers = (0..75)
+        .map(|index| format!("MULTITURN_MARKER_{index:02}"))
+        .collect::<Vec<_>>();
+
+    for (index, marker) in markers.iter().enumerate() {
+        append_user_history_message(runtime.app_mut(), &format!("prompt {marker}"));
+        append_history_message(runtime.app_mut(), &format!("answer {marker}"));
+        if index % 5 == 0 {
+            draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+                .expect("incremental draw transaction");
+        }
+    }
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("final draw transaction");
+    let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
+    for marker in markers {
+        assert!(
+            terminal_history.contains(&marker),
+            "host scrollback lost {marker} from multiturn history:\n{terminal_history}"
+        );
+        assert_eq!(
+            terminal_history.matches(&marker).count(),
+            2,
+            "host scrollback should contain prompt and answer once for {marker}:\n{terminal_history}"
+        );
+    }
+}
+
 fn draw_test_frame<B>(
     terminal: &mut Terminal<InlineTerminalBackend<B>>,
     runtime: &mut ShellRuntime,

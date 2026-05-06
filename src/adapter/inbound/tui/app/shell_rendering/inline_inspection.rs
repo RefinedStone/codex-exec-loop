@@ -287,32 +287,38 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_section(
         frame,
         left_layout[1],
-        Line::from("Pool Board"),
+        Line::from("Realm Map"),
         pool_lines,
         false,
     );
     render_inline_section(
         frame,
         left_layout[2],
-        Line::from("Agent Roster"),
+        Line::from("Actors"),
         roster_lines,
         false,
     );
     render_inline_section(
         frame,
         right_layout[0],
-        Line::from("Selected Detail"),
+        Line::from("Quest Log"),
         detail_lines,
         false,
     );
     render_inline_section(
         frame,
         right_layout[1],
-        Line::from("Distributor / Queue"),
+        Line::from("Exit Corridor"),
         distributor_lines,
         false,
     );
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_section(
+        frame,
+        layout[3],
+        Line::from("Command Hints"),
+        key_lines,
+        true,
+    );
 }
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_queue_overlay_view(app);

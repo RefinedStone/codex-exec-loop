@@ -1299,6 +1299,32 @@ impl NativeTuiApp {
                 // command path as `:parallel off` so status copy stays identical.
                 self.handle_parallel_shell_command(Some("off"));
             }
+            KeyCode::Tab if key.modifiers.is_empty() => {
+                self.supersession_mud_ui_state.focus_next_zone();
+                let snapshot = self.parallel_mode_supervisor_snapshot();
+                self.supersession_mud_ui_state.clamp_to_snapshot(&snapshot);
+            }
+            KeyCode::BackTab => {
+                self.supersession_mud_ui_state.focus_previous_zone();
+                let snapshot = self.parallel_mode_supervisor_snapshot();
+                self.supersession_mud_ui_state.clamp_to_snapshot(&snapshot);
+            }
+            KeyCode::Left | KeyCode::Up if key.modifiers.is_empty() => {
+                let snapshot = self.parallel_mode_supervisor_snapshot();
+                self.supersession_mud_ui_state.move_selection(&snapshot, -1);
+            }
+            KeyCode::Right | KeyCode::Down if key.modifiers.is_empty() => {
+                let snapshot = self.parallel_mode_supervisor_snapshot();
+                self.supersession_mud_ui_state.move_selection(&snapshot, 1);
+            }
+            KeyCode::Enter if key.modifiers.is_empty() => {
+                let snapshot = self.parallel_mode_supervisor_snapshot();
+                self.supersession_mud_ui_state.inspect_focused(&snapshot);
+            }
+            KeyCode::Char(' ') if key.modifiers.is_empty() => {
+                let snapshot = self.parallel_mode_supervisor_snapshot();
+                self.supersession_mud_ui_state.inspect_focused(&snapshot);
+            }
             _ => return false,
         }
 

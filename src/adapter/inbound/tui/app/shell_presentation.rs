@@ -95,7 +95,9 @@ use shell_core::{ShellConversationState, ShellCorePresentationContext};
 use startup_banner::build_startup_banner_lines_from_context;
 pub(super) use startup_banner::startup_ascii_art_lines;
 pub(super) use status_panels::InlineTailView;
-pub(super) use transcript_copy::{format_conversation_lines, format_conversation_lines_with_debug};
+#[cfg(test)]
+pub(super) use transcript_copy::format_conversation_lines_with_debug;
+pub(super) use transcript_copy::{format_conversation_lines, format_conversation_scrollback_lines};
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]

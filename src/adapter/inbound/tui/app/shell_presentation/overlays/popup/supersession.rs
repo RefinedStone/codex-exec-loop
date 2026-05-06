@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
-use crate::adapter::inbound::tui::supersession_mud::build_supersession_mud_lines;
+use crate::adapter::inbound::tui::supersession_mud::build_supersession_mud_view;
 use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
@@ -26,7 +26,8 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let readiness_snapshot = app.parallel_mode_readiness_snapshot();
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
     let activity_frame = supersession_activity_frame();
-    let mud_lines = build_supersession_mud_lines(&supervisor_snapshot);
+    let mud_lines =
+        build_supersession_mud_view(&supervisor_snapshot, &app.supersession_mud_ui_state);
     /*
     The app state remains the source of truth for live readiness and supervisor
     snapshots. This adapter only chooses popup grouping and copy, so service-layer
@@ -69,7 +70,9 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
             "next action: fix readiness blockers, then type :parallel",
         ));
     }
-    key_lines.push(AkraTheme::key_line("Ctrl+O or Esc/Ctrl+C: close"));
+    key_lines.push(AkraTheme::key_line(
+        "Tab/arrows: move | Enter/Space: inspect | Ctrl+O or Esc/Ctrl+C: close",
+    ));
 
     SupersessionOverlayView {
         header_lines: vec![

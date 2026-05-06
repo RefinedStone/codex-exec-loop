@@ -1,4 +1,6 @@
-use codex_exec_loop_native::adapter::inbound::tui::supersession_mud::build_supersession_mud_lines;
+use codex_exec_loop_native::adapter::inbound::tui::supersession_mud::{
+    SupersessionMudUiState, build_supersession_mud_lines, build_supersession_mud_view,
+};
 use codex_exec_loop_native::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -143,11 +145,90 @@ fn supersession_mud_projection_integrates_lanes_actor_timeline_and_corridor() {
     assert!(rendered.contains("lane map: [slot-1:RUN] [slot-2:IDLE] [slot-3:BLOCK]"));
     assert!(rendered.contains("actor agent-1 in slot-1"));
     assert!(rendered.contains("quest log: slot-1 / agent-1"));
-    assert!(rendered.contains("trail: assigned -> running -> commit ready"));
+    assert!(rendered.contains("trail: assigned -> running -> official"));
     assert!(rendered.contains("exit corridor: head queued | depth 2"));
     assert!(rendered.contains("held behind head: 1 quest(s)"));
     assert!(
         rendered.lines().all(|line| line.chars().count() <= 112),
         "MUD projection should keep line width bounded for narrow TUI panels:\n{rendered}"
+    );
+}
+
+#[test]
+fn supersession_mud_projection_marks_focus_and_survives_narrow_copy() {
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root/projects/codex-exec-loop",
+        ParallelModePoolBoardSnapshot::new(
+            2,
+            "/tmp/root/projects/codex-exec-loop-akra-worktrees/pool",
+            "idle",
+            vec![
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Idle,
+                    "prerelease",
+                    "akra-pool/slot-1",
+                    "idle",
+                ),
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-2",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-2/parallel-mode-mud-ui-pack",
+                    "akra-pool/slot-2",
+                    "agent-2 / task-2",
+                ),
+            ],
+        ),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![ParallelModeAgentRosterEntry::new(
+                "agent-2",
+                "Parallel Mode MUD Timeline UI Pack",
+                "slot-2",
+                "akra-agent/slot-2/parallel-mode-mud-ui-pack",
+                "running",
+                "04m12s",
+                "rendering the selected session timeline",
+            )],
+            "no active agents",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-2",
+                "Parallel Mode MUD Timeline UI Pack",
+                ParallelModeQueueItemState::Queued,
+                "akra-agent/slot-2/parallel-mode-mud-ui-pack",
+                "abc1234",
+                "ready",
+            )],
+            Vec::new(),
+            "queued",
+            "ready",
+        ),
+        None,
+    );
+    let mut ui_state = SupersessionMudUiState::default();
+    ui_state.move_selection(&snapshot, 1);
+    ui_state.inspect_focused(&snapshot);
+    ui_state.focus_next_zone();
+    let projection = build_supersession_mud_view(&snapshot, &ui_state);
+    let rendered = [
+        projection.summary_lines,
+        projection.pool_lines,
+        projection.roster_lines,
+        projection.detail_lines,
+        projection.distributor_lines,
+    ]
+    .concat()
+    .join("\n");
+
+    assert!(rendered.contains("focus: exit corridor"));
+    assert!(rendered.contains("realm map: [slot-1:IDLE] [slot-2:RUN]"));
+    assert!(rendered.contains("> exit corridor: head queued | depth 1"));
+    assert!(rendered.contains("quest log: no selected actor"));
+    assert!(
+        rendered.lines().all(|line| line.chars().count() <= 112),
+        "focused MUD projection should remain bounded:\n{rendered}"
     );
 }
