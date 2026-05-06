@@ -269,6 +269,7 @@ pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_akr
                     "-C",
                     slot_path_string.as_str(),
                     "checkout",
+                    "--force",
                     "--detach",
                     POOL_BASELINE_BRANCH,
                 ],

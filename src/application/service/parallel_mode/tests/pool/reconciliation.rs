@@ -279,6 +279,59 @@ fn parallel_entry_from_off_hard_resets_active_pool_slots() {
     assert_eq!(current_branch(&slot_path), "HEAD");
 }
 
+// Dirty tracked files must not stop off -> on pool reset. Git checkout without --force
+// can fail before reset --hard runs when a slot branch has committed and uncommitted
+// edits to the same tracked file, which leaves the slot detached at stale work.
+#[test]
+fn parallel_entry_from_off_forces_dirty_tracked_slot_back_to_baseline() {
+    let repo = TempGitRepo::new("parallel-enable-reset-dirty-tracked");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(
+        &slot_path,
+        "README.md",
+        "agent branch version\n",
+        "agent edits tracked readme",
+    );
+    fs::write(slot_path.join("README.md"), "dirty local version\n")
+        .expect("dirty tracked file should write");
+
+    let reset_count = service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect("parallel enable reset should force dirty tracked slots back to baseline");
+
+    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert_eq!(
+        fs::read_to_string(slot_path.join("README.md")).expect("readme should be readable"),
+        "seed\n"
+    );
+    assert_eq!(current_branch(&slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                slot_path.to_str().expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("slot head should resolve"),
+        repo.head_sha()
+    );
+}
+
 // Running lease라도 slot worktree가 더 이상 해당 agent branch에 있지 않으면 live worker로
 // 보호할 수 없다. 재시작 후 남은 stale DB row가 off -> on pool reset을 막으면 사용자는
 // :parallel 진입 때마다 오래된 roster와 blocked pool을 다시 보게 된다.
