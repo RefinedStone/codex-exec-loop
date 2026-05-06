@@ -424,10 +424,12 @@ fn build_timeline_lines(
         })
         .unwrap_or_else(|| "not captured yet".to_string());
 
-    vec![
-        Line::from(format!("events: {event_flow}")),
-        Line::from(format!("last event: {last_event}")),
-    ]
+    let mut lines = vec![Line::from(format!("events: {event_flow}"))];
+    if let Some(delivery_boundary) = delivery_boundary_label(detail) {
+        lines.push(Line::from(delivery_boundary));
+    }
+    lines.push(Line::from(format!("last event: {last_event}")));
+    lines
 }
 
 struct SupersessionTimelineEvent {
@@ -474,6 +476,90 @@ fn compact_timeline_events(
     }
 
     events
+}
+
+struct DeliveryBoundaryStage {
+    label: &'static str,
+    state_labels: &'static [&'static str],
+}
+
+struct DeliveryBoundaryEvent {
+    stage_label: &'static str,
+    timestamp: String,
+}
+
+fn delivery_boundary_label(
+    detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
+) -> Option<String> {
+    let events = delivery_boundary_events(detail);
+    if events.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "delivery: {}",
+        events
+            .iter()
+            .map(|event| format!("{} {}", event.stage_label, event.timestamp))
+            .collect::<Vec<_>>()
+            .join(" -> ")
+    ))
+}
+
+fn delivery_boundary_events(
+    detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
+) -> Vec<DeliveryBoundaryEvent> {
+    let mut source_events = detail
+        .history
+        .iter()
+        .filter(|entry| !entry.state_label.trim().is_empty())
+        .map(|entry| (entry.state_label.as_str(), entry.timestamp.as_str()))
+        .collect::<Vec<_>>();
+    let current_state = detail.state_label.trim();
+    if !current_state.is_empty() {
+        let current_already_recorded = source_events.last().is_some_and(|(state, timestamp)| {
+            *state == current_state && *timestamp == detail.updated_at.as_str()
+        });
+        if !current_already_recorded {
+            source_events.push((current_state, detail.updated_at.as_str()));
+        }
+    }
+    let has_distributor_delivery = source_events.iter().any(|(state_label, _)| {
+        ["pushing", "pr_pending", "merge_pending", "integrating"].contains(state_label)
+    });
+    if !has_distributor_delivery {
+        return Vec::new();
+    }
+
+    delivery_boundary_stages()
+        .iter()
+        .filter_map(|stage| {
+            source_events
+                .iter()
+                .find(|(state_label, _)| stage.state_labels.contains(state_label))
+                .map(|(_, timestamp)| DeliveryBoundaryEvent {
+                    stage_label: stage.label,
+                    timestamp: compact_timestamp_label(timestamp),
+                })
+        })
+        .collect()
+}
+
+fn delivery_boundary_stages() -> [DeliveryBoundaryStage; 3] {
+    [
+        DeliveryBoundaryStage {
+            label: "push",
+            state_labels: &["pushing"],
+        },
+        DeliveryBoundaryStage {
+            label: "PR",
+            state_labels: &["pr_pending", "merge_pending"],
+        },
+        DeliveryBoundaryStage {
+            label: "merge",
+            state_labels: &["integrating", "merged", "cleanup_pending", "cleaned"],
+        },
+    ]
 }
 
 fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
