@@ -6,6 +6,7 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
     PlanningAuthorityRuntimeProjectionSnapshot,
 };
+use crate::diagnostics::raw_event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot,
@@ -250,12 +251,60 @@ pub(super) fn reset_pool_for_parallel_enable(
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
         let slot_path = pool_root.join(&slot_id);
-        if worktree_records
+        if !worktree_records
             .iter()
             .any(|record| record.path == slot_path)
-            && reset_slot_worktree_to_akra(&slot_path).succeeded()
         {
+            raw_event_log::emit_lazy("parallel_pool_slot_reset_skipped", || {
+                serde_json::json!({
+                    "workspace": workspace_dir,
+                    "repo_root": repo_root,
+                    "pool_root": pool_root,
+                    "slot_id": slot_id,
+                    "slot_path": slot_path,
+                    "reason": "slot worktree is not registered",
+                })
+            });
+            continue;
+        }
+
+        raw_event_log::emit_lazy("parallel_pool_slot_reset_started", || {
+            serde_json::json!({
+                "workspace": workspace_dir,
+                "repo_root": repo_root,
+                "pool_root": pool_root,
+                "slot_id": slot_id,
+                "slot_path": slot_path,
+                "baseline_branch": POOL_BASELINE_BRANCH,
+            })
+        });
+        let reset_report = reset_slot_worktree_to_akra(&slot_path);
+        if reset_report.succeeded() {
             reset_slots += 1;
+            raw_event_log::emit_lazy("parallel_pool_slot_reset_completed", || {
+                serde_json::json!({
+                    "workspace": workspace_dir,
+                    "repo_root": repo_root,
+                    "pool_root": pool_root,
+                    "slot_id": slot_id,
+                    "slot_path": slot_path,
+                    "baseline_branch": POOL_BASELINE_BRANCH,
+                    "succeeded": true,
+                })
+            });
+        } else {
+            raw_event_log::emit_lazy("parallel_pool_slot_reset_failed", || {
+                serde_json::json!({
+                    "workspace": workspace_dir,
+                    "repo_root": repo_root,
+                    "pool_root": pool_root,
+                    "slot_id": slot_id,
+                    "slot_path": slot_path,
+                    "baseline_branch": POOL_BASELINE_BRANCH,
+                    "succeeded": false,
+                    "failure": reset_report.failure_summary(),
+                })
+            });
         }
     }
 
