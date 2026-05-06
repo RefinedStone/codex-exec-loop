@@ -37,14 +37,16 @@ Parallel Mode의 다음 UI Pack은 "운영형 MUD timeline"으로 잡는 것이 
 - Keep key footer conservative. `docs/design/07-tui-layered-architecture-and-aesthetic-contract.md` requires displayed shortcuts to match implemented input paths.
 - Use fixed-width row fields and truncate branch/task/path labels to protect narrow TUI snapshots.
 
-## Proposed First Slice
+## Delivered First Slice
 
-Create a read-only Supersession timeline projection:
+The first slice is shipped as a read-only Supersession timeline projection:
 
-- Add timeline lines to the existing supervisor detail view model.
-- Render selected session lifecycle as compact event arrows under the current pool/roster sections.
-- Do not add new commands yet.
-- Verify with the existing shell rendering tests plus one narrow snapshot.
+- Timeline lines are added to the existing supervisor detail view model in
+  `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession.rs`.
+- Selected session lifecycle renders as compact event arrows under the current pool/roster sections.
+- No new commands or mutable controls were added.
+- Coverage is pinned by supersession popup copy tests and a narrow inline shell rendering contract
+  test that keeps the selected timeline visible.
 
 ## References
 
