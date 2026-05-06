@@ -1,14 +1,25 @@
 {% extends "admin/base.html" %}
 {% block content %}
-<section class="grid">
-  <article class="card span-5">
-    <h2>Workspace</h2>
-    <p>State: <strong>{{ overview.doctor.planning_state }}</strong></p>
+<section class="dashboard-panel">
+  <article class="status-board">
+    <div class="status-title">
+      <div>
+        <h2>Workspace Status</h2>
+        <p>State: <strong>{{ overview.doctor.planning_state }}</strong></p>
+      </div>
+      <span class="pill strong">{{ overview.runtime.preview_status_label }}</span>
+    </div>
     <div class="statline">
       {% if let Some(policy) = overview.doctor.queue_idle_policy %}
       <span class="pill">queue-idle: {{ policy }}</span>
       {% endif %}
-      <span class="pill">status: {{ overview.runtime.preview_status_label }}</span>
+      {% if overview.runtime.workspace_present %}
+      <span class="pill">workspace ready</span>
+      {% else %}
+      <span class="pill">workspace missing</span>
+      {% endif %}
+      <span class="pill">{{ overview.runtime.visible_tasks.len() }} visible tasks</span>
+      <span class="pill">{{ overview.runtime.proposed_tasks.len() }} proposals</span>
     </div>
     {% if let Some(health) = overview.doctor.health %}
     <p>{{ health }}</p>
@@ -19,16 +30,60 @@
     {% if let Some(note) = overview.doctor.note %}
     <p><strong>Note:</strong> {{ note }}</p>
     {% endif %}
+
+    {% if let Some(queue_head) = overview.runtime.queue_head %}
+    <div class="queue-head">
+      <span class="eyebrow">Next Queue Head</span>
+      <strong>{{ queue_head.task_title }}</strong>
+      <div class="queue-meta">
+        <span class="mono">{{ queue_head.task_id }}</span>
+        <span class="mono">{{ queue_head.direction_id }}</span>
+        <span>priority {{ queue_head.combined_priority }}</span>
+        <span>{{ queue_head.status }}</span>
+      </div>
+      {% if !queue_head.rank_reasons.is_empty() %}
+      <div class="statline">
+        {% for reason in queue_head.rank_reasons %}
+        <span class="pill">{{ reason }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="queue-head">
+      <span class="eyebrow">Next Queue Head</span>
+      <strong>No actionable task is currently selected.</strong>
+      {% if let Some(summary) = overview.doctor.queue_summary %}
+      <p>{{ summary }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
   </article>
 
-  <article class="card span-7">
+  <aside class="route-board">
+    <a class="route-link" href="/admin/tasks">
+      <strong>Tasks</strong>
+      <span>Create, prioritize, unblock, or retire work items.</span>
+    </a>
+    <a class="route-link" href="/admin/directions">
+      <strong>Directions</strong>
+      <span>Maintain workstreams, detail documents, and queue-idle prompt edits.</span>
+    </a>
+    <a class="route-link" href="/admin/controls">
+      <strong>Controls</strong>
+      <span>Export editable files, apply workspace edits, or reset local planning state.</span>
+    </a>
+    <form method="post" action="/admin/drafts">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="full_planning">
+      <button type="submit">Open Full Planning Draft</button>
+    </form>
+  </aside>
+</section>
+
+<section class="grid">
+  <article class="card span-6">
     <h2>Queue Projection</h2>
-    {% if let Some(queue_head) = overview.runtime.queue_head %}
-    <p><strong>{{ queue_head.task_title }}</strong></p>
-    <p class="mono">{{ queue_head.task_id }} / {{ queue_head.direction_id }} / priority {{ queue_head.combined_priority }}</p>
-    {% else %}
-    <p>No actionable queue head.</p>
-    {% endif %}
     {% if let Some(summary) = overview.doctor.queue_summary %}
     <p>{{ summary }}</p>
     {% endif %}
@@ -38,29 +93,49 @@
   </article>
 
   <article class="card span-6">
-    <h2>Start Editing</h2>
-    <div class="actions">
-      <form method="post" action="/admin/drafts">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="kind" value="full_planning">
-        <button type="submit">Full Planning Draft</button>
-      </form>
-      <a class="button secondary" href="/admin/directions">Direction Maintenance</a>
-      <a class="button secondary" href="/admin/controls">Runtime Controls</a>
-    </div>
-  </article>
-
-  <article class="card span-6">
     <h2>Visible Tasks</h2>
     {% if overview.runtime.visible_tasks.is_empty() %}
     <p>No active tasks surfaced.</p>
     {% else %}
     <table>
+      <thead>
+        <tr>
+          <th>Task</th>
+          <th>Status</th>
+          <th>Priority</th>
+        </tr>
+      </thead>
       <tbody>
         {% for task in overview.runtime.visible_tasks %}
         <tr>
           <td><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
           <td>{{ task.status }}</td>
+          <td>{{ task.combined_priority }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </article>
+
+  <article class="card span-12">
+    <h2>Proposals</h2>
+    {% if overview.runtime.proposed_tasks.is_empty() %}
+    <p>No promotable proposals are currently visible.</p>
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Proposal</th>
+          <th>Direction</th>
+          <th>Priority</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in overview.runtime.proposed_tasks %}
+        <tr>
+          <td><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
+          <td class="mono">{{ task.direction_id }}</td>
           <td>{{ task.combined_priority }}</td>
         </tr>
         {% endfor %}

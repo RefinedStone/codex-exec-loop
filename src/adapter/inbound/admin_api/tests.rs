@@ -13,6 +13,7 @@ const CONTROLS_TEMPLATE: &str = include_str!("../../../../templates/admin/contro
 const DIRECTIONS_TEMPLATE: &str = include_str!("../../../../templates/admin/directions.html");
 const EDITOR_TEMPLATE: &str = include_str!("../../../../templates/admin/editor.html");
 const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.html");
+const DASHBOARD_TEMPLATE: &str = include_str!("../../../../templates/admin/dashboard.html");
 
 /*
  * 제거된 raw-authority field는 stale browser tab이나 오래된 bookmark/form replay에서 여전히 들어올 수 있다.
@@ -50,6 +51,31 @@ fn nav_no_longer_has_raw_task_authority_draft_kind() {
         nav_for_kind(PlanningAdminDraftKind::QueueIdlePrompt),
         "directions"
     );
+}
+
+/*
+ * admin 개편의 첫 화면 계약은 route handler가 아니라 template shell에 있다.
+ * sidebar landmark와 dashboard quick routes가 사라지면 로컬 운영자가 편집/제어 surface로 바로 이동하지 못하므로
+ * fixture test로 최소 구조를 고정한다.
+ */
+#[test]
+fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
+    assert!(BASE_TEMPLATE.contains("class=\"admin-layout\""));
+    assert!(BASE_TEMPLATE.contains("aria-label=\"Admin navigation\""));
+    assert!(BASE_TEMPLATE.contains("class=\"workspace-chip\""));
+
+    for route in [
+        "href=\"/admin/tasks\"",
+        "href=\"/admin/directions\"",
+        "href=\"/admin/controls\"",
+    ] {
+        assert!(
+            DASHBOARD_TEMPLATE.contains(route),
+            "dashboard should expose quick route {route}"
+        );
+    }
+
+    assert!(DASHBOARD_TEMPLATE.contains("Open Full Planning Draft"));
 }
 
 /*
