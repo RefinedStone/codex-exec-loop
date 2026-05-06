@@ -9,7 +9,6 @@ pub(crate) enum InlineShellCommand {
     Turns,
     Stop,
     Doctor,
-    Init,
     PlanningInit,
     Reset,
     NewDraft,
@@ -49,7 +48,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :init  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -132,15 +131,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":doctor"],
         suggestion_detail: "planning health",
         buffered_hint: "Press Enter to inspect planning health.",
-        execution_status: None,
-        requires_argument: false,
-    },
-    InlineShellCommandSpec {
-        command: InlineShellCommand::Init,
-        primary_name: ":init",
-        aliases: &[":init"],
-        suggestion_detail: "planning scaffold",
-        buffered_hint: "Press Enter to stage the default planning scaffold.",
         execution_status: None,
         requires_argument: false,
     },
@@ -392,7 +382,6 @@ impl InlineShellCommand {
             | InlineShellCommand::Task
             | InlineShellCommand::Stop
             | InlineShellCommand::Doctor
-            | InlineShellCommand::Init
             | InlineShellCommand::PlanningInit
             | InlineShellCommand::NewDraft
             | InlineShellCommand::Help => self.command_name(),
@@ -420,7 +409,6 @@ impl InlineShellCommand {
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Sessions
             | InlineShellCommand::Doctor
-            | InlineShellCommand::Init
             | InlineShellCommand::NewDraft
             | InlineShellCommand::Help => self.command_name(),
         }

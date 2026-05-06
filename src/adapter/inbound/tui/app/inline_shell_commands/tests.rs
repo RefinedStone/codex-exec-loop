@@ -51,7 +51,7 @@ fn parse_recognizes_supported_aliases() {
         (":auto", None),
         (":automation", None),
         (":doctor", Some((InlineShellCommand::Doctor, None))),
-        (":init", Some((InlineShellCommand::Init, None))),
+        (":init", None),
         (":planning", Some((InlineShellCommand::PlanningInit, None))),
         (
             ":planning doctor",
@@ -103,7 +103,6 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Turns,
             InlineShellCommand::Stop,
             InlineShellCommand::Doctor,
-            InlineShellCommand::Init,
             InlineShellCommand::PlanningInit,
             InlineShellCommand::Reset,
             InlineShellCommand::NewDraft,
@@ -134,10 +133,7 @@ fn suggestions_filter_by_prefix() {
         InlineShellCommand::suggestions(":do"),
         vec![InlineShellCommand::Doctor]
     );
-    assert_eq!(
-        InlineShellCommand::suggestions(":i"),
-        vec![InlineShellCommand::Init]
-    );
+    assert_eq!(InlineShellCommand::suggestions(":i"), Vec::new());
     assert_eq!(
         InlineShellCommand::suggestions(":re"),
         vec![InlineShellCommand::Reset]
@@ -183,7 +179,7 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(10));
+    assert!(state.move_selection(9));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -211,7 +207,6 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     );
     assert_eq!(InlineShellCommand::Parallel.completion_text(), ":parallel");
     assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
-    assert_eq!(InlineShellCommand::Init.completion_text(), ":init");
     assert_eq!(InlineShellCommand::Task.completion_text(), ":task");
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
@@ -317,21 +312,15 @@ fn parallel_command_hint_is_argument_aware() {
 }
 
 #[test]
-fn doctor_and_init_command_hints_use_lifecycle_language() {
+fn doctor_command_hint_uses_lifecycle_language() {
     /*
-    Doctor and init both touch planning setup, but their hints must communicate
-    distinct lifecycle actions: inspect existing health versus stage scaffolding.
+    Doctor touches planning setup, but its hint must stay inspection-oriented.
     */
     let doctor = InlineShellCommandInput::parse(":doctor").expect("command should parse");
-    let init = InlineShellCommandInput::parse(":init").expect("command should parse");
 
     assert_eq!(
         doctor.buffered_hint(),
         "Press Enter to inspect planning health."
-    );
-    assert_eq!(
-        init.buffered_hint(),
-        "Press Enter to stage the default planning scaffold."
     );
 }
 
@@ -378,7 +367,6 @@ fn execution_status_stays_alias_neutral() {
         (":sessions", Some("opened recent sessions inspection")),
         (":queue", Some("opened planning queue inspection")),
         (":doctor", None),
-        (":init", None),
         (":planning", None),
         (":task", None),
         (":turns 5", None),

@@ -1,6 +1,5 @@
 use crate::application::service::planning::{
-    PlanningBootstrapMode, PlanningDoctorReport, PlanningResetTarget, PlanningRuntimeSnapshot,
-    PlanningWorkspaceInitResult, PlanningWorkspaceResetResult,
+    PlanningDoctorReport, PlanningResetTarget, PlanningWorkspaceResetResult,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -39,66 +38,6 @@ impl DoctorReport {
     }
     pub(super) fn exit_code(&self) -> i32 {
         self.report.exit_code()
-    }
-}
-
-// init output은 service-level fact 두 개를 합친다. bootstrap result는 file creation을 설명하고,
-// runtime snapshot은 사용자가 볼 queue policy를 제공한다.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct InitReport {
-    workspace_path: String,
-    mode: &'static str,
-    created_file_count: Option<usize>,
-    queue_idle_policy: Option<String>,
-    status: Option<String>,
-    issue: Option<String>,
-}
-
-impl InitReport {
-    // path issue는 service execution 전에 발생한다. visible output을 일반 init failure와 가깝게 유지해
-    // caller가 필요하면 exit code만으로 분기할 수 있게 한다.
-    pub(super) fn path_issue(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            mode: "simple",
-            created_file_count: None,
-            queue_idle_policy: None,
-            status: None,
-            issue: Some(issue),
-        }
-    }
-
-    // service result를 owned presentation field로 capture한다. rendering이 side-effect free이고 init 이후 workspace state와
-    // 독립적이게 하기 위해서다.
-    pub(super) fn success(
-        workspace_path: String,
-        result: &PlanningWorkspaceInitResult,
-        snapshot: &PlanningRuntimeSnapshot,
-    ) -> Self {
-        Self {
-            workspace_path,
-            mode: bootstrap_mode_label(result.mode),
-            created_file_count: Some(result.created_file_count),
-            queue_idle_policy: Some(snapshot.queue_idle_policy().label().to_string()),
-            status: Some("planning workspace initialized".to_string()),
-            issue: None,
-        }
-    }
-
-    // service failure에는 보고할 created-file count나 runtime policy가 없다. 그래도 successful line protocol과 같은
-    // command/mode key를 사용한다.
-    pub(super) fn failure(workspace_path: String, issue: String) -> Self {
-        Self {
-            workspace_path,
-            mode: "simple",
-            created_file_count: None,
-            queue_idle_policy: None,
-            status: None,
-            issue: Some(issue),
-        }
-    }
-    pub(super) fn exit_code(&self) -> i32 {
-        if self.issue.is_some() { 1 } else { 0 }
     }
 }
 
@@ -201,27 +140,6 @@ pub(super) fn render_doctor_report(stdout: &mut impl Write, report: &DoctorRepor
     Ok(())
 }
 
-// init은 optional result line보다 먼저 fixed command/mode header를 렌더링한다.
-// 모든 outcome이 terminal capture와 integration test에서 예측 가능한 prefix를 갖게 하기 위해서다.
-pub(super) fn render_init_report(stdout: &mut impl Write, report: &InitReport) -> Result<()> {
-    writeln!(stdout, "workspace: {}", report.workspace_path)?;
-    writeln!(stdout, "command: init")?;
-    writeln!(stdout, "mode: {}", report.mode)?;
-    if let Some(created_file_count) = report.created_file_count {
-        writeln!(stdout, "created files: {created_file_count}")?;
-    }
-    if let Some(queue_idle_policy) = &report.queue_idle_policy {
-        writeln!(stdout, "queue-idle policy: {queue_idle_policy}")?;
-    }
-    if let Some(status) = &report.status {
-        writeln!(stdout, "status: {status}")?;
-    }
-    if let Some(issue) = &report.issue {
-        writeln!(stdout, "issue: {issue}")?;
-    }
-    Ok(())
-}
-
 // reset은 mutation path를 repeated key로 출력한다. service가 준 순서를 보존하면서도 human-readable protocol에
 // 별도 list syntax를 만들지 않기 위한 형식이다.
 pub(super) fn render_reset_report(stdout: &mut impl Write, report: &ResetReport) -> Result<()> {
@@ -251,12 +169,4 @@ pub(super) fn render_json_line<T: Serialize>(stdout: &mut impl Write, value: &T)
     serde_json::to_writer(&mut *stdout, value).context("failed to serialize JSON response")?;
     writeln!(stdout)?;
     Ok(())
-}
-
-// CLI spelling은 compatibility surface다. enum debug name이나 variant identifier에서 파생하지 않는다.
-fn bootstrap_mode_label(mode: PlanningBootstrapMode) -> &'static str {
-    match mode {
-        PlanningBootstrapMode::Detail => "detail",
-        PlanningBootstrapMode::Simple => "simple",
-    }
 }

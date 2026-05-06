@@ -28,7 +28,7 @@ to [remaining-work.md](remaining-work.md).
 ## Planning Contract
 
 - `:doctor` / `akra doctor`: read-only planning inspection.
-- `:init` / `akra init`: create or stage the default planning scaffold.
+- `:planning`: create or stage the default planning scaffold.
 - `:reset queue|directions|all`: rewrite the selected accepted planning scope.
 - `:planning on|off`: toggle plan execution without deleting the workspace.
 - `:task [prompt]`: create a structured task draft, validate it, then commit one accepted task.
