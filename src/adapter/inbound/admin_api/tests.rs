@@ -18,6 +18,8 @@ const AKRA_DASHBOARD_TEMPLATE: &str =
     include_str!("../../../../templates/admin/akra_dashboard.html");
 const ADMIN_GRAPHIC_VISUAL_SCRIPT: &str =
     include_str!("../../../../scripts/check_admin_graphic_visual.sh");
+const ADMIN_CHARACTER_SPRITES: &str =
+    include_str!("../../../../assets/admin/admin-character-sprites.svg");
 const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
 
@@ -105,6 +107,10 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "길드 성과",
         "data-admin-graphic",
         "data-poll-interval-ms",
+        "/assets/admin/admin-character-sprites.svg",
+        "background-size: 240px 48px",
+        "role-distributor",
+        "role-events",
         "data-focus-target=\"pipeline\"",
         "data-event-drawer",
         "data-event-feed-status",
@@ -139,6 +145,8 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "\"/api/admin/akra/agents\"",
         "\"/api/admin/akra/distributor\"",
         "\"/api/admin/akra/events\"",
+        "\"/assets/admin/admin-character-sprites.svg\"",
+        "admin_character_sprites_asset",
     ] {
         assert!(
             ADMIN_MOD.contains(route),
@@ -175,6 +183,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 
     for token in [
         "docs/gamification/img.png",
+        "/assets/admin/admin-character-sprites.svg",
+        "admin-character-sprites.svg",
         "ADMIN_GRAPHIC_CAPTURE",
         "akra-admin",
         "/admin/legacy",
@@ -189,6 +199,29 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
             "visual regression script should keep {token}"
         );
     }
+}
+
+#[test]
+fn akra_graphic_dashboard_character_sprite_asset_is_reviewable() {
+    for token in [
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"48\"",
+        "id=\"agent-normal\"",
+        "id=\"agent-warning\"",
+        "id=\"agent-danger\"",
+        "id=\"distributor\"",
+        "id=\"event-board\"",
+    ] {
+        assert!(
+            ADMIN_CHARACTER_SPRITES.contains(token),
+            "character sprite asset should keep {token}"
+        );
+    }
+
+    assert!(
+        ADMIN_MOD
+            .contains("include_bytes!(\"../../../../assets/admin/admin-character-sprites.svg\")")
+    );
+    assert!(ADMIN_MOD.contains("image/svg+xml; charset=utf-8"));
 }
 
 /*

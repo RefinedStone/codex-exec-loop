@@ -14,6 +14,8 @@ use crate::application::service::planning::{
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
 use axum::http::StatusCode;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -38,6 +40,8 @@ mod views;
 use self::helpers::{ensure_csrf_cookie, internal_server_error, verify_header_csrf};
 
 const DEFAULT_PORT: u16 = 18442;
+const ADMIN_CHARACTER_SPRITES: &[u8] =
+    include_bytes!("../../../../assets/admin/admin-character-sprites.svg");
 
 #[derive(Clone)]
 struct AdminAppState {
@@ -214,6 +218,10 @@ fn build_router(state: AdminAppState) -> Router {
             post(pages::promote_draft_page),
         )
         .route("/admin/controls/reset", post(pages::reset_page))
+        .route(
+            "/assets/admin/admin-character-sprites.svg",
+            get(admin_character_sprites_asset),
+        )
         .route("/api/planning/summary", get(api::summary_api))
         .route("/api/planning/runtime", get(api::runtime_api))
         .route("/api/planning/drafts", post(api::create_draft_api))
@@ -248,6 +256,17 @@ fn build_router(state: AdminAppState) -> Router {
         )
         .route("/api/admin/akra/events", get(api::akra_events_api))
         .with_state(state)
+}
+
+async fn admin_character_sprites_asset() -> Response {
+    (
+        [
+            (CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        ADMIN_CHARACTER_SPRITES,
+    )
+        .into_response()
 }
 
 fn parse_reset_target(target: &str) -> std::result::Result<PlanningResetTarget, StatusCode> {
