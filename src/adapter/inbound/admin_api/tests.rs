@@ -14,6 +14,9 @@ const DIRECTIONS_TEMPLATE: &str = include_str!("../../../../templates/admin/dire
 const EDITOR_TEMPLATE: &str = include_str!("../../../../templates/admin/editor.html");
 const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.html");
 const DASHBOARD_TEMPLATE: &str = include_str!("../../../../templates/admin/dashboard.html");
+const AKRA_DASHBOARD_TEMPLATE: &str =
+    include_str!("../../../../templates/admin/akra_dashboard.html");
+const ADMIN_MOD: &str = include_str!("mod.rs");
 
 /*
  * 제거된 raw-authority field는 stale browser tab이나 오래된 bookmark/form replay에서 여전히 들어올 수 있다.
@@ -63,6 +66,7 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("class=\"admin-layout\""));
     assert!(BASE_TEMPLATE.contains("aria-label=\"Admin navigation\""));
     assert!(BASE_TEMPLATE.contains("class=\"workspace-chip\""));
+    assert!(BASE_TEMPLATE.contains("href=\"/admin/legacy\""));
 
     for route in [
         "href=\"/admin/tasks\"",
@@ -76,6 +80,38 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     }
 
     assert!(DASHBOARD_TEMPLATE.contains("Open Full Planning Draft"));
+}
+
+#[test]
+fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
+    for copy in [
+        "게임발전국",
+        "AKRA Admin Control Center",
+        "워크트리 풀",
+        "배포 파이프라인",
+        "실시간 이벤트",
+        "운영 지표",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(copy),
+            "graphic dashboard should expose {copy}"
+        );
+    }
+
+    for route in [
+        ".route(\"/admin\", get(pages::akra_dashboard_page))",
+        ".route(\"/admin/legacy\", get(pages::dashboard_page))",
+        "\"/api/admin/akra/dashboard\"",
+        "\"/api/admin/akra/pool\"",
+        "\"/api/admin/akra/agents\"",
+        "\"/api/admin/akra/distributor\"",
+        "\"/api/admin/akra/events\"",
+    ] {
+        assert!(
+            ADMIN_MOD.contains(route),
+            "admin route table should keep {route}"
+        );
+    }
 }
 
 /*

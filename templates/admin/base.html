@@ -27,6 +27,20 @@
         --sidebar: #11161d;
         --sidebar-muted: #9aa7b6;
       }
+      body.akra-graphic {
+        --bg: #08111f;
+        --panel: #101a2a;
+        --panel-strong: #15243a;
+        --ink: #e9f2ff;
+        --ink-strong: #ffffff;
+        --muted: #9eb0c6;
+        --muted-strong: #bdc9d8;
+        --line: rgba(148, 168, 197, 0.22);
+        --line-soft: rgba(148, 168, 197, 0.14);
+        --accent: #35d07f;
+        --accent-soft: rgba(53, 208, 127, 0.13);
+        --sidebar: #07101d;
+      }
       * { box-sizing: border-box; }
       body {
         margin: 0;
@@ -659,16 +673,17 @@
       }
     </script>
   </head>
-  <body>
+  <body class="{% if current_nav == "akra_dashboard" %}akra-graphic{% endif %}">
     <div class="admin-layout">
       <aside class="sidebar">
         <div class="brand">
-          <div class="eyebrow">Akra Local</div>
-          <div class="brand-title">Planning Admin</div>
+          <div class="eyebrow">AKRA Admin</div>
+          <div class="brand-title">{% if current_nav == "akra_dashboard" %}게임발전국{% else %}Planning Admin{% endif %}</div>
         </div>
         <nav class="nav" aria-label="Admin navigation">
           <div class="nav-label">Workspace</div>
-          <a href="/admin" class="{% if current_nav == "dashboard" %}active{% endif %}">Dashboard</a>
+          <a href="/admin" class="{% if current_nav == "akra_dashboard" %}active{% endif %}">대시보드</a>
+          <a href="/admin/legacy" class="{% if current_nav == "dashboard" %}active{% endif %}">Legacy Admin</a>
           <a href="/admin/directions" class="{% if current_nav == "directions" %}active{% endif %}">Directions</a>
           <a href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}">Tasks</a>
           <a href="/admin/controls" class="{% if current_nav == "controls" %}active{% endif %}">Controls</a>

@@ -6,9 +6,21 @@
  */
 use askama::Template;
 
+use super::akra_dashboard::AkraAdminDashboardView;
 use crate::application::service::planning::{
     PlanningAdminManagementView, PlanningAdminOverview, PlanningAdminSessionView,
 };
+
+#[derive(Template)]
+#[template(path = "admin/akra_dashboard.html")]
+pub(super) struct AkraDashboardTemplate {
+    pub(super) page_title: String,
+    pub(super) current_nav: &'static str,
+    pub(super) workspace_dir: String,
+    pub(super) csrf_token: String,
+    pub(super) notice: Option<String>,
+    pub(super) dashboard: AkraAdminDashboardView,
+}
 
 // dashboard는 read-only workspace status 화면이라 overview bundle만 받고 editable management/session state는 받지 않는다.
 #[derive(Template)]

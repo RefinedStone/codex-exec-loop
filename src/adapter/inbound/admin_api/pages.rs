@@ -7,10 +7,11 @@ use super::helpers::{
     notice_location, render_fragment, render_html, verify_form_csrf,
 };
 use super::views::{
-    ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate, EditorTemplate,
-    TasksTemplate,
+    AkraDashboardTemplate, ControlsTemplate, DashboardTemplate, DirectionsTemplate,
+    DraftStatusTemplate, EditorTemplate, TasksTemplate,
 };
 use super::{AdminAppState, parse_reset_target};
+use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
@@ -34,6 +35,30 @@ use std::collections::HashMap;
  * pages.rs는 form field를 application request DTO로 옮기고 response shape을 고르지만,
  * direction/task/draft의 유효성, authority mutation, workspace file write는 facade가 소유한다.
  */
+pub(super) async fn akra_dashboard_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    let dashboard = build_akra_dashboard_view(
+        state.facade.workspace_dir(),
+        &state.planning,
+        state.parallel_mode.as_ref(),
+    );
+    render_html(
+        jar,
+        AkraDashboardTemplate {
+            page_title: "게임발전국".to_string(),
+            current_nav: "akra_dashboard",
+            workspace_dir: state.facade.workspace_dir().to_string(),
+            csrf_token,
+            notice: query.get("notice").cloned(),
+            dashboard,
+        },
+    )
+}
+
 pub(super) async fn dashboard_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,

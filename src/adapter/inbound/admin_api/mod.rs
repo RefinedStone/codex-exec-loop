@@ -1,6 +1,13 @@
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+use crate::adapter::outbound::github::GithubAutomationAdapter;
+use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::{
     PlanningAdminFacadeService, PlanningResetTarget, PlanningServices,
 };
@@ -19,6 +26,7 @@ use std::sync::Arc;
  * 그래서 이 파일은 "어떤 URL이 어떤 transport contract로 facade를 호출하는가"만 설명하고,
  * planning 자체의 판정은 직접 복제하지 않는다.
  */
+mod akra_dashboard;
 mod api;
 mod forms;
 mod helpers;
@@ -39,6 +47,8 @@ struct AdminAppState {
      * HTML page handler와 JSON API handler가 같은 facade instance를 바라보므로 두 surface의 상태 해석도 함께 묶인다.
      */
     facade: Arc<PlanningAdminFacadeService>,
+    planning: PlanningServices,
+    parallel_mode: Arc<ParallelModeService>,
 }
 
 #[derive(Debug, Default)]
@@ -67,8 +77,7 @@ where
         .canonicalize()
         .context("failed to canonicalize current directory for admin server")?;
     let workspace_dir = workspace_dir.display().to_string();
-    let facade = Arc::new(build_admin_facade(workspace_dir));
-    let state = AdminAppState { facade };
+    let state = build_admin_state(workspace_dir);
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, args.port))
         .await
         .with_context(|| format!("failed to bind admin server on 127.0.0.1:{}", args.port))?;
@@ -85,7 +94,7 @@ where
     Ok(())
 }
 
-fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
+fn build_admin_state(workspace_dir: String) -> AdminAppState {
     /*
      * standalone admin server의 composition root다.
      * app-server worker, sqlite planning authority, filesystem workspace adapter를 여기서 조립해
@@ -100,23 +109,40 @@ fn build_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let planning_workspace_port = Arc::new(
-        FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(planning_authority.clone()),
-    );
+    let sqlite_planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning_authority: Arc<dyn PlanningAuthorityPort> = sqlite_planning_authority.clone();
+    let planning_task_repository: Arc<dyn PlanningTaskRepositoryPort> =
+        sqlite_planning_authority.clone();
+    let planning_workspace_port =
+        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
+            sqlite_planning_authority.clone(),
+        ));
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> =
+        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter));
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
         planning_authority.clone(),
-        planning_authority.clone(),
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
+        planning_task_repository.clone(),
+        planning_worker_port,
     );
-    PlanningAdminFacadeService::from_planning_with_authority(
-        workspace_dir,
-        planning,
+    let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
+    let parallel_mode = Arc::new(ParallelModeService::new(
+        planning_authority.clone(),
+        github_automation,
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let facade = Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
+        workspace_dir.clone(),
+        planning.clone(),
         planning_workspace_port,
         planning_authority.clone(),
-        planning_authority,
-    )
+        planning_task_repository,
+    ));
+    AdminAppState {
+        facade,
+        planning,
+        parallel_mode,
+    }
 }
 
 fn build_router(state: AdminAppState) -> Router {
@@ -127,8 +153,9 @@ fn build_router(state: AdminAppState) -> Router {
      * route registration을 한곳에 모으면 새 operation을 추가할 때 HTML/JSON 양쪽 노출 여부를 같은 diff에서 검토할 수 있다.
      */
     Router::new()
-        .route("/", get(pages::dashboard_page))
-        .route("/admin", get(pages::dashboard_page))
+        .route("/", get(pages::akra_dashboard_page))
+        .route("/admin", get(pages::akra_dashboard_page))
+        .route("/admin/legacy", get(pages::dashboard_page))
         .route("/admin/directions", get(pages::directions_page))
         .route("/admin/tasks", get(pages::tasks_page))
         .route("/admin/controls", get(pages::controls_page))
@@ -184,6 +211,14 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/api/planning/files/export", post(api::export_files_api))
         .route("/api/planning/files/apply", post(api::apply_files_api))
         .route("/api/planning/reset", post(api::reset_api))
+        .route("/api/admin/akra/dashboard", get(api::akra_dashboard_api))
+        .route("/api/admin/akra/pool", get(api::akra_pool_api))
+        .route("/api/admin/akra/agents", get(api::akra_agents_api))
+        .route(
+            "/api/admin/akra/distributor",
+            get(api::akra_distributor_api),
+        )
+        .route("/api/admin/akra/events", get(api::akra_events_api))
         .with_state(state)
 }
 
