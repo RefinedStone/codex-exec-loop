@@ -150,6 +150,41 @@ fn runtime_event_log_port_reads_recent_projection_events() {
     );
 }
 
+#[test]
+fn runtime_projection_loads_recent_runtime_event_feed_newest_first() {
+    let workspace_dir = temp_workspace("runtime-events");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    for index in 1..=10 {
+        adapter
+            .upsert_runtime_session_detail(
+                &workspace_dir,
+                &failed_start_session_detail(
+                    &format!("session-{index:02}"),
+                    &format!("task-{index:02}"),
+                    &format!("2026-05-04T12:{index:02}:00+00:00"),
+                ),
+            )
+            .expect("session detail event should persist");
+    }
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+
+    assert_eq!(snapshot.runtime_events.len(), 8);
+    assert_eq!(snapshot.runtime_events[0].sequence, 10);
+    assert_eq!(
+        snapshot.runtime_events[0].event_kind,
+        "session_detail_upsert"
+    );
+    assert_eq!(snapshot.runtime_events[0].projection_kind, "session_detail");
+    assert_eq!(snapshot.runtime_events[0].projection_key, "session-10");
+    assert_eq!(snapshot.runtime_events[0].observed_planning_revision, 0);
+    assert!(snapshot.runtime_events[0].summary.contains("state: failed"));
+    assert_eq!(snapshot.runtime_events[7].sequence, 3);
+}
+
 fn failed_start_session_detail(
     session_key: &str,
     task_id: &str,

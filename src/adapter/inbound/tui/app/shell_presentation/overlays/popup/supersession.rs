@@ -641,6 +641,23 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
             .iter()
             .map(|entry| Line::from(format!("{}: {}", entry.stage_label, entry.summary))),
     );
+    lines.push(Line::from("runtime events:"));
+    if distributor.runtime_event_feed.is_empty() {
+        lines.push(Line::from("events: no runtime events captured yet"));
+    } else {
+        lines.extend(distributor.runtime_event_feed.iter().map(|entry| {
+            Line::from(format!(
+                "event #{} @ {} / {}:{} / {} / rev {} / {}",
+                entry.sequence,
+                compact_timestamp_label(&entry.recorded_at),
+                display_runtime_event_label(&entry.projection_kind),
+                entry.projection_key,
+                display_runtime_event_label(&entry.event_kind),
+                entry.observed_planning_revision,
+                entry.summary
+            ))
+        }));
+    }
     lines
 }
 
@@ -651,6 +668,7 @@ fn is_pending_pool_board(pool: &ParallelModePoolBoardSnapshot) -> bool {
 fn is_pending_distributor(distributor: &ParallelModeDistributorSnapshot) -> bool {
     distributor.queue_items.is_empty()
         && distributor.completion_feed.is_empty()
+        && distributor.runtime_event_feed.is_empty()
         && (distributor.head_summary.starts_with("waiting ")
             || distributor.head_summary.contains("progress")
             || distributor.head_summary.contains("refreshing"))
@@ -710,6 +728,10 @@ fn display_supersession_state_label(state_label: &str) -> String {
         "commit_ready" => "official".to_string(),
         other => other.replace('_', " "),
     }
+}
+
+fn display_runtime_event_label(label: &str) -> String {
+    label.replace('_', " ")
 }
 
 fn compact_timestamp_label(timestamp: &str) -> String {

@@ -362,6 +362,14 @@ fn build_supervisor_snapshot_projects_official_completion_and_commit_ready_state
         snapshot.distributor.completion_feed[2].summary,
         "official ledger refresh accepted the completion report"
     );
+    assert!(
+        snapshot
+            .distributor
+            .runtime_event_feed
+            .iter()
+            .any(|entry| entry.event_kind == "session_detail_upsert"
+                && entry.summary.contains("state: commit_ready"))
+    );
     assert_eq!(
         detail
             .history

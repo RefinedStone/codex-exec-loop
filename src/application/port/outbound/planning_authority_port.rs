@@ -158,12 +158,58 @@ impl PlanningAuthorityDistributorQueueRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/*
+ * runtime event record는 runtime_events append-only log의 operator-facing read model입니다.
+ * current projection row는 최신 상태만 담기 때문에, Supersession UI와 복구 진단은 이 feed로
+ * 어떤 projection 전이가 어떤 planning revision을 보고 저장됐는지 확인합니다.
+ */
+pub struct PlanningAuthorityRuntimeEventRecord {
+    // Monotonic event sequence assigned inside the authority store.
+    pub sequence: i64,
+    // Stored transition type such as slot_lease_upsert or session_detail_upsert.
+    pub event_kind: String,
+    // Projection table family affected by the event.
+    pub projection_kind: String,
+    // Projection-local row identity, for example slot id or session key.
+    pub projection_key: String,
+    // Planning revision visible when the runtime event was appended.
+    pub observed_planning_revision: i64,
+    // Short human-facing event summary stored with the row.
+    pub summary: String,
+    // Store timestamp used as the operator timeline label.
+    pub recorded_at: String,
+}
+
+impl PlanningAuthorityRuntimeEventRecord {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        sequence: i64,
+        event_kind: impl Into<String>,
+        projection_kind: impl Into<String>,
+        projection_key: impl Into<String>,
+        observed_planning_revision: i64,
+        summary: impl Into<String>,
+        recorded_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            sequence,
+            event_kind: event_kind.into(),
+            projection_kind: projection_kind.into(),
+            projection_key: projection_key.into(),
+            observed_planning_revision,
+            summary: summary.into(),
+            recorded_at: recorded_at.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 /*
  * runtime projection snapshot은 parallel mode 운영 상태를 한 번에 읽는 read model입니다.
  * authority adapter는 slot lease, session detail, distributor queue를 각각 저장하지만,
- * pool reconcile과 admin file sync는 이 네 묶음을 같이 봐야 "현재 실행 중인 슬롯", "깨진 lease",
- * "agent session 상태", "통합 대기 큐"를 일관된 한 화면으로 판단할 수 있습니다.
+ * pool reconcile과 admin file sync는 current row와 최근 runtime event를 같이 봐야 "현재 실행 중인 슬롯",
+ * "깨진 lease", "agent session 상태", "통합 대기 큐", "최근 전이"를 일관된 한 화면으로 판단할 수 있습니다.
  */
 pub struct PlanningAuthorityRuntimeProjectionSnapshot {
     // Lease state by slot id, representing active worktree/lane ownership.
@@ -176,6 +222,8 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
     pub task_dispatch_blocks: Vec<ParallelModeTaskDispatchBlockSnapshot>,
     // Queue records still pending, blocked, or otherwise visible to distributor.
     pub distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
+    // Recent append-only runtime events, newest first and bounded by the adapter.
+    pub runtime_events: Vec<PlanningAuthorityRuntimeEventRecord>,
 }
 
 /*
