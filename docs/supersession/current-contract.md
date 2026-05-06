@@ -59,6 +59,9 @@ to [remaining-work.md](remaining-work.md).
   `task_intake_after_epoch`. Concurrent requests coalesce into one in-flight dispatch pass plus at
   most one pending follow-up pass.
 - The board shows readiness, pool, roster, selected detail, distributor head, and queue state.
+- Selected detail includes a read-only compact lifecycle timeline for the selected session:
+  timestamped history states are condensed into event arrows, with full history kept below as
+  audit context.
 - The board summary includes the last automation trigger and the latest dispatch-withheld reason
   when either exists.
 - Queue work leases one of three local `akra` worktree slots.
