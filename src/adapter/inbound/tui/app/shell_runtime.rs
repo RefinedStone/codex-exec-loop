@@ -225,6 +225,9 @@ impl ShellRuntime {
     }
 
     fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
+        if self.app.parallel_mode_supervisor_refresh_in_flight {
+            return false;
+        }
         if !self.app.parallel_mode_activity_pulse_visible() {
             return false;
         }

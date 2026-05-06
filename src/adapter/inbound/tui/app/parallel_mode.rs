@@ -8,6 +8,7 @@ use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgen
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
+use crate::diagnostics::raw_event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
     ParallelModeOrchestratorStateMachine, ParallelModePoolBoardSnapshot,
@@ -113,6 +114,9 @@ impl NativeTuiApp {
                     ParallelModeLoadingStage::RefreshingBoard,
                 ));
         }
+        if self.parallel_mode_supervisor_refresh_in_flight {
+            return;
+        }
         self.spawn_parallel_mode_supervisor_snapshot_refresh(
             workspace_directory,
             readiness_snapshot,
@@ -187,6 +191,7 @@ impl NativeTuiApp {
                 // read-only and close the control tower so normal shell focus
                 // resumes immediately.
                 self.parallel_mode_enabled = false;
+                self.parallel_mode_supervisor_refresh_in_flight = false;
                 self.pending_parallel_mode_task_update_dispatch = None;
                 self.sync_parallel_mode_supervisor_snapshot(false);
                 if self.shell_overlay == ShellOverlay::Supersession {
@@ -219,6 +224,7 @@ impl NativeTuiApp {
                 let reset_pool_on_off_to_on_entry = !self.parallel_mode_enabled;
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
+                self.parallel_mode_supervisor_refresh_in_flight = false;
                 self.parallel_mode_supervisor_snapshot =
                     Some(pending_parallel_mode_supervisor_snapshot(
                         &workspace_directory,
@@ -241,7 +247,7 @@ impl NativeTuiApp {
     }
 
     fn spawn_parallel_mode_supervisor_snapshot_refresh(
-        &self,
+        &mut self,
         workspace_directory: String,
         readiness_snapshot: ParallelModeReadinessSnapshot,
     ) {
@@ -249,12 +255,27 @@ impl NativeTuiApp {
         let mode_enabled = self.parallel_mode_enabled();
         let tx = self.tx.clone();
 
+        self.parallel_mode_supervisor_refresh_in_flight = true;
         thread::spawn(move || {
+            raw_event_log::emit_lazy("parallel_supervisor_refresh_started", || {
+                serde_json::json!({
+                    "workspace_directory": &workspace_directory,
+                    "mode_enabled": mode_enabled,
+                })
+            });
             let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
                 &workspace_directory,
                 mode_enabled,
                 Some(&readiness_snapshot),
             );
+            raw_event_log::emit_lazy("parallel_supervisor_refresh_completed", || {
+                serde_json::json!({
+                    "workspace_directory": &workspace_directory,
+                    "mode_enabled": mode_enabled,
+                    "pool_status": &supervisor_snapshot.pool.reconcile_status,
+                    "roster_active_count": supervisor_snapshot.roster.active_count(),
+                })
+            });
             let _ = tx.send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
                 workspace_directory,
                 supervisor_snapshot: Box::new(supervisor_snapshot),
@@ -518,6 +539,7 @@ impl NativeTuiApp {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
+            self.parallel_mode_supervisor_refresh_in_flight = false;
             return;
         }
 
@@ -542,9 +564,11 @@ impl NativeTuiApp {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
+            self.parallel_mode_supervisor_refresh_in_flight = false;
             return;
         }
 
+        self.parallel_mode_supervisor_refresh_in_flight = false;
         self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
         self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
@@ -566,6 +590,7 @@ impl NativeTuiApp {
         workspace_directory: &str,
         supervisor_snapshot: ParallelModeSupervisorSnapshot,
     ) {
+        self.parallel_mode_supervisor_refresh_in_flight = false;
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
@@ -585,9 +610,11 @@ impl NativeTuiApp {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
+            self.parallel_mode_supervisor_refresh_in_flight = false;
             return;
         }
 
+        self.parallel_mode_supervisor_refresh_in_flight = false;
         self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
         self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);

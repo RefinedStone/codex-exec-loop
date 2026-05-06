@@ -299,6 +299,7 @@ struct NativeTuiApp {
     parallel_mode_enabled: bool,
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
+    parallel_mode_supervisor_refresh_in_flight: bool,
     pending_parallel_mode_task_update_dispatch: Option<String>,
     conversation_state: ConversationState,
     selected_session_index: usize,

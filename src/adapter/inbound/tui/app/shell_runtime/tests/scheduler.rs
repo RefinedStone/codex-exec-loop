@@ -120,6 +120,40 @@ fn active_supersession_supervisor_refreshes_periodically() {
 }
 
 #[test]
+fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_refresh_in_flight = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-1",
+                    "Task One",
+                    "slot-1",
+                    "akra-agent/slot-1/task-one",
+                    "running",
+                    "12s",
+                    "working",
+                )],
+                "no active agents",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    let now = Instant::now();
+
+    assert!(!runtime.parallel_supervisor_refresh_due(now));
+    assert!(!runtime.parallel_supervisor_refresh_due(now + Duration::from_secs(5)));
+}
+
+#[test]
 fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();

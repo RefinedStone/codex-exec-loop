@@ -108,6 +108,7 @@ impl NativeTuiApp {
             parallel_mode_enabled: false,
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
+            parallel_mode_supervisor_refresh_in_flight: false,
             pending_parallel_mode_task_update_dispatch: None,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
