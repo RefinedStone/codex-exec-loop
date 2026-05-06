@@ -215,8 +215,8 @@ impl NativeTuiApp {
             }
             None => {
                 // Bare `:parallel` is the only enable entrypoint. Open the
-                // control tower first, then let readiness/reconcile/dispatch run
-                // off the terminal event loop so prompt typing stays responsive.
+                // control tower first, then let readiness/reconcile run off the
+                // terminal event loop so prompt typing stays responsive.
                 // A destructive pool reset belongs to the local off -> on
                 // transition. Re-running `:parallel` while already enabled only
                 // refreshes/reconciles; after `:parallel off`, the next
@@ -240,7 +240,7 @@ impl NativeTuiApp {
                 );
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text:
-                        "parallel mode: loading 1/4 / checking readiness before pool setup"
+                        "parallel mode: loading 1/3 / checking readiness before pool setup"
                             .to_string(),
                 });
             }
@@ -290,8 +290,6 @@ impl NativeTuiApp {
         reset_pool_on_off_to_on_entry: bool,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
-        let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
-        let parallel_mode_turn_service = self.parallel_mode_turn_service();
         let planning = self.planning.clone();
         let tx = self.tx.clone();
 
@@ -317,7 +315,7 @@ impl NativeTuiApp {
                         ParallelModeLoadingStage::ReconcilingPool,
                     )),
                     status_text:
-                        "parallel mode: loading 2/4 / readiness complete; reconciling pool and planning dispatch"
+                        "parallel mode: loading 2/3 / readiness complete; reconciling pool"
                             .to_string(),
                 });
                 let reset_result = if entry_plan.reset_scope
@@ -356,15 +354,6 @@ impl NativeTuiApp {
                         };
                     }
                 };
-                let dispatch_status = dispatch_parallel_queue_pool(
-                    &workspace_directory,
-                    &planning_snapshot,
-                    &parallel_mode_service,
-                    parallel_agent_worker_port,
-                    parallel_mode_turn_service,
-                    planning,
-                    tx.clone(),
-                );
                 let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
                     &workspace_directory,
                     true,
@@ -374,10 +363,6 @@ impl NativeTuiApp {
                     "parallel mode: on / readiness: {} / control tower ready",
                     readiness_snapshot.readiness_label()
                 );
-                if !dispatch_status.trim().is_empty() {
-                    status_text.push_str(" / ");
-                    status_text.push_str(&dispatch_status);
-                }
                 if !reset_status.trim().is_empty() {
                     status_text.push_str(" / ");
                     status_text.push_str(&reset_status);
@@ -661,7 +646,7 @@ fn dispatch_parallel_queue_pool(
     let dispatch_plan = match parallel_mode_service.build_dispatch_plan(
         workspace_directory,
         planning_snapshot,
-        // The UI command dispatches the entire currently actionable queue;
+        // A task-update dispatch refresh handles the currently actionable queue;
         // the service still limits work by idle slots and candidate rules.
         usize::MAX,
     ) {
@@ -754,60 +739,52 @@ impl ParallelModeLoadingStage {
 
     fn pool_status(self) -> &'static str {
         match self {
-            Self::Entering => "1/4 readiness checks running",
-            Self::ReconcilingPool => "2/4 pool reconcile and queue dispatch running",
-            Self::RefreshingBoard => "4/4 refreshing supervisor board",
+            Self::Entering => "1/3 readiness checks running",
+            Self::ReconcilingPool => "2/3 pool reconcile running",
+            Self::RefreshingBoard => "3/3 refreshing supervisor board",
         }
     }
 
     fn roster_empty_state(self) -> &'static str {
         match self {
             Self::Entering => "waiting for readiness before slots can be assigned",
-            Self::ReconcilingPool => "waiting for pool leases and worker launch results",
+            Self::ReconcilingPool => "waiting for pool reset and reconcile results",
             Self::RefreshingBoard => "refreshing active agent roster",
         }
     }
 
     fn detail_empty_state(self) -> &'static str {
         match self {
-            Self::Entering => "loading 1/4: readiness checks",
-            Self::ReconcilingPool => "loading 2/4: pool reconcile and dispatch",
-            Self::RefreshingBoard => "loading 4/4: board refresh",
+            Self::Entering => "loading 1/3: readiness checks",
+            Self::ReconcilingPool => "loading 2/3: pool reconcile",
+            Self::RefreshingBoard => "loading 3/3: board refresh",
         }
     }
 
     fn distributor_head(self) -> &'static str {
         match self {
             Self::Entering => "waiting for readiness",
-            Self::ReconcilingPool => "dispatch planning in progress",
+            Self::ReconcilingPool => "pool reconcile in progress",
             Self::RefreshingBoard => "refreshing distributor state",
         }
     }
 
     fn distributor_note(self) -> &'static str {
         match self {
-            Self::Entering => {
-                "pipeline: [running] readiness -> [next] pool -> [next] dispatch -> [next] board"
-            }
-            Self::ReconcilingPool => {
-                "pipeline: [done] readiness -> [running] pool/dispatch -> [next] board"
-            }
-            Self::RefreshingBoard => {
-                "pipeline: [done] readiness -> [done] pool/dispatch -> [running] board"
-            }
+            Self::Entering => "pipeline: [running] readiness -> [next] pool -> [next] board",
+            Self::ReconcilingPool => "pipeline: [done] readiness -> [running] pool -> [next] board",
+            Self::RefreshingBoard => "pipeline: [done] readiness -> [done] pool -> [running] board",
         }
     }
 
     fn top_notice(self) -> &'static str {
         match self {
             Self::Entering => {
-                "loading 1/4: checking repository, planning, branch, pool, and GitHub readiness"
+                "loading 1/3: checking repository, planning, branch, pool, and GitHub readiness"
             }
-            Self::ReconcilingPool => {
-                "loading 2/4: readiness passed; reconciling pool and reserving dispatch slots"
-            }
+            Self::ReconcilingPool => "loading 2/3: readiness passed; reconciling pool",
             Self::RefreshingBoard => {
-                "loading 4/4: worker state changed; refreshing the supervisor board"
+                "loading 3/3: pool state changed; refreshing the supervisor board"
             }
         }
     }
