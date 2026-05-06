@@ -56,6 +56,7 @@ struct FlowParallelAgentWorkerPort {
 struct FlowWorkerLaunchRequest {
     cwd: String,
     prompt: String,
+    developer_instructions: String,
     service_name: String,
 }
 
@@ -89,6 +90,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
             .push(FlowWorkerLaunchRequest {
                 cwd: request.cwd.to_string(),
                 prompt: request.prompt.to_string(),
+                developer_instructions: request.developer_instructions.to_string(),
                 service_name: request.service_name.to_string(),
             });
         if self.fail_launch.load(Ordering::SeqCst) {
@@ -777,6 +779,34 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
     );
     assert_eq!(harness.worker_port.launch_count(), 1);
+    let launch_request = harness
+        .worker_port
+        .requests()
+        .into_iter()
+        .next()
+        .expect("one worker request should be captured");
+    assert_eq!(launch_request.service_name, "akra-parallel-worker");
+    assert!(
+        launch_request
+            .developer_instructions
+            .contains("Execute only the queued-task handoff"),
+        "worker developer instructions should preserve the sub-session scope boundary: {}",
+        launch_request.developer_instructions
+    );
+    assert!(
+        launch_request
+            .developer_instructions
+            .contains("Do not push, open pull requests, merge"),
+        "worker developer instructions should keep distributor delivery out of the worker lane: {}",
+        launch_request.developer_instructions
+    );
+    assert!(
+        launch_request
+            .prompt
+            .starts_with("# akra-sub-session-turn\n")
+    );
+    assert!(launch_request.prompt.contains("[queued-task-handoff]"));
+    assert!(launch_request.prompt.contains("[delivery-boundary]"));
     let ConversationState::Ready(conversation) = &harness.runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
