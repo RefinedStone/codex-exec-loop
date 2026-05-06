@@ -109,7 +109,7 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "data-admin-graphic",
         "data-poll-interval-ms",
         "/assets/admin/admin-character-sprites.svg",
-        "background-size: 240px 48px",
+        "background-size: 528px 96px",
         "role-distributor",
         "role-events",
         "data-focus-target=\"pipeline\"",
@@ -165,6 +165,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "grid-template-columns: repeat(8",
         "class=\"office-board\" id=\"agents\"",
         "class=\"pool-overlay\" id=\"pool\"",
+        "class=\"scene-object object-sprite server-rack\"",
+        "background-size: 792px 144px",
+        "background-size: 528px 96px",
         "max-height: 540px",
         "overflow: auto",
         "text-overflow: ellipsis",
@@ -227,12 +230,15 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 #[test]
 fn akra_graphic_dashboard_character_sprite_asset_is_reviewable() {
     for token in [
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"48\"",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"528\" height=\"96\"",
         "id=\"agent-normal\"",
         "id=\"agent-warning\"",
         "id=\"agent-danger\"",
         "id=\"distributor\"",
         "id=\"event-board\"",
+        "id=\"server-rack\"",
+        "id=\"whiteboard\"",
+        "id=\"couch\"",
     ] {
         assert!(
             ADMIN_CHARACTER_SPRITES.contains(token),

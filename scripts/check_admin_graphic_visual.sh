@@ -126,6 +126,7 @@ for token in \
   'aria-label="게임발전국 AKRA Admin Control Center"' \
   'class="office-board" id="agents"' \
   'class="pool-overlay" id="pool"' \
+  'class="scene-object object-sprite server-rack"' \
   'id="events"' \
   'id="pipeline"' \
   'id="metrics"' \
@@ -141,9 +142,10 @@ for token in \
   'data-event-drawer' \
   'data-event-feed-status' \
   '/assets/admin/admin-character-sprites.svg' \
-  'background-size: 240px 48px' \
   'akra-office-background.png' \
   'akra-object-sprites.png' \
+  'background-size: 528px 96px' \
+  'background-size: 792px 144px' \
   'prependEventRows' \
   'stale snapshot' \
   'skeleton-line' \
@@ -178,12 +180,15 @@ for token in \
 done
 
 for token in \
-  '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="48"' \
+  '<svg xmlns="http://www.w3.org/2000/svg" width="528" height="96"' \
   'id="agent-normal"' \
   'id="agent-warning"' \
   'id="agent-danger"' \
   'id="distributor"' \
-  'id="event-board"'; do
+  'id="event-board"' \
+  'id="server-rack"' \
+  'id="whiteboard"' \
+  'id="couch"'; do
   require_contains "${sprites_svg}" "${token}"
 done
 

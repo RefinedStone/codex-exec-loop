@@ -299,40 +299,35 @@
     box-shadow: 12px 16px 0 rgba(0,0,0,0.24);
     cursor: pointer;
   }
+  .object-sprite {
+    width: 144px;
+    height: 108px;
+    padding: 0;
+    border: 0;
+    color: transparent;
+    background-color: transparent;
+    background-image: url("/assets/admin/admin-character-sprites.svg");
+    background-repeat: no-repeat;
+    background-size: 792px 144px;
+    image-rendering: pixelated;
+    box-shadow: none;
+    cursor: default;
+    overflow: hidden;
+  }
   .server-rack {
     left: 16%;
     top: 15%;
-    width: 190px;
-    height: 112px;
-    background:
-      repeating-linear-gradient(90deg, #101d30 0 28px, #233b5d 28px 32px),
-      linear-gradient(#1e334f, #0b1422);
-  }
-  .server-rack::after,
-  .whiteboard::after,
-  .couch::after {
-    content: "";
-    position: absolute;
-    inset: 10px;
-    border: 1px solid rgba(255,255,255,0.12);
+    background-position: -360px 0;
   }
   .whiteboard {
     right: 22%;
     top: 13%;
-    width: 168px;
-    height: 92px;
-    background: linear-gradient(#e7e2d3, #b7bdc5);
-    color: #1c2530;
-    padding: 14px;
-    font-size: 12px;
-    box-shadow: 9px 12px 0 rgba(0,0,0,0.18);
+    background-position: -504px 0;
   }
   .couch {
     right: 20%;
     bottom: 17%;
-    width: 160px;
-    height: 70px;
-    background: linear-gradient(160deg, #61422d, #252d42);
+    background-position: -648px 0;
   }
   .desk,
   .distributor-desk,
@@ -383,7 +378,7 @@
     color: #f7fbff;
     background-image: url("/assets/admin/admin-character-sprites.svg");
     background-repeat: no-repeat;
-    background-size: 240px 48px;
+    background-size: 528px 96px;
     background-position: 0 0;
     image-rendering: pixelated;
     font-size: 10px;
@@ -785,9 +780,9 @@
   <div class="board-row">
     <div class="office-board" id="agents" aria-label="AKRA isometric office board">
       <div class="room" aria-hidden="true"></div>
-      <div class="scene-object server-rack" aria-hidden="true"></div>
-      <div class="scene-object whiteboard" aria-hidden="true">QUEUE<br>1. Plan<br>2. Pack<br>3. Refactor</div>
-      <div class="scene-object couch" aria-hidden="true"></div>
+      <div class="scene-object object-sprite server-rack" aria-hidden="true"></div>
+      <div class="scene-object object-sprite whiteboard" aria-hidden="true"></div>
+      <div class="scene-object object-sprite couch" aria-hidden="true"></div>
 
       <aside class="pool-overlay" id="pool">
         <div class="panel-title">
