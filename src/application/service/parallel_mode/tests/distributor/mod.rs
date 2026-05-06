@@ -344,6 +344,230 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
     );
 }
 
+// 실제 장애에서 오래된 queue head는 PR이 닫혔다는 이유로 blocked가 됐지만,
+// 그 source commit의 patch는 이미 prerelease에 들어가 있었다. 이 경우 distributor는
+// stale head를 cleanup으로 수렴시키고 뒤의 두 commit-ready task를 계속 rebase-merge해야 한다.
+#[test]
+fn process_distributor_queue_recovers_patch_equivalent_closed_head_and_merges_two_results() {
+    let repo = TempGitRepo::new("distributor-recovers-closed-equivalent-head");
+    let origin_path = repo.create_bare_origin_remote();
+    run_git(
+        &repo.repo_root,
+        &["push", "-u", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    let github = GitBackedGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+
+    let stale_lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("stale-task", "Stale Task", "agent-stale", "stale-task"),
+        )
+        .expect("stale slot lease should be acquired");
+    let stale_slot_path = PathBuf::from(stale_lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&stale_lease.worktree_path)
+        .expect("stale slot should transition to running");
+    repo.commit_file_in_slot(
+        &stale_slot_path,
+        "stale-feature.txt",
+        "already integrated\n",
+        "stale agent work",
+    );
+    let stale_commit = run_command(
+        "git",
+        [
+            "-C",
+            stale_lease.worktree_path.as_str(),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("stale source commit should resolve");
+    service
+        .begin_workspace_official_completion(
+            &stale_lease.worktree_path,
+            "turn-stale",
+            None,
+            Some("Stale task completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("stale official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&stale_lease.worktree_path)
+        .expect("stale ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &stale_lease.worktree_path,
+            "official ledger refresh succeeded: stale delivery approved",
+        )
+        .expect("stale commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&stale_lease.worktree_path)
+        .expect("stale commit-ready result should be enqueued")
+        .expect("stale queue item should be created");
+
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    run_git(&repo.repo_root, &["cherry-pick", stale_commit.as_str()]);
+    run_git(
+        &repo.repo_root,
+        &[
+            "commit",
+            "--amend",
+            "-qm",
+            "manual equivalent stale integration",
+        ],
+    );
+    run_git(
+        &repo.repo_root,
+        &["push", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+
+    let mut stale_record = load_distributor_queue_records(&repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("stale queue record should exist");
+    stale_record.queue_state = ParallelModeQueueItemState::Blocked;
+    stale_record.integration_state = "blocked".to_string();
+    stale_record.pull_request_number = Some(1383);
+    stale_record.integration_note =
+        "recovered after restart: pull request #1383 is `CLOSED` before integration".to_string();
+    stale_record.recovery_note = Some(stale_record.integration_note.clone());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &stale_record,
+    )
+    .expect("stale blocked queue record should be stored");
+    thread::sleep(Duration::from_millis(2));
+
+    let mut leases = Vec::new();
+    for index in 1..=2 {
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request(
+                    &format!("task-{index}"),
+                    &format!("Task {index}"),
+                    &format!("agent-{index}"),
+                    &format!("task-{index}"),
+                ),
+            )
+            .expect("slot lease should be acquired");
+        let slot_path = PathBuf::from(lease.worktree_path.clone());
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(
+            &slot_path,
+            &format!("feature-{index}.txt"),
+            &format!("done {index}\n"),
+            &format!("agent {index} work"),
+        );
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                &format!("turn-{index}"),
+                None,
+                Some(&format!("Task {index} completed.")),
+                Some("cargo test passed"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                &format!(
+                    "official ledger refresh succeeded: task {index} distributor delivery approved"
+                ),
+            )
+            .expect("commit-ready should be recorded");
+        service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should be enqueued")
+            .expect("queue item should be created");
+        leases.push(lease);
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    let cleanup_notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("stale equivalent head should recover through cleanup");
+    assert!(
+        cleanup_notices
+            .iter()
+            .all(|notice| !notice.contains("blocked")),
+        "patch-equivalent closed head should not block later queue items: {cleanup_notices:?}"
+    );
+    assert!(
+        cleanup_notices
+            .iter()
+            .any(|notice| notice.contains("distributor returned slot to idle")),
+        "stale head should be cleaned before later queue items merge: {cleanup_notices:?}"
+    );
+
+    for expected_done_count in 2..=3 {
+        let notices = service
+            .process_distributor_queue(&repo.workspace_dir())
+            .expect("later distributor queue item should process");
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+            "queue tick should integrate the head: {notices:?}"
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("distributor returned slot to idle")),
+            "queue tick should return the integrated slot: {notices:?}"
+        );
+        assert_eq!(
+            load_distributor_queue_records(&repo.pool_root())
+                .iter()
+                .filter(|record| record.queue_state == ParallelModeQueueItemState::Done)
+                .count(),
+            expected_done_count
+        );
+    }
+
+    let records = load_distributor_queue_records(&repo.pool_root());
+    assert_eq!(records.len(), 3);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.queue_state == ParallelModeQueueItemState::Done),
+        "stale head and two later task records should all finish: {records:?}"
+    );
+    assert!(!repo.slot_lease_path(1).exists());
+    for (index, lease) in leases.iter().enumerate() {
+        let number = index + 1;
+        assert!(!repo.slot_lease_path(number + 1).exists());
+        assert!(!repo.branch_exists(&lease.branch_name));
+        assert_eq!(
+            run_command(
+                "git",
+                [
+                    "--git-dir",
+                    origin_path
+                        .to_str()
+                        .expect("origin path should be valid utf-8"),
+                    "show",
+                    &format!("{POOL_BASELINE_BRANCH}:feature-{number}.txt"),
+                ],
+                None,
+            )
+            .as_deref(),
+            Some(format!("done {number}").as_str())
+        );
+    }
+}
+
 // lease branch는 현재 `prerelease` head에서 시작해야 한다. 사용자가 prerelease를
 // 먼저 전진시킨 뒤 lease를 얻는 상황에서 source parent가 최신 baseline인지,
 // distributor 통합 후 기존 prerelease-only 파일과 worker 파일이 모두 유지되는지

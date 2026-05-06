@@ -399,11 +399,8 @@ impl ParallelModeDistributorService {
                 ParallelModeQueueItemState::Idle
                     | ParallelModeQueueItemState::Done
                     | ParallelModeQueueItemState::Failed
-            ) && branch_is_integrated_into(
-                &context.repo_root,
-                &record.branch_name,
-                DISTRIBUTOR_INTEGRATION_BRANCH,
-            ) {
+            ) && queue_record_is_integrated_or_patch_equivalent(&context, &record)
+            {
                 /*
                 Integration proof also recovers cleanup-time blocks. A queue
                 item that already landed in prerelease should converge toward
@@ -732,6 +729,48 @@ fn record_is_cleanup_recovery_candidate(record: &ParallelModeDistributorQueueRec
         || record
             .integration_note
             .contains("GitHub delivery completed")
+}
+
+fn queue_record_is_integrated_or_patch_equivalent(
+    context: &PoolRuntimeContext,
+    record: &ParallelModeDistributorQueueRecord,
+) -> bool {
+    let source_branch = record.effective_source_branch();
+    branch_is_integrated_into(
+        &context.repo_root,
+        source_branch.as_str(),
+        DISTRIBUTOR_INTEGRATION_BRANCH,
+    ) || branch_is_integrated_into(
+        &context.repo_root,
+        &record.branch_name,
+        DISTRIBUTOR_INTEGRATION_BRANCH,
+    ) || commit_patch_equivalent_in_integration_branch(
+        &context.repo_root,
+        &record.effective_source_commit_sha(),
+    )
+}
+
+fn commit_patch_equivalent_in_integration_branch(repo_root: &str, commit_sha: &str) -> bool {
+    if commit_sha.trim().is_empty() {
+        return false;
+    }
+    let Some(cherry_output) = run_command(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "cherry",
+            DISTRIBUTOR_INTEGRATION_BRANCH,
+            commit_sha,
+        ],
+        None,
+    ) else {
+        return false;
+    };
+
+    cherry_output
+        .lines()
+        .any(|line| line.trim_start().starts_with('-'))
 }
 
 /*

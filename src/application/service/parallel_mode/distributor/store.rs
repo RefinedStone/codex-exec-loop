@@ -6,6 +6,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::DateTime;
+
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot};
 
@@ -50,11 +52,18 @@ timestamp 정렬도 대체로 가능하지만, u64 key를 함께 저장하면 pe
 명시적인 queue ordering 값을 사용할 수 있다.
 */
 pub(super) fn queue_order_key_from_timestamp(timestamp: &str) -> u64 {
-    // timezone separator와 punctuation을 제거한 숫자 prefix만 사용해 JSON/DB projection 모두에서 정렬한다.
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(timestamp)
+        && let Some(nanos) = parsed.timestamp_nanos_opt()
+    {
+        return u64::try_from(nanos).unwrap_or(0);
+    }
+
+    // Legacy or malformed timestamps still get a stable sortable fallback. Keep
+    // only millisecond precision so the numeric prefix fits in u64.
     timestamp
         .chars()
         .filter(|ch| ch.is_ascii_digit())
-        .take(20)
+        .take(17)
         .collect::<String>()
         .parse::<u64>()
         .unwrap_or(0)
@@ -182,4 +191,19 @@ pub(super) fn block_distributor_queue_record(
         "distributor queue head blocked / agent: {} / {}",
         record.agent_id, failure_detail
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::queue_order_key_from_timestamp;
+
+    #[test]
+    fn queue_order_key_preserves_nanosecond_timestamp_order_without_overflow() {
+        let earlier = queue_order_key_from_timestamp("2026-05-06T18:10:58.851646656+00:00");
+        let later = queue_order_key_from_timestamp("2026-05-06T18:10:58.851646657+00:00");
+
+        assert_ne!(earlier, 0);
+        assert_ne!(later, 0);
+        assert!(earlier < later);
+    }
 }
