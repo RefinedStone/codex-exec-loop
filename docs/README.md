@@ -16,6 +16,7 @@ most, one supporting deep dive.
 - [plan/17-structure-and-architecture-debt-map.md](plan/17-structure-and-architecture-debt-map.md): current hotspot order and completed boundary checkpoints
 - [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md): planning runtime and draft editor details
 - [design/07-tui-layered-architecture-and-aesthetic-contract.md](design/07-tui-layered-architecture-and-aesthetic-contract.md): TUI layer ownership and visual contract
+- [design/08-parallel-mode-mud-timeline-ui-pack-research.md](design/08-parallel-mode-mud-timeline-ui-pack-research.md): Parallel Mode MUD timeline UI research brief
 
 ## Operations
 
