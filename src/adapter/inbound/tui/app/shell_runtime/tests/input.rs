@@ -1,12 +1,15 @@
 use super::{
-    ConversationState, InlineShellCommand, ShellOverlay, StartupState,
+    BackgroundMessage, ConversationState, InlineShellCommand, ShellOverlay, StartupState,
     make_dispatch_ready_parallel_runtime, make_test_runtime, sample_startup_diagnostics,
 };
+use crate::adapter::inbound::tui::app::conversation_runtime::{
+    ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
+};
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeCapabilityKey,
-    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
+    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
@@ -130,53 +133,16 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
 }
 
 #[test]
-fn parallel_task_update_dispatch_defers_while_entry_is_loading() {
+fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
     /*
-     * Task intake can commit while parallel entry is still loading. That update
-     * must not race a second dispatch refresh against the entry worker; it is
-     * queued and flushed after the concrete entry snapshot arrives.
+     * Task intake before the first main-session post-turn epoch is data-plane
+     * intake only. It can populate the accepted queue, but it must not start the
+     * first parallel automation epoch or queue a worker dispatch.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().parallel_mode_enabled = true;
-    runtime.app_mut().parallel_mode_readiness_snapshot = None;
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
-            ParallelModeSupervisorState::Supervise,
-            workspace_directory.clone(),
-            ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
-            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
-            ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
-            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
-            Some("loading 2/3: pool reconcile".to_string()),
-        ));
-
-    runtime
-        .app_mut()
-        .refresh_parallel_mode_dispatch_after_task_update("task-added");
-
-    assert_eq!(
-        runtime
-            .app()
-            .pending_parallel_mode_task_update_dispatch
-            .as_deref(),
-        Some("task update: task-added")
-    );
-    assert!(
-        runtime
-            .app_mut()
-            .take_ready_deferred_parallel_mode_task_update_dispatch_reason()
-            .is_none()
-    );
-    assert_eq!(
-        runtime
-            .app()
-            .pending_parallel_mode_task_update_dispatch
-            .as_deref(),
-        Some("task update: task-added")
-    );
-
     runtime.app_mut().parallel_mode_readiness_snapshot =
         Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
     runtime.app_mut().parallel_mode_supervisor_snapshot =
@@ -190,18 +156,24 @@ fn parallel_task_update_dispatch_defers_while_entry_is_loading() {
             None,
         ));
 
+    runtime
+        .app_mut()
+        .refresh_parallel_mode_dispatch_after_task_update("task-added");
+
+    assert!(
+        runtime.app().parallel_mode_automation_epoch_id.is_none(),
+        "task update must not open the first automation epoch"
+    );
     assert_eq!(
-        runtime
-            .app_mut()
-            .take_ready_deferred_parallel_mode_task_update_dispatch_reason()
-            .as_deref(),
-        Some("deferred task update: task-added")
+        runtime.app().last_parallel_mode_automation_trigger,
+        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
     );
     assert!(
         runtime
             .app()
-            .pending_parallel_mode_task_update_dispatch
-            .is_none()
+            .last_parallel_mode_dispatch_withheld_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("before the first main-session post-turn epoch"))
     );
 }
 
@@ -244,6 +216,87 @@ fn bare_parallel_enter_does_not_auto_dispatch_ready_queue() {
         fixture.launch_count.load(Ordering::SeqCst),
         0,
         "bare :parallel entry must not launch isolated workers"
+    );
+}
+
+#[test]
+fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
+    /*
+     * The main session post-turn policy is the first legal parallel automation
+     * start point. When it returns a queue auto prompt, the TUI suppresses the
+     * single-session auto-follow prompt and dispatches through the parallel pool.
+     */
+    let fixture = make_dispatch_ready_parallel_runtime("post-turn-parallel-dispatch");
+    let mut runtime = fixture.runtime;
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_readiness_snapshot =
+        Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        ));
+    let planning_snapshot = runtime
+        .app()
+        .planning
+        .runtime
+        .load_runtime_snapshot_or_invalid(&workspace_directory);
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-1".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
+
+    runtime
+        .app
+        .tx
+        .send(BackgroundMessage::PostTurnEvaluated {
+            thread_id: "thread-1".to_string(),
+            queued_from_turn_id: "turn-1".to_string(),
+            evaluation: Box::new(ConversationPostTurnEvaluation {
+                planning_runtime_snapshot: planning_snapshot,
+                planning_repair_state: None,
+                runtime_notices: Vec::new(),
+                action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
+                    prompt: "run next task".to_string(),
+                    queued_from_turn_id: "turn-1".to_string(),
+                    mode_label: "test".to_string(),
+                    transcript_text: "next-task".to_string(),
+                    handoff_task: None,
+                })),
+            }),
+            planner_worker_panel_state: Default::default(),
+        })
+        .expect("background message should enqueue");
+
+    for _ in 0..250 {
+        runtime.poll_background_messages();
+        if fixture.launch_count.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(runtime.app().parallel_mode_automation_epoch_id.is_some());
+    assert_eq!(
+        runtime.app().last_parallel_mode_automation_trigger,
+        Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
+    );
+    assert_eq!(fixture.launch_count.load(Ordering::SeqCst), 1);
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(
+        !conversation
+            .status_text
+            .contains("queued auto follow-up with mode test"),
+        "parallel mode should suppress the main-session auto-follow submit"
     );
 }
 

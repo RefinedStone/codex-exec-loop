@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
-    ParallelModeCapabilitySnapshot, ParallelModeCapabilityState, ParallelModeDispatchBlockReason,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeDispatchBlockReason, ParallelModeDispatchOutcome,
     ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
@@ -137,7 +138,7 @@ fn orchestrator_entry_plan_resets_pool_only_on_off_to_on_entry() {
     );
     assert_eq!(
         refresh_entry.state,
-        ParallelModeOrchestratorState::Dispatching
+        ParallelModeOrchestratorState::Supervising
     );
     assert_eq!(refresh_entry.reset_scope, None);
     assert_eq!(
@@ -145,6 +146,30 @@ fn orchestrator_entry_plan_resets_pool_only_on_off_to_on_entry() {
         ParallelModeOrchestratorState::ReadinessBlocked
     );
     assert_eq!(blocked_entry.reset_scope, None);
+}
+
+#[test]
+fn dispatch_outcome_carries_trigger_and_structured_status_inputs() {
+    let mut outcome = ParallelModeDispatchOutcome::new(
+        ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        "/repo",
+        7,
+    );
+    outcome.idle_slot_count = 2;
+    outcome.candidate_task_ids = vec!["task-1".to_string(), "task-2".to_string()];
+    outcome.launched_task_ids = vec!["task-1".to_string()];
+
+    assert_eq!(outcome.trigger.label(), "main_turn_post_evaluation");
+    assert_eq!(outcome.workspace_directory, "/repo");
+    assert_eq!(outcome.epoch_id, 7);
+    assert_eq!(outcome.status_detail(), "auto dispatched 1 worker(s)");
+
+    outcome.blocked_reason = Some("no idle slot is available for auto dispatch".to_string());
+    outcome.status_copy_input.clear();
+    assert_eq!(
+        outcome.status_detail(),
+        "auto dispatch blocked / no idle slot is available for auto dispatch"
+    );
 }
 
 // dispatch eligibility도 같은 state machine이 판단한다. runtime이 이미 소유한 task는

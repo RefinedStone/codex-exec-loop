@@ -6,6 +6,7 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningServices, PlanningTaskHandoff,
 };
+use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -23,6 +24,8 @@ pub(super) struct ParallelDispatchWorkerRequest {
     pub(super) planning_workspace_directory: String,
     // worktree는 실제 isolated Codex turn이 실행되는 slot checkout이다.
     pub(super) worktree_directory: String,
+    // automation epoch lets the UI drop delayed completion chaining after :parallel off.
+    pub(super) automation_epoch_id: u64,
     // prompt는 queue head handoff를 worker thread에 전달하는 최종 user-facing 입력이다.
     pub(super) prompt: String,
     // developer_instructions/service_name은 application prompt assembly가 정한 app-server thread metadata다.
@@ -59,6 +62,32 @@ struct ParallelDispatchTurnCompleted {
     changed_planning_file_paths: Vec<String>,
 }
 
+struct ParallelDispatchWorkerRunResult {
+    notices: Vec<String>,
+    official_completion_refresh_succeeded: bool,
+}
+
+struct ParallelDispatchOfficialCompletionOutcome {
+    notices: Vec<String>,
+    official_completion_refresh_succeeded: bool,
+}
+
+impl ParallelDispatchOfficialCompletionOutcome {
+    fn failed(notices: Vec<String>) -> Self {
+        Self {
+            notices,
+            official_completion_refresh_succeeded: false,
+        }
+    }
+
+    fn succeeded(notices: Vec<String>) -> Self {
+        Self {
+            notices,
+            official_completion_refresh_succeeded: true,
+        }
+    }
+}
+
 pub(super) fn spawn_parallel_dispatch_worker(
     request: ParallelDispatchWorkerRequest,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
@@ -72,8 +101,11 @@ pub(super) fn spawn_parallel_dispatch_worker(
          * supervisor snapshot invalidation으로 되돌아가며, sender 실패는 이미 UI가 내려가는 중이라는
          * 의미라 worker thread 안에서 추가 복구를 시도하지 않는다.
          */
-        let notices = run_parallel_dispatch_worker(request, worker_port, turn_service, planning);
-        for notice in notices {
+        let workspace_directory = request.planning_workspace_directory.clone();
+        let automation_epoch_id = request.automation_epoch_id;
+        let result =
+            run_parallel_dispatch_worker(request, worker_port, turn_service, planning.clone());
+        for notice in result.notices {
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }
         /*
@@ -81,6 +113,18 @@ pub(super) fn spawn_parallel_dispatch_worker(
          * official completion marker가 화면에 남지 않는다.
          */
         let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
+        let planning_snapshot = planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(&workspace_directory);
+        if result.official_completion_refresh_succeeded
+            && planning_snapshot.has_actionable_queue_head()
+        {
+            let _ = outer_tx.send(BackgroundMessage::RequestParallelModeDispatch {
+                workspace_directory,
+                trigger: ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                epoch_id: automation_epoch_id,
+            });
+        }
     });
 }
 
@@ -89,7 +133,7 @@ fn run_parallel_dispatch_worker(
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
-) -> Vec<String> {
+) -> ParallelDispatchWorkerRunResult {
     let (event_tx, event_rx) = mpsc::channel();
     let service_request = request.clone();
     let service_thread = thread::spawn(move || {
@@ -199,7 +243,10 @@ fn run_parallel_dispatch_worker(
             &request.worktree_directory,
             "parallel worker stream failed before official completion refresh",
         );
-        return notices;
+        return ParallelDispatchWorkerRunResult {
+            notices,
+            official_completion_refresh_succeeded: false,
+        };
     }
 
     let Some(turn_completed) = stream_state.turn_completed else {
@@ -212,17 +259,25 @@ fn run_parallel_dispatch_worker(
             &request.worktree_directory,
             "parallel worker stream ended without a completed turn",
         );
-        return notices;
+        return ParallelDispatchWorkerRunResult {
+            notices,
+            official_completion_refresh_succeeded: false,
+        };
     };
 
-    notices.extend(run_parallel_dispatch_official_completion(
+    let official_completion = run_parallel_dispatch_official_completion(
         &request,
         &turn_service,
         &planning,
         &turn_completed,
         stream_state.latest_main_reply.as_deref(),
-    ));
-    notices
+    );
+    notices.extend(official_completion.notices);
+    ParallelDispatchWorkerRunResult {
+        notices,
+        official_completion_refresh_succeeded: official_completion
+            .official_completion_refresh_succeeded,
+    }
 }
 
 fn sync_parallel_dispatch_worker_event(
@@ -282,7 +337,7 @@ fn run_parallel_dispatch_official_completion(
     planning: &PlanningServices,
     turn_completed: &ParallelDispatchTurnCompleted,
     latest_main_reply: Option<&str>,
-) -> Vec<String> {
+) -> ParallelDispatchOfficialCompletionOutcome {
     let mut notices = Vec::new();
 
     // Official completion refreshes are serialized by slot lease order, not by thread wake-up
@@ -292,17 +347,17 @@ fn run_parallel_dispatch_official_completion(
     {
         Ok(Some(order)) => order,
         Ok(None) => {
-            return vec![format!(
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion skipped official refresh because no running slot lease was found / task: {}",
                 request.handoff_task.task_title
-            )];
+            )]);
         }
         Err(error) => {
             turn_service.mark_official_completion_failed(&request.worktree_directory, &error);
-            return vec![format!(
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion could not reserve official refresh order / task: {} / {error}",
                 request.handoff_task.task_title
-            )];
+            )]);
         }
     };
 
@@ -323,17 +378,17 @@ fn run_parallel_dispatch_official_completion(
     ) {
         Ok(Some(report)) => report,
         Ok(None) => {
-            return vec![format!(
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion had no running slot to report / task: {}",
                 request.handoff_task.task_title
-            )];
+            )]);
         }
         Err(error) => {
             turn_service.mark_official_completion_failed(&request.worktree_directory, &error);
-            return vec![format!(
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion capture failed / task: {} / {error}",
                 request.handoff_task.task_title
-            )];
+            )]);
         }
     };
 
@@ -365,7 +420,7 @@ fn run_parallel_dispatch_official_completion(
         Err(error) => {
             let detail = format!("parallel official completion refresh failed: {error}");
             turn_service.mark_official_completion_failed(&request.worktree_directory, &detail);
-            return vec![detail];
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![detail]);
         }
     };
 
@@ -382,7 +437,7 @@ fn run_parallel_dispatch_official_completion(
             "parallel official completion refresh blocked / task: {} / {detail}",
             request.handoff_task.task_title
         ));
-        return notices;
+        return ParallelDispatchOfficialCompletionOutcome::failed(notices);
     }
 
     if !matches!(
@@ -401,7 +456,7 @@ fn run_parallel_dispatch_official_completion(
             "parallel official completion refresh blocked / task: {} / {detail}",
             request.handoff_task.task_title
         ));
-        return notices;
+        return ParallelDispatchOfficialCompletionOutcome::failed(notices);
     }
 
     let authority_refresh_outcome = outcome
@@ -413,7 +468,7 @@ fn run_parallel_dispatch_official_completion(
         &request.worktree_directory,
         &authority_refresh_outcome,
     ));
-    notices
+    ParallelDispatchOfficialCompletionOutcome::succeeded(notices)
 }
 
 fn parallel_dispatch_validation_summary(changed_planning_file_paths: &[String]) -> String {

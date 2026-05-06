@@ -22,7 +22,7 @@ to [remaining-work.md](remaining-work.md).
 | Task Intake | `:task` | preview and commit one validated user task as accepted `ready` work |
 | Planning | `:planning` | stage or reopen planning authoring |
 | Directions | `:directions` | maintain direction docs and queue-idle supporting prompt |
-| Supersession | `:parallel` | enable or refresh the supervisor board and worker pool |
+| Supersession | `:parallel` | arm parallel automation and refresh the supervisor board/pool |
 | Supersession Off | `:parallel off` | stop local parallel mode and close the board without deleting worktrees |
 
 ## Planning Contract
@@ -39,21 +39,33 @@ to [remaining-work.md](remaining-work.md).
 ## Supersession Contract
 
 - Bare `:parallel` is the enable/refresh entrypoint; `:parallel on` is not a separate mode.
-- Off-to-on `:parallel` entry checks readiness, opens the board, and attempts pool reset.
-- Re-running `:parallel` while already enabled refreshes readiness/reconcile/dispatch only; it does
-  not reset the pool.
+- Off-to-on `:parallel` entry checks readiness, opens the board, and attempts a pool-only reset and
+  reconcile. It does not launch workers.
+- Re-running `:parallel` while already enabled refreshes readiness and supervisor projection only;
+  it does not reset the pool or launch workers.
 - `Esc` closes the board surface only. Parallel mode remains enabled.
-- `:parallel off` disables local parallel mode and clears pending deferred dispatch, but leaves pool
-  worktrees in place.
+- `:parallel off` disables local parallel mode and clears the automation epoch, pending dispatch,
+  and in-flight dispatch state, but leaves pool worktrees in place.
 - The next off-to-on `:parallel` attempts reset again. Reset is blocked when live Running,
   CleanupPending, or recent Leased slots are present.
 - Idle or stale reusable slots are reset into disposable baselines; active slots are preserved.
-- Task intake while parallel mode is enabled triggers dispatch. If entry is still loading, dispatch
-  is deferred until the concrete entry snapshot lands.
+- Parallel automation starts only after the main session completes a user turn and post-turn
+  planning evaluation returns an accepted ready queue. In that case the normal main-session
+  auto-follow prompt is suppressed and converted into parallel dispatch.
+- Manual `:task` intake before that first automation epoch commits accepted work only; it records a
+  dispatch-withheld reason and launches no worker. After the epoch is open, task intake can request
+  dispatch with the `task_intake_after_epoch` trigger.
+- Dispatch triggers are explicit: `main_turn_post_evaluation`, `parallel_official_completion`, and
+  `task_intake_after_epoch`. Concurrent requests coalesce into one in-flight dispatch pass plus at
+  most one pending follow-up pass.
 - The board shows readiness, pool, roster, selected detail, distributor head, and queue state.
+- The board summary includes the last automation trigger and the latest dispatch-withheld reason
+  when either exists.
 - Queue work leases one of three local `akra` worktree slots.
 - Agent completion becomes distributor-eligible only after hidden official planning refresh marks it
   commit-ready.
+- A successful parallel official completion refresh that leaves another actionable queue head emits
+  the next `parallel_official_completion` dispatch request, capped by idle-slot capacity.
 - Distributor delivery is serial: source branch push, PR automation, integration into `prerelease`,
   and slot cleanup.
 

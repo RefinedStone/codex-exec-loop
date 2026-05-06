@@ -15,7 +15,9 @@ use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
 };
-use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
+use crate::domain::parallel_mode::{
+    ParallelModeAutomationTrigger, ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
+};
 use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
@@ -300,7 +302,12 @@ struct NativeTuiApp {
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     parallel_mode_supervisor_refresh_in_flight: bool,
-    pending_parallel_mode_task_update_dispatch: Option<String>,
+    parallel_mode_dispatch_refresh_in_flight: bool,
+    parallel_mode_automation_epoch_id: Option<u64>,
+    next_parallel_mode_automation_epoch_id: u64,
+    pending_parallel_mode_dispatch_trigger: Option<ParallelModeAutomationTrigger>,
+    last_parallel_mode_automation_trigger: Option<ParallelModeAutomationTrigger>,
+    last_parallel_mode_dispatch_withheld_reason: Option<String>,
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
