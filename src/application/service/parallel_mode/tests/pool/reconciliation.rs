@@ -278,6 +278,47 @@ fn parallel_entry_from_off_blocks_reset_when_slot_is_active() {
     assert!(slot_path.join("scratch.tmp").exists());
 }
 
+// Running lease라도 slot worktree가 더 이상 해당 agent branch에 있지 않으면 live worker로
+// 보호할 수 없다. 재시작 후 남은 stale DB row가 off -> on pool reset을 막으면 사용자는
+// :parallel 진입 때마다 오래된 roster와 blocked pool을 다시 보게 된다.
+#[test]
+fn parallel_entry_from_off_resets_stale_running_lease_when_slot_left_agent_branch() {
+    let repo = TempGitRepo::new("parallel-enable-reset-stale-running");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
+    fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
+
+    let reset_count = service
+        .reset_pool_on_parallel_enable(&repo.workspace_dir())
+        .expect("stale running lease should not block parallel enable reset");
+    let snapshot = service.build_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+
+    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
+    assert_eq!(snapshot.roster.active_count(), 0);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!slot_path.join("scratch.tmp").exists());
+    assert_eq!(current_branch(&slot_path), "HEAD");
+}
+
 // Stale startup leases are different from active running work: no worker reached Running and the
 // assigned session detail is old enough to be considered abandoned, so off -> on reset may reclaim it.
 #[test]
