@@ -16,6 +16,9 @@ const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.htm
 const DASHBOARD_TEMPLATE: &str = include_str!("../../../../templates/admin/dashboard.html");
 const AKRA_DASHBOARD_TEMPLATE: &str =
     include_str!("../../../../templates/admin/akra_dashboard.html");
+const ADMIN_GRAPHIC_VISUAL_SCRIPT: &str =
+    include_str!("../../../../scripts/check_admin_graphic_visual.sh");
+const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
 
 /*
@@ -127,6 +130,43 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         assert!(
             ADMIN_MOD.contains(route),
             "admin route table should keep {route}"
+        );
+    }
+}
+
+#[test]
+fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
+    for token in [
+        "grid-template-columns: repeat(8",
+        "class=\"office-board\" id=\"agents\"",
+        "class=\"pool-overlay\" id=\"pool\"",
+        "max-height: 540px",
+        "overflow: auto",
+        "text-overflow: ellipsis",
+        "@media (max-width: 860px)",
+        "generated_time_label",
+        "automation_epoch",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(token)
+                || BASE_TEMPLATE.contains(token)
+                || AKRA_DASHBOARD_RS.contains(token),
+            "graphic visual contract should keep {token}"
+        );
+    }
+
+    for token in [
+        "docs/gamification/img.png",
+        "ADMIN_GRAPHIC_CAPTURE",
+        "akra-admin",
+        "/admin/legacy",
+        "/api/admin/akra/dashboard",
+        "--screenshot=",
+        "admin graphic visual contract ok",
+    ] {
+        assert!(
+            ADMIN_GRAPHIC_VISUAL_SCRIPT.contains(token),
+            "visual regression script should keep {token}"
         );
     }
 }
