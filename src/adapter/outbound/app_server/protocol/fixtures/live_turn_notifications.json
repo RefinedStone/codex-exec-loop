@@ -1,0 +1,100 @@
+[
+  {
+    "method": "turn/started",
+    "params": {
+      "threadId": "thread-live",
+      "turn": {
+        "id": "turn-live"
+      }
+    }
+  },
+  {
+    "method": "item/agentMessage/delta",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "itemId": "agent-live",
+      "phase": "commentary",
+      "delta": "delta text should stay live-only"
+    }
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "item": {
+        "type": "agentMessage",
+        "id": "agent-live",
+        "phase": "final_answer",
+        "text": "completed answer from item/completed"
+      }
+    }
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "item": {
+        "type": "fileChange",
+        "id": "file-change-live",
+        "changes": [
+          {
+            "path": ".codex-exec-loop/planning/result-output.md",
+            "kind": {
+              "type": "update"
+            }
+          },
+          {
+            "path": "/tmp/workspace/.codex-exec-loop/planning/result-output.md",
+            "kind": {
+              "type": "update"
+            }
+          },
+          {
+            "path": "src/main.rs",
+            "kind": {
+              "type": "update"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "item/autoApprovalReview/started",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "targetItemId": "file-change-live",
+      "review": {
+        "status": "inProgress",
+        "riskLevel": "medium",
+        "rationale": "planning file write"
+      }
+    }
+  },
+  {
+    "method": "item/autoApprovalReview/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "targetItemId": "file-change-live",
+      "review": {
+        "status": "approved",
+        "riskLevel": "medium",
+        "rationale": "allowed by test fixture"
+      }
+    }
+  },
+  {
+    "method": "turn/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turn": {
+        "id": "turn-live"
+      }
+    }
+  }
+]

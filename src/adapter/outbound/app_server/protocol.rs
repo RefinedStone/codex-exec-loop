@@ -490,6 +490,9 @@ pub(super) struct ThreadGitInfo {
 }
 
 #[cfg(test)]
+mod contract_tests;
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 

@@ -1,0 +1,68 @@
+{
+  "thread": {
+    "id": "thread-snapshot",
+    "name": "   ",
+    "preview": "Snapshot fallback title\nsecond preview line",
+    "cwd": "/home/akra/project",
+    "source": "appServer",
+    "modelProvider": "openai",
+    "updatedAt": 1777910800,
+    "path": "/home/akra/.codex/sessions/thread-snapshot.json",
+    "status": {
+      "type": "idle"
+    },
+    "gitInfo": {
+      "branch": "feature/wire-contract"
+    },
+    "turns": [
+      {
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "user-snapshot",
+            "content": [
+              {
+                "type": "text",
+                "text": "summarize the current state"
+              }
+            ]
+          },
+          {
+            "type": "agentMessage",
+            "id": "agent-snapshot",
+            "phase": "final_answer",
+            "text": "final answer stored by item/completed"
+          },
+          {
+            "type": "fileChange",
+            "id": "file-snapshot",
+            "changes": [
+              {
+                "path": ".codex-exec-loop/planning/result-output.md",
+                "kind": {
+                  "type": "update"
+                }
+              },
+              {
+                "path": "src/main.rs",
+                "kind": {
+                  "type": "update"
+                }
+              }
+            ]
+          },
+          {
+            "type": "commandExecution",
+            "id": "command-snapshot",
+            "command": "cargo test app_server::protocol",
+            "status": "completed"
+          },
+          {
+            "type": "unknownFutureItem",
+            "id": "ignored-snapshot"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,60 @@
+[
+  {
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "thread-stale",
+      "status": {
+        "type": "running"
+      }
+    }
+  },
+  {
+    "method": "item/agentMessage/delta",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-stale",
+      "itemId": "agent-stale",
+      "phase": "commentary",
+      "delta": "stale delta must not reach the active transcript"
+    }
+  },
+  {
+    "method": "turn/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turn": {
+        "id": "turn-stale"
+      }
+    }
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "item": null
+    }
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "item": {
+        "type": "agentMessage",
+        "id": "agent-after-malformed",
+        "phase": "final_answer",
+        "text": "active stream survived malformed item"
+      }
+    }
+  },
+  {
+    "method": "turn/completed",
+    "params": {
+      "threadId": "thread-live",
+      "turn": {
+        "id": "turn-live"
+      }
+    }
+  }
+]

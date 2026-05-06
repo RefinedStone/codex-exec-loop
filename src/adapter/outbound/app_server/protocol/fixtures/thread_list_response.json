@@ -1,0 +1,35 @@
+{
+  "data": [
+    {
+      "id": "thread-newer",
+      "name": "Wire contract session",
+      "preview": "latest turn preview",
+      "cwd": "/home/akra/project",
+      "source": "appServer",
+      "modelProvider": "openai",
+      "updatedAt": 1777910700,
+      "path": null,
+      "status": {
+        "type": "running"
+      },
+      "gitInfo": {
+        "branch": "feature/wire-contract"
+      }
+    },
+    {
+      "id": "thread-older",
+      "name": null,
+      "preview": "older preview title\nsecond line",
+      "cwd": "/home/akra/project",
+      "source": "cli",
+      "modelProvider": "openai",
+      "updatedAt": 1777910000,
+      "path": "/home/akra/.codex/sessions/thread-older.json",
+      "status": {
+        "type": "idle"
+      },
+      "gitInfo": null
+    }
+  ],
+  "nextCursor": "cursor-after-newer"
+}
