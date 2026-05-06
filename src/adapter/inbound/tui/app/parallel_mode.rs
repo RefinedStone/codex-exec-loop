@@ -1318,13 +1318,17 @@ impl NativeTuiApp {
                 self.supersession_mud_ui_state.move_selection(&snapshot, 1);
             }
             KeyCode::Enter
-                if key.modifiers.is_empty() && self.parallel_mode_prompt_input_locked() =>
+                if key.modifiers.is_empty()
+                    && !self.shell_ui_skin.is_dashboard()
+                    && self.parallel_mode_prompt_input_locked() =>
             {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.supersession_mud_ui_state.inspect_focused(&snapshot);
             }
             KeyCode::Char(' ')
-                if key.modifiers.is_empty() && self.parallel_mode_prompt_input_locked() =>
+                if key.modifiers.is_empty()
+                    && !self.shell_ui_skin.is_dashboard()
+                    && self.parallel_mode_prompt_input_locked() =>
             {
                 let snapshot = self.parallel_mode_supervisor_snapshot();
                 self.supersession_mud_ui_state.inspect_focused(&snapshot);

@@ -63,6 +63,7 @@ const MAX_COMPOSER_HEIGHT: u16 = 8;
 const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
+const TUI_SKIN_ENV_VAR: &str = "CODEX_EXEC_LOOP_TUI_SKIN";
 const INLINE_HISTORY_RENDER_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_INLINE_HISTORY_MODE";
 const HISTORY_INSERT_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_HISTORY_INSERT_MODE";
 
@@ -86,6 +87,8 @@ mod conversation_lifecycle;
 mod conversation_model;
 #[path = "app/conversation_runtime.rs"]
 mod conversation_runtime;
+#[path = "app/dashboard_ui.rs"]
+mod dashboard_ui;
 #[path = "app/directions_maintenance_ui.rs"]
 mod directions_maintenance_ui;
 #[path = "app/followup/mod.rs"]
@@ -167,6 +170,7 @@ pub(super) use conversation_model::{
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
 };
+use dashboard_ui::{DashboardUiState, ShellUiSkin};
 use directions_maintenance_ui::{
     DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
 };
@@ -336,6 +340,8 @@ struct NativeTuiApp {
     github_review_polling_state: GithubReviewPollingState,
     inline_history_render_mode: InlineHistoryRenderMode,
     history_insert_mode: HistoryInsertionMode,
+    shell_ui_skin: ShellUiSkin,
+    dashboard_ui_state: DashboardUiState,
     show_startup_ascii_art: bool,
     tx: Sender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,

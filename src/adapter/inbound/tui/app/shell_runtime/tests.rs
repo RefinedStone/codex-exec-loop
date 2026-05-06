@@ -5,7 +5,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
 };
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, PlannerWorkerPanelState,
-    PlannerWorkerStatus,
+    PlannerWorkerStatus, ShellUiSkin,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;

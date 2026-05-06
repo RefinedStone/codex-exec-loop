@@ -156,6 +156,8 @@ impl NativeTuiApp {
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             inline_history_render_mode: super::InlineHistoryRenderMode::from_environment(),
             history_insert_mode: super::HistoryInsertionMode::from_environment(),
+            shell_ui_skin: super::ShellUiSkin::from_environment(),
+            dashboard_ui_state: super::DashboardUiState::default(),
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
             tx,
             rx,

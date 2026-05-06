@@ -8,6 +8,8 @@ use super::*;
  * presentation layer가 Line 기반 read model을 만들고, inline_layout이 frame 분할을 정하면,
  * 이 module은 base inline conversation, 선택적 inline inspection, exit confirmation modal 순서로 layer를 적용한다.
  */
+#[path = "shell_rendering/dashboard.rs"]
+mod dashboard;
 #[path = "shell_rendering/inline_inspection.rs"]
 mod inline_inspection;
 #[path = "shell_rendering/inline_layout.rs"]
@@ -60,6 +62,14 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
+    if app.shell_ui_skin.is_dashboard() {
+        dashboard::draw_dashboard_shell(frame, app);
+        if app.is_exit_confirmation_visible() {
+            draw_exit_confirmation(frame);
+        }
+        return;
+    }
+
     let frame_area = frame.area();
     // tail view는 status/prompt line과 cursor offset을 함께 담는다.
     // 같은 tail 높이가 inline inspection/body 분할 기준도 된다.

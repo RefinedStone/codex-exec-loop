@@ -99,6 +99,46 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
 }
 
 #[test]
+fn dashboard_supersession_loading_keeps_prompt_primary_input_available() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_ui_skin = super::ShellUiSkin::Dashboard;
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading agent roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+            Some("loading 2/3: pool reconcile".to_string()),
+        ));
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::empty(),
+    )));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::empty(),
+    )));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::empty(),
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "a b");
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert!(runtime.take_redraw_request());
+}
+
+#[test]
 fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
     /*
      * Loading이 끝나 concrete supervisor snapshot이 들어오면 Supersession board를 열어 둔 채로도
@@ -269,6 +309,69 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
             .supersession_mud_ui_state
             .selected_actor_index(),
         0
+    );
+    assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn dashboard_supersession_navigation_changes_only_dashboard_ui_state() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        workspace_directory,
+        ParallelModePoolBoardSnapshot::new(
+            2,
+            "/tmp/pool",
+            "idle",
+            vec![
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Idle,
+                    "prerelease",
+                    "akra-pool/slot-1",
+                    "idle",
+                ),
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-2",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-2/dashboard",
+                    "akra-pool/slot-2",
+                    "agent-2 / task-2",
+                ),
+            ],
+        ),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    );
+    runtime.app_mut().shell_ui_skin = super::ShellUiSkin::Dashboard;
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot = Some(snapshot.clone());
+    let mud_state_before = runtime.app().supersession_mud_ui_state.clone();
+    let dashboard_focus_before = runtime.app().dashboard_ui_state.focused_panel();
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Tab,
+        KeyModifiers::empty(),
+    )));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Down,
+        KeyModifiers::empty(),
+    )));
+
+    assert_eq!(
+        runtime.app().parallel_mode_supervisor_snapshot,
+        Some(snapshot),
+        "dashboard navigation must not mutate supervisor/domain state"
+    );
+    assert_eq!(runtime.app().supersession_mud_ui_state, mud_state_before);
+    assert_ne!(
+        runtime.app().dashboard_ui_state.focused_panel(),
+        dashboard_focus_before
     );
     assert!(runtime.take_redraw_request());
 }

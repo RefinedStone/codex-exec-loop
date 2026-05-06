@@ -442,15 +442,23 @@ impl NativeTuiApp {
             }
             return true;
         }
-        if self.handle_supersession_overlay_key(key) {
-            return true;
-        }
         if self.shell_overlay == ShellOverlay::Supersession {
+            if self.shell_ui_skin.is_dashboard()
+                && self.dashboard_ui_state.handle_navigation_key(key)
+            {
+                return true;
+            }
+            if self.handle_supersession_overlay_key(key) {
+                return true;
+            }
             // Supersession only owns ordinary prompt keys while its loading
             // pipeline is active. Once the board has a concrete snapshot, prompt
             // editing falls through so the operator can keep working while the
             // board remains visible.
-            return self.parallel_mode_prompt_input_locked();
+            return !self.shell_ui_skin.is_dashboard() && self.parallel_mode_prompt_input_locked();
+        }
+        if self.shell_ui_skin.is_dashboard() && self.dashboard_ui_state.handle_navigation_key(key) {
+            return true;
         }
         if self.shell_overlay == ShellOverlay::TaskIntake {
             return self.handle_task_intake_overlay_key(key);

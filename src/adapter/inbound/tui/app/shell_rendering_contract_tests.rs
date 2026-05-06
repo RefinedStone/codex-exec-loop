@@ -453,6 +453,111 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
 }
 
 #[test]
+fn dashboard_skin_renders_panel_dashboard_while_inline_skin_stays_frameless() {
+    let mut inline_app = make_test_app();
+    inline_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let inline_rendered = tui_testkit::render_shell_snapshot(&mut inline_app, 120, 36);
+
+    let mut dashboard_app = make_test_app();
+    dashboard_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    dashboard_app.shell_ui_skin = ShellUiSkin::Dashboard;
+    let dashboard_rendered = tui_testkit::render_shell_snapshot(&mut dashboard_app, 120, 36);
+
+    assert!(!inline_rendered.contains("AKRA Command Deck"));
+    assert!(dashboard_rendered.contains("AKRA Command Deck"));
+    assert!(dashboard_rendered.contains("Transcript"));
+    assert!(dashboard_rendered.contains("Prompt Primary"));
+}
+
+#[test]
+fn dashboard_prompt_keeps_korean_input_in_bottom_box_without_status_overlap() {
+    for (width, height) in [(80, 24), (120, 36), (160, 48)] {
+        let mut app = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.shell_ui_skin = ShellUiSkin::Dashboard;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        conversation.input_buffer = "안녕하세요 parallel".to_string();
+
+        let rendered = tui_testkit::render_shell_snapshot(&mut app, width, height);
+        let prompt_line = rendered
+            .lines()
+            .find(|line| line.contains("> 안녕하세요 parallel"))
+            .unwrap_or_else(|| panic!("prompt should render at {width}x{height}:\n{rendered}"));
+
+        assert!(
+            !prompt_line.contains("now: none"),
+            "status text must not share the prompt row at {width}x{height}:\n{rendered}"
+        );
+        assert!(rendered.contains("Prompt Primary"));
+    }
+}
+
+#[test]
+fn dashboard_supersession_renders_parallel_panel_markers_without_fake_stats() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_ui_skin = ShellUiSkin::Dashboard;
+    app.shell_overlay = ShellOverlay::Supersession;
+    app.parallel_mode_enabled = true;
+    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    ));
+    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(
+            2,
+            "/tmp/pool",
+            "idle",
+            vec![ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                ParallelModePoolSlotState::Idle,
+                "prerelease",
+                "akra-pool/slot-1",
+                "idle",
+            )],
+        ),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![ParallelModeAgentRosterEntry::new(
+                "agent-1",
+                "Dashboard TUI",
+                "slot-1",
+                "akra-dashboard-tui",
+                "running",
+                "01m00s",
+                "implementing",
+            )],
+            "no active agents",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        Some("dashboard board ready".to_string()),
+    ));
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 160, 48);
+
+    for marker in [
+        "Agent Tavern",
+        "Distributor",
+        "Worktree Pool",
+        "Realm Map",
+        "Quest Log",
+        "Event Feed",
+        "System Status",
+    ] {
+        assert!(rendered.contains(marker), "missing {marker}:\n{rendered}");
+    }
+    for fake_stat in ["XP", "Rank", "Badge", "Reward"] {
+        assert!(
+            !rendered.contains(fake_stat),
+            "dashboard must not render fake stat copy {fake_stat}:\n{rendered}"
+        );
+    }
+}
+
+#[test]
 fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     /*
      * The timeline is the first MUD-style read-only slice: slot/agent topology
