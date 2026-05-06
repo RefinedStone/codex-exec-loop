@@ -1,0 +1,416 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<style>
+  .akra-game {
+    --game-bg: #08111f;
+    --game-panel: #0e1b2d;
+    --game-panel-soft: #12243a;
+    --game-line: rgba(141, 164, 196, 0.26);
+    --game-ink: #edf6ff;
+    --game-muted: #94a8c0;
+    --game-green: #35d07f;
+    --game-blue: #5da9ff;
+    --game-yellow: #f4c84a;
+    --game-red: #ff6b6b;
+    --game-violet: #9d7cff;
+    max-width: 1480px;
+    margin: 0 auto;
+    color: var(--game-ink);
+  }
+  .akra-game .game-card,
+  .akra-game .kpi,
+  .akra-game .office-board,
+  .akra-game .game-panel {
+    background: linear-gradient(180deg, rgba(20, 36, 58, 0.96), rgba(9, 20, 35, 0.98));
+    border: 1px solid var(--game-line);
+    border-radius: 8px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+  }
+  .akra-game .top-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 14px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .akra-game .title-block h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+  .akra-game .title-block p,
+  .akra-game p,
+  .akra-game small {
+    color: var(--game-muted);
+  }
+  .akra-game .mode-chip,
+  .akra-game .status-chip {
+    padding: 8px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--game-line);
+    background: rgba(255,255,255,0.05);
+    font-size: 13px;
+  }
+  .akra-game .mode-chip strong,
+  .akra-game .status-chip.ready strong {
+    color: var(--game-green);
+  }
+  .akra-game .status-chip.blocked strong {
+    color: var(--game-red);
+  }
+  .akra-game .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(8rem, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .akra-game .kpi {
+    min-height: 92px;
+    padding: 13px;
+    display: grid;
+    align-content: space-between;
+  }
+  .akra-game .kpi span {
+    color: var(--game-muted);
+    font-size: 12px;
+  }
+  .akra-game .kpi strong {
+    font-size: 26px;
+    line-height: 1;
+  }
+  .akra-game .board-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .akra-game .office-board {
+    position: relative;
+    min-height: 520px;
+    overflow: hidden;
+    background:
+      linear-gradient(30deg, transparent 42%, rgba(82, 105, 135, 0.16) 43%, rgba(82, 105, 135, 0.16) 44%, transparent 45%),
+      linear-gradient(150deg, transparent 42%, rgba(82, 105, 135, 0.14) 43%, rgba(82, 105, 135, 0.14) 44%, transparent 45%),
+      radial-gradient(circle at 72% 20%, rgba(94, 169, 255, 0.2), transparent 32%),
+      #101929;
+    background-size: 54px 31px, 54px 31px, auto, auto;
+  }
+  .akra-game .room {
+    position: absolute;
+    inset: 34px 38px;
+    transform: skewY(-9deg);
+    border: 1px solid rgba(190, 210, 238, 0.18);
+    background: linear-gradient(135deg, rgba(58, 42, 31, 0.78), rgba(31, 48, 67, 0.88));
+  }
+  .akra-game .desk,
+  .akra-game .server,
+  .akra-game .distributor-desk,
+  .akra-game .event-board {
+    position: absolute;
+    width: 132px;
+    min-height: 72px;
+    padding: 9px;
+    border: 1px solid rgba(230, 240, 255, 0.18);
+    background: linear-gradient(160deg, rgba(96, 73, 47, 0.95), rgba(37, 52, 72, 0.96));
+    box-shadow: 12px 16px 0 rgba(0,0,0,0.22);
+  }
+  .akra-game .server {
+    width: 118px;
+    background: linear-gradient(160deg, #1b2d44, #0c1524);
+  }
+  .akra-game .distributor-desk {
+    right: 14%;
+    top: 18%;
+  }
+  .akra-game .event-board {
+    right: 7%;
+    bottom: 12%;
+    background: linear-gradient(160deg, #25334b, #111b2b);
+  }
+  .akra-game .desk.agent-1 { left: 26%; top: 30%; }
+  .akra-game .desk.agent-2 { left: 38%; top: 48%; }
+  .akra-game .desk.agent-3 { left: 18%; top: 56%; }
+  .akra-game .server.slot-1 { left: 7%; top: 18%; }
+  .akra-game .server.slot-2 { left: 7%; top: 36%; }
+  .akra-game .server.slot-3 { left: 7%; top: 54%; }
+  .akra-game .sprite {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    background: var(--game-blue);
+    color: #05101e;
+    font-weight: 800;
+  }
+  .akra-game .severity-normal .sprite { background: var(--game-green); }
+  .akra-game .severity-info .sprite { background: var(--game-blue); }
+  .akra-game .severity-warning .sprite { background: var(--game-yellow); }
+  .akra-game .severity-danger .sprite { background: var(--game-red); }
+  .akra-game .severity-muted .sprite { background: #7e8b9d; }
+  .akra-game .bubble {
+    position: absolute;
+    top: -18px;
+    left: 22px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: #f7fff8;
+    color: #122019;
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .akra-game .label-line {
+    display: grid;
+    gap: 2px;
+    margin-top: 6px;
+    font-size: 12px;
+  }
+  .akra-game .right-stack,
+  .akra-game .bottom-grid {
+    display: grid;
+    gap: 12px;
+  }
+  .akra-game .game-panel {
+    padding: 14px;
+    min-width: 0;
+  }
+  .akra-game .game-panel h3 {
+    margin: 0 0 10px;
+    color: var(--game-ink);
+  }
+  .akra-game .event-row,
+  .akra-game .queue-row,
+  .akra-game .metric-line {
+    display: grid;
+    gap: 4px;
+    padding: 9px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .akra-game .event-row:last-child,
+  .akra-game .queue-row:last-child,
+  .akra-game .metric-line:last-child {
+    border-bottom: 0;
+  }
+  .akra-game .bottom-grid {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr);
+    margin-top: 12px;
+  }
+  .akra-game .pipeline {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 7px;
+    margin-bottom: 12px;
+  }
+  .akra-game .step {
+    min-height: 54px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.05);
+    color: var(--game-muted);
+    font-size: 12px;
+  }
+  .akra-game .step.done,
+  .akra-game .step.active {
+    color: var(--game-ink);
+    border-color: rgba(53, 208, 127, 0.55);
+    background: rgba(53, 208, 127, 0.14);
+  }
+  .akra-game .step.blocked,
+  .akra-game .step.failed {
+    color: var(--game-ink);
+    border-color: rgba(255, 107, 107, 0.6);
+    background: rgba(255, 107, 107, 0.14);
+  }
+  .akra-game .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .akra-game .badge {
+    padding: 6px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(53, 208, 127, 0.45);
+    color: var(--game-green);
+    background: rgba(53, 208, 127, 0.08);
+    font-size: 12px;
+  }
+  @media (max-width: 1180px) {
+    .akra-game .kpi-grid { grid-template-columns: repeat(4, minmax(8rem, 1fr)); }
+    .akra-game .board-row,
+    .akra-game .bottom-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    .akra-game .top-strip,
+    .akra-game .kpi-grid,
+    .akra-game .pipeline { grid-template-columns: 1fr; }
+    .akra-game .office-board { min-height: 680px; }
+    .akra-game .desk,
+    .akra-game .server,
+    .akra-game .distributor-desk,
+    .akra-game .event-board {
+      position: relative;
+      left: auto !important;
+      right: auto !important;
+      top: auto !important;
+      bottom: auto !important;
+      width: calc(100% - 32px);
+      margin: 14px 16px;
+    }
+    .akra-game .room { display: none; }
+  }
+</style>
+
+<section class="akra-game">
+  <div class="top-strip">
+    <div class="title-block">
+      <h2>게임발전국 <span class="mode-chip">AKRA Admin Control Center</span></h2>
+      <p class="mono">{{ dashboard.workspace.path }}</p>
+    </div>
+    <span class="mode-chip">Parallel Mode <strong>{{ dashboard.workspace.mode }}</strong></span>
+    <span class="status-chip {{ dashboard.workspace.readiness }}">준비도 <strong>{{ dashboard.workspace.readiness }}</strong></span>
+  </div>
+
+  {% if let Some(notice) = dashboard.workspace.top_notice %}
+  <div class="notice error-notice">{{ notice }}</div>
+  {% endif %}
+
+  <div class="kpi-grid">
+    <div class="kpi"><span>총 작업</span><strong>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small>snapshot 기반</small></div>
+    <div class="kpi"><span>성공률</span><strong>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
+    <div class="kpi"><span>오늘 처리량</span><strong>{% if let Some(count) = dashboard.kpis.today_throughput %}{{ count }}{% else %}-{% endif %}</strong><small>미집계</small></div>
+    <div class="kpi"><span>활성 요원</span><strong>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong><small>roster snapshot</small></div>
+    <div class="kpi"><span>풀 슬롯</span><strong>{{ dashboard.kpis.pool_running }} / {{ dashboard.kpis.pool_configured_size }}</strong><small>여유 {{ dashboard.kpis.pool_idle }}</small></div>
+    <div class="kpi"><span>대기 작업</span><strong>{{ dashboard.kpis.queue_depth }}</strong><small>distributor depth</small></div>
+    <div class="kpi"><span>준비도</span><strong>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
+    <div class="kpi"><span>분배기 상태</span><strong>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
+  </div>
+
+  <div class="board-row">
+    <div class="office-board" aria-label="AKRA isometric office board">
+      <div class="room"></div>
+      {% for slot in dashboard.pool.slots %}
+      <div class="server slot-{{ loop.index }} severity-{{ slot.severity }}">
+        <span class="bubble">{{ slot.bubble_label }}</span>
+        <span class="sprite">S{{ loop.index }}</span>
+        <div class="label-line">
+          <strong>{{ slot.slot_id }}</strong>
+          <span>{{ slot.label }}</span>
+          <small>{{ slot.note }}</small>
+        </div>
+      </div>
+      {% endfor %}
+
+      {% for agent in dashboard.agents.entries %}
+      <div class="desk agent-{{ loop.index }}">
+        <span class="bubble">{{ agent.bubble_label }}</span>
+        <span class="sprite">{{ agent.display_name }}</span>
+        <div class="label-line">
+          <strong>{{ agent.agent_id }}</strong>
+          <span>{{ agent.task_title }}</span>
+          <small>{{ agent.slot_id }} / {{ agent.lifecycle_state }}</small>
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="distributor-desk">
+        <span class="bubble">배포 파이프라인</span>
+        <span class="sprite">D</span>
+        <div class="label-line">
+          <strong>분배관</strong>
+          <span>{{ dashboard.distributor.head_summary }}</span>
+          <small>queue {{ dashboard.distributor.queue_depth }}</small>
+        </div>
+      </div>
+
+      <div class="event-board">
+        <span class="bubble">이벤트 로그</span>
+        <span class="sprite">E</span>
+        <div class="label-line">
+          <strong>실시간 이벤트</strong>
+          <span>{{ dashboard.events.len() }} visible</span>
+          <small>{{ dashboard.generated_at }}</small>
+        </div>
+      </div>
+    </div>
+
+    <aside class="right-stack">
+      <section class="game-panel">
+        <h3>워크트리 풀</h3>
+        <p>{{ dashboard.pool.reconcile_status }}</p>
+        {% for slot in dashboard.pool.slots %}
+        <div class="metric-line">
+          <strong>{{ slot.slot_id }} · {{ slot.label }}</strong>
+          <small>{{ slot.branch_name }} / {{ slot.worktree_label }}</small>
+        </div>
+        {% endfor %}
+      </section>
+      <section class="game-panel">
+        <h3>실시간 이벤트</h3>
+        {% if dashboard.events.is_empty() %}
+        <p>runtime event log가 아직 비어 있습니다.</p>
+        {% else %}
+        {% for event in dashboard.events %}
+        <div class="event-row">
+          <strong>#{{ event.sequence }} {{ event.event_kind }}</strong>
+          <small>{{ event.recorded_at }} · {{ event.projection_kind }}:{{ event.projection_key }}</small>
+          <small>{{ event.summary }}</small>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </section>
+    </aside>
+  </div>
+
+  <div class="bottom-grid">
+    <section class="game-panel">
+      <h3>작업 상세</h3>
+      {% if let Some(task) = dashboard.selected_task %}
+      <div class="metric-line"><strong>{{ task.task_id }}</strong><span>{{ task.task_title }}</span></div>
+      <div class="metric-line"><small>담당 요원</small><strong>{{ task.agent_id }} / {{ task.slot_id }}</strong></div>
+      <div class="metric-line"><small>브랜치</small><strong>{{ task.branch_name }}</strong></div>
+      <div class="metric-line"><small>진행률</small><strong>{{ task.progress_percent }}%</strong></div>
+      <div class="metric-line"><small>검증 결과</small><strong>{{ task.validation_summary }}</strong></div>
+      <div class="metric-line"><small>트레일</small><span>{{ task.trail|join(" -> ") }}</span></div>
+      {% else %}
+      <p>{{ dashboard.agents.empty_state }}</p>
+      {% endif %}
+    </section>
+
+    <section class="game-panel">
+      <h3>배포 파이프라인</h3>
+      <div class="pipeline">
+        {% for step in dashboard.distributor.pipeline %}
+        <div class="step {{ step.state }}">
+          <strong>{{ step.label }}</strong><br>
+          <small>{{ step.state }}</small>
+        </div>
+        {% endfor %}
+      </div>
+      {% if dashboard.distributor.queue_items.is_empty() %}
+      <p>{{ dashboard.distributor.head_summary }}</p>
+      {% else %}
+      {% for item in dashboard.distributor.queue_items %}
+      <div class="queue-row">
+        <strong>{{ item.task_title }}</strong>
+        <small>{{ item.source_agent }} / {{ item.queue_state }} / {{ item.branch_name }}</small>
+      </div>
+      {% endfor %}
+      {% endif %}
+    </section>
+
+    <section class="game-panel">
+      <h3>운영 지표</h3>
+      <div class="metric-line"><small>풀 활용률</small><strong>{{ dashboard.metrics.pool_utilization_percent }}%</strong></div>
+      <div class="metric-line"><small>활성 요원</small><strong>{{ dashboard.metrics.active_agent_count }}</strong></div>
+      <div class="metric-line"><small>대기 작업</small><strong>{{ dashboard.metrics.waiting_task_count }}</strong></div>
+      <div class="metric-line"><small>blocked slot</small><strong>{{ dashboard.metrics.blocked_slot_count }}</strong></div>
+      <div class="badges">
+        {% for badge in dashboard.metrics.badges %}
+        <span class="badge">{{ badge }}</span>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</section>
+{% endblock %}

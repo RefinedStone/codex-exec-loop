@@ -6,6 +6,7 @@ use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
     verify_header_csrf,
 };
+use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest,
@@ -58,6 +59,61 @@ pub(super) async fn runtime_api(
         .load_runtime_summary()
         .map_err(internal_server_error)?;
     Ok((jar, Json(runtime)).into_response())
+}
+
+pub(super) async fn akra_dashboard_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    let dashboard = build_akra_dashboard_view(
+        state.facade.workspace_dir(),
+        &state.planning,
+        state.parallel_mode.as_ref(),
+    );
+    Ok(Json(dashboard).into_response())
+}
+
+pub(super) async fn akra_pool_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    let dashboard = build_akra_dashboard_view(
+        state.facade.workspace_dir(),
+        &state.planning,
+        state.parallel_mode.as_ref(),
+    );
+    Ok(Json(dashboard.pool).into_response())
+}
+
+pub(super) async fn akra_agents_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    let dashboard = build_akra_dashboard_view(
+        state.facade.workspace_dir(),
+        &state.planning,
+        state.parallel_mode.as_ref(),
+    );
+    Ok(Json(dashboard.agents).into_response())
+}
+
+pub(super) async fn akra_distributor_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    let dashboard = build_akra_dashboard_view(
+        state.facade.workspace_dir(),
+        &state.planning,
+        state.parallel_mode.as_ref(),
+    );
+    Ok(Json(dashboard.distributor).into_response())
+}
+
+pub(super) async fn akra_events_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    let dashboard = build_akra_dashboard_view(
+        state.facade.workspace_dir(),
+        &state.planning,
+        state.parallel_mode.as_ref(),
+    );
+    Ok(Json(dashboard.events).into_response())
 }
 
 pub(super) async fn create_draft_api(
