@@ -11,6 +11,8 @@ pub mod github_review_poller_port;
 pub mod interactive_turn_runtime_port;
 // parallel agent worker port는 병렬 lane에서 실제 agent 작업을 시작하는 경계다.
 pub mod parallel_agent_worker_port;
+// parallel mode runtime event log port는 authority store의 변경 이벤트 feed를 읽는 경계다.
+pub mod parallel_mode_runtime_event_log_port;
 // parallel mode runtime port는 worktree와 branch 준비 같은 로컬 런타임 조작을 추상화한다.
 pub mod parallel_mode_runtime_port;
 // planning authority port는 현재 planning 상태를 읽고 reset하는 권한 있는 저장소 경계다.

@@ -1,4 +1,5 @@
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
@@ -6,8 +7,8 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDispatchBlockReason, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetReport, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -371,6 +372,25 @@ impl ParallelModeService {
             readiness_snapshot,
             &self.distributor_service,
         )
+    }
+
+    /*
+    runtime event snapshot은 current supervisor projection과 분리된 감사/타임라인 read model이다.
+    포트에서 limit/filter를 적용해 읽고, DB가 없거나 오류가 나면 화면 계층이 같은 타입을 유지할 수 있게
+    unavailable empty snapshot으로 축약한다.
+    */
+    pub fn build_runtime_events_snapshot(
+        &self,
+        workspace_dir: &str,
+        request: ParallelModeRuntimeEventLogRequest,
+    ) -> ParallelModeRuntimeEventsSnapshot {
+        self.planning_authority
+            .load_runtime_event_log(workspace_dir, request)
+            .unwrap_or_else(|error| {
+                ParallelModeRuntimeEventsSnapshot::empty(format!(
+                    "runtime event log unavailable / {error:#}"
+                ))
+            })
     }
 
     /*

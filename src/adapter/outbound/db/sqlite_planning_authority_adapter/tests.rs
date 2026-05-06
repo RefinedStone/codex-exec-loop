@@ -4,11 +4,17 @@ SQLite planning authority adapter가 application port의 snapshot 계약을 실�
 포트 메서드로 호출해 task authority 문서와 queue projection의 동시 round-trip을 고정한다.
 */
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
+    ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
+};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
-use crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot;
+use crate::domain::parallel_mode::{
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState,
+};
 use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument};
 
 // 테스트마다 SQLite namespace를 분리하는 workspace directory를 만든다. adapter가 workspace path를
@@ -109,6 +115,41 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
     assert_eq!(block.blocked_at, "2026-05-04T12:00:00+00:00");
 }
 
+#[test]
+fn runtime_event_log_port_reads_recent_projection_events() {
+    let workspace_dir = temp_workspace("runtime-events");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let first = slot_lease("slot-1", ParallelModeSlotLeaseState::Leased);
+    let second = slot_lease("slot-1", ParallelModeSlotLeaseState::Running);
+
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &first)
+        .expect("first slot lease event should persist");
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &second)
+        .expect("second slot lease event should persist");
+
+    let snapshot = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::for_projection("slot_lease", "slot-1", 1),
+        )
+        .expect("runtime event log should load");
+
+    assert_eq!(snapshot.total_event_count, 2);
+    assert_eq!(snapshot.visible_count(), 1);
+    let latest = snapshot.latest().expect("latest event should be visible");
+    assert_eq!(latest.sequence, 2);
+    assert_eq!(latest.event_kind, "slot_lease_upsert");
+    assert_eq!(latest.projection_kind, "slot_lease");
+    assert_eq!(latest.projection_key, "slot-1");
+    assert!(
+        latest
+            .summary
+            .contains("runtime slot lease stored / slot: slot-1 / state: running")
+    );
+}
+
 fn failed_start_session_detail(
     session_key: &str,
     task_id: &str,
@@ -132,5 +173,19 @@ fn failed_start_session_detail(
         None,
         Vec::new(),
         updated_at,
+    )
+}
+
+fn slot_lease(slot_id: &str, state: ParallelModeSlotLeaseState) -> ParallelModeSlotLeaseSnapshot {
+    ParallelModeSlotLeaseSnapshot::new(
+        slot_id,
+        "task-1",
+        "Task One",
+        "agent-1",
+        "akra-agent/slot-1/task-one",
+        "/tmp/worktree",
+        state,
+        "2026-05-04T10:00:00+00:00",
+        Some("2026-05-04T10:05:00+00:00".to_string()),
     )
 }
