@@ -241,10 +241,12 @@ pub(super) fn reset_pool_for_parallel_enable(
     ensure_pool_baseline_branch(&repo_root)
         .map_err(|_| "pool baseline could not be created".to_string())?;
     let runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
+    let worktree_records = load_worktree_records(&repo_root)
+        .ok_or_else(|| "git worktree inventory could not be loaded".to_string())?;
     if let Some(blocking_lease) = runtime_projection
         .slot_leases
         .values()
-        .find(|lease| lease_blocks_parallel_entry_reset(lease))
+        .find(|lease| lease_blocks_parallel_entry_reset(lease, &worktree_records))
     {
         return Err(format!(
             "pool reset blocked by active slot {} / {} / {}",
@@ -261,8 +263,6 @@ pub(super) fn reset_pool_for_parallel_enable(
         .map_err(|error| format!("parallel runtime projection reset failed: {error}"))?;
     clear_pool_runtime_mirrors(&pool_root)?;
 
-    let worktree_records = load_worktree_records(&repo_root)
-        .ok_or_else(|| "git worktree inventory could not be loaded".to_string())?;
     let mut reset_slots = 0;
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -279,17 +279,33 @@ pub(super) fn reset_pool_for_parallel_enable(
     Ok(reset_slots)
 }
 
-fn lease_blocks_parallel_entry_reset(lease: &ParallelModeSlotLeaseSnapshot) -> bool {
+fn lease_blocks_parallel_entry_reset(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    worktree_records: &[GitWorktreeRecord],
+) -> bool {
     match lease.state {
-        ParallelModeSlotLeaseState::Running | ParallelModeSlotLeaseState::CleanupPending => true,
+        ParallelModeSlotLeaseState::Running | ParallelModeSlotLeaseState::CleanupPending => {
+            lease_matches_current_slot_worktree(lease, worktree_records)
+        }
         ParallelModeSlotLeaseState::Leased => {
             let Ok(timestamp) = DateTime::parse_from_rfc3339(&lease.leased_at) else {
                 return true;
             };
             Utc::now().signed_duration_since(timestamp.with_timezone(&Utc))
                 < TimeDelta::seconds(LIVE_LEASED_SLOT_RESET_BLOCK_AFTER_SECS)
+                && lease_matches_current_slot_worktree(lease, worktree_records)
         }
     }
+}
+
+fn lease_matches_current_slot_worktree(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    worktree_records: &[GitWorktreeRecord],
+) -> bool {
+    let lease_path = Path::new(&lease.worktree_path);
+    worktree_records.iter().any(|record| {
+        record.path == lease_path && record.branch_name.as_deref() == Some(&lease.branch_name)
+    })
 }
 
 fn clear_pool_runtime_mirrors(pool_root: &Path) -> Result<(), String> {
