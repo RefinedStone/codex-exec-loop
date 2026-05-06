@@ -25,8 +25,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
-    ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
+    ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome, ParallelModePoolSlotState,
+    ParallelModeQueueItemState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
 use crate::domain::planning::{
     PriorityQueueProjection, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,

@@ -21,8 +21,8 @@ use crate::application::port::outbound::planning_authority_port::{
 // parallel mode의 slot lease와 agent session은 domain 타입이므로,
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolResetReport,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
 };
 
 // metadata upsert helper는 store 모듈의 스키마 관리와 같은 규칙을 공유한다.
@@ -549,6 +549,92 @@ impl SqlitePlanningAuthorityAdapter {
         transaction
             .commit()
             .context("failed to commit parallel runtime reset transaction")?;
+
+        Ok(())
+    }
+
+    pub(crate) fn apply_parallel_pool_reset_report(
+        workspace_dir: &str,
+        report: &ParallelModePoolResetReport,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open parallel pool reset report transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let dispatch_block_rows = preserve_failed_start_dispatch_blocks(&transaction)
+            .context("failed to preserve failed-start dispatch blocks before pool reset report")?;
+
+        let reset_slot_ids = report.succeeded_reset_slot_ids();
+        let mut lease_rows = 0;
+        let mut invalid_rows = 0;
+        let mut session_rows = 0;
+        let mut queue_rows = 0;
+        let mut claim_rows = 0;
+
+        for slot_id in &reset_slot_ids {
+            lease_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_slot_leases WHERE slot_id = ?1",
+                    params![slot_id],
+                )
+                .with_context(|| format!("failed to clear reset slot lease `{slot_id}`"))?;
+            invalid_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
+                    params![slot_id],
+                )
+                .with_context(|| format!("failed to clear invalid reset slot lease `{slot_id}`"))?;
+        }
+
+        for session_key in &report.reset_session_keys {
+            session_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_session_details WHERE session_key = ?1",
+                    params![session_key],
+                )
+                .with_context(|| format!("failed to clear reset session detail `{session_key}`"))?;
+        }
+
+        for queue_item_id in &report.reset_queue_item_ids {
+            queue_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_distributor_queue WHERE queue_item_id = ?1",
+                    params![queue_item_id],
+                )
+                .with_context(|| {
+                    format!("failed to clear reset distributor queue item `{queue_item_id}`")
+                })?;
+            claim_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_claims
+                     WHERE claim_kind = ?1
+                       AND scope_key = ?2",
+                    params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id],
+                )
+                .with_context(|| {
+                    format!("failed to clear reset distributor claim `{queue_item_id}`")
+                })?;
+        }
+
+        append_runtime_event(
+            &transaction,
+            "parallel_pool_reset_report_applied",
+            "parallel_runtime",
+            report.run_id.as_str(),
+            &format!(
+                "parallel pool reset report applied / reset_slots: {} / live_blockers: {} / failures: {} / leases: {lease_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / claims: {claim_rows} / dispatch_blocks_preserved: {dispatch_block_rows}",
+                reset_slot_ids.len(),
+                report.live_blocker_count(),
+                report.failed_reset_count()
+            ),
+            &serde_json::to_string(report)
+                .context("failed to serialize parallel pool reset report event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit parallel pool reset report transaction")?;
 
         Ok(())
     }

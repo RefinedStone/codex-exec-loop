@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorQueueItem,
-    ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
+    ParallelModePoolResetReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
     ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
@@ -283,6 +283,13 @@ pub trait PlanningAuthorityPort: Send + Sync {
     // Clear current parallel runtime rows when the disposable pool is reset on enable.
     fn clear_parallel_runtime_projections(&self, workspace_dir: &str, reason: &str) -> Result<()>;
 
+    // Apply a pool reset report after git reset has succeeded for selected slots.
+    fn apply_parallel_pool_reset_report(
+        &self,
+        workspace_dir: &str,
+        report: &ParallelModePoolResetReport,
+    ) -> Result<()>;
+
     // Upsert a slot lease projection shared by pool reconciliation and supervisor roster.
     fn upsert_runtime_slot_lease(
         &self,
@@ -448,6 +455,14 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         &self,
         _workspace_dir: &str,
         _reason: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn apply_parallel_pool_reset_report(
+        &self,
+        _workspace_dir: &str,
+        _report: &ParallelModePoolResetReport,
     ) -> Result<()> {
         Ok(())
     }

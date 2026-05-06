@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, TimeDelta, Utc};
+
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
     PlanningAuthorityRuntimeProjectionSnapshot,
@@ -9,9 +11,11 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::diagnostics::raw_event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolResetRunId,
+    ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
+    ParallelModePoolResetSlotReport, ParallelModePoolSlotCleanupDecision,
+    ParallelModePoolSlotSnapshot, ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
 };
 
 use super::current_branch_name;
@@ -46,6 +50,8 @@ pub(super) use self::cleanup::{
 use self::cleanup::{cleanup_reusable_slots, cleanup_stale_leased_startup_slots};
 #[cfg(test)]
 pub(super) use self::lease_store::slot_lease_file_path;
+#[cfg(not(test))]
+use self::lease_store::slot_lease_file_path;
 pub(super) use self::lease_store::{remove_slot_lease, write_slot_lease};
 use self::paths::{
     annotate_worktree_label, canonicalize_best_effort, parse_worktree_records, resolve_branch_head,
@@ -57,6 +63,9 @@ use self::reconcile::{
 };
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
 use self::slot_inspection::summarize_pool_reconcile_status;
+use super::session_detail::agent_session_detail_record_path;
+
+const RECENT_LEASE_PROTECTION_SECS: i64 = 120;
 
 /*
 Git worktree inventory는 git porcelain 출력에서 얻은 최소 read model이다. 이 타입은
@@ -224,7 +233,7 @@ pub(super) fn reconcile_pool_board(
 pub(super) fn reset_pool_for_parallel_enable(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
-) -> Result<usize, String> {
+) -> Result<ParallelModePoolResetReport, String> {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
         return Err("git repository is unavailable".to_string());
     };
@@ -237,34 +246,69 @@ pub(super) fn reset_pool_for_parallel_enable(
         .map_err(|error| format!("pool root could not be created: {error}"))?;
     ensure_pool_baseline_branch(&repo_root)
         .map_err(|_| "pool baseline could not be created".to_string())?;
-    let worktree_records = load_worktree_records(&repo_root)
-        .ok_or_else(|| "git worktree inventory could not be loaded".to_string())?;
-    planning_authority
-        .clear_parallel_runtime_projections(
-            &repo_root,
-            "parallel mode enabled; pool-only runtime reset to baseline; planning tasks preserved",
-        )
-        .map_err(|error| format!("parallel runtime projection reset failed: {error}"))?;
-    clear_pool_runtime_mirrors(&pool_root)?;
+    let context =
+        load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
+            .map_err(|detail| detail.to_string())?;
 
-    let mut reset_slots = 0;
+    let mut report = ParallelModePoolResetReport::new(
+        ParallelModePoolResetRunId::new(format!("{}:{}", repo_root, Utc::now().to_rfc3339())),
+        ParallelModePoolResetPolicy::ProtectLive,
+    );
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
         let slot_path = pool_root.join(&slot_id);
-        if !worktree_records
+        let Some(_worktree_record) = context
+            .worktree_records
+            .iter()
+            .find(|record| record.path == slot_path)
+        else {
+            report
+                .slot_reports
+                .push(ParallelModePoolResetSlotReport::new(
+                    slot_id,
+                    ParallelModePoolResetSlotAction::SkipMissing,
+                    ParallelModePoolResetSlotOutcome::Skipped,
+                    "slot worktree is not registered",
+                ));
+            continue;
+        };
+
+        if let Some(lease) = context.slot_leases.get(&slot_id)
+            && live_lease_blocks_parallel_entry_reset(lease, &context.session_details)
+        {
+            report
+                .slot_reports
+                .push(ParallelModePoolResetSlotReport::new(
+                    slot_id,
+                    ParallelModePoolResetSlotAction::PreserveLive,
+                    ParallelModePoolResetSlotOutcome::Blocked,
+                    format!("live {} lease is protected", lease.state.label()),
+                ));
+        }
+    }
+
+    if report.has_live_blockers() {
+        raw_event_log::emit_lazy("parallel_pool_reset_blocked", || {
+            serde_json::json!({
+                "workspace": workspace_dir,
+                "repo_root": repo_root,
+                "pool_root": pool_root,
+                "run_id": report.run_id.as_str(),
+                "policy": report.policy,
+                "live_blockers": report.live_blocker_count(),
+            })
+        });
+        return Ok(report);
+    }
+
+    for slot_number in 1..=DEFAULT_POOL_SIZE {
+        let slot_id = slot_id(slot_number);
+        let slot_path = pool_root.join(&slot_id);
+        if !context
+            .worktree_records
             .iter()
             .any(|record| record.path == slot_path)
         {
-            raw_event_log::emit_lazy("parallel_pool_slot_reset_skipped", || {
-                serde_json::json!({
-                    "workspace": workspace_dir,
-                    "repo_root": repo_root,
-                    "pool_root": pool_root,
-                    "slot_id": slot_id,
-                    "slot_path": slot_path,
-                    "reason": "slot worktree is not registered",
-                })
-            });
             continue;
         }
 
@@ -280,7 +324,15 @@ pub(super) fn reset_pool_for_parallel_enable(
         });
         let reset_report = reset_slot_worktree_to_akra(&slot_path);
         if reset_report.succeeded() {
-            reset_slots += 1;
+            collect_reset_projection_keys(&mut report, &context, &slot_id);
+            report
+                .slot_reports
+                .push(ParallelModePoolResetSlotReport::new(
+                    &slot_id,
+                    ParallelModePoolResetSlotAction::Reset,
+                    ParallelModePoolResetSlotOutcome::Succeeded,
+                    "slot worktree reset to baseline",
+                ));
             raw_event_log::emit_lazy("parallel_pool_slot_reset_completed", || {
                 serde_json::json!({
                     "workspace": workspace_dir,
@@ -292,31 +344,141 @@ pub(super) fn reset_pool_for_parallel_enable(
                     "succeeded": true,
                 })
             });
-        } else {
-            raw_event_log::emit_lazy("parallel_pool_slot_reset_failed", || {
-                serde_json::json!({
-                    "workspace": workspace_dir,
-                    "repo_root": repo_root,
-                    "pool_root": pool_root,
-                    "slot_id": slot_id,
-                    "slot_path": slot_path,
-                    "baseline_branch": POOL_BASELINE_BRANCH,
-                    "succeeded": false,
-                    "failure": reset_report.failure_summary(),
-                })
-            });
+            continue;
         }
+
+        let failure_summary = reset_report
+            .failure_summary()
+            .unwrap_or_else(|| "slot reset failed".to_string());
+        report
+            .slot_reports
+            .push(ParallelModePoolResetSlotReport::new(
+                &slot_id,
+                ParallelModePoolResetSlotAction::Reset,
+                ParallelModePoolResetSlotOutcome::Failed,
+                failure_summary.clone(),
+            ));
+        raw_event_log::emit_lazy("parallel_pool_slot_reset_failed", || {
+            serde_json::json!({
+                "workspace": workspace_dir,
+                "repo_root": repo_root,
+                "pool_root": pool_root,
+                "slot_id": slot_id,
+                "slot_path": slot_path,
+                "baseline_branch": POOL_BASELINE_BRANCH,
+                "succeeded": false,
+                "failure": failure_summary,
+            })
+        });
     }
 
-    Ok(reset_slots)
+    if report.succeeded_reset_slot_count() > 0 {
+        planning_authority
+            .apply_parallel_pool_reset_report(&repo_root, &report)
+            .map_err(|error| format!("parallel runtime projection reset report failed: {error}"))?;
+        clear_pool_runtime_mirrors_for_report(&pool_root, &report)?;
+    }
+
+    Ok(report)
 }
 
-fn clear_pool_runtime_mirrors(pool_root: &Path) -> Result<(), String> {
-    for directory in [".leases", ".agent-sessions", ".distributor-queue"] {
-        let path = pool_root.join(directory);
-        if fs::symlink_metadata(&path).is_ok() {
-            fs::remove_dir_all(&path).map_err(|error| {
-                format!("failed to remove mirror directory `{directory}`: {error}")
+fn live_lease_blocks_parallel_entry_reset(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    session_details: &[ParallelModeAgentSessionDetailSnapshot],
+) -> bool {
+    match lease.state {
+        ParallelModeSlotLeaseState::Running | ParallelModeSlotLeaseState::CleanupPending => true,
+        ParallelModeSlotLeaseState::Leased => {
+            !stale_unstarted_lease_can_be_reset(lease, session_details)
+        }
+    }
+}
+
+fn stale_unstarted_lease_can_be_reset(
+    lease: &ParallelModeSlotLeaseSnapshot,
+    session_details: &[ParallelModeAgentSessionDetailSnapshot],
+) -> bool {
+    if !leased_at_is_stale(&lease.leased_at) {
+        return false;
+    }
+    session_details
+        .iter()
+        .find(|detail| detail.session_key == lease.session_key())
+        .is_some_and(|detail| {
+            detail.thread_id.is_none()
+                && detail.state_label == "assigned"
+                && detail.completion_state_label == "in_progress"
+        })
+}
+
+fn leased_at_is_stale(leased_at: &str) -> bool {
+    let Ok(timestamp) = DateTime::parse_from_rfc3339(leased_at) else {
+        return false;
+    };
+    Utc::now().signed_duration_since(timestamp.with_timezone(&Utc))
+        >= TimeDelta::seconds(RECENT_LEASE_PROTECTION_SECS)
+}
+
+fn collect_reset_projection_keys(
+    report: &mut ParallelModePoolResetReport,
+    context: &PoolRuntimeContext,
+    slot_id: &str,
+) {
+    for detail in &context.session_details {
+        if detail.slot_id == slot_id && !report.reset_session_keys.contains(&detail.session_key) {
+            report.reset_session_keys.push(detail.session_key.clone());
+        }
+    }
+    for queue_record in &context.distributor_queue_records {
+        if queue_record.slot_id == slot_id
+            && !report
+                .reset_queue_item_ids
+                .contains(&queue_record.queue_item_id)
+        {
+            report
+                .reset_queue_item_ids
+                .push(queue_record.queue_item_id.clone());
+        }
+    }
+}
+
+fn clear_pool_runtime_mirrors_for_report(
+    pool_root: &Path,
+    report: &ParallelModePoolResetReport,
+) -> Result<(), String> {
+    for slot_id in report.succeeded_reset_slot_ids() {
+        let path = slot_lease_file_path(pool_root, &slot_id);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "failed to remove reset lease mirror `{}`: {error}",
+                    path.display()
+                )
+            })?;
+        } else {
+            continue;
+        }
+    }
+    for session_key in &report.reset_session_keys {
+        let path = agent_session_detail_record_path(pool_root, session_key);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "failed to remove reset session mirror `{}`: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    let queue_root = pool_root.join(".distributor-queue");
+    for queue_item_id in &report.reset_queue_item_ids {
+        let path = queue_root.join(format!("{queue_item_id}.json"));
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "failed to remove reset distributor mirror `{}`: {error}",
+                    path.display()
+                )
             })?;
         }
     }

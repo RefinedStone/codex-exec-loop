@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 mod agent_session;
 mod distributor;
 mod orchestrator;
+mod pool_reset;
 mod readiness;
 
 // 호출자는 `domain::parallel_mode::*`만 알면 된다. 하위 모듈 경로는 이 퍼사드가
@@ -26,6 +27,11 @@ pub use self::orchestrator::{
     ParallelModeDispatchEligibility, ParallelModeDispatchOutcome, ParallelModeEntryPlan,
     ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
     ParallelModePoolResetScope, ParallelModeTaskDispatchBlockSnapshot,
+};
+pub use self::pool_reset::{
+    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolResetRunId,
+    ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
+    ParallelModePoolResetSlotReport,
 };
 pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,

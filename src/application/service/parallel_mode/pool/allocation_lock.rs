@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 const POOL_ALLOCATION_LOCK_DIR: &str = ".allocation-lock";
 const POOL_ALLOCATION_LOCK_OWNER_FILE: &str = "owner";
-const POOL_ALLOCATION_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const POOL_ALLOCATION_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_ALLOCATION_LOCK_RETRY: Duration = Duration::from_millis(25);
 const POOL_ALLOCATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(300);
 
