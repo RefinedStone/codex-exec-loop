@@ -488,10 +488,16 @@
         border-collapse: collapse;
       }
       th, td {
-        padding: 10px 0;
+        padding: 10px 8px;
         text-align: left;
         border-bottom: 1px solid var(--line);
         vertical-align: top;
+      }
+      th:first-child, td:first-child {
+        padding-left: 0;
+      }
+      th:last-child, td:last-child {
+        padding-right: 0;
       }
       .issues {
         display: grid;
@@ -535,6 +541,37 @@
         }
         .entity-meta {
           justify-content: flex-start;
+        }
+        th, td {
+          overflow-wrap: anywhere;
+        }
+        .card table, .card thead, .card tbody, .card tr, .card th, .card td {
+          display: block;
+        }
+        .card thead {
+          display: none;
+        }
+        .card tr {
+          padding: 10px 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .card tr:last-child {
+          border-bottom: 0;
+        }
+        .card td {
+          padding: 3px 0;
+          border-bottom: 0;
+        }
+        .card td::before {
+          content: attr(data-label);
+          display: inline-block;
+          min-width: 4.5rem;
+          margin-right: 8px;
+          color: var(--muted);
+          font-weight: 700;
+        }
+        .card td:first-child::before {
+          display: none;
         }
       }
     </style>
