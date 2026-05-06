@@ -407,7 +407,7 @@ impl NativeTuiApp {
                         };
                     }
                 };
-                let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
+                let supervisor_snapshot = parallel_mode_service.reconcile_supervisor_snapshot(
                     &workspace_directory,
                     true,
                     Some(&readiness_snapshot),

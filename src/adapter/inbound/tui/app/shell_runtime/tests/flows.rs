@@ -3,6 +3,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::service::planning::PlanningTaskIntakeCommitResult;
 use crate::application::service::planning::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolUpdateRequest, PlanningTaskUpdatePayload,
@@ -12,8 +13,8 @@ use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
     ParallelModeCapabilityState, ParallelModeDispatchBlockReason, ParallelModeDistributorSnapshot,
     ParallelModeLiveSessionDetailDefaults, ParallelModePoolBoardSnapshot,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseRequest,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState, ParallelModeTaskDispatchBlockSnapshot,
 };
@@ -26,12 +27,14 @@ use std::thread;
 use std::time::Duration;
 
 static FLOW_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const FLOW_POOL_SIZE: usize = 3;
+const FLOW_POOL_BASELINE_BRANCH: &str = "prerelease";
 
 fn flow_test_guard() -> MutexGuard<'static, ()> {
     FLOW_TEST_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("flow test lock should not be poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 struct NativeFlowHarness {
@@ -222,6 +225,27 @@ impl NativeFlowHarness {
         stale_lease
     }
 
+    fn remove_idle_pool_worktrees_except(&self, preserved_slot_id: &str, pool_root: &Path) {
+        for slot_number in 1..=FLOW_POOL_SIZE {
+            let slot_id = format!("slot-{slot_number}");
+            if slot_id == preserved_slot_id {
+                continue;
+            }
+            let slot_path = pool_root.join(&slot_id);
+            if !slot_path.exists() {
+                continue;
+            }
+            let slot_path_string = slot_path.display().to_string();
+            git_stdout(
+                Path::new(&self.workspace_dir),
+                &["worktree", "remove", "--force", slot_path_string.as_str()],
+            );
+            if slot_path.exists() {
+                fs::remove_dir_all(&slot_path).expect("idle slot residue should be removable");
+            }
+        }
+    }
+
     fn enter_parallel(&mut self) {
         self.submit_inline_command(":parallel");
     }
@@ -377,6 +401,78 @@ impl NativeFlowHarness {
             .load_runtime_projections(&self.workspace_dir)
             .expect("runtime projections should load")
     }
+
+    fn runtime_task_authority(&self) -> crate::domain::planning::TaskAuthorityDocument {
+        self.authority
+            .load_task_authority_snapshot(&self.workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority snapshot should exist")
+            .task_authority
+    }
+
+    fn poll_until_idle_pool(&mut self) -> ParallelModePoolBoardSnapshot {
+        let mut last_pool = None;
+        for _ in 0..750 {
+            self.runtime.poll_background_messages();
+            if let Some(supervisor) = self
+                .runtime
+                .app()
+                .parallel_mode_supervisor_snapshot
+                .as_ref()
+            {
+                let pool = supervisor.pool.clone();
+                if pool.slots.len() == FLOW_POOL_SIZE && pool.idle_slots == FLOW_POOL_SIZE {
+                    return pool;
+                }
+                last_pool = Some(pool);
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "pool did not become fully idle; last pool snapshot: {:?}",
+            last_pool
+        );
+    }
+}
+
+fn git_stdout(repo_root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git command should spawn");
+    assert!(
+        output.status.success(),
+        "git {:?} failed in {}\nstdout:\n{}\nstderr:\n{}",
+        args,
+        repo_root.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn slot_path_from_board_label(workspace_dir: &str, worktree_label: &str) -> PathBuf {
+    let path = PathBuf::from(worktree_label);
+    if path.is_absolute() {
+        return path;
+    }
+    PathBuf::from(workspace_dir)
+        .parent()
+        .expect("workspace should have parent directory")
+        .join(path)
+}
+
+fn registered_worktree_paths(workspace_dir: &str) -> Vec<PathBuf> {
+    git_stdout(
+        Path::new(workspace_dir),
+        &["worktree", "list", "--porcelain"],
+    )
+    .lines()
+    .filter_map(|line| line.strip_prefix("worktree "))
+    .map(PathBuf::from)
+    .collect()
 }
 
 fn ready_parallel_mode_readiness_snapshot(
@@ -441,6 +537,132 @@ fn parallel_entry_reaches_ready_without_dispatching_ready_queue() {
         0,
         "bare :parallel entry must not launch isolated workers"
     );
+}
+
+#[test]
+fn parallel_command_from_initial_screen_enables_ready_mode() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-parallel-initial-screen");
+
+    harness.enter_parallel();
+
+    let final_status = harness.poll_until_status_contains("control tower ready");
+    assert!(harness.runtime.app().parallel_mode_enabled);
+    assert!(final_status.contains("parallel mode: on"));
+}
+
+#[test]
+fn parallel_entry_initializes_every_pool_slot_as_idle_worktree() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-pool-init");
+
+    harness.enter_parallel();
+    harness.poll_until_status_contains("control tower ready");
+
+    let pool = harness.poll_until_idle_pool();
+    assert_eq!(pool.configured_size, FLOW_POOL_SIZE);
+    assert_eq!(pool.slots.len(), FLOW_POOL_SIZE);
+    assert_eq!(pool.idle_slots, FLOW_POOL_SIZE);
+    assert_eq!(pool.leased_slots, 0);
+    assert_eq!(pool.running_slots, 0);
+    assert_eq!(pool.blocked_slots, 0);
+    assert_eq!(pool.missing_slots, 0);
+    assert_eq!(pool.unavailable_slots, 0);
+    assert!(
+        harness.runtime_projections().slot_leases.is_empty(),
+        "bare :parallel entry should not create active leases"
+    );
+
+    let worktree_paths = registered_worktree_paths(&harness.workspace_dir);
+    for slot in pool.slots {
+        assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
+        assert_eq!(slot.owner_label, "idle baseline");
+        let slot_path = slot_path_from_board_label(&harness.workspace_dir, &slot.worktree_label);
+        assert!(
+            slot_path.is_dir(),
+            "pool slot `{}` should exist at {}",
+            slot.slot_id,
+            slot_path.display()
+        );
+        assert!(
+            worktree_paths.iter().any(|path| path == &slot_path),
+            "pool slot `{}` should be registered as a git worktree",
+            slot.slot_id
+        );
+        assert_eq!(
+            git_stdout(&slot_path, &["status", "--porcelain=v1"]),
+            "",
+            "pool slot `{}` should be clean",
+            slot.slot_id
+        );
+    }
+}
+
+#[test]
+fn parallel_entry_leaves_idle_slots_detached_at_pool_baseline_head() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-pool-head");
+
+    harness.enter_parallel();
+    harness.poll_until_status_contains("control tower ready");
+
+    let baseline_head = git_stdout(
+        Path::new(&harness.workspace_dir),
+        &["rev-parse", FLOW_POOL_BASELINE_BRANCH],
+    );
+    for slot in harness.poll_until_idle_pool().slots {
+        let slot_path = slot_path_from_board_label(&harness.workspace_dir, &slot.worktree_label);
+        assert_eq!(
+            git_stdout(&slot_path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "HEAD",
+            "idle pool slot `{}` should stay detached",
+            slot.slot_id
+        );
+        assert_eq!(
+            git_stdout(&slot_path, &["rev-parse", "HEAD"]),
+            baseline_head,
+            "idle pool slot `{}` should point at the pool baseline head",
+            slot.slot_id
+        );
+        assert_eq!(
+            slot.branch_name,
+            format!("{FLOW_POOL_BASELINE_BRANCH} (detached)")
+        );
+    }
+}
+
+#[test]
+fn parallel_entry_without_prompt_does_not_advance_ready_tasks() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-no-prompt-task-status");
+    let first = harness.committed_ready_task("ready task should remain ready after bare parallel");
+    let second = harness.committed_ready_task("second ready task should also remain ready");
+
+    harness.enter_parallel();
+    harness.poll_until_status_contains("control tower ready");
+
+    let task_authority = harness.runtime_task_authority();
+    let task_statuses = task_authority
+        .tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task.status))
+        .collect::<Vec<_>>();
+    assert!(
+        task_statuses
+            .iter()
+            .all(|(_, status)| *status != TaskStatus::InProgress),
+        "bare :parallel entry should not mark any task in progress: {:?}",
+        task_statuses
+    );
+    for task_id in [first.committed_task_id, second.committed_task_id] {
+        let task = task_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .expect("committed task should remain in authority");
+        assert_eq!(task.status, TaskStatus::Ready);
+    }
+    assert_eq!(harness.worker_port.launch_count(), 0);
 }
 
 #[test]
@@ -628,6 +850,11 @@ fn stale_leased_slot_reset_preserves_failed_start_dispatch_block() {
         )
         .expect("stale slot lease should be acquired");
     let stale_lease = harness.make_lease_stale_for_startup_reset(&lease);
+    let pool_root = PathBuf::from(&stale_lease.worktree_path)
+        .parent()
+        .expect("stale lease worktree should have pool parent")
+        .to_path_buf();
+    harness.remove_idle_pool_worktrees_except(&stale_lease.slot_id, &pool_root);
     harness
         .authority
         .upsert_runtime_task_dispatch_block(
