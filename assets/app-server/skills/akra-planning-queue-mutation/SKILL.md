@@ -67,6 +67,7 @@ Do not wrap commands as `{"create_task":{...}}` or `{"update_task":{...}}`.
 - New tasks must attach to an existing `direction_id` and include `direction_relation_note` unless the host prompt explicitly says no direction catalog exists.
 - Keep commands minimal and tied to the latest operator request, latest main-session reply, existing direction frame, and accepted queue state.
 - Emit at most 16 commands in one response; prefer one precise update or create over broad queue rewrites.
+- For existing tasks, do not include `description` in `update_task`; non-empty descriptions are preserved by the host.
 
 ## Command Fields
 
@@ -93,3 +94,4 @@ For `update_task`, include:
 
 - `task_id`
 - only the fields that should change
+- omit `description` unless the current description is blank

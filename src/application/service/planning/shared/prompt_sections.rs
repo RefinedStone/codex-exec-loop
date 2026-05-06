@@ -113,6 +113,8 @@ pub(crate) fn worker_task_authority_output_contract() -> Vec<String> {
         "Do not return `task_authority` or a full task ledger document.".to_string(),
         "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
             .to_string(),
+        "For `update_task`, omit `description`; existing non-empty descriptions are preserved by the host."
+            .to_string(),
         "Use `status=cancelled` to cancel work; do not emit delete operations.".to_string(),
         "End with a short natural-language summary of the task command changes.".to_string(),
     ]
@@ -136,6 +138,8 @@ pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
             .to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
         "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
+            .to_string(),
+        "For `update_task`, omit `description`; existing non-empty descriptions are preserved by the host."
             .to_string(),
         "Resolve every validation error listed below.".to_string(),
     ]
@@ -321,6 +325,7 @@ mod tests {
         assert!(contract.contains("\"planning_task_commands\""));
         assert!(contract.contains("create_task"));
         assert!(contract.contains("\"op\":\"create_task\""));
+        assert!(contract.contains("omit `description`"));
         assert!(contract.contains("Do not wrap commands"));
         assert!(contract.contains("planning-task-tool"));
         assert!(contract.contains("does not apply it twice"));

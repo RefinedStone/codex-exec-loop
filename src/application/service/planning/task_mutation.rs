@@ -55,6 +55,9 @@ impl PlanningTaskMutationSource {
             Self::System => "system",
         }
     }
+    fn can_update_existing_description(self) -> bool {
+        matches!(self, Self::User)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskMutationRequest {
@@ -505,7 +508,13 @@ impl PlanningTaskMutationService {
         if let Some(title) = input.title.as_deref() {
             task.title = required_text(title, "task title")?.to_string();
         }
-        if let Some(description) = input.description.as_deref() {
+        if source.can_update_existing_description() {
+            if let Some(description) = input.description.as_deref() {
+                task.description = required_text(description, "task description")?.to_string();
+            }
+        } else if task.description.trim().is_empty()
+            && let Some(description) = input.description.as_deref()
+        {
             task.description = required_text(description, "task description")?.to_string();
         }
         if let Some(status) = input.status {
