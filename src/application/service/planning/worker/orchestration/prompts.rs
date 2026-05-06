@@ -179,7 +179,9 @@ fn queue_advancement_rules() -> Vec<String> {
     // refresh는 executable queue head를 바꾸거나 current task를 새 evidence로 좁힐 때만 의미 있는 진행으로 본다.
     vec![
         "Do not repeat the same queue head unchanged.".to_string(),
-        "If the same task remains queue head, update scope, description, priority_reason, title, status, or updated_at from the latest evidence."
+        "If the same task remains queue head, update status, title, priority_reason, priority, blockers, dependencies, or relation note from the latest evidence."
+            .to_string(),
+        "Do not rewrite an existing non-empty task description as part of automatic task updates."
             .to_string(),
         "Adding only blocked/proposed tasks is not queue advancement.".to_string(),
     ]

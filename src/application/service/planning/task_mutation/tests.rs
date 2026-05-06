@@ -245,6 +245,117 @@ fn update_preserves_unspecified_fields() {
     assert_eq!(updated.source_turn_id.as_deref(), Some("turn-2"));
 }
 #[test]
+fn llm_update_preserves_existing_description_even_when_supplied() {
+    /*
+     * worker-authored updates can refine scheduling fields, but an existing description is user-facing
+     * task context. Supplying description in an LLM patch must not rewrite it.
+     */
+    let repo = repo();
+    let workspace = workspace("llm-preserve-description");
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", TaskStatus::Ready)],
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+
+    service
+        .apply_commands(PlanningTaskMutationRequest {
+            workspace_directory: workspace.clone(),
+            source: PlanningTaskMutationSource::Llm,
+            source_turn_id: Some("turn-llm-description".to_string()),
+            commands: vec![PlanningTaskMutationCommand::UpdateTask(
+                PlanningTaskUpdateInput {
+                    task_id: "task-1".to_string(),
+                    direction_id: None,
+                    direction_relation_note: None,
+                    title: None,
+                    description: Some("LLM-generated rewrite".to_string()),
+                    status: Some(TaskStatus::Blocked),
+                    base_priority: None,
+                    dynamic_priority_delta: None,
+                    priority_reason: None,
+                    depends_on: None,
+                    blocked_by: None,
+                },
+            )],
+        })
+        .unwrap();
+    let snapshot = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap();
+    let updated = &snapshot.task_authority.tasks[0];
+    assert_eq!(updated.description, "Existing task");
+    assert_eq!(updated.status, TaskStatus::Blocked);
+    assert_eq!(updated.last_updated_by, TaskActor::Llm);
+    assert_eq!(
+        updated.source_turn_id.as_deref(),
+        Some("turn-llm-description")
+    );
+}
+#[test]
+fn user_update_can_replace_existing_description() {
+    /*
+     * Operator-facing edits still own description changes. The LLM guard must not remove the
+     * admin/runtime-user ability to correct task text intentionally.
+     */
+    let repo = repo();
+    let workspace = workspace("user-update-description");
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", TaskStatus::Ready)],
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+
+    service
+        .apply_commands(PlanningTaskMutationRequest {
+            workspace_directory: workspace.clone(),
+            source: PlanningTaskMutationSource::User,
+            source_turn_id: Some("turn-user-description".to_string()),
+            commands: vec![PlanningTaskMutationCommand::UpdateTask(
+                PlanningTaskUpdateInput {
+                    task_id: "task-1".to_string(),
+                    direction_id: None,
+                    direction_relation_note: None,
+                    title: None,
+                    description: Some("Operator-authored description".to_string()),
+                    status: None,
+                    base_priority: None,
+                    dynamic_priority_delta: None,
+                    priority_reason: None,
+                    depends_on: None,
+                    blocked_by: None,
+                },
+            )],
+        })
+        .unwrap();
+    let snapshot = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap();
+    let updated = &snapshot.task_authority.tasks[0];
+    assert_eq!(updated.description, "Operator-authored description");
+    assert_eq!(updated.last_updated_by, TaskActor::User);
+    assert_eq!(
+        updated.source_turn_id.as_deref(),
+        Some("turn-user-description")
+    );
+}
+#[test]
 fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
     /*
      * LLM이 이미 적용된 intent를 반복하면 no-op update가 흔히 나온다. service는 correlation을
