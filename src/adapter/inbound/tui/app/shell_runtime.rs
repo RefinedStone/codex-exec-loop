@@ -126,6 +126,17 @@ impl ShellRuntime {
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
+                BackgroundMessage::RequestParallelModeDispatch {
+                    workspace_directory,
+                    trigger,
+                    epoch_id,
+                } => {
+                    self.app.apply_parallel_mode_dispatch_request(
+                        workspace_directory,
+                        trigger,
+                        epoch_id,
+                    );
+                }
                 BackgroundMessage::ParallelModeEnterProgress {
                     workspace_directory,
                     readiness_snapshot,
@@ -165,13 +176,13 @@ impl ShellRuntime {
                     workspace_directory,
                     readiness_snapshot,
                     supervisor_snapshot,
-                    status_text,
+                    outcome,
                 } => {
                     self.app.apply_parallel_mode_dispatch_refreshed(
                         &workspace_directory,
                         readiness_snapshot,
                         *supervisor_snapshot,
-                        status_text,
+                        outcome,
                     );
                 }
                 BackgroundMessage::PostTurnEvaluated {
@@ -225,7 +236,9 @@ impl ShellRuntime {
     }
 
     fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
-        if self.app.parallel_mode_supervisor_refresh_in_flight {
+        if self.app.parallel_mode_supervisor_refresh_in_flight
+            || self.app.parallel_mode_dispatch_refresh_in_flight
+        {
             return false;
         }
         if !self.app.parallel_mode_activity_pulse_visible() {

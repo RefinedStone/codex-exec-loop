@@ -32,6 +32,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     refresh stay testable outside ratatui rendering.
     */
     let summary_lines = build_summary_lines(
+        app,
         mode_label,
         readiness_snapshot,
         &supervisor_snapshot,
@@ -79,6 +80,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
 }
 
 fn build_summary_lines(
+    app: &NativeTuiApp,
     mode_label: &str,
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
@@ -127,6 +129,15 @@ fn build_summary_lines(
         lines.push(Line::from(format!("alert: {alert}")));
     } else if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
         lines.push(Line::from(format!("notice: {notice}")));
+    }
+    if let Some(trigger) = app.last_parallel_mode_automation_trigger() {
+        lines.push(Line::from(format!(
+            "last automation trigger: {}",
+            trigger.label()
+        )));
+    }
+    if let Some(reason) = app.last_parallel_mode_dispatch_withheld_reason() {
+        lines.push(Line::from(format!("dispatch withheld: {reason}")));
     }
 
     lines

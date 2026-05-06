@@ -11,7 +11,10 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
-use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
+use crate::domain::parallel_mode::{
+    ParallelModeAutomationTrigger, ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot,
+    ParallelModeSupervisorSnapshot,
+};
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -43,6 +46,11 @@ pub(super) enum BackgroundMessage {
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
     InvalidateParallelModeSupervisorSnapshot,
+    RequestParallelModeDispatch {
+        workspace_directory: String,
+        trigger: ParallelModeAutomationTrigger,
+        epoch_id: u64,
+    },
     ParallelModeEnterProgress {
         workspace_directory: String,
         readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
@@ -63,7 +71,7 @@ pub(super) enum BackgroundMessage {
         workspace_directory: String,
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
-        status_text: String,
+        outcome: ParallelModeDispatchOutcome,
     },
     PostTurnEvaluated {
         thread_id: String,
@@ -109,7 +117,12 @@ impl NativeTuiApp {
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
             parallel_mode_supervisor_refresh_in_flight: false,
-            pending_parallel_mode_task_update_dispatch: None,
+            parallel_mode_dispatch_refresh_in_flight: false,
+            parallel_mode_automation_epoch_id: None,
+            next_parallel_mode_automation_epoch_id: 1,
+            pending_parallel_mode_dispatch_trigger: None,
+            last_parallel_mode_automation_trigger: None,
+            last_parallel_mode_dispatch_withheld_reason: None,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
@@ -290,6 +303,8 @@ impl NativeTuiApp {
             effects.retain(|effect| {
                 !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
             });
+        } else if should_flush_pending_task_intake {
+            self.convert_parallel_mode_auto_prompt_effects_to_dispatch(&mut effects);
         }
         for effect in effects {
             self.execute_conversation_runtime_effect(effect);

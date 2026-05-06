@@ -32,6 +32,64 @@ pub enum ParallelModeOrchestratorState {
     IntegrationBlocked,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeAutomationTrigger {
+    MainTurnPostEvaluation,
+    ParallelOfficialCompletion,
+    TaskIntakeAfterEpoch,
+}
+
+impl ParallelModeAutomationTrigger {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MainTurnPostEvaluation => "main_turn_post_evaluation",
+            Self::ParallelOfficialCompletion => "parallel_official_completion",
+            Self::TaskIntakeAfterEpoch => "task_intake_after_epoch",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeDispatchOutcome {
+    pub trigger: ParallelModeAutomationTrigger,
+    pub workspace_directory: String,
+    pub epoch_id: u64,
+    pub idle_slot_count: usize,
+    pub candidate_task_ids: Vec<String>,
+    pub launched_task_ids: Vec<String>,
+    pub blocked_reason: Option<String>,
+    pub status_copy_input: String,
+}
+
+impl ParallelModeDispatchOutcome {
+    pub fn new(
+        trigger: ParallelModeAutomationTrigger,
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+    ) -> Self {
+        Self {
+            trigger,
+            workspace_directory: workspace_directory.into(),
+            epoch_id,
+            idle_slot_count: 0,
+            candidate_task_ids: Vec::new(),
+            launched_task_ids: Vec::new(),
+            blocked_reason: None,
+            status_copy_input: String::new(),
+        }
+    }
+
+    pub fn status_detail(&self) -> String {
+        if !self.status_copy_input.trim().is_empty() {
+            return self.status_copy_input.clone();
+        }
+        if let Some(reason) = self.blocked_reason.as_deref() {
+            return format!("auto dispatch blocked / {reason}");
+        }
+        format!("auto dispatched {} worker(s)", self.launched_task_ids.len())
+    }
+}
+
 impl ParallelModeOrchestratorState {
     pub fn label(self) -> &'static str {
         match self {
@@ -136,7 +194,7 @@ impl ParallelModeOrchestratorStateMachine {
         }
 
         if mode_was_enabled {
-            return ParallelModeEntryPlan::new(ParallelModeOrchestratorState::Dispatching, None);
+            return ParallelModeEntryPlan::new(ParallelModeOrchestratorState::Supervising, None);
         }
 
         ParallelModeEntryPlan::new(

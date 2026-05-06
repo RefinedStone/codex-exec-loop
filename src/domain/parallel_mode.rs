@@ -22,7 +22,8 @@ pub use self::distributor::{
     ParallelModeSupervisorSnapshot,
 };
 pub use self::orchestrator::{
-    ParallelModeDispatchBlockReason, ParallelModeDispatchEligibility, ParallelModeEntryPlan,
+    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
+    ParallelModeDispatchEligibility, ParallelModeDispatchOutcome, ParallelModeEntryPlan,
     ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
     ParallelModePoolResetScope, ParallelModeTaskDispatchBlockSnapshot,
 };

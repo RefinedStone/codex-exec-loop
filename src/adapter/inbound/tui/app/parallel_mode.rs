@@ -10,9 +10,9 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::diagnostics::raw_event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolBoardSnapshot,
-    ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
+    ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger, ParallelModeDispatchOutcome,
+    ParallelModeDistributorSnapshot, ParallelModeOrchestratorStateMachine,
+    ParallelModePoolBoardSnapshot, ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
@@ -28,7 +28,7 @@ mod dispatch_worker;
 
 use self::dispatch_worker::{ParallelDispatchWorkerRequest, spawn_parallel_dispatch_worker};
 use super::turn_submission_runtime::parallel_mode_slot_lease_request;
-use super::{BackgroundMessage, ConversationInputEvent, NativeTuiApp};
+use super::{BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, NativeTuiApp};
 
 impl NativeTuiApp {
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
@@ -41,6 +41,14 @@ impl NativeTuiApp {
     }
     pub(crate) fn parallel_mode_service(&self) -> &ParallelModeService {
         &self.parallel_mode_service
+    }
+    pub(crate) fn last_parallel_mode_automation_trigger(
+        &self,
+    ) -> Option<ParallelModeAutomationTrigger> {
+        self.last_parallel_mode_automation_trigger
+    }
+    pub(crate) fn last_parallel_mode_dispatch_withheld_reason(&self) -> Option<&str> {
+        self.last_parallel_mode_dispatch_withheld_reason.as_deref()
     }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.planning_workspace_directory();
@@ -191,9 +199,11 @@ impl NativeTuiApp {
                 // Turning off parallel mode is local UI state. Keep the snapshot
                 // read-only and close the control tower so normal shell focus
                 // resumes immediately.
+                self.close_parallel_mode_automation_epoch();
                 self.parallel_mode_enabled = false;
                 self.parallel_mode_supervisor_refresh_in_flight = false;
-                self.pending_parallel_mode_task_update_dispatch = None;
+                self.parallel_mode_dispatch_refresh_in_flight = false;
+                self.pending_parallel_mode_dispatch_trigger = None;
                 self.sync_parallel_mode_supervisor_snapshot(false);
                 if self.shell_overlay == ShellOverlay::Supersession {
                     self.close_shell_overlay();
@@ -303,6 +313,14 @@ impl NativeTuiApp {
                 !reset_pool_on_off_to_on_entry,
                 readiness_snapshot.allows_parallel_mode(),
             );
+            raw_event_log::emit_lazy("parallel_action_planned", || {
+                serde_json::json!({
+                    "workspace": &workspace_directory,
+                    "state": entry_plan.state.label(),
+                    "reset_scope": entry_plan.reset_scope.map(|scope| scope.label()),
+                    "readiness": readiness_snapshot.readiness_label(),
+                })
+            });
 
             let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
                 let _ = tx.send(BackgroundMessage::ParallelModeEnterProgress {
@@ -321,9 +339,22 @@ impl NativeTuiApp {
                 let reset_result = if entry_plan.reset_scope
                     == Some(ParallelModePoolResetScope::PoolOnly)
                 {
+                    raw_event_log::emit_lazy("parallel_pool_reset_started", || {
+                        serde_json::json!({
+                            "workspace": &workspace_directory,
+                            "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+                        })
+                    });
                     parallel_mode_service
                         .reset_pool_on_parallel_enable(&workspace_directory)
                         .map(|count| {
+                            raw_event_log::emit_lazy("parallel_pool_reset_completed", || {
+                                serde_json::json!({
+                                    "workspace": &workspace_directory,
+                                    "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+                                    "slot_count": count,
+                                })
+                            });
                             format!(
                                 "reset {count} pool slot worktree(s) to prerelease after off->on entry / {}",
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
@@ -399,18 +430,25 @@ impl NativeTuiApp {
             return;
         }
 
-        let workspace_directory = self.planning_workspace_directory();
-        let reason = format!("task update: {task_id}");
-        if self.parallel_mode_dispatch_refresh_should_defer() {
-            self.pending_parallel_mode_task_update_dispatch = Some(reason);
+        if self.parallel_mode_automation_epoch_id.is_none() {
+            let reason = format!(
+                "task update `{task_id}` accepted before the first main-session post-turn epoch"
+            );
+            self.record_parallel_mode_dispatch_withheld(
+                Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+                &reason,
+            );
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "parallel mode: queue refresh deferred until entry loading finishes"
-                    .to_string(),
+                status_text: format!("parallel mode: dispatch withheld / {reason}"),
             });
             return;
         }
 
-        self.spawn_parallel_mode_dispatch_refresh_worker(workspace_directory, reason);
+        let workspace_directory = self.planning_workspace_directory();
+        self.request_parallel_mode_dispatch(
+            workspace_directory,
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        );
     }
 
     fn parallel_mode_dispatch_refresh_should_defer(&self) -> bool {
@@ -424,33 +462,171 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn take_ready_deferred_parallel_mode_task_update_dispatch_reason(
+    pub(super) fn convert_parallel_mode_auto_prompt_effects_to_dispatch(
         &mut self,
-    ) -> Option<String> {
-        let reason = self.pending_parallel_mode_task_update_dispatch.take()?;
-
-        if !self.parallel_mode_enabled() || self.parallel_mode_dispatch_refresh_should_defer() {
-            self.pending_parallel_mode_task_update_dispatch = Some(reason);
-            return None;
+        effects: &mut Vec<ConversationRuntimeEffect>,
+    ) {
+        if !self.parallel_mode_enabled() {
+            return;
+        }
+        if !effects
+            .iter()
+            .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
+        {
+            return;
         }
 
-        Some(format!("deferred {reason}"))
+        effects
+            .retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
+        let epoch_id = self.open_parallel_mode_automation_epoch();
+        let workspace_directory = self.planning_workspace_directory();
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: format!(
+                "parallel mode: automation epoch {epoch_id} opened / dispatching accepted queue"
+            ),
+        });
+        self.request_parallel_mode_dispatch(
+            workspace_directory,
+            ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        );
     }
 
-    fn spawn_deferred_parallel_mode_task_update_dispatch(&mut self) {
-        let Some(reason) = self.take_ready_deferred_parallel_mode_task_update_dispatch_reason()
-        else {
+    fn open_parallel_mode_automation_epoch(&mut self) -> u64 {
+        if let Some(epoch_id) = self.parallel_mode_automation_epoch_id {
+            return epoch_id;
+        }
+
+        let epoch_id = self.next_parallel_mode_automation_epoch_id;
+        self.next_parallel_mode_automation_epoch_id = self
+            .next_parallel_mode_automation_epoch_id
+            .saturating_add(1);
+        self.parallel_mode_automation_epoch_id = Some(epoch_id);
+        self.last_parallel_mode_dispatch_withheld_reason = None;
+        raw_event_log::emit_lazy("parallel_automation_epoch_opened", || {
+            serde_json::json!({
+                "workspace": self.planning_workspace_directory(),
+                "epoch_id": epoch_id,
+            })
+        });
+        epoch_id
+    }
+
+    fn close_parallel_mode_automation_epoch(&mut self) {
+        let epoch_id = self.parallel_mode_automation_epoch_id.take();
+        self.pending_parallel_mode_dispatch_trigger = None;
+        self.last_parallel_mode_dispatch_withheld_reason = None;
+        if let Some(epoch_id) = epoch_id {
+            raw_event_log::emit_lazy("parallel_automation_epoch_closed", || {
+                serde_json::json!({
+                    "workspace": self.planning_workspace_directory(),
+                    "epoch_id": epoch_id,
+                })
+            });
+        }
+    }
+
+    fn request_parallel_mode_dispatch(
+        &mut self,
+        workspace_directory: String,
+        trigger: ParallelModeAutomationTrigger,
+    ) {
+        let Some(epoch_id) = self.parallel_mode_automation_epoch_id else {
+            self.record_parallel_mode_dispatch_withheld(
+                Some(trigger),
+                "automation epoch is not open",
+            );
             return;
         };
 
+        if self.parallel_mode_dispatch_refresh_should_defer() {
+            self.pending_parallel_mode_dispatch_trigger = Some(trigger);
+            self.record_parallel_mode_dispatch_withheld(
+                Some(trigger),
+                "entry loading or supervisor refresh is still in progress",
+            );
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "parallel mode: dispatch deferred until control-plane refresh finishes"
+                        .to_string(),
+            });
+            return;
+        }
+
+        if self.parallel_mode_dispatch_refresh_in_flight {
+            self.pending_parallel_mode_dispatch_trigger = Some(trigger);
+            self.record_parallel_mode_dispatch_withheld(
+                Some(trigger),
+                "dispatch already in flight",
+            );
+            return;
+        }
+
+        self.parallel_mode_dispatch_refresh_in_flight = true;
+        self.last_parallel_mode_automation_trigger = Some(trigger);
+        self.last_parallel_mode_dispatch_withheld_reason = None;
+        raw_event_log::emit_lazy("parallel_dispatch_requested", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": &workspace_directory,
+                "epoch_id": epoch_id,
+            })
+        });
+        self.spawn_parallel_mode_dispatch_refresh_worker(workspace_directory, trigger, epoch_id);
+    }
+
+    pub(super) fn apply_parallel_mode_dispatch_request(
+        &mut self,
+        workspace_directory: String,
+        trigger: ParallelModeAutomationTrigger,
+        epoch_id: u64,
+    ) {
+        if self.parallel_mode_automation_epoch_id != Some(epoch_id) {
+            raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+                serde_json::json!({
+                    "trigger": trigger.label(),
+                    "workspace": workspace_directory,
+                    "epoch_id": epoch_id,
+                    "blocked_reason": "stale automation epoch",
+                })
+            });
+            return;
+        }
+        self.request_parallel_mode_dispatch(workspace_directory, trigger);
+    }
+
+    fn spawn_pending_parallel_mode_dispatch_if_ready(&mut self) {
+        let Some(trigger) = self.pending_parallel_mode_dispatch_trigger.take() else {
+            return;
+        };
+        if !self.parallel_mode_enabled() || self.parallel_mode_automation_epoch_id.is_none() {
+            return;
+        }
         let workspace_directory = self.planning_workspace_directory();
-        self.spawn_parallel_mode_dispatch_refresh_worker(workspace_directory, reason);
+        self.request_parallel_mode_dispatch(workspace_directory, trigger);
+    }
+
+    fn record_parallel_mode_dispatch_withheld(
+        &mut self,
+        trigger: Option<ParallelModeAutomationTrigger>,
+        reason: &str,
+    ) {
+        self.last_parallel_mode_automation_trigger = trigger;
+        self.last_parallel_mode_dispatch_withheld_reason = Some(reason.to_string());
+        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.map(|value| value.label()),
+                "workspace": self.planning_workspace_directory(),
+                "epoch_id": self.parallel_mode_automation_epoch_id,
+                "blocked_reason": reason,
+            })
+        });
     }
 
     fn spawn_parallel_mode_dispatch_refresh_worker(
         &self,
         workspace_directory: String,
-        reason: String,
+        trigger: ParallelModeAutomationTrigger,
+        epoch_id: u64,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
@@ -465,30 +641,24 @@ impl NativeTuiApp {
             let readiness_snapshot =
                 parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
 
-            let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
-                let dispatch_status = dispatch_parallel_queue_pool(
-                    &workspace_directory,
-                    &planning_snapshot,
-                    &parallel_mode_service,
+            let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
+                let outcome = dispatch_parallel_queue_pool(ParallelModeDispatchExecutionContext {
+                    workspace_directory: &workspace_directory,
+                    planning_snapshot: &planning_snapshot,
+                    parallel_mode_service: &parallel_mode_service,
                     parallel_agent_worker_port,
                     parallel_mode_turn_service,
                     planning,
-                    tx.clone(),
-                );
+                    tx: tx.clone(),
+                    trigger,
+                    epoch_id,
+                });
                 let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
                     &workspace_directory,
                     true,
                     Some(&readiness_snapshot),
                 );
-                let mut status_text = format!(
-                    "parallel mode: queue refreshed / {reason} / readiness: {}",
-                    readiness_snapshot.readiness_label()
-                );
-                if !dispatch_status.trim().is_empty() {
-                    status_text.push_str(" / ");
-                    status_text.push_str(&dispatch_status);
-                }
-                (supervisor_snapshot, status_text)
+                (supervisor_snapshot, outcome)
             } else {
                 let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
                     &workspace_directory,
@@ -499,18 +669,24 @@ impl NativeTuiApp {
                     .top_alert
                     .as_deref()
                     .unwrap_or("inspect the readiness panel before retrying");
-                let status_text = format!(
-                    "parallel mode: queue refresh blocked / {reason} / readiness: {} / {cause}",
-                    readiness_snapshot.readiness_label()
+                let mut outcome = ParallelModeDispatchOutcome::new(
+                    trigger,
+                    workspace_directory.clone(),
+                    epoch_id,
                 );
-                (supervisor_snapshot, status_text)
+                outcome.blocked_reason = Some(format!(
+                    "readiness: {} / {cause}",
+                    readiness_snapshot.readiness_label()
+                ));
+                outcome.status_copy_input = outcome.blocked_reason.clone().unwrap_or_default();
+                (supervisor_snapshot, outcome)
             };
 
             let _ = tx.send(BackgroundMessage::ParallelModeDispatchRefreshed {
                 workspace_directory,
                 readiness_snapshot,
                 supervisor_snapshot: Box::new(supervisor_snapshot),
-                status_text,
+                outcome,
             });
         });
     }
@@ -565,9 +741,9 @@ impl NativeTuiApp {
             status_text,
         });
         if self.parallel_mode_enabled {
-            self.spawn_deferred_parallel_mode_task_update_dispatch();
+            self.spawn_pending_parallel_mode_dispatch_if_ready();
         } else {
-            self.pending_parallel_mode_task_update_dispatch = None;
+            self.pending_parallel_mode_dispatch_trigger = None;
         }
     }
 
@@ -591,25 +767,45 @@ impl NativeTuiApp {
         workspace_directory: &str,
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: ParallelModeSupervisorSnapshot,
-        status_text: String,
+        outcome: ParallelModeDispatchOutcome,
     ) {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
+            || self.parallel_mode_automation_epoch_id != Some(outcome.epoch_id)
         {
-            self.parallel_mode_supervisor_refresh_in_flight = false;
+            self.parallel_mode_dispatch_refresh_in_flight = false;
             return;
         }
 
-        self.parallel_mode_supervisor_refresh_in_flight = false;
+        self.parallel_mode_dispatch_refresh_in_flight = false;
         self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
         self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
             workspace_directory,
         );
+        self.last_parallel_mode_automation_trigger = Some(outcome.trigger);
+        self.last_parallel_mode_dispatch_withheld_reason = outcome.blocked_reason.clone();
+        let status_text = format!(
+            "parallel mode: dispatch refreshed / trigger: {} / {}",
+            outcome.trigger.label(),
+            outcome.status_detail()
+        );
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
+        raw_event_log::emit_lazy("parallel_dispatch_completed", || {
+            serde_json::json!({
+                "trigger": outcome.trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": outcome.epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "launched_count": outcome.launched_task_ids.len(),
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        self.spawn_pending_parallel_mode_dispatch_if_ready();
     }
 }
 
@@ -627,15 +823,21 @@ fn parallel_mode_supervisor_snapshot_has_running_slot(
     snapshot.pool.running_slots > 0
 }
 
-fn dispatch_parallel_queue_pool(
-    workspace_directory: &str,
-    planning_snapshot: &PlanningRuntimeSnapshot,
-    parallel_mode_service: &ParallelModeService,
+struct ParallelModeDispatchExecutionContext<'a> {
+    workspace_directory: &'a str,
+    planning_snapshot: &'a PlanningRuntimeSnapshot,
+    parallel_mode_service: &'a ParallelModeService,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
     parallel_mode_turn_service: ParallelModeTurnService,
     planning: PlanningServices,
     tx: Sender<BackgroundMessage>,
-) -> String {
+    trigger: ParallelModeAutomationTrigger,
+    epoch_id: u64,
+}
+
+fn dispatch_parallel_queue_pool(
+    context: ParallelModeDispatchExecutionContext<'_>,
+) -> ParallelModeDispatchOutcome {
     /*
      * Dispatch is the handoff bridge from planning queue to parallel worker.
      * The service chooses candidates and leases slots; the TUI assembles the
@@ -643,25 +845,59 @@ fn dispatch_parallel_queue_pool(
      * launch summary back through conversation status.
      */
 
-    let dispatch_plan = match parallel_mode_service.build_dispatch_plan(
+    let workspace_directory = context.workspace_directory;
+    let trigger = context.trigger;
+    let epoch_id = context.epoch_id;
+    let mut outcome =
+        ParallelModeDispatchOutcome::new(trigger, workspace_directory.to_string(), epoch_id);
+
+    let dispatch_plan = match context.parallel_mode_service.build_dispatch_plan(
         workspace_directory,
-        planning_snapshot,
+        context.planning_snapshot,
         // A task-update dispatch refresh handles the currently actionable queue;
         // the service still limits work by idle slots and candidate rules.
         usize::MAX,
     ) {
         Ok(plan) => plan,
         Err(error) => {
-            return format!("auto dispatch blocked / {error}");
+            outcome.blocked_reason = Some(error);
+            outcome.status_copy_input = outcome.status_detail();
+            raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+                serde_json::json!({
+                    "trigger": trigger.label(),
+                    "workspace": workspace_directory,
+                    "epoch_id": epoch_id,
+                    "blocked_reason": outcome.blocked_reason,
+                })
+            });
+            return outcome;
         }
     };
+    outcome.idle_slot_count = dispatch_plan.idle_slot_count;
+    outcome.candidate_task_ids = dispatch_plan
+        .candidates
+        .iter()
+        .map(|task| task.task_id.clone())
+        .collect();
     // Distinguish infrastructure capacity from queue availability so the
     // operator can decide whether to wait for slots or change planning tasks.
     if dispatch_plan.idle_slot_count == 0 {
-        return "no idle slot is available for auto dispatch".to_string();
+        outcome.blocked_reason = Some("no idle slot is available for auto dispatch".to_string());
+        outcome.status_copy_input = outcome.status_detail();
+        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        return outcome;
     }
     if dispatch_plan.candidates.is_empty() {
-        return if dispatch_plan.excluded_task_ids.is_empty() {
+        let reason = if dispatch_plan.excluded_task_ids.is_empty() {
             "no actionable queue task to auto dispatch".to_string()
         } else {
             format!(
@@ -669,6 +905,19 @@ fn dispatch_parallel_queue_pool(
                 dispatch_plan.excluded_task_ids.join(", ")
             )
         };
+        outcome.blocked_reason = Some(reason);
+        outcome.status_copy_input = outcome.status_detail();
+        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        return outcome;
     }
 
     let mut launched_titles = Vec::new();
@@ -676,9 +925,15 @@ fn dispatch_parallel_queue_pool(
     for task in dispatch_plan.candidates {
         // Handoff creation belongs to planning runtime because it knows how
         // to turn a queue task into sub-session prompt text and task identity.
-        let handoff = planning.runtime.build_sub_session_task_handoff(&task);
+        let handoff = context
+            .planning
+            .runtime
+            .build_sub_session_task_handoff(&task);
         let lease_request = parallel_mode_slot_lease_request(&handoff.task);
-        match parallel_mode_service.acquire_slot_lease(workspace_directory, lease_request) {
+        match context
+            .parallel_mode_service
+            .acquire_slot_lease(workspace_directory, lease_request)
+        {
             Ok(lease) => {
                 // After the lease is acquired, the worker owns app-server
                 // turn execution in the slot worktree. The TUI keeps only
@@ -686,6 +941,7 @@ fn dispatch_parallel_queue_pool(
                 let worker_request = ParallelDispatchWorkerRequest {
                     planning_workspace_directory: workspace_directory.to_string(),
                     worktree_directory: lease.worktree_path.clone(),
+                    automation_epoch_id: epoch_id,
                     prompt: handoff.prompt,
                     developer_instructions: handoff.developer_instructions,
                     service_name: handoff.service_name,
@@ -693,11 +949,12 @@ fn dispatch_parallel_queue_pool(
                 };
                 spawn_parallel_dispatch_worker(
                     worker_request,
-                    parallel_agent_worker_port.clone(),
-                    parallel_mode_turn_service.clone(),
-                    planning.clone(),
-                    tx.clone(),
+                    context.parallel_agent_worker_port.clone(),
+                    context.parallel_mode_turn_service.clone(),
+                    context.planning.clone(),
+                    context.tx.clone(),
                 );
+                outcome.launched_task_ids.push(handoff.task.task_id.clone());
                 launched_titles.push(handoff.task.task_title);
             }
             Err(error) => blocked_details.push(format!("{}: {error}", handoff.task.task_id)),
@@ -705,10 +962,22 @@ fn dispatch_parallel_queue_pool(
     }
     let launched_count = launched_titles.len();
     if launched_count == 0 {
-        return format!(
-            "auto dispatch blocked before worker launch / {}",
+        outcome.blocked_reason = Some(format!(
+            "worker launch blocked / {}",
             blocked_details.join(" | ")
-        );
+        ));
+        outcome.status_copy_input = outcome.status_detail();
+        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        return outcome;
     }
 
     let mut status = format!(
@@ -718,7 +987,18 @@ fn dispatch_parallel_queue_pool(
     if !blocked_details.is_empty() {
         status.push_str(&format!(" / blocked: {}", blocked_details.join(" | ")));
     }
-    status
+    outcome.status_copy_input = status;
+    raw_event_log::emit_lazy("parallel_dispatch_launched", || {
+        serde_json::json!({
+            "trigger": trigger.label(),
+            "workspace": workspace_directory,
+            "epoch_id": epoch_id,
+            "idle_slot_count": outcome.idle_slot_count,
+            "task_ids": outcome.candidate_task_ids,
+            "launched_count": outcome.launched_task_ids.len(),
+        })
+    });
+    outcome
 }
 
 #[derive(Clone, Copy)]
