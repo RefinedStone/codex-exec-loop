@@ -20,6 +20,8 @@ events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
 events_error_json="${output_dir}/events-error.json"
 sprites_svg="${output_dir}/admin-character-sprites.svg"
+office_asset="${output_dir}/akra-office-background.png"
+sprite_asset="${output_dir}/akra-object-sprites.png"
 screenshot_path="${output_dir}/admin-graphic.png"
 
 mkdir -p "${output_dir}"
@@ -110,6 +112,8 @@ curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
 curl -fsS "${base_url}/assets/admin/admin-character-sprites.svg" >"${sprites_svg}"
+curl -fsS "${base_url}/admin/assets/graphics/akra-office-background.png" >"${office_asset}"
+curl -fsS "${base_url}/admin/assets/graphics/akra-object-sprites.png" >"${sprite_asset}"
 events_error_status="$(curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
 if [[ "${events_error_status}" != "400" ]]; then
   echo "expected event limit validation to return 400, got ${events_error_status}" >&2
@@ -138,6 +142,8 @@ for token in \
   'data-event-feed-status' \
   '/assets/admin/admin-character-sprites.svg' \
   'background-size: 240px 48px' \
+  'akra-office-background.png' \
+  'akra-object-sprites.png' \
   'prependEventRows' \
   'stale snapshot' \
   'skeleton-line' \
@@ -190,6 +196,15 @@ done
 require_contains "${legacy_html}" "Workspace Status"
 require_contains "${legacy_html}" "Open Full Planning Draft"
 require_not_contains "${legacy_html}" '<body class="akra-graphic">'
+
+cmp -s assets/admin/graphics/akra-office-background.png "${office_asset}" || {
+  echo "served office background asset does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/graphics/akra-object-sprites.png "${sprite_asset}" || {
+  echo "served object sprite asset does not match workspace asset" >&2
+  exit 1
+}
 
 if [[ -f docs/gamification/img.png ]]; then
   sha256sum docs/gamification/img.png >"${output_dir}/reference-img.sha256"

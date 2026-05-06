@@ -14,10 +14,22 @@
     --game-yellow: #f5c84b;
     --game-red: #ff6b6b;
     --game-violet: #9d7cff;
+    --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
+    --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
   .akra-game * { min-width: 0; }
+  .akra-game::before {
+    content: "";
+    position: fixed;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    background-image: var(--object-sprite-sheet);
+  }
   .akra-topbar {
     display: grid;
     grid-template-columns: minmax(260px, 1fr) repeat(3, auto) minmax(180px, auto);
@@ -174,8 +186,11 @@
       linear-gradient(30deg, transparent 42%, rgba(122, 148, 184, 0.18) 43%, rgba(122, 148, 184, 0.18) 44%, transparent 45%),
       linear-gradient(150deg, transparent 42%, rgba(122, 148, 184, 0.14) 43%, rgba(122, 148, 184, 0.14) 44%, transparent 45%),
       radial-gradient(circle at 72% 12%, rgba(125, 91, 188, 0.18), transparent 28%),
+      var(--office-bg-image),
       linear-gradient(180deg, #142238, #0e1728);
-    background-size: 58px 33px, 58px 33px, auto, auto;
+    background-size: 58px 33px, 58px 33px, auto, cover, auto;
+    background-position: 0 0, 0 0, center, center, center;
+    background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat;
   }
   .office-board::before {
     content: "";

@@ -22,6 +22,7 @@ const ADMIN_CHARACTER_SPRITES: &str =
     include_str!("../../../../assets/admin/admin-character-sprites.svg");
 const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
+const ADMIN_STATIC_ASSETS: &str = include_str!("static_assets.rs");
 
 /*
  * 제거된 raw-authority field는 stale browser tab이나 오래된 bookmark/form replay에서 여전히 들어올 수 있다.
@@ -114,6 +115,8 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "data-focus-target=\"pipeline\"",
         "data-event-drawer",
         "data-event-feed-status",
+        "akra-office-background.png",
+        "akra-object-sprites.png",
         "prependEventRows",
         "stale snapshot",
         "pollEvents",
@@ -147,6 +150,7 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "\"/api/admin/akra/events\"",
         "\"/assets/admin/admin-character-sprites.svg\"",
         "admin_character_sprites_asset",
+        "\"/admin/assets/graphics/{asset_name}\"",
     ] {
         assert!(
             ADMIN_MOD.contains(route),
@@ -172,6 +176,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "queue_depth_basis",
         "mock_metric_note",
         "read-only 운영 관제",
+        "--office-bg-image",
+        "--object-sprite-sheet",
+        "var(--office-bg-image)",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)
@@ -188,15 +195,31 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "ADMIN_GRAPHIC_CAPTURE",
         "akra-admin",
         "/admin/legacy",
+        "/admin/assets/graphics/akra-office-background.png",
+        "/admin/assets/graphics/akra-object-sprites.png",
         "/api/admin/akra/dashboard",
         "/api/admin/akra/events?limit=50",
         "/api/admin/akra/events?afterSequence=0&limit=50",
+        "served office background asset does not match workspace asset",
+        "served object sprite asset does not match workspace asset",
         "--screenshot=",
         "admin graphic visual contract ok",
     ] {
         assert!(
             ADMIN_GRAPHIC_VISUAL_SCRIPT.contains(token),
             "visual regression script should keep {token}"
+        );
+    }
+
+    for token in [
+        "include_bytes!(\"../../../../assets/admin/graphics/akra-office-background.png\")",
+        "include_bytes!(\"../../../../assets/admin/graphics/akra-object-sprites.png\")",
+        "image/png",
+        "public, max-age=86400",
+    ] {
+        assert!(
+            ADMIN_STATIC_ASSETS.contains(token),
+            "admin graphic asset route should keep {token}"
         );
     }
 }

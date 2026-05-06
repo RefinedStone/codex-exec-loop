@@ -33,6 +33,7 @@ mod api;
 mod forms;
 mod helpers;
 mod pages;
+mod static_assets;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -188,6 +189,10 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/", get(pages::akra_dashboard_page))
         .route("/admin", get(pages::akra_dashboard_page))
         .route("/admin/legacy", get(pages::dashboard_page))
+        .route(
+            "/admin/assets/graphics/{asset_name}",
+            get(static_assets::admin_graphic_asset),
+        )
         .route("/admin/directions", get(pages::directions_page))
         .route("/admin/tasks", get(pages::tasks_page))
         .route("/admin/controls", get(pages::controls_page))
