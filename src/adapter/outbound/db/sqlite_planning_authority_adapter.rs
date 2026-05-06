@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
+    ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
+};
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityPort,
@@ -30,7 +33,8 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolResetReport,
-    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 // active snapshot 테이블을 다루는 하위 모듈이다.
 mod active_documents;
@@ -507,6 +511,16 @@ application의 `PlanningAuthorityPort`를 SQLite adapter에 연결한다.
 application 계층이 구체 타입을 몰라도 port trait만으로 runtime claim, queue, lease, session projection을
 다룰 수 있게 하기 위해서이다.
 */
+impl ParallelModeRuntimeEventLogPort for SqlitePlanningAuthorityAdapter {
+    fn load_runtime_event_log(
+        &self,
+        workspace_dir: &str,
+        request: ParallelModeRuntimeEventLogRequest,
+    ) -> Result<ParallelModeRuntimeEventsSnapshot> {
+        Self::load_runtime_event_log(workspace_dir, request)
+    }
+}
+
 impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
     /*
     workspace 경로를 authority DB 위치 정보로 해석한다.

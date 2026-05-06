@@ -14,6 +14,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 // application port의 record/status/snapshot 타입을 그대로 반환해,
 // SQLite 세부 구조가 application layer로 새지 않도록 어댑터 내부에서 매핑을 끝낸다.
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
     PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeProjectionSnapshot,
@@ -22,6 +23,7 @@ use crate::application::port::outbound::planning_authority_port::{
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolResetReport,
+    ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
     ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
 };
 
@@ -378,6 +380,19 @@ impl SqlitePlanningAuthorityAdapter {
         // snapshot 로드는 읽기 전용이므로 트랜잭션 없이 열린 connection을 helper에 전달한다.
         let connection = open_authority_connection(&location)?;
         load_runtime_projection_snapshot(&connection)
+    }
+
+    // runtime_events audit feed를 bounded read model로 읽는다.
+    // current projection snapshot과 달리 이 경로는 시간순 변경 이력을 보여 주기 때문에 request limit/filter를 받는다.
+    pub(crate) fn load_runtime_event_log(
+        // 읽을 authority DB를 고르는 workspace 경로이다.
+        workspace_dir: &str,
+        // UI나 진단 경로가 요청한 limit/projection filter이다.
+        request: ParallelModeRuntimeEventLogRequest,
+    ) -> Result<ParallelModeRuntimeEventsSnapshot> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        load_runtime_event_log_snapshot(&connection, &request)
     }
 
     // parallel mode의 slot lease snapshot을 authority DB의 현재 런타임 투영으로 저장한다.
@@ -980,6 +995,71 @@ fn load_runtime_projection_snapshot(
         task_dispatch_blocks,
         distributor_queue_records,
     })
+}
+
+fn load_runtime_event_log_snapshot(
+    connection: &Connection,
+    request: &ParallelModeRuntimeEventLogRequest,
+) -> Result<ParallelModeRuntimeEventsSnapshot> {
+    let projection_kind = request.projection_kind.as_deref();
+    let projection_key = request.projection_key.as_deref();
+    let total_event_count = connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM runtime_events
+             WHERE (?1 IS NULL OR projection_kind = ?1)
+               AND (?2 IS NULL OR projection_key = ?2)",
+            params![projection_kind, projection_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("failed to count runtime events")?;
+    let limit = request.bounded_limit() as i64;
+    let mut statement = connection
+        .prepare(
+            "SELECT sequence,
+                    event_kind,
+                    projection_kind,
+                    projection_key,
+                    observed_planning_revision,
+                    summary,
+                    recorded_at
+             FROM runtime_events
+             WHERE (?1 IS NULL OR projection_kind = ?1)
+               AND (?2 IS NULL OR projection_key = ?2)
+             ORDER BY sequence DESC
+             LIMIT ?3",
+        )
+        .context("failed to read runtime events")?;
+    let rows = statement
+        .query_map(params![projection_kind, projection_key, limit], |row| {
+            Ok(ParallelModeRuntimeEventEntry::new(
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .context("failed to iterate runtime events")?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row.context("failed to decode runtime event row")?);
+    }
+
+    let total_event_count = total_event_count.max(0) as usize;
+    let empty_state = if total_event_count > 0 && limit == 0 {
+        "runtime events hidden by request limit"
+    } else {
+        "no runtime events captured yet"
+    };
+    Ok(ParallelModeRuntimeEventsSnapshot::new(
+        entries,
+        total_event_count,
+        empty_state,
+    ))
 }
 
 fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Result<usize> {

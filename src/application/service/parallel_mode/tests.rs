@@ -646,6 +646,7 @@ fn test_parallel_mode_service_with_github(
 // 표면이 함께 흔들리도록 묶어 두는 entry point다.
 mod distributor;
 mod pool;
+mod runtime_events;
 mod supervisor;
 
 // HTTPS remote parsing은 GitHub automation URL 정규화의 narrow contract다.

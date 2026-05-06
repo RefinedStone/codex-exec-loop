@@ -7,6 +7,7 @@ mod distributor;
 mod orchestrator;
 mod pool_reset;
 mod readiness;
+mod runtime_events;
 
 // 호출자는 `domain::parallel_mode::*`만 알면 된다. 하위 모듈 경로는 이 퍼사드가
 // 흡수해 병렬 모드 화면과 서비스가 같은 도메인 언어를 쓰게 둔다.
@@ -37,6 +38,7 @@ pub use self::readiness::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState,
 };
+pub use self::runtime_events::{ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot};
 
 // supervisor 상태는 병렬 모드 전체 제어면의 큰 흐름이다. 준비, 정상 감독,
 // 복구를 readiness gate와 사용자의 mode toggle 조합으로만 판정한다.

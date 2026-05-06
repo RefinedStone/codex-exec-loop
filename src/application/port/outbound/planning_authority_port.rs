@@ -5,10 +5,13 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
+    ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorQueueItem,
-    ParallelModePoolResetReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModePoolResetReport, ParallelModeQueueItemState, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
@@ -181,7 +184,7 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
  * authority store의 위치, shadow store 진단, parallel mode runtime projection, 분산 claim을 관리합니다.
  * application service는 이 trait만 보고 공식 SQLite authority인지 테스트용 Noop인지 구분하지 않습니다.
  */
-pub trait PlanningAuthorityPort: Send + Sync {
+pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
     /*
      * workspace 문자열에서 authority store의 실제 위치를 해석합니다.
      * repo-scoped workspace에서는 canonical repo root와 runtime dir이 중요하고, admin/readiness 흐름은
@@ -338,6 +341,18 @@ pub trait PlanningAuthorityPort: Send + Sync {
 pub struct NoopPlanningAuthorityPort {
     // Monotonic refresh counter keeps orchestration on the same path as real adapters.
     next_refresh_order: AtomicU64,
+}
+
+impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
+    fn load_runtime_event_log(
+        &self,
+        _workspace_dir: &str,
+        _request: ParallelModeRuntimeEventLogRequest,
+    ) -> Result<ParallelModeRuntimeEventsSnapshot> {
+        Ok(ParallelModeRuntimeEventsSnapshot::empty(
+            "runtime event log is unavailable without an authority store",
+        ))
+    }
 }
 
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {

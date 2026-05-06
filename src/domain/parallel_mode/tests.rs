@@ -7,8 +7,8 @@ use super::{
     ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorState,
+    ParallelModeReadinessState, ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
 
 // readiness 집계의 최우선 안전 규칙을 고정한다. 하나라도 Blocked가 있으면 다른
@@ -169,6 +169,29 @@ fn dispatch_outcome_carries_trigger_and_structured_status_inputs() {
     assert_eq!(
         outcome.status_detail(),
         "auto dispatch blocked / no idle slot is available for auto dispatch"
+    );
+}
+
+#[test]
+fn runtime_events_snapshot_reports_latest_visible_event() {
+    let snapshot = ParallelModeRuntimeEventsSnapshot::new(
+        vec![ParallelModeRuntimeEventEntry::new(
+            7,
+            "slot_lease_upsert",
+            "slot_lease",
+            "slot-1",
+            3,
+            "runtime slot lease stored / slot: slot-1 / state: running",
+            "2026-05-04T10:00:00+00:00",
+        )],
+        4,
+        "no runtime events captured yet",
+    );
+
+    assert_eq!(snapshot.visible_count(), 1);
+    assert_eq!(
+        snapshot.compact_summary(),
+        "events 1/4 / latest #7 slot_lease_upsert slot_lease:slot-1"
     );
 }
 
