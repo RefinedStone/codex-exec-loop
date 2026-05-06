@@ -20,7 +20,7 @@ use self::agent_session::{roster_recency_key, roster_state_priority};
 pub use self::distributor::{
     ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorSnapshot,
 };
 pub use self::orchestrator::{
     ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,

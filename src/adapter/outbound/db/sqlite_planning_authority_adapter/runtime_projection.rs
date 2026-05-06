@@ -16,7 +16,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 // SQLite 세부 구조가 application layer로 새지 않도록 어댑터 내부에서 매핑을 끝낸다.
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
-    PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityRuntimeEventRecord,
+    PlanningAuthorityRuntimeProjectionSnapshot,
 };
 // parallel mode의 slot lease와 agent session은 domain 타입이므로,
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
@@ -34,6 +35,8 @@ use super::{
     CLAIM_STALE_AFTER_SECS, DISTRIBUTOR_QUEUE_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY,
     SqlitePlanningAuthorityAdapter, open_authority_connection, read_metadata_i64,
 };
+
+const RUNTIME_EVENT_FEED_LIMIT: i64 = 8;
 
 // 이 impl 블록은 `SqlitePlanningAuthorityAdapter`의 런타임 상태 책임을 담는다.
 // 영구 planning authority 문서가 아니라, 여러 실행 주체가 동시에 움직일 때 필요한
@@ -856,6 +859,8 @@ fn load_runtime_projection_snapshot(
     let mut task_dispatch_blocks = Vec::new();
     // distributor queue도 enqueued_at 순서가 의미 있으므로 Vec 순서를 그대로 snapshot 순서로 사용한다.
     let mut distributor_queue_records = Vec::new();
+    // runtime event feed는 operator가 최근 전이를 볼 수 있게 최신 sequence부터 제한된 개수만 싣는다.
+    let mut runtime_events = Vec::new();
 
     // slot lease 테이블에서 id와 JSON content만 읽는다.
     // updated_at은 저장 시각으로는 유용하지만 domain snapshot은 JSON content 안의 값을 기준으로 복원된다.
@@ -972,13 +977,45 @@ fn load_runtime_projection_snapshot(
         );
     }
 
-    // 네 projection 영역을 하나의 snapshot으로 묶어 application service가 DB를 몰라도 런타임 상태를 읽게 한다.
+    let mut event_statement = connection
+        .prepare(
+            "SELECT sequence,
+                    event_kind,
+                    projection_kind,
+                    projection_key,
+                    observed_planning_revision,
+                    summary,
+                    recorded_at
+             FROM runtime_events
+             ORDER BY sequence DESC
+             LIMIT ?1",
+        )
+        .context("failed to read runtime event feed")?;
+    let event_rows = event_statement
+        .query_map(params![RUNTIME_EVENT_FEED_LIMIT], |row| {
+            Ok(PlanningAuthorityRuntimeEventRecord::new(
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .context("failed to iterate runtime event feed")?;
+    for row in event_rows {
+        runtime_events.push(row.context("failed to decode runtime event row")?);
+    }
+
+    // current projection과 최근 event feed를 하나의 snapshot으로 묶어 application service가 DB를 몰라도 런타임 상태를 읽게 한다.
     Ok(PlanningAuthorityRuntimeProjectionSnapshot {
         slot_leases,
         invalid_slot_leases,
         session_details,
         task_dispatch_blocks,
         distributor_queue_records,
+        runtime_events,
     })
 }
 

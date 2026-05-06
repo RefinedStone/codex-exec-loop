@@ -4,10 +4,11 @@ use super::super::{
     inspect_slot_git_status, short_sha,
 };
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeEventRecord;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeCompletionFeedEntry,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeRuntimeEventFeedEntry, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 
 /*
@@ -24,6 +25,7 @@ pub(super) fn build_distributor_snapshot_from_context(
 ) -> ParallelModeDistributorSnapshot {
     let history = context.session_details.clone();
     let queue_records = context.distributor_queue_records.clone();
+    let runtime_event_feed = build_runtime_event_feed(&context.runtime_events);
     /*
     queue_items는 화면에 직접 나갈 active record 목록이다. done/idle record를
     여기서 제외해야 completion feed와 queue table이 서로 다른 질문에 답한다:
@@ -49,14 +51,16 @@ pub(super) fn build_distributor_snapshot_from_context(
         )
         .with_head_blocked_detail(blocked_head_detail(queue_head))
         .with_head_rebase_provenance(rebase_provenance_label(queue_head))
-        .with_orchestrator_status(build_orchestrator_status(context, queue_head));
+        .with_orchestrator_status(build_orchestrator_status(context, queue_head))
+        .with_runtime_event_feed(runtime_event_feed);
     }
     let Some(detail) = selected_runtime_session_detail(context, &history, &queue_records) else {
         return build_placeholder_distributor_snapshot(
             ParallelModeQueueItemState::Idle.label(),
             "no distributor queue items are waiting",
         )
-        .with_orchestrator_status(build_idle_orchestrator_status(context));
+        .with_orchestrator_status(build_idle_orchestrator_status(context))
+        .with_runtime_event_feed(runtime_event_feed);
     };
     /*
     queue가 비었어도 마지막 session detail은 중요하다. agent가 reported_complete를 냈지만
@@ -91,6 +95,26 @@ pub(super) fn build_distributor_snapshot_from_context(
     ParallelModeDistributorSnapshot::new(queue_items, completion_feed, head_summary, note)
         .with_head_rebase_provenance(history_rebase_provenance(&detail))
         .with_orchestrator_status(build_idle_orchestrator_status(context))
+        .with_runtime_event_feed(runtime_event_feed)
+}
+
+fn build_runtime_event_feed(
+    events: &[PlanningAuthorityRuntimeEventRecord],
+) -> Vec<ParallelModeRuntimeEventFeedEntry> {
+    events
+        .iter()
+        .map(|event| {
+            ParallelModeRuntimeEventFeedEntry::new(
+                event.sequence,
+                event.event_kind.clone(),
+                event.projection_kind.clone(),
+                event.projection_key.clone(),
+                event.observed_planning_revision,
+                event.summary.clone(),
+                event.recorded_at.clone(),
+            )
+        })
+        .collect()
 }
 
 /*

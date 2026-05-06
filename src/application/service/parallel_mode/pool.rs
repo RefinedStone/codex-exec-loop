@@ -6,7 +6,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
-    PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityRuntimeEventRecord, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::diagnostics::raw_event_log;
 use crate::domain::parallel_mode::{
@@ -158,6 +158,7 @@ pub(super) struct PoolRuntimeContext {
     pub(super) session_details: Vec<ParallelModeAgentSessionDetailSnapshot>,
     pub(super) task_dispatch_blocks: Vec<ParallelModeTaskDispatchBlockSnapshot>,
     pub(super) distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
+    pub(super) runtime_events: Vec<PlanningAuthorityRuntimeEventRecord>,
 }
 pub(super) type PoolBoardWithContextResult = Result<
     (PoolRuntimeContext, ParallelModePoolBoardSnapshot),
@@ -827,6 +828,7 @@ fn load_pool_runtime_context_from_roots(
         session_details: runtime_projections.session_details,
         task_dispatch_blocks: runtime_projections.task_dispatch_blocks,
         distributor_queue_records: runtime_projections.distributor_queue_records,
+        runtime_events: runtime_projections.runtime_events,
     })
 }
 

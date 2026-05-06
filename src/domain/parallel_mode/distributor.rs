@@ -64,6 +64,42 @@ impl ParallelModeCompletionFeedEntry {
     }
 }
 
+// runtime event feed는 authority store의 append-only orchestration log를 UI용으로 축약한 행이다.
+// completion feed가 lifecycle 요약이라면 이 feed는 실제 projection write 순서와 planning revision을 보여준다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeRuntimeEventFeedEntry {
+    pub sequence: i64,
+    pub event_kind: String,
+    pub projection_kind: String,
+    pub projection_key: String,
+    pub observed_planning_revision: i64,
+    pub summary: String,
+    pub recorded_at: String,
+}
+
+impl ParallelModeRuntimeEventFeedEntry {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        sequence: i64,
+        event_kind: impl Into<String>,
+        projection_kind: impl Into<String>,
+        projection_key: impl Into<String>,
+        observed_planning_revision: i64,
+        summary: impl Into<String>,
+        recorded_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            sequence,
+            event_kind: event_kind.into(),
+            projection_kind: projection_kind.into(),
+            projection_key: projection_key.into(),
+            observed_planning_revision,
+            summary: summary.into(),
+            recorded_at: recorded_at.into(),
+        }
+    }
+}
+
 // distributor queue item은 통합 대기열의 한 행이다. source agent와 branch/commit을
 // 함께 둬서 supervisor가 어떤 병렬 산출물을 prerelease로 옮기는지 추적한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +167,7 @@ impl ParallelModeOrchestratorStatus {
 pub struct ParallelModeDistributorSnapshot {
     pub queue_items: Vec<ParallelModeDistributorQueueItem>,
     pub completion_feed: Vec<ParallelModeCompletionFeedEntry>,
+    pub runtime_event_feed: Vec<ParallelModeRuntimeEventFeedEntry>,
     pub head_summary: String,
     pub note: String,
     pub head_blocked_detail: Option<String>,
@@ -150,6 +187,7 @@ impl ParallelModeDistributorSnapshot {
         Self {
             queue_items,
             completion_feed,
+            runtime_event_feed: Vec::new(),
             head_summary: head_summary.into(),
             note: note.into(),
             head_blocked_detail: None,
@@ -174,6 +212,14 @@ impl ParallelModeDistributorSnapshot {
 
     pub fn with_orchestrator_status(mut self, status: ParallelModeOrchestratorStatus) -> Self {
         self.orchestrator_status = status;
+        self
+    }
+
+    pub fn with_runtime_event_feed(
+        mut self,
+        runtime_event_feed: Vec<ParallelModeRuntimeEventFeedEntry>,
+    ) -> Self {
+        self.runtime_event_feed = runtime_event_feed;
         self
     }
 

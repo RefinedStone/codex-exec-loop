@@ -5,8 +5,8 @@ use crate::domain::parallel_mode::{
     ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModePoolBoardSnapshot,
     ParallelModePoolSlotSnapshot, ParallelModePoolSlotState, ParallelModeQueueItemState,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
 /*
@@ -186,6 +186,36 @@ fn distributor_lines_render_orchestrator_status_details() {
             "slot return: slot `slot-1` stays running until the queue head is integrated"
         )
     );
+}
+
+#[test]
+fn distributor_lines_render_runtime_event_feed_with_sequence_and_revision() {
+    /*
+    runtime_events는 current projection row가 덮어쓴 과거 전이를 보여 주는 감사 feed다.
+    Supersession popup은 raw snake_case event kind보다 sequence, observed revision, summary를
+    한 줄에 보여줘야 operator가 최신 store write를 바로 읽을 수 있다.
+    */
+    let snapshot = ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queued")
+        .with_runtime_event_feed(vec![ParallelModeRuntimeEventFeedEntry::new(
+            42,
+            "session_detail_upsert",
+            "session_detail",
+            "slot-1:task-1",
+            7,
+            "runtime session detail stored / session: slot-1:task-1 / state: commit_ready",
+            "2026-04-17T00:03:00Z",
+        )]);
+    let rendered = build_distributor_lines(&snapshot)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("runtime events:"));
+    assert!(rendered.contains(
+        "event #42 @ 00:03 / session detail:slot-1:task-1 / session detail upsert / rev 7 / runtime session detail stored / session: slot-1:task-1 / state: commit_ready"
+    ));
+    assert!(!rendered.contains("session_detail_upsert"));
 }
 
 #[test]
