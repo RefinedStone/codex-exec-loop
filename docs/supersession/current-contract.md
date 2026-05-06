@@ -62,6 +62,9 @@ to [remaining-work.md](remaining-work.md).
 - Selected detail includes a read-only compact lifecycle timeline for the selected session:
   timestamped history states are condensed into event arrows, with full history kept below as
   audit context.
+- When distributor history exists, selected detail also shows a read-only delivery boundary row
+  for source push, PR automation, and merge/integration timing so those handoffs stay visible after
+  the compact lifecycle condenses older events.
 - The board summary includes the last automation trigger and the latest dispatch-withheld reason
   when either exists.
 - Queue work leases one of three local `akra` worktree slots.

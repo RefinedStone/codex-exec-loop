@@ -284,7 +284,127 @@ fn roster_and_detail_lines_render_distinct_reported_and_official_labels() {
     assert!(detail_rendered.contains(
         "2026-04-17T00:02:00Z / official / official ledger refresh accepted the completion report"
     ));
+    assert!(!detail_rendered.contains("delivery:"));
     assert!(!detail_rendered.contains("commit_ready"));
+}
+
+#[test]
+fn detail_lines_keep_delivery_boundary_visible_after_timeline_condenses() {
+    /*
+    Long successful deliveries quickly exceed the compact timeline budget. The
+    dedicated delivery boundary keeps source push, PR automation, and merge
+    integration visible even after older lifecycle events are collapsed.
+    */
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/workspace",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "empty"),
+        ParallelModeSupervisorDetailSnapshot::new(
+            Some(ParallelModeAgentSessionDetailSnapshot::new(
+                "slot-1:task-1",
+                "agent-1",
+                "task-1",
+                "Task One",
+                "slot-1",
+                Some("thread-1".to_string()),
+                "/tmp/worktree",
+                "akra-agent/slot-1/task-one",
+                "2026-04-17T00:00:00Z",
+                "cleaned",
+                "cleaned",
+                "slot cleaned and returned to the idle pool",
+                "tests passed",
+                "official ledger refresh succeeded",
+                Some("branch merged into prerelease and the slot returned to idle".to_string()),
+                vec![
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "assigned",
+                        "2026-04-17T00:00:00Z",
+                        "slot lease acquired and branch reserved for launch",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "starting",
+                        "2026-04-17T00:01:00Z",
+                        "thread prepared for agent launch",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "running",
+                        "2026-04-17T00:02:00Z",
+                        "agent session entered the running state",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "reported_complete",
+                        "2026-04-17T00:03:00Z",
+                        "agent reported completion",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "ledger_refreshing",
+                        "2026-04-17T00:04:00Z",
+                        "official refresh worker started",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "commit_ready",
+                        "2026-04-17T00:05:00Z",
+                        "official ledger refresh accepted the completion report",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "merge_queued",
+                        "2026-04-17T00:06:00Z",
+                        "distributor accepted the result and queued it for GitHub delivery",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "pushing",
+                        "2026-04-17T00:07:00Z",
+                        "distributor is pushing the source branch to origin",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "pr_pending",
+                        "2026-04-17T00:08:00Z",
+                        "source branch pushed and pull request ensure is in progress",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "merge_pending",
+                        "2026-04-17T00:09:00Z",
+                        "pull request is open and merge readiness is being checked",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "integrating",
+                        "2026-04-17T00:10:00Z",
+                        "pull request is ready and distributor is integrating the queued branch",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "merged",
+                        "2026-04-17T00:11:00Z",
+                        "agent branch is merged into prerelease and awaiting slot cleanup",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "cleanup_pending",
+                        "2026-04-17T00:12:00Z",
+                        "agent branch is merged into prerelease and awaiting slot cleanup",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "cleaned",
+                        "2026-04-17T00:13:00Z",
+                        "slot cleaned and returned to the idle pool",
+                    ),
+                ],
+                "2026-04-17T00:13:00Z",
+            )),
+            "empty",
+        ),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queued"),
+        None,
+    );
+    let detail_rendered = build_detail_lines(&snapshot)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(detail_rendered.contains("events: 00:08 ... pr pending"));
+    assert!(detail_rendered.contains("delivery: push 00:07 -> PR 00:08 -> merge 00:10"));
+    assert!(detail_rendered.contains("last event: 00:13 cleaned"));
 }
 
 #[test]
