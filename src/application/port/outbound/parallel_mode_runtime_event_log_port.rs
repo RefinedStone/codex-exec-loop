@@ -15,6 +15,7 @@ pub struct ParallelModeRuntimeEventLogRequest {
     pub limit: usize,
     pub projection_kind: Option<String>,
     pub projection_key: Option<String>,
+    pub after_sequence: Option<i64>,
 }
 
 impl ParallelModeRuntimeEventLogRequest {
@@ -23,6 +24,7 @@ impl ParallelModeRuntimeEventLogRequest {
             limit,
             projection_kind: None,
             projection_key: None,
+            after_sequence: None,
         }
     }
 
@@ -35,7 +37,13 @@ impl ParallelModeRuntimeEventLogRequest {
             limit,
             projection_kind: Some(projection_kind.into()),
             projection_key: Some(projection_key.into()),
+            after_sequence: None,
         }
+    }
+
+    pub fn after_sequence(mut self, sequence: i64) -> Self {
+        self.after_sequence = Some(sequence);
+        self
     }
 
     pub fn bounded_limit(&self) -> usize {

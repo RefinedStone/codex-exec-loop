@@ -6,7 +6,9 @@ use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
     verify_header_csrf,
 };
-use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
+use crate::adapter::inbound::admin_api::akra_dashboard::{
+    EventFeedView, RuntimeEventView, build_akra_dashboard_view, build_akra_events_view,
+};
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest,
@@ -16,6 +18,7 @@ use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::CookieJar;
+use serde::{Deserialize, Serialize};
 
 /*
  * api.rs는 planning admin inbound adapter의 JSON half다.
@@ -24,6 +27,27 @@ use axum_extra::extract::CookieJar;
  * application read model이다. planning validation, workspace file policy, authority-store mutation rule을 아는 곳은
  * 여전히 facade 하나뿐이다.
  */
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraEventsQuery {
+    pub limit: Option<usize>,
+    pub after_sequence: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraEventsApiResponse {
+    pub feed: EventFeedView,
+    pub events: Vec<RuntimeEventView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AdminFriendlyErrorResponse {
+    pub error: String,
+    pub operator_message: String,
+}
+
 pub(super) async fn summary_api(
     State(state): State<AdminAppState>,
     jar: CookieJar,
@@ -107,13 +131,26 @@ pub(super) async fn akra_distributor_api(
 
 pub(super) async fn akra_events_api(
     State(state): State<AdminAppState>,
+    Query(query): Query<AkraEventsQuery>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(
+    let limit = query.limit.unwrap_or(20);
+    if limit > 200 {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(AdminFriendlyErrorResponse {
+                error: "event_limit_too_large".to_string(),
+                operator_message: "Runtime event API limit must be 200 or less.".to_string(),
+            }),
+        )
+            .into_response());
+    }
+    let (feed, events) = build_akra_events_view(
         state.facade.workspace_dir(),
-        &state.planning,
         state.parallel_mode.as_ref(),
+        limit,
+        query.after_sequence,
     );
-    Ok(Json(dashboard.events).into_response())
+    Ok(Json(AkraEventsApiResponse { feed, events }).into_response())
 }
 
 pub(super) async fn create_draft_api(

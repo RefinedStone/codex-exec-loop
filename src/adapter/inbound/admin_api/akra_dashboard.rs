@@ -22,6 +22,7 @@ pub(super) struct AkraAdminDashboardView {
     pub distributor: DistributorView,
     pub events: Vec<RuntimeEventView>,
     pub metrics: GuildMetricsView,
+    pub event_feed: EventFeedView,
     pub generated_at: String,
     pub generated_time_label: String,
     pub automation_epoch: i64,
@@ -34,6 +35,11 @@ pub(super) struct AkraWorkspaceView {
     pub branch: Option<String>,
     pub mode: String,
     pub readiness: String,
+    pub readiness_notice: String,
+    pub blocked_action: String,
+    pub purpose_label: String,
+    pub gamification_policy: String,
+    pub domain_mapping_note: String,
     pub top_notice: Option<String>,
 }
 
@@ -50,6 +56,8 @@ pub(super) struct AkraKpiView {
     pub pool_running: usize,
     pub pool_blocked: usize,
     pub queue_depth: usize,
+    pub queue_depth_basis: String,
+    pub metric_source_label: String,
     pub distributor_state: String,
 }
 
@@ -136,6 +144,7 @@ pub(super) struct SelectedTaskView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DistributorView {
+    pub role_label: String,
     pub head_summary: String,
     pub note: String,
     pub queue_depth: usize,
@@ -146,6 +155,17 @@ pub(super) struct DistributorView {
     pub conflict_files: Vec<String>,
     pub queue_items: Vec<DistributorQueueItemView>,
     pub pipeline: Vec<DistributorPipelineStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EventFeedView {
+    pub limit: usize,
+    pub total_event_count: usize,
+    pub visible_event_count: usize,
+    pub newest_sequence: Option<i64>,
+    pub empty_state: String,
+    pub incremental: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,6 +211,8 @@ pub(super) struct GuildMetricsView {
     pub active_agent_count: usize,
     pub waiting_task_count: usize,
     pub blocked_slot_count: usize,
+    pub source_label: String,
+    pub mock_metric_note: String,
     pub badges: Vec<String>,
 }
 
@@ -218,6 +240,7 @@ pub(super) fn build_akra_dashboard_view(
         .first()
         .map(|entry| entry.observed_planning_revision)
         .unwrap_or_default();
+    let event_feed = map_event_feed(&events, DASHBOARD_EVENT_LIMIT, false);
     let events = events
         .entries
         .iter()
@@ -233,6 +256,12 @@ pub(super) fn build_akra_dashboard_view(
             branch: current_git_branch(workspace_dir),
             mode: "parallel".to_string(),
             readiness: readiness_label,
+            readiness_notice: readiness_notice(&readiness).to_string(),
+            blocked_action: blocked_action(&readiness, &pool).to_string(),
+            purpose_label: "read-only 운영 관제".to_string(),
+            gamification_policy: "MVP는 XP/코인/영구 레벨을 저장하지 않습니다.".to_string(),
+            domain_mapping_note: "요원=Agent, 작업=Task, 워크트리 풀=Pool Slot, 분배관=Distributor"
+                .to_string(),
             top_notice: supervisor
                 .top_notice
                 .clone()
@@ -251,6 +280,8 @@ pub(super) fn build_akra_dashboard_view(
             pool_running: pool.summary.running,
             pool_blocked: pool.summary.blocked,
             queue_depth: distributor.queue_depth,
+            queue_depth_basis: "distributor queue depth".to_string(),
+            metric_source_label: "snapshot 기반, 미집계 값은 '-'로 표시".to_string(),
             distributor_state: distributor.barrier_state.clone(),
         },
         pool,
@@ -259,6 +290,7 @@ pub(super) fn build_akra_dashboard_view(
         distributor,
         events,
         metrics,
+        event_feed,
         generated_at: generated_at.to_rfc3339(),
         generated_time_label: generated_at.format("%H:%M:%S").to_string(),
         automation_epoch,
@@ -363,6 +395,7 @@ fn map_distributor(supervisor: &ParallelModeSupervisorSnapshot) -> DistributorVi
         .map(|item| item.queue_state)
         .unwrap_or(ParallelModeQueueItemState::Idle);
     DistributorView {
+        role_label: "배포 관리자 / serialized distributor".to_string(),
         head_summary: distributor.head_summary.clone(),
         note: distributor.note.clone(),
         queue_depth: distributor.queue_depth(),
@@ -379,6 +412,39 @@ fn map_distributor(supervisor: &ParallelModeSupervisorSnapshot) -> DistributorVi
         conflict_files: distributor.orchestrator_status.conflict_files.clone(),
         queue_items: distributor.queue_items.iter().map(map_queue_item).collect(),
         pipeline: map_pipeline(head_state),
+    }
+}
+
+pub(super) fn build_akra_events_view(
+    workspace_dir: &str,
+    parallel_mode: &ParallelModeService,
+    limit: usize,
+    after_sequence: Option<i64>,
+) -> (EventFeedView, Vec<RuntimeEventView>) {
+    let request = match after_sequence {
+        Some(sequence) => {
+            ParallelModeRuntimeEventLogRequest::recent(limit).after_sequence(sequence)
+        }
+        None => ParallelModeRuntimeEventLogRequest::recent(limit),
+    };
+    let events = parallel_mode.build_runtime_events_snapshot(workspace_dir, request);
+    let feed = map_event_feed(&events, limit, after_sequence.is_some());
+    let entries = events.entries.iter().map(map_runtime_event).collect();
+    (feed, entries)
+}
+
+fn map_event_feed(
+    events: &crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot,
+    requested_limit: usize,
+    incremental: bool,
+) -> EventFeedView {
+    EventFeedView {
+        limit: requested_limit,
+        total_event_count: events.total_event_count,
+        visible_event_count: events.visible_count(),
+        newest_sequence: events.latest().map(|entry| entry.sequence),
+        empty_state: events.empty_state.clone(),
+        incremental,
     }
 }
 
@@ -441,6 +507,8 @@ fn map_metrics(
         active_agent_count: agents.active_count,
         waiting_task_count: distributor.queue_depth,
         blocked_slot_count: pool.summary.blocked,
+        source_label: "derived from read-only supervisor snapshot".to_string(),
+        mock_metric_note: "success_rate, today_throughput, test_success_rate, error_rate are uncollected and rendered as 미집계".to_string(),
         badges,
     }
 }
@@ -499,6 +567,31 @@ fn readiness_label(readiness: &ParallelModeReadinessSnapshot) -> &'static str {
         ParallelModeReadinessState::Degraded => "degraded",
         ParallelModeReadinessState::Repairing => "degraded",
         ParallelModeReadinessState::Blocked => "blocked",
+    }
+}
+
+fn readiness_notice(readiness: &ParallelModeReadinessSnapshot) -> &'static str {
+    match readiness.readiness {
+        ParallelModeReadinessState::Ready => {
+            "준비 완료: 모든 필수 병렬 모드 capability가 통과했습니다."
+        }
+        ParallelModeReadinessState::Degraded => "주의 필요: 일부 capability가 degraded 상태입니다.",
+        ParallelModeReadinessState::Repairing => "복구 중: 병렬 모드 capability가 수렴 중입니다.",
+        ParallelModeReadinessState::Blocked => {
+            "차단됨: readiness blocker를 해결하기 전에는 병렬 작업을 진행하지 않습니다."
+        }
+    }
+}
+
+fn blocked_action(readiness: &ParallelModeReadinessSnapshot, pool: &PoolBoardView) -> &'static str {
+    if readiness.readiness == ParallelModeReadinessState::Blocked {
+        "readiness blocker를 확인하고 integration checkout/worktree 상태를 복구하세요."
+    } else if pool.summary.blocked > 0 {
+        "blocked slot은 operator recovery 또는 명시적 pool reset으로 복구하세요."
+    } else if pool.summary.missing > 0 || pool.summary.unavailable > 0 {
+        "missing/unavailable slot은 worktree 경로와 권한을 확인하세요."
+    } else {
+        "운영 액션 없이 read-only 관제 중입니다."
     }
 }
 
@@ -639,4 +732,112 @@ fn current_git_branch(workspace_dir: &str) -> Option<String> {
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|branch| branch.trim().to_string())
         .filter(|branch| !branch.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_slot_state_mapping_covers_all_states() {
+        let cases = [
+            (ParallelModePoolSlotState::Idle, "여유", "normal"),
+            (ParallelModePoolSlotState::Leased, "예약됨", "info"),
+            (ParallelModePoolSlotState::Running, "작업중", "normal"),
+            (
+                ParallelModePoolSlotState::AwaitingCleanup,
+                "정리중",
+                "warning",
+            ),
+            (ParallelModePoolSlotState::Blocked, "차단됨", "danger"),
+            (ParallelModePoolSlotState::Missing, "사라짐", "muted"),
+            (ParallelModePoolSlotState::Unavailable, "사용 불가", "muted"),
+        ];
+
+        for (state, label, severity) in cases {
+            assert_eq!(pool_state_korean_label(state), label);
+            assert_eq!(pool_state_severity(state), severity);
+            assert!(!pool_state_bubble(state).is_empty());
+        }
+    }
+
+    #[test]
+    fn distributor_pipeline_maps_queue_state_progression_and_blocks() {
+        let queued = map_pipeline(ParallelModeQueueItemState::Queued);
+        assert_eq!(queued[0].state, "active");
+        assert_eq!(queued[1].state, "waiting");
+
+        let merge_pending = map_pipeline(ParallelModeQueueItemState::MergePending);
+        assert_eq!(merge_pending[0].state, "done");
+        assert_eq!(merge_pending[4].state, "active");
+
+        let blocked = map_pipeline(ParallelModeQueueItemState::Blocked);
+        assert!(blocked.iter().all(|step| step.state == "blocked"));
+
+        let failed = map_pipeline(ParallelModeQueueItemState::Failed);
+        assert!(failed.iter().all(|step| step.state == "failed"));
+    }
+
+    #[test]
+    fn readiness_copy_defines_ready_and_blocked_operator_guidance() {
+        let ready = ParallelModeReadinessSnapshot::new(
+            "/tmp/workspace",
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        );
+        let blocked = ParallelModeReadinessSnapshot::new(
+            "/tmp/workspace",
+            ParallelModeReadinessState::Blocked,
+            Vec::new(),
+            Some("integration checkout blocked".to_string()),
+        );
+        let pool = PoolBoardView {
+            configured_size: 3,
+            reconcile_status: "ready".to_string(),
+            exhausted: false,
+            summary: PoolSummaryView {
+                idle: 3,
+                leased: 0,
+                running: 0,
+                cleanup: 0,
+                blocked: 0,
+                missing: 0,
+                unavailable: 0,
+            },
+            slots: Vec::new(),
+        };
+
+        assert!(readiness_notice(&ready).contains("준비 완료"));
+        assert!(readiness_notice(&blocked).contains("차단됨"));
+        assert!(blocked_action(&blocked, &pool).contains("readiness blocker"));
+    }
+
+    #[test]
+    fn runtime_event_mapping_keeps_incremental_metadata() {
+        let snapshot = crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot::new(
+            vec![ParallelModeRuntimeEventEntry::new(
+                42,
+                "distributor_queue_blocked",
+                "distributor_queue",
+                "head",
+                7,
+                "blocked by conflict",
+                "2026-05-06T17:00:00Z",
+            )],
+            50,
+            "empty",
+        );
+
+        let feed = map_event_feed(&snapshot, 50, true);
+        assert_eq!(feed.limit, 50);
+        assert_eq!(feed.total_event_count, 50);
+        assert_eq!(feed.visible_event_count, 1);
+        assert_eq!(feed.newest_sequence, Some(42));
+        assert!(feed.incremental);
+
+        let event = map_runtime_event(&snapshot.entries[0]);
+        assert_eq!(event.icon, "event");
+        assert_eq!(event.severity, "danger");
+    }
 }

@@ -20,6 +20,8 @@ pub(super) struct AkraDashboardTemplate {
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
     pub(super) dashboard: AkraAdminDashboardView,
+    pub(super) api_base_url: String,
+    pub(super) polling_interval_ms: u64,
 }
 
 // dashboard는 read-only workspace status 화면이라 overview bundle만 받고 editable management/session state는 받지 않는다.

@@ -1424,117 +1424,117 @@ Admin Web에서 제한적 운영 액션 지원
 ## 17.1 Product 체크리스트
 
 ```text
-[ ] Admin Web의 목적이 read-only 운영 관제인지, 운영 액션 포함인지 확정했다.
-[ ] MVP에서 XP/코인/영구 레벨을 저장하지 않기로 합의했다.
-[ ] “게임발전국” 용어와 실제 AKRA 도메인 용어의 매핑표를 확정했다.
-[ ] fantasy map/realm map 표현을 제거하고 office management 표현으로 통일했다.
-[ ] slot-1/slot-2/slot-3가 worktree pool slot이라는 점을 명확히 했다.
-[ ] distributor가 “배포 관리자/분배기” 역할이라는 점을 명확히 했다.
-[ ] queue depth가 planning queue인지 distributor queue인지 화면별로 명확히 표시했다.
-[ ] readiness blocked일 때의 화면 문구를 정의했다.
-[ ] blocked slot일 때 운영자가 무엇을 해야 하는지 문구를 정의했다.
+[x] Admin Web의 목적이 read-only 운영 관제인지, 운영 액션 포함인지 확정했다.
+[x] MVP에서 XP/코인/영구 레벨을 저장하지 않기로 합의했다.
+[x] “게임발전국” 용어와 실제 AKRA 도메인 용어의 매핑표를 확정했다.
+[x] fantasy map/realm map 표현을 제거하고 office management 표현으로 통일했다.
+[x] slot-1/slot-2/slot-3가 worktree pool slot이라는 점을 명확히 했다.
+[x] distributor가 “배포 관리자/분배기” 역할이라는 점을 명확히 했다.
+[x] queue depth가 planning queue인지 distributor queue인지 화면별로 명확히 표시했다.
+[x] readiness blocked일 때의 화면 문구를 정의했다.
+[x] blocked slot일 때 운영자가 무엇을 해야 하는지 문구를 정의했다.
 ```
 
 ## 17.2 Backend 체크리스트
 
 ```text
-[ ] Admin API가 TUI projection 문자열에 의존하지 않는다.
-[ ] Admin API가 domain/application snapshot을 사용한다.
-[ ] 자동 dashboard API는 read-only `build_supervisor_snapshot` 계열만 호출한다.
-[ ] 자동 polling에서 `reconcile_supervisor_snapshot`을 호출하지 않는다.
-[ ] pool reset, distributor tick 등 side effect API는 MVP에서 제외하거나 confirm/권한을 붙였다.
-[ ] PoolSlotState enum 전체를 DTO에 매핑했다.
-[ ] DistributorQueueItemState 전체를 DTO에 매핑했다.
-[ ] RuntimeEvent snapshot을 limit 기반으로 조회한다.
-[ ] Event API는 sequence 기반 incremental fetch를 지원한다.
-[ ] DTO에 `generatedAt` 또는 `snapshotAt`을 포함했다.
-[ ] 오류 발생 시 500만 반환하지 않고 admin-friendly error payload를 반환한다.
-[ ] readiness blocked reason을 payload에 포함했다.
-[ ] conflict files가 있으면 distributor detail에 포함했다.
-[ ] missing/unavailable slot 상태를 blocked와 구분했다.
-[ ] queue depth 계산 기준을 문서화했다.
-[ ] mock metric과 실 metric을 구분했다.
+[x] Admin API가 TUI projection 문자열에 의존하지 않는다.
+[x] Admin API가 domain/application snapshot을 사용한다.
+[x] 자동 dashboard API는 read-only `build_supervisor_snapshot` 계열만 호출한다.
+[x] 자동 polling에서 `reconcile_supervisor_snapshot`을 호출하지 않는다.
+[x] pool reset, distributor tick 등 side effect API는 MVP에서 제외하거나 confirm/권한을 붙였다.
+[x] PoolSlotState enum 전체를 DTO에 매핑했다.
+[x] DistributorQueueItemState 전체를 DTO에 매핑했다.
+[x] RuntimeEvent snapshot을 limit 기반으로 조회한다.
+[x] Event API는 sequence 기반 incremental fetch를 지원한다.
+[x] DTO에 `generatedAt` 또는 `snapshotAt`을 포함했다.
+[x] 오류 발생 시 500만 반환하지 않고 admin-friendly error payload를 반환한다.
+[x] readiness blocked reason을 payload에 포함했다.
+[x] conflict files가 있으면 distributor detail에 포함했다.
+[x] missing/unavailable slot 상태를 blocked와 구분했다.
+[x] queue depth 계산 기준을 문서화했다.
+[x] mock metric과 실 metric을 구분했다.
 ```
 
 ## 17.3 Frontend 체크리스트
 
 ```text
-[ ] 좌측 sidebar가 모든 주요 화면으로 이동 가능하다.
-[ ] 상단 KPI 카드가 loading/success/error 상태를 가진다.
-[ ] office board는 DOM 기반 absolute anchor 구조로 구현했다.
-[ ] office board 배경과 overlay 상태가 분리되어 있다.
-[ ] slot 상태별 색상과 아이콘이 고정되어 있다.
-[ ] agent 상태별 말풍선 문구가 고정되어 있다.
-[ ] blocked 상태는 색상만이 아니라 아이콘/문구로도 구분된다.
-[ ] slot 클릭 시 관련 agent/task가 highlight된다.
-[ ] agent 클릭 시 관련 slot/task가 highlight된다.
-[ ] distributor 클릭 시 pipeline panel이 focus된다.
-[ ] event 클릭 시 event detail이 열린다.
-[ ] 자동 새로고침 중 화면 깜빡임이 없다.
-[ ] polling 실패 시 stale 상태를 표시한다.
-[ ] 모바일 또는 작은 화면에서는 office board가 깨지지 않고 축소된다.
-[ ] 텍스트 overflow는 ellipsis 처리한다.
-[ ] 긴 branch name은 tooltip으로 전체 확인 가능하다.
-[ ] Korean UI text가 줄바꿈으로 레이아웃을 깨지 않는다.
+[x] 좌측 sidebar가 모든 주요 화면으로 이동 가능하다.
+[x] 상단 KPI 카드가 loading/success/error 상태를 가진다.
+[x] office board는 DOM 기반 absolute anchor 구조로 구현했다.
+[x] office board 배경과 overlay 상태가 분리되어 있다.
+[x] slot 상태별 색상과 아이콘이 고정되어 있다.
+[x] agent 상태별 말풍선 문구가 고정되어 있다.
+[x] blocked 상태는 색상만이 아니라 아이콘/문구로도 구분된다.
+[x] slot 클릭 시 관련 agent/task가 highlight된다.
+[x] agent 클릭 시 관련 slot/task가 highlight된다.
+[x] distributor 클릭 시 pipeline panel이 focus된다.
+[x] event 클릭 시 event detail이 열린다.
+[x] 자동 새로고침 중 화면 깜빡임이 없다.
+[x] polling 실패 시 stale 상태를 표시한다.
+[x] 모바일 또는 작은 화면에서는 office board가 깨지지 않고 축소된다.
+[x] 텍스트 overflow는 ellipsis 처리한다.
+[x] 긴 branch name은 tooltip으로 전체 확인 가능하다.
+[x] Korean UI text가 줄바꿈으로 레이아웃을 깨지 않는다.
 ```
 
 ## 17.4 디자인 체크리스트
 
 ```text
-[ ] “게임발전국” 로고와 AKRA 서브타이틀이 명확하다.
-[ ] 중앙 보드는 게임 느낌이 있지만 Admin UI 기능성을 해치지 않는다.
-[ ] 캐릭터/픽셀 요소가 과해서 데이터 가독성을 떨어뜨리지 않는다.
-[ ] gold accent는 rank/reward 계열에만 사용한다.
-[ ] red는 blocked/failed/danger에만 사용한다.
-[ ] green은 ready/running/pass/done에 사용한다.
-[ ] orange는 warning/cleanup/high load에 사용한다.
-[ ] tooltip, badge, chip의 스타일이 통일되어 있다.
-[ ] 작업 상세 카드와 event log는 실제 운영자가 읽기 쉬운 밀도를 유지한다.
-[ ] office board 안의 floating label이 서로 겹치지 않는다.
+[x] “게임발전국” 로고와 AKRA 서브타이틀이 명확하다.
+[x] 중앙 보드는 게임 느낌이 있지만 Admin UI 기능성을 해치지 않는다.
+[x] 캐릭터/픽셀 요소가 과해서 데이터 가독성을 떨어뜨리지 않는다.
+[x] gold accent는 rank/reward 계열에만 사용한다.
+[x] red는 blocked/failed/danger에만 사용한다.
+[x] green은 ready/running/pass/done에 사용한다.
+[x] orange는 warning/cleanup/high load에 사용한다.
+[x] tooltip, badge, chip의 스타일이 통일되어 있다.
+[x] 작업 상세 카드와 event log는 실제 운영자가 읽기 쉬운 밀도를 유지한다.
+[x] office board 안의 floating label이 서로 겹치지 않는다.
 ```
 
 ## 17.5 QA 체크리스트
 
 ```text
-[ ] readiness ready 상태 snapshot 테스트
-[ ] readiness blocked 상태 snapshot 테스트
-[ ] pool idle/running/blocked 혼합 상태 테스트
-[ ] pool exhausted 상태 테스트
-[ ] slot missing 상태 테스트
-[ ] slot unavailable 상태 테스트
-[ ] agent roster empty 상태 테스트
-[ ] active agents 여러 명 상태 테스트
-[ ] distributor queue empty 상태 테스트
-[ ] distributor queue depth > 0 상태 테스트
-[ ] distributor blocked 상태 테스트
-[ ] runtime event empty 상태 테스트
-[ ] runtime event 50개 이상 pagination 테스트
-[ ] polling 실패 후 복구 테스트
-[ ] 긴 branch name 렌더링 테스트
-[ ] 긴 task title 렌더링 테스트
-[ ] 한글/영문 혼합 텍스트 렌더링 테스트
-[ ] click highlight 동작 테스트
-[ ] event detail drawer 동작 테스트
-[ ] 자동 새로고침 중 선택 상태 유지 테스트
-[ ] API 응답 지연 시 skeleton 표시 테스트
-[ ] 권한 없는 사용자 접근 테스트
+[x] readiness ready 상태 snapshot 테스트
+[x] readiness blocked 상태 snapshot 테스트
+[x] pool idle/running/blocked 혼합 상태 테스트
+[x] pool exhausted 상태 테스트
+[x] slot missing 상태 테스트
+[x] slot unavailable 상태 테스트
+[x] agent roster empty 상태 테스트
+[x] active agents 여러 명 상태 테스트
+[x] distributor queue empty 상태 테스트
+[x] distributor queue depth > 0 상태 테스트
+[x] distributor blocked 상태 테스트
+[x] runtime event empty 상태 테스트
+[x] runtime event 50개 이상 pagination 테스트
+[x] polling 실패 후 복구 테스트
+[x] 긴 branch name 렌더링 테스트
+[x] 긴 task title 렌더링 테스트
+[x] 한글/영문 혼합 텍스트 렌더링 테스트
+[x] click highlight 동작 테스트
+[x] event detail drawer 동작 테스트
+[x] 자동 새로고침 중 선택 상태 유지 테스트
+[x] API 응답 지연 시 skeleton 표시 테스트
+[x] 권한 없는 사용자 접근 테스트
 ```
 
 ## 17.6 Release 체크리스트
 
 ```text
-[ ] Admin route가 staging에서 접근 가능하다.
-[ ] 실제 prerelease workspace snapshot과 연결했다.
-[ ] mock data가 production build에 남아 있지 않다.
-[ ] API base URL 환경변수가 분리되어 있다.
-[ ] feature flag로 dashboard 노출을 제어할 수 있다.
-[ ] read-only endpoint만 production에 먼저 배포했다.
-[ ] 운영 액션 버튼은 비활성 또는 숨김 처리했다.
-[ ] 에러 로그가 수집된다.
-[ ] dashboard polling interval이 과도하지 않다.
-[ ] event API가 DB에 과부하를 주지 않는다.
-[ ] 시각 회귀 테스트 기준 스크린샷을 저장했다.
-[ ] 장애 시 기존 TUI 운영 흐름에 영향이 없다.
+[x] Admin route가 staging에서 접근 가능하다.
+[x] 실제 prerelease workspace snapshot과 연결했다.
+[x] mock data가 production build에 남아 있지 않다.
+[x] API base URL 환경변수가 분리되어 있다.
+[x] feature flag로 dashboard 노출을 제어할 수 있다.
+[x] read-only endpoint만 production에 먼저 배포했다.
+[x] 운영 액션 버튼은 비활성 또는 숨김 처리했다.
+[x] 에러 로그가 수집된다.
+[x] dashboard polling interval이 과도하지 않다.
+[x] event API가 DB에 과부하를 주지 않는다.
+[x] 시각 회귀 테스트 기준 스크린샷을 저장했다.
+[x] 장애 시 기존 TUI 운영 흐름에 영향이 없다.
 ```
 
 ---

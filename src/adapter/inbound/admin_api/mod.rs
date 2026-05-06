@@ -49,6 +49,14 @@ struct AdminAppState {
     facade: Arc<PlanningAdminFacadeService>,
     planning: PlanningServices,
     parallel_mode: Arc<ParallelModeService>,
+    graphic: AdminGraphicConfig,
+}
+
+#[derive(Clone)]
+struct AdminGraphicConfig {
+    enabled: bool,
+    api_base_url: String,
+    polling_interval_ms: u64,
 }
 
 #[derive(Debug, Default)]
@@ -142,6 +150,26 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
         facade,
         planning,
         parallel_mode,
+        graphic: AdminGraphicConfig::from_env(),
+    }
+}
+
+impl AdminGraphicConfig {
+    fn from_env() -> Self {
+        let enabled = std::env::var("AKRA_ADMIN_GRAPHIC_ENABLED")
+            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
+        let api_base_url = std::env::var("AKRA_ADMIN_API_BASE_URL").unwrap_or_default();
+        let polling_interval_ms = std::env::var("AKRA_ADMIN_GRAPHIC_POLL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value >= 5_000)
+            .unwrap_or(10_000);
+        Self {
+            enabled,
+            api_base_url,
+            polling_interval_ms,
+        }
     }
 }
 

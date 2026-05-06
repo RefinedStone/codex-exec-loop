@@ -72,7 +72,11 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("href=\"/admin/legacy\""));
     assert!(BASE_TEMPLATE.contains("href=\"#pool\""));
     assert!(BASE_TEMPLATE.contains("href=\"#pipeline\""));
+    assert!(BASE_TEMPLATE.contains("href=\"#system\""));
     assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
+    assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
+    assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
+    assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_POLL_MS"));
 
     for route in [
         "href=\"/admin/tasks\"",
@@ -99,6 +103,13 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
         "운영 지표",
         "akra_admin",
         "길드 성과",
+        "data-admin-graphic",
+        "data-poll-interval-ms",
+        "data-focus-target=\"pipeline\"",
+        "data-event-drawer",
+        "stale snapshot",
+        "pollEvents",
+        "skeleton-line",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(copy),
@@ -146,6 +157,11 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "@media (max-width: 860px)",
         "generated_time_label",
         "automation_epoch",
+        "readiness_notice",
+        "blocked_action",
+        "queue_depth_basis",
+        "mock_metric_note",
+        "read-only 운영 관제",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)
@@ -161,6 +177,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "akra-admin",
         "/admin/legacy",
         "/api/admin/akra/dashboard",
+        "/api/admin/akra/events?limit=50",
+        "/api/admin/akra/events?afterSequence=0&limit=50",
         "--screenshot=",
         "admin graphic visual contract ok",
     ] {

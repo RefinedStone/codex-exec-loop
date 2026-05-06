@@ -126,7 +126,11 @@
     padding: 14px;
     display: grid;
     gap: 8px;
+    transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
   }
+  .kpi.is-loading { opacity: 0.72; }
+  .kpi.is-success { border-color: rgba(53, 208, 127, 0.44); }
+  .kpi.is-error { border-color: rgba(255, 107, 107, 0.58); background: rgba(255, 107, 107, 0.09); }
   .kpi .kpi-head {
     display: flex;
     gap: 8px;
@@ -220,6 +224,11 @@
     font-size: 15px;
   }
   .slot-card {
+    appearance: none;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
     display: grid;
     grid-template-columns: 1fr 54px;
     gap: 8px;
@@ -228,6 +237,19 @@
     border: 1px solid rgba(255,255,255,0.11);
     border-radius: 8px;
     background: rgba(255,255,255,0.05);
+    cursor: pointer;
+  }
+  .slot-card.is-linked,
+  .scene-object.is-linked,
+  .game-panel.is-focused {
+    outline: 2px solid rgba(93, 169, 255, 0.72);
+    outline-offset: 3px;
+  }
+  .slot-card.is-selected,
+  .scene-object.is-selected,
+  .event-row.is-selected {
+    border-color: rgba(245, 200, 75, 0.72);
+    box-shadow: 0 0 0 3px rgba(245, 200, 75, 0.12);
   }
   .slot-card + .slot-card { margin-top: 8px; }
   .slot-card strong,
@@ -251,11 +273,16 @@
     box-shadow: inset 0 0 0 3px rgba(0,0,0,0.22);
   }
   .scene-object {
+    appearance: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
     position: absolute;
     z-index: 2;
     border: 1px solid rgba(232, 241, 255, 0.17);
     background: linear-gradient(160deg, rgba(104, 76, 48, 0.96), rgba(35, 51, 71, 0.97));
     box-shadow: 12px 16px 0 rgba(0,0,0,0.24);
+    cursor: pointer;
   }
   .server-rack {
     left: 16%;
@@ -395,8 +422,14 @@
     border-bottom: 0;
   }
   .event-row {
+    appearance: none;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
     grid-template-columns: 28px minmax(0, 1fr);
     align-items: start;
+    cursor: pointer;
   }
   .event-row strong,
   .event-row small,
@@ -578,6 +611,50 @@
     background: rgba(255, 107, 107, 0.1);
     color: var(--game-ink);
   }
+  .ops-status,
+  .event-detail {
+    margin: 12px 0;
+    padding: 12px;
+    border: 1px solid rgba(130, 155, 193, 0.22);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+  }
+  .ops-status {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .ops-status strong,
+  .ops-status small {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+  .ops-status .blocked-copy { color: var(--game-yellow); }
+  .event-detail[hidden] { display: none; }
+  .event-detail pre {
+    margin: 8px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--game-muted);
+  }
+  .poll-status {
+    color: var(--game-muted);
+  }
+  .poll-status.is-stale,
+  .poll-status.is-error {
+    color: var(--game-yellow);
+  }
+  .skeleton-line {
+    min-height: 1em;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.07), rgba(255,255,255,0.16), rgba(255,255,255,0.07));
+    background-size: 220% 100%;
+    animation: akraSkeleton 1.2s linear infinite;
+  }
+  @keyframes akraSkeleton {
+    from { background-position: 220% 0; }
+    to { background-position: -220% 0; }
+  }
   @media (max-width: 1320px) {
     .kpi-grid { grid-template-columns: repeat(4, minmax(128px, 1fr)); }
     .board-row,
@@ -612,10 +689,17 @@
       z-index: 1;
     }
     .speech { position: static; display: inline-block; margin-bottom: 8px; }
+    .ops-status { grid-template-columns: 1fr; }
   }
 </style>
 
-<section class="akra-game" aria-label="게임발전국 AKRA Admin Control Center">
+<section
+  class="akra-game"
+  aria-label="게임발전국 AKRA Admin Control Center"
+  data-admin-graphic
+  data-api-base="{{ api_base_url }}"
+  data-poll-interval-ms="{{ polling_interval_ms }}"
+>
   <header class="akra-topbar">
     <div class="akra-title">
       <span class="pixel-emblem" aria-hidden="true"></span>
@@ -634,7 +718,7 @@
     </div>
     <div class="top-stat">
       <small>Last Updated</small>
-      <strong>{{ dashboard.generated_time_label }}</strong>
+      <strong data-last-updated>{{ dashboard.generated_time_label }}</strong>
     </div>
     <div class="admin-user">
       <span class="pixel-avatar" aria-hidden="true"></span>
@@ -649,15 +733,22 @@
   <div class="notice error-notice">{{ notice }}</div>
   {% endif %}
 
+  <div class="ops-status" aria-label="AKRA Admin product and operation contract">
+    <div><small>목적</small><strong>{{ dashboard.workspace.purpose_label }}</strong></div>
+    <div><small>게임화 정책</small><strong>{{ dashboard.workspace.gamification_policy }}</strong></div>
+    <div><small>도메인 매핑</small><strong>{{ dashboard.workspace.domain_mapping_note }}</strong></div>
+    <div><small>readiness</small><strong>{{ dashboard.workspace.readiness_notice }}</strong><small class="blocked-copy">{{ dashboard.workspace.blocked_action }}</small></div>
+  </div>
+
   <div class="kpi-grid" aria-label="AKRA operation KPIs">
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon yellow">T</i>총 작업</span><strong>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small class="positive">snapshot 기반</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon green">S</i>성공률</span><strong>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon red">D</i>오늘 처리량</span><strong>{% if let Some(count) = dashboard.kpis.today_throughput %}{{ count }}{% else %}-{% endif %}</strong><small>미집계</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon">A</i>활성 요원</span><strong>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong><small class="positive">roster snapshot</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon yellow">P</i>풀 슬롯</span><strong>{{ dashboard.kpis.pool_running }} / {{ dashboard.kpis.pool_configured_size }}</strong><small>여유 {{ dashboard.kpis.pool_idle }}</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon red">Q</i>대기 작업</span><strong>{{ dashboard.kpis.queue_depth }}</strong><small>distributor depth</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon green">R</i>준비도</span><strong>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
-    <div class="kpi"><span class="kpi-head"><i class="kpi-icon violet">B</i>분배기 상태</span><strong>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
+    <div class="kpi is-success" data-kpi="totalTasks"><span class="kpi-head"><i class="kpi-icon yellow">T</i>총 작업</span><strong data-value>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small class="positive">{{ dashboard.kpis.metric_source_label }}</small></div>
+    <div class="kpi is-success" data-kpi="successRate"><span class="kpi-head"><i class="kpi-icon green">S</i>성공률</span><strong data-value>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
+    <div class="kpi is-success" data-kpi="todayThroughput"><span class="kpi-head"><i class="kpi-icon red">D</i>오늘 처리량</span><strong data-value>{% if let Some(count) = dashboard.kpis.today_throughput %}{{ count }}{% else %}-{% endif %}</strong><small>미집계</small></div>
+    <div class="kpi is-success" data-kpi="agents"><span class="kpi-head"><i class="kpi-icon">A</i>활성 요원</span><strong data-value>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong><small class="positive">roster snapshot</small></div>
+    <div class="kpi is-success" data-kpi="pool"><span class="kpi-head"><i class="kpi-icon yellow">P</i>풀 슬롯</span><strong data-value>{{ dashboard.kpis.pool_running }} / {{ dashboard.kpis.pool_configured_size }}</strong><small>여유 {{ dashboard.kpis.pool_idle }}</small></div>
+    <div class="kpi is-success" data-kpi="queueDepth"><span class="kpi-head"><i class="kpi-icon red">Q</i>대기 작업</span><strong data-value>{{ dashboard.kpis.queue_depth }}</strong><small>{{ dashboard.kpis.queue_depth_basis }}</small></div>
+    <div class="kpi is-success" data-kpi="readiness"><span class="kpi-head"><i class="kpi-icon green">R</i>준비도</span><strong data-value>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
+    <div class="kpi is-success" data-kpi="distributor"><span class="kpi-head"><i class="kpi-icon violet">B</i>분배기 상태</span><strong data-value>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
   </div>
 
   <div class="board-row">
@@ -673,19 +764,33 @@
           <small>{{ dashboard.pool.configured_size }} / {{ dashboard.pool.configured_size }}</small>
         </div>
         {% for slot in dashboard.pool.slots %}
-        <div class="slot-card severity-{{ slot.severity }}">
+        <button
+          type="button"
+          class="slot-card severity-{{ slot.severity }}"
+          data-slot-id="{{ slot.slot_id }}"
+          data-agent-id="{{ slot.owner_agent_id.as_deref().unwrap_or("") }}"
+          data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
+          title="{{ slot.branch_name }} / {{ slot.worktree_label }} / {{ slot.note }}"
+        >
           <div>
             <strong>{{ slot.slot_id }}</strong>
             <small>{{ slot.label }}</small>
             <small>{{ slot.owner_agent_id.as_deref().unwrap_or("-") }}</small>
           </div>
           <span class="mini-server" aria-hidden="true"></span>
-        </div>
+        </button>
         {% endfor %}
       </aside>
 
       {% for agent in dashboard.agents.entries %}
-      <div class="scene-object desk agent-{{ loop.index }} severity-{% if agent.status == "blocked" %}danger{% else if agent.status == "cleanup" %}warning{% else %}normal{% endif %}">
+      <button
+        type="button"
+        class="scene-object desk agent-{{ loop.index }} severity-{% if agent.status == "blocked" %}danger{% else if agent.status == "cleanup" %}warning{% else %}normal{% endif %}"
+        data-agent-id="{{ agent.agent_id }}"
+        data-slot-id="{{ agent.slot_id }}"
+        data-task-id=""
+        title="{{ agent.branch_name }} / {{ agent.task_title }} / {{ agent.latest_summary }}"
+      >
         <span class="speech">{{ agent.bubble_label }}</span>
         <span class="agent-sprite">{{ agent.display_name }}</span>
         <div class="object-label">
@@ -693,10 +798,15 @@
           <span>{{ agent.task_title }}</span>
           <small>{{ agent.slot_id }} · {{ agent.lifecycle_state }}</small>
         </div>
-      </div>
+      </button>
       {% endfor %}
 
-      <div class="scene-object distributor-desk">
+      <button
+        type="button"
+        class="scene-object distributor-desk"
+        data-focus-target="pipeline"
+        title="{{ dashboard.distributor.role_label }} / {{ dashboard.distributor.integration_worktree_readiness }}"
+      >
         <span class="speech">배포 파이프라인</span>
         <span class="agent-sprite">D</span>
         <div class="object-label">
@@ -704,9 +814,9 @@
           <span>{{ dashboard.distributor.head_summary }}</span>
           <small>queue {{ dashboard.distributor.queue_depth }}</small>
         </div>
-      </div>
+      </button>
 
-      <div class="scene-object event-board">
+      <button type="button" class="scene-object event-board" data-focus-target="events" title="Runtime event feed / total {{ dashboard.event_feed.total_event_count }}">
         <span class="speech">이벤트 로그</span>
         <span class="agent-sprite">E</span>
         <div class="object-label">
@@ -714,26 +824,38 @@
           <span>{{ dashboard.events.len() }} visible</span>
           <small>{{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</small>
         </div>
-      </div>
+      </button>
     </div>
 
     <aside class="right-stack">
       <section class="game-panel" id="events">
-        <div class="panel-title"><h3>실시간 이벤트</h3><small>LIVE</small></div>
+        <div class="panel-title"><h3>실시간 이벤트</h3><small>LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}</small></div>
         {% if dashboard.events.is_empty() %}
-        <p>runtime event log가 아직 비어 있습니다.</p>
+        <p>{{ dashboard.event_feed.empty_state }}</p>
         {% else %}
         {% for event in dashboard.events %}
-        <div class="event-row severity-{{ event.severity }}">
+        <button
+          type="button"
+          class="event-row severity-{{ event.severity }}"
+          data-event-detail="{{ event.summary }}"
+          data-event-kind="{{ event.event_kind }}"
+          data-event-sequence="{{ event.sequence }}"
+          data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
+          title="{{ event.recorded_at }} / {{ event.summary }}"
+        >
           <span class="event-icon">{{ event.icon }}</span>
           <div>
             <strong>{{ event.event_kind }}</strong>
             <small>{{ event.recorded_at }} · {{ event.projection_key }}</small>
             <small>{{ event.summary }}</small>
           </div>
-        </div>
+        </button>
         {% endfor %}
         {% endif %}
+        <div class="event-detail" data-event-drawer hidden>
+          <strong data-event-drawer-title>event detail</strong>
+          <pre data-event-drawer-body></pre>
+        </div>
       </section>
       <section class="game-panel" id="metrics">
         <div class="panel-title"><h3>길드 성과</h3><small>snapshot</small></div>
@@ -798,12 +920,13 @@
       {% endif %}
     </section>
 
-    <section class="game-panel">
+    <section class="game-panel" id="system">
       <div class="panel-title"><h3>운영 지표</h3><small>system status</small></div>
       <div class="metric-line"><small>풀 활용률</small><strong>{{ dashboard.metrics.pool_utilization_percent }}%</strong></div>
       <div class="metric-line"><small>활성 요원</small><strong>{{ dashboard.metrics.active_agent_count }}</strong></div>
       <div class="metric-line"><small>대기 작업</small><strong>{{ dashboard.metrics.waiting_task_count }}</strong></div>
       <div class="metric-line"><small>blocked slot</small><strong>{{ dashboard.metrics.blocked_slot_count }}</strong></div>
+      <div class="metric-line"><small>지표 출처</small><strong>{{ dashboard.metrics.source_label }}</strong><small>{{ dashboard.metrics.mock_metric_note }}</small></div>
       <div class="system-grid">
         <span class="system-chip">Git 상태 정상</span>
         <span class="system-chip">GitHub 연동 정상</span>
@@ -813,4 +936,143 @@
     </section>
   </div>
 </section>
+<script>
+(() => {
+  const root = document.querySelector("[data-admin-graphic]");
+  if (!root) return;
+
+  const apiBase = root.dataset.apiBase || "";
+  const pollIntervalMs = Number(root.dataset.pollIntervalMs || "10000");
+  const dashboardUrl = `${apiBase}/api/admin/akra/dashboard`;
+  const eventsUrl = `${apiBase}/api/admin/akra/events`;
+  const kpiMap = {
+    totalTasks: "totalTasks",
+    successRate: "successRate",
+    todayThroughput: "todayThroughput",
+    agents: "agents",
+    pool: "pool",
+    queueDepth: "queueDepth",
+    readiness: "readiness",
+    distributor: "distributor"
+  };
+
+  const setKpiState = (state) => {
+    for (const card of root.querySelectorAll("[data-kpi]")) {
+      card.classList.remove("is-loading", "is-success", "is-error");
+      card.classList.add(`is-${state}`);
+    }
+  };
+
+  const setText = (selector, value) => {
+    const node = root.querySelector(selector);
+    if (node) node.textContent = value;
+  };
+
+  const formatValue = (value, fallback = "-") => value === null || value === undefined ? fallback : String(value);
+
+  const updateDashboard = (dashboard) => {
+    setText("[data-last-updated]", dashboard.generatedTimeLabel);
+    const values = {
+      totalTasks: formatValue(dashboard.kpis.totalTasks),
+      successRate: dashboard.kpis.successRate == null ? "-" : `${dashboard.kpis.successRate}%`,
+      todayThroughput: formatValue(dashboard.kpis.todayThroughput),
+      agents: `${dashboard.kpis.activeAgents} / ${dashboard.kpis.totalAgents}`,
+      pool: `${dashboard.kpis.poolRunning} / ${dashboard.kpis.poolConfiguredSize}`,
+      queueDepth: String(dashboard.kpis.queueDepth),
+      readiness: dashboard.workspace.readiness,
+      distributor: dashboard.kpis.distributorState
+    };
+    for (const [key, valueKey] of Object.entries(kpiMap)) {
+      const node = root.querySelector(`[data-kpi="${key}"] [data-value]`);
+      if (node) node.textContent = values[valueKey];
+    }
+    const latest = dashboard.eventFeed?.newestSequence;
+    if (Number.isFinite(latest)) root.dataset.latestEventSequence = String(latest);
+  };
+
+  const markRelated = (source) => {
+    const slotId = source.dataset.slotId || "";
+    const agentId = source.dataset.agentId || "";
+    const taskId = source.dataset.taskId || "";
+    for (const node of root.querySelectorAll("[data-slot-id], [data-agent-id], [data-task-id]")) {
+      const linked = (slotId && node.dataset.slotId === slotId)
+        || (agentId && node.dataset.agentId === agentId)
+        || (taskId && node.dataset.taskId === taskId);
+      node.classList.toggle("is-linked", linked);
+      node.classList.toggle("is-selected", node === source);
+    }
+  };
+
+  root.addEventListener("click", (event) => {
+    const focus = event.target.closest("[data-focus-target]");
+    if (focus) {
+      const panel = document.getElementById(focus.dataset.focusTarget);
+      if (panel) {
+        panel.classList.add("is-focused");
+        panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        window.setTimeout(() => panel.classList.remove("is-focused"), 1400);
+      }
+    }
+
+    const linked = event.target.closest("[data-slot-id], [data-agent-id], [data-task-id]");
+    if (linked) markRelated(linked);
+
+    const eventRow = event.target.closest("[data-event-detail]");
+    if (eventRow) {
+      for (const row of root.querySelectorAll("[data-event-detail]")) row.classList.remove("is-selected");
+      eventRow.classList.add("is-selected");
+      const drawer = root.querySelector("[data-event-drawer]");
+      if (drawer) {
+        drawer.hidden = false;
+        drawer.querySelector("[data-event-drawer-title]").textContent =
+          `#${eventRow.dataset.eventSequence} ${eventRow.dataset.eventKind} · ${eventRow.dataset.eventTarget}`;
+        drawer.querySelector("[data-event-drawer-body]").textContent = eventRow.dataset.eventDetail || "";
+      }
+    }
+  });
+
+  const pollStatus = document.createElement("small");
+  pollStatus.className = "poll-status";
+  pollStatus.textContent = "polling ready";
+  root.querySelector(".akra-topbar")?.appendChild(pollStatus);
+
+  const pollDashboard = async () => {
+    setKpiState("loading");
+    pollStatus.textContent = "refreshing snapshot";
+    pollStatus.classList.remove("is-stale", "is-error");
+    try {
+      const response = await fetch(dashboardUrl, { headers: { "Accept": "application/json" } });
+      if (!response.ok) throw new Error(`dashboard ${response.status}`);
+      const dashboard = await response.json();
+      updateDashboard(dashboard);
+      setKpiState("success");
+      pollStatus.textContent = "live snapshot";
+    } catch (error) {
+      setKpiState("error");
+      pollStatus.textContent = `stale snapshot: ${error.message}`;
+      pollStatus.classList.add("is-stale", "is-error");
+    }
+  };
+
+  const pollEvents = async () => {
+    const latest = Number(root.dataset.latestEventSequence || "0");
+    const url = latest > 0 ? `${eventsUrl}?afterSequence=${latest}&limit=50` : `${eventsUrl}?limit=50`;
+    try {
+      const response = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!response.ok) throw new Error(`events ${response.status}`);
+      const payload = await response.json();
+      const newest = payload.feed?.newestSequence;
+      if (Number.isFinite(newest)) root.dataset.latestEventSequence = String(newest);
+    } catch (_error) {
+      pollStatus.textContent = "stale events";
+      pollStatus.classList.add("is-stale");
+    }
+  };
+
+  window.setInterval(() => {
+    pollDashboard();
+    pollEvents();
+  }, Math.max(pollIntervalMs, 5000));
+})();
+</script>
 {% endblock %}

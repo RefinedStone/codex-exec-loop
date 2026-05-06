@@ -16,6 +16,9 @@ server_log="${output_dir}/akra-admin.log"
 admin_html="${output_dir}/admin.html"
 legacy_html="${output_dir}/legacy.html"
 dashboard_json="${output_dir}/dashboard.json"
+events_json="${output_dir}/events.json"
+events_incremental_json="${output_dir}/events-incremental.json"
+events_error_json="${output_dir}/events-error.json"
 screenshot_path="${output_dir}/admin-graphic.png"
 
 mkdir -p "${output_dir}"
@@ -103,6 +106,14 @@ wait_for_server "${base_url}/admin"
 curl -fsS "${base_url}/admin" >"${admin_html}"
 curl -fsS "${base_url}/admin/legacy" >"${legacy_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
+curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
+curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
+events_error_status="$(curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
+if [[ "${events_error_status}" != "400" ]]; then
+  echo "expected event limit validation to return 400, got ${events_error_status}" >&2
+  cat "${events_error_json}" >&2 || true
+  exit 1
+fi
 
 for token in \
   '<body class="akra-graphic">' \
@@ -117,6 +128,13 @@ for token in \
   'Last Updated' \
   'akra_admin' \
   'Legacy Admin' \
+  'data-admin-graphic' \
+  'data-api-base' \
+  'data-poll-interval-ms' \
+  'data-focus-target="pipeline"' \
+  'data-event-drawer' \
+  'stale snapshot' \
+  'skeleton-line' \
   'grid-template-columns: repeat(8' \
   'max-height: 540px' \
   'overflow: auto' \
@@ -135,6 +153,22 @@ for token in \
   '"generatedTimeLabel"' \
   '"automationEpoch"'; do
   require_contains "${dashboard_json}" "${token}"
+done
+
+for token in \
+  '"feed"' \
+  '"events"' \
+  '"limit"' \
+  '"totalEventCount"' \
+  '"incremental"'; do
+  require_contains "${events_json}" "${token}"
+  require_contains "${events_incremental_json}" "${token}"
+done
+
+for token in \
+  '"error":"event_limit_too_large"' \
+  '"operatorMessage":"Runtime event API limit must be 200 or less."'; do
+  require_contains "${events_error_json}" "${token}"
 done
 
 require_contains "${legacy_html}" "Workspace Status"

@@ -151,6 +151,36 @@ fn runtime_event_log_port_reads_recent_projection_events() {
 }
 
 #[test]
+fn runtime_event_log_port_filters_events_after_sequence() {
+    let workspace_dir = temp_workspace("runtime-events-after-sequence");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let first = slot_lease("slot-1", ParallelModeSlotLeaseState::Leased);
+    let second = slot_lease("slot-1", ParallelModeSlotLeaseState::Running);
+
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &first)
+        .expect("first slot lease event should persist");
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &second)
+        .expect("second slot lease event should persist");
+
+    let snapshot = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::for_projection("slot_lease", "slot-1", 10)
+                .after_sequence(1),
+        )
+        .expect("incremental runtime event log should load");
+
+    assert_eq!(snapshot.total_event_count, 1);
+    assert_eq!(snapshot.visible_count(), 1);
+    let latest = snapshot.latest().expect("latest event should be visible");
+    assert_eq!(latest.sequence, 2);
+    assert!(latest.sequence > 1);
+    assert!(latest.summary.contains("state: running"));
+}
+
+#[test]
 fn runtime_projection_loads_recent_runtime_event_feed_newest_first() {
     let workspace_dir = temp_workspace("runtime-events");
     let adapter = SqlitePlanningAuthorityAdapter::new();

@@ -41,6 +41,23 @@ pub(super) async fn akra_dashboard_page(
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    if !state.graphic.enabled {
+        let overview = state
+            .facade
+            .load_overview()
+            .map_err(internal_server_error)?;
+        return render_html(
+            jar,
+            DashboardTemplate {
+                page_title: "Planning Admin".to_string(),
+                current_nav: "dashboard",
+                workspace_dir: state.facade.workspace_dir().to_string(),
+                csrf_token,
+                notice: query.get("notice").cloned(),
+                overview,
+            },
+        );
+    }
     let dashboard = build_akra_dashboard_view(
         state.facade.workspace_dir(),
         &state.planning,
@@ -55,6 +72,8 @@ pub(super) async fn akra_dashboard_page(
             csrf_token,
             notice: query.get("notice").cloned(),
             dashboard,
+            api_base_url: state.graphic.api_base_url.clone(),
+            polling_interval_ms: state.graphic.polling_interval_ms,
         },
     )
 }

@@ -1040,13 +1040,15 @@ fn load_runtime_event_log_snapshot(
 ) -> Result<ParallelModeRuntimeEventsSnapshot> {
     let projection_kind = request.projection_kind.as_deref();
     let projection_key = request.projection_key.as_deref();
+    let after_sequence = request.after_sequence;
     let total_event_count = connection
         .query_row(
             "SELECT COUNT(*)
              FROM runtime_events
              WHERE (?1 IS NULL OR projection_kind = ?1)
-               AND (?2 IS NULL OR projection_key = ?2)",
-            params![projection_kind, projection_key],
+               AND (?2 IS NULL OR projection_key = ?2)
+               AND (?3 IS NULL OR sequence > ?3)",
+            params![projection_kind, projection_key, after_sequence],
             |row| row.get::<_, i64>(0),
         )
         .context("failed to count runtime events")?;
@@ -1063,22 +1065,26 @@ fn load_runtime_event_log_snapshot(
              FROM runtime_events
              WHERE (?1 IS NULL OR projection_kind = ?1)
                AND (?2 IS NULL OR projection_key = ?2)
+               AND (?3 IS NULL OR sequence > ?3)
              ORDER BY sequence DESC
-             LIMIT ?3",
+             LIMIT ?4",
         )
         .context("failed to read runtime events")?;
     let rows = statement
-        .query_map(params![projection_kind, projection_key, limit], |row| {
-            Ok(ParallelModeRuntimeEventEntry::new(
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-            ))
-        })
+        .query_map(
+            params![projection_kind, projection_key, after_sequence, limit],
+            |row| {
+                Ok(ParallelModeRuntimeEventEntry::new(
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )
         .context("failed to iterate runtime events")?;
 
     let mut entries = Vec::new();
