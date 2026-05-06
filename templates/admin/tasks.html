@@ -192,8 +192,8 @@
       <tbody>
         {% for task in overview.runtime.proposed_tasks %}
         <tr>
-          <td><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
-          <td>{{ task.combined_priority }}</td>
+          <td data-label="Proposal"><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
+          <td data-label="Priority">{{ task.combined_priority }}</td>
         </tr>
         {% endfor %}
       </tbody>
