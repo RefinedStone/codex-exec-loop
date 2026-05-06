@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
+use crate::adapter::inbound::tui::supersession_mud::build_supersession_mud_lines;
 use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
@@ -25,6 +26,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let readiness_snapshot = app.parallel_mode_readiness_snapshot();
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
     let activity_frame = supersession_activity_frame();
+    let mud_lines = build_supersession_mud_lines(&supervisor_snapshot);
     /*
     The app state remains the source of truth for live readiness and supervisor
     snapshots. This adapter only chooses popup grouping and copy, so service-layer
@@ -37,13 +39,25 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         readiness_snapshot,
         &supervisor_snapshot,
         activity_frame,
+        &mud_lines.summary_lines,
     );
     let capability_lines =
         build_capability_lines(readiness_snapshot, &supervisor_snapshot, activity_frame);
-    let pool_lines = build_pool_lines(&supervisor_snapshot.pool, activity_frame);
-    let roster_lines = build_roster_lines(&supervisor_snapshot, activity_frame);
-    let detail_lines = build_detail_lines(&supervisor_snapshot);
-    let distributor_lines = build_distributor_lines(&supervisor_snapshot.distributor);
+    let pool_lines = build_pool_lines_with_mud(
+        &supervisor_snapshot.pool,
+        activity_frame,
+        &mud_lines.pool_lines,
+    );
+    let roster_lines = build_roster_lines_with_mud(
+        &supervisor_snapshot,
+        activity_frame,
+        &mud_lines.roster_lines,
+    );
+    let detail_lines = build_detail_lines_with_mud(&supervisor_snapshot, &mud_lines.detail_lines);
+    let distributor_lines = build_distributor_lines_with_mud(
+        &supervisor_snapshot.distributor,
+        &mud_lines.distributor_lines,
+    );
     let mut key_lines = vec![AkraTheme::key_line("Ctrl+R: rerun readiness")];
 
     if app.parallel_mode_enabled() {
@@ -85,13 +99,18 @@ fn build_summary_lines(
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     activity_frame: &'static str,
+    mud_summary_lines: &[String],
 ) -> Vec<Line<'static>> {
     /*
     Summary lines are the popup's triage header: readiness tells whether parallel
     mode can be enabled, pool and roster summaries show dispatch capacity, and the
     distributor compact summary shows whether completed work is stuck downstream.
     */
-    let mut lines = vec![
+    let mut lines = mud_summary_lines
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+    lines.extend([
         Line::from(format!(
             "activity: {}  |  prompt: locked  |  workers: {}",
             activity_frame,
@@ -114,7 +133,10 @@ fn build_summary_lines(
                 .map(|snapshot| snapshot.readiness_label().to_string())
                 .unwrap_or_else(|| "not checked yet".to_string())
         )),
-        Line::from(format!("workspace: {}", supervisor_snapshot.workspace_path)),
+        Line::from(format!(
+            "workspace: {}",
+            truncate_timeline_text(&supervisor_snapshot.workspace_path, 96)
+        )),
         Line::from(format!(
             "pool: {}",
             pool_summary_label(&supervisor_snapshot.pool)
@@ -124,7 +146,7 @@ fn build_summary_lines(
             roster_summary_label(supervisor_snapshot),
             distributor_summary_label(&supervisor_snapshot.distributor)
         )),
-    ];
+    ]);
     if let Some(alert) = readiness_snapshot.and_then(|snapshot| snapshot.top_alert.as_deref()) {
         lines.push(Line::from(format!("alert: {alert}")));
     } else if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
@@ -195,9 +217,19 @@ fn distributor_summary_label(distributor: &ParallelModeDistributorSnapshot) -> S
     distributor.compact_summary()
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn build_pool_lines(
     pool: &ParallelModePoolBoardSnapshot,
     activity_frame: &'static str,
+) -> Vec<Line<'static>> {
+    build_pool_lines_with_mud(pool, activity_frame, &[])
+}
+
+fn build_pool_lines_with_mud(
+    pool: &ParallelModePoolBoardSnapshot,
+    activity_frame: &'static str,
+    mud_pool_lines: &[String],
 ) -> Vec<Line<'static>> {
     /*
     Pool state is rendered before roster state because a missing or blocked slot
@@ -213,9 +245,16 @@ fn build_pool_lines(
         ];
     }
 
-    let mut lines = vec![
+    let mut lines = mud_pool_lines
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+    lines.extend([
         Line::from(format!("configured size: {}", pool.configured_size)),
-        Line::from(format!("pool root: {}", pool.pool_root_label)),
+        Line::from(format!(
+            "pool root: {}",
+            truncate_timeline_text(&pool.pool_root_label, 96)
+        )),
         Line::from(format!(
             "summary: idle {} / leased {} / running {} / cleanup {} / blocked {} / missing {} / unavailable {}",
             pool.idle_slots,
@@ -227,7 +266,7 @@ fn build_pool_lines(
             pool.unavailable_slots
         )),
         Line::from(format!("reconcile: {}", pool.reconcile_status)),
-    ];
+    ]);
     if pool.exhausted {
         lines.push(Line::from("capacity: exhausted"));
     }
@@ -236,17 +275,26 @@ fn build_pool_lines(
             "{}: {} / branch {} / worktree {} / owner {}",
             slot.slot_id,
             slot.state.label(),
-            slot.branch_name,
-            slot.worktree_label,
-            slot.owner_label
+            truncate_timeline_text(&slot.branch_name, 40),
+            truncate_timeline_text(&slot.worktree_label, 48),
+            truncate_timeline_text(&slot.owner_label, 40)
         ))
     }));
     lines
 }
 
+#[cfg(test)]
 fn build_roster_lines(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     activity_frame: &'static str,
+) -> Vec<Line<'static>> {
+    build_roster_lines_with_mud(supervisor_snapshot, activity_frame, &[])
+}
+
+fn build_roster_lines_with_mud(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    activity_frame: &'static str,
+    mud_roster_lines: &[String],
 ) -> Vec<Line<'static>> {
     let roster = &supervisor_snapshot.roster;
     if is_pending_pool_board(&supervisor_snapshot.pool) {
@@ -258,10 +306,14 @@ fn build_roster_lines(
         ];
     }
 
-    let mut lines = vec![
+    let mut lines = mud_roster_lines
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+    lines.extend([
         Line::from(format!("active count: {}", roster.active_count())),
         Line::from(format!("state: {}", supervisor_snapshot.state_label())),
-    ];
+    ]);
     if roster.entries.is_empty() {
         /*
         The empty roster still teaches the expected row shape. That keeps the popup
@@ -295,26 +347,38 @@ fn build_roster_lines(
             "{} {}: {} / {} / {} / {} / {} / {} / {}",
             activity_frame,
             entry.agent_id,
-            entry.task_title,
+            truncate_timeline_text(&entry.task_title, 36),
             entry.slot_id,
-            entry.branch_name,
+            truncate_timeline_text(&entry.branch_name, 40),
             state_label,
             duration_label,
-            entry.latest_summary,
+            truncate_timeline_text(&entry.latest_summary, 72),
             slot_health
         ))
     }));
     lines
 }
 
+#[cfg(test)]
 fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> Vec<Line<'static>> {
+    build_detail_lines_with_mud(supervisor_snapshot, &[])
+}
+
+fn build_detail_lines_with_mud(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    mud_detail_lines: &[String],
+) -> Vec<Line<'static>> {
     let Some(detail) = supervisor_snapshot.detail.session.as_ref() else {
         /*
         Detail falls back to board-level state instead of inventing a selected
         session. That prevents stale agent data from lingering after the supervisor
         has no active or recently completed session to inspect.
         */
-        return vec![
+        let mut lines = mud_detail_lines
+            .iter()
+            .map(|line| Line::from(line.clone()))
+            .collect::<Vec<_>>();
+        lines.extend([
             Line::from("selection: none"),
             Line::from(format!(
                 "board state: {}",
@@ -325,7 +389,8 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
                 supervisor_snapshot.detail.empty_state
             )),
             Line::from("timeline: no selected session history"),
-        ];
+        ]);
+        return lines;
     };
 
     // Detail focuses on the selected running or recently completed agent and keeps
@@ -335,6 +400,7 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
         detail.slot_id, detail.session_key
     ))];
     lines.extend(build_timeline_lines(detail));
+    lines.extend(mud_detail_lines.iter().map(|line| Line::from(line.clone())));
     lines.extend([
         Line::from(format!(
             "selection: {} / {} / {}",
@@ -342,7 +408,11 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
             detail.slot_id,
             display_supersession_state_label(&detail.state_label)
         )),
-        Line::from(format!("task: {} / {}", detail.task_id, detail.task_title)),
+        Line::from(format!(
+            "task: {} / {}",
+            detail.task_id,
+            truncate_timeline_text(&detail.task_title, 56)
+        )),
         Line::from(format!(
             "thread: {}",
             detail.thread_id.as_deref().unwrap_or("not captured yet")
@@ -351,25 +421,40 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
             "slot health: {}",
             slot_health_summary(supervisor_snapshot, &detail.slot_id)
         )),
-        Line::from(format!("worktree: {}", detail.worktree_path)),
-        Line::from(format!("branch: {}", detail.branch_name)),
+        Line::from(format!(
+            "worktree: {}",
+            truncate_timeline_text(&detail.worktree_path, 96)
+        )),
+        Line::from(format!(
+            "branch: {}",
+            truncate_timeline_text(&detail.branch_name, 72)
+        )),
         Line::from(format!("lease start: {}", detail.lease_started_at)),
         Line::from(format!(
             "completion: {}",
             display_supersession_state_label(&detail.completion_state_label)
         )),
-        Line::from(format!("latest: {}", detail.latest_summary)),
-        Line::from(format!("validation: {}", detail.validation_summary)),
+        Line::from(format!(
+            "latest: {}",
+            truncate_timeline_text(&detail.latest_summary, 96)
+        )),
+        Line::from(format!(
+            "validation: {}",
+            truncate_timeline_text(&detail.validation_summary, 96)
+        )),
         Line::from(format!(
             "ledger refresh: {}",
-            detail.authority_refresh_outcome
+            truncate_timeline_text(&detail.authority_refresh_outcome, 96)
         )),
         Line::from(format!(
             "distributor: {}",
-            detail
-                .distributor_outcome
-                .as_deref()
-                .unwrap_or("no distributor outcome recorded")
+            truncate_timeline_text(
+                detail
+                    .distributor_outcome
+                    .as_deref()
+                    .unwrap_or("no distributor outcome recorded"),
+                96
+            )
         )),
     ]);
     lines.push(Line::from("history:"));
@@ -378,7 +463,7 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
             "{} / {} / {}",
             entry.timestamp,
             display_supersession_state_label(&entry.state_label),
-            entry.summary
+            truncate_timeline_text(&entry.summary, 96)
         ))
     }));
     lines
@@ -562,7 +647,15 @@ fn delivery_boundary_stages() -> [DeliveryBoundaryStage; 3] {
     ]
 }
 
+#[cfg(test)]
 fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
+    build_distributor_lines_with_mud(distributor, &[])
+}
+
+fn build_distributor_lines_with_mud(
+    distributor: &ParallelModeDistributorSnapshot,
+    mud_distributor_lines: &[String],
+) -> Vec<Line<'static>> {
     /*
     Distributor rows sit after agent detail because they explain what happens once
     an agent has reported completion. The strongest operator signal is the queue
@@ -584,21 +677,34 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
         ];
     }
 
-    let mut lines = vec![
+    let mut lines = mud_distributor_lines
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+    lines.extend([
         Line::from(format!("head: {}", distributor.head_summary)),
         Line::from(format!("queue depth: {}", distributor.queue_depth())),
-    ];
+    ]);
 
     // `note` and `blocked head` can share the same text; avoid duplicating it in the
     // narrow popup while still surfacing richer blocked-head detail when present.
     if blocked_head_detail != Some(distributor.note.trim()) {
-        lines.push(Line::from(format!("note: {}", distributor.note)));
+        lines.push(Line::from(format!(
+            "note: {}",
+            truncate_timeline_text(&distributor.note, 96)
+        )));
     }
     if let Some(detail) = blocked_head_detail {
-        lines.push(Line::from(format!("blocked head: {detail}")));
+        lines.push(Line::from(format!(
+            "blocked head: {}",
+            truncate_timeline_text(detail, 96)
+        )));
     }
     if let Some(provenance) = distributor.head_rebase_provenance.as_deref() {
-        lines.push(Line::from(format!("provenance: {provenance}")));
+        lines.push(Line::from(format!(
+            "provenance: {}",
+            truncate_timeline_text(provenance, 96)
+        )));
     }
     lines.extend(build_orchestrator_lines(distributor));
     if distributor.queue_items.is_empty() {
@@ -621,11 +727,11 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
                     Line::from(format!(
                         "{row_label}: {} / {} / {} / {} / {} / {}",
                         item.source_agent,
-                        item.task_title,
+                        truncate_timeline_text(&item.task_title, 36),
                         item.queue_state.label(),
-                        item.branch_name,
+                        truncate_timeline_text(&item.branch_name, 40),
                         item.commit_short_sha,
-                        item.integration_note
+                        truncate_timeline_text(&item.integration_note, 72)
                     ))
                 }),
         );
@@ -635,12 +741,13 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
     The completion feed is a short audit trail from the distributor snapshot. It is
     appended after the queue because it is supporting evidence, not the next action.
     */
-    lines.extend(
-        distributor
-            .completion_feed
-            .iter()
-            .map(|entry| Line::from(format!("{}: {}", entry.stage_label, entry.summary))),
-    );
+    lines.extend(distributor.completion_feed.iter().map(|entry| {
+        Line::from(format!(
+            "{}: {}",
+            entry.stage_label,
+            truncate_timeline_text(&entry.summary, 96)
+        ))
+    }));
     lines.push(Line::from("runtime events:"));
     if distributor.runtime_event_feed.is_empty() {
         lines.push(Line::from("events: no runtime events captured yet"));
@@ -654,7 +761,7 @@ fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec
                 entry.projection_key,
                 display_runtime_event_label(&entry.event_kind),
                 entry.observed_planning_revision,
-                entry.summary
+                truncate_timeline_text(&entry.summary, 88)
             ))
         }));
     }
@@ -691,19 +798,28 @@ fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Ve
     capacity is withheld intentionally until integration recovery finishes.
     */
     let mut lines = vec![
-        Line::from(format!("orchestrator head: {}", status.queue_head)),
-        Line::from(format!("orchestrator barrier: {}", status.barrier_state)),
+        Line::from(format!(
+            "orchestrator head: {}",
+            truncate_timeline_text(&status.queue_head, 96)
+        )),
+        Line::from(format!(
+            "orchestrator barrier: {}",
+            truncate_timeline_text(&status.barrier_state, 96)
+        )),
         Line::from(format!(
             "orchestrator held queue: {}",
             status.held_queue_count
         )),
         Line::from(format!(
             "integration worktree: {}",
-            status.integration_worktree_readiness
+            truncate_timeline_text(&status.integration_worktree_readiness, 96)
         )),
     ];
     if let Some(reason) = status.blocked_reason.as_deref() {
-        lines.push(Line::from(format!("blocked reason: {reason}")));
+        lines.push(Line::from(format!(
+            "blocked reason: {}",
+            truncate_timeline_text(reason, 96)
+        )));
     }
     if !status.conflict_files.is_empty() {
         lines.push(Line::from(format!(
@@ -712,7 +828,10 @@ fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Ve
         )));
     }
     if let Some(reason) = status.slot_return_wait_reason.as_deref() {
-        lines.push(Line::from(format!("slot return: {reason}")));
+        lines.push(Line::from(format!(
+            "slot return: {}",
+            truncate_timeline_text(reason, 96)
+        )));
     }
     lines
 }

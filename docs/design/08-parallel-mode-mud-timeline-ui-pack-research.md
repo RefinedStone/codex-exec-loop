@@ -48,6 +48,20 @@ The first slice is shipped as a read-only Supersession timeline projection:
 - Coverage is pinned by supersession popup copy tests and a narrow inline shell rendering contract
   test that keeps the selected timeline visible.
 
+## Delivered Hardening Slice
+
+The hardening slice adds a bounded MUD projection that is shared by the Supersession overlay and a
+Rust integration test:
+
+- Pool slots render as lane/room tokens, live agents as actors, selected detail as a quest log, and
+  distributor state as the exit corridor.
+- Long branch, worktree, queue note, and runtime event fields are compacted before they reach the
+  dense Supersession panels, reducing narrow-terminal wrap churn.
+- `tests/supersession_mud_projection.rs` validates the public projection across lanes, actor
+  roster, selected timeline, and distributor corridor while enforcing bounded line width.
+- Inline rendering contract tests now assert that the lane map and exit corridor remain visible
+  alongside the original selected timeline; the integration test pins the full quest-log projection.
+
 ## References
 
 - Lazyweb report: `.lazyweb/design-research/parallel-mud-timeline-ui-pack-2026-05-06/report.md`

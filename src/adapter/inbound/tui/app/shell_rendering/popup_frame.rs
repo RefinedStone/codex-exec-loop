@@ -252,7 +252,7 @@ pub(super) fn draw_supersession_overlay(frame: &mut Frame<'_>, app: &NativeTuiAp
     let right_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(block_height_for_lines(&detail_lines, 5, 8)),
+            Constraint::Length(block_height_for_lines(&detail_lines, 5, 10)),
             Constraint::Min(8),
         ])
         .split(content_layout[1]);

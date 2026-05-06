@@ -272,7 +272,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     let right_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&detail_lines, 7)),
+            Constraint::Length(inline_section_height(&detail_lines, 9)),
             Constraint::Min(7),
         ])
         .split(content_layout[1]);
