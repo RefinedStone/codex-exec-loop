@@ -20,6 +20,7 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::TaskStatus;
 use anyhow::Result;
+use chrono::{DateTime, SecondsFormat, Utc};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{MutexGuard, OnceLock};
@@ -400,6 +401,56 @@ impl NativeFlowHarness {
         self.authority
             .load_runtime_projections(&self.workspace_dir)
             .expect("runtime projections should load")
+    }
+
+    fn wait_until_task_timestamp_can_clear_failed_start_block(&mut self, task_id: &str) {
+        let projections = self.runtime_projections();
+        let block_timestamp = projections
+            .task_dispatch_blocks
+            .iter()
+            .filter(|block| {
+                block.task_id == task_id
+                    && block.reason
+                        == ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges
+            })
+            .filter_map(|block| {
+                DateTime::parse_from_rfc3339(block.blocked_at.trim())
+                    .map(|timestamp| timestamp.timestamp_millis())
+                    .ok()
+            })
+            .chain(
+                projections
+                    .session_details
+                    .iter()
+                    .filter(|detail| {
+                        detail.task_id == task_id
+                            && detail.state_label == "failed"
+                            && detail.completion_state_label == "aborted"
+                            && detail.latest_summary.contains(
+                                "launch failed before the session reached the running state",
+                            )
+                    })
+                    .filter_map(|detail| {
+                        DateTime::parse_from_rfc3339(detail.updated_at.trim())
+                            .map(|timestamp| timestamp.timestamp_millis())
+                            .ok()
+                    }),
+            )
+            .max()
+            .expect("failed-start dispatch block should exist before retry update");
+        for _ in 0..750 {
+            self.runtime.poll_background_messages();
+            let next_task_timestamp = Utc::now()
+                .to_rfc3339_opts(SecondsFormat::Secs, true)
+                .parse::<DateTime<Utc>>()
+                .expect("generated task timestamp should parse")
+                .timestamp_millis();
+            if next_task_timestamp > block_timestamp {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("task timestamp did not advance past failed-start block for `{task_id}`");
     }
 
     fn runtime_task_authority(&self) -> crate::domain::planning::TaskAuthorityDocument {
@@ -941,7 +992,7 @@ fn worker_launch_failure_blocks_task_until_task_update_then_retries() {
         "failed-start block should exclude unchanged task from redispatch"
     );
 
-    thread::sleep(Duration::from_millis(10));
+    harness.wait_until_task_timestamp_can_clear_failed_start_block(&commit.committed_task_id);
     harness.update_task_description(
         &commit.committed_task_id,
         "Updated after the worker failed before startup.",
