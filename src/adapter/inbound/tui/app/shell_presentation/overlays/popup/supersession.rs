@@ -324,12 +324,18 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
                 "detail state: {}",
                 supervisor_snapshot.detail.empty_state
             )),
+            Line::from("timeline: no selected session history"),
         ];
     };
 
     // Detail focuses on the selected running or recently completed agent and keeps
     // the official ledger refresh outcome next to distributor handoff status.
-    let mut lines = vec![
+    let mut lines = vec![Line::from(format!(
+        "timeline: {} / {}",
+        detail.slot_id, detail.session_key
+    ))];
+    lines.extend(build_timeline_lines(detail));
+    lines.extend([
         Line::from(format!(
             "selection: {} / {} / {}",
             detail.agent_id,
@@ -365,7 +371,7 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
                 .as_deref()
                 .unwrap_or("no distributor outcome recorded")
         )),
-    ];
+    ]);
     lines.push(Line::from("history:"));
     lines.extend(detail.history.iter().map(|entry| {
         Line::from(format!(
@@ -376,6 +382,98 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
         ))
     }));
     lines
+}
+
+fn build_timeline_lines(
+    detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
+) -> Vec<Line<'static>> {
+    /*
+    The selected-detail panel has only a few visible rows in inline mode, so this
+    compact timeline sits before path/ledger fields. Full history stays below it as
+    audit evidence, but operators can scan lifecycle chronology without scrolling.
+    */
+    let events = compact_timeline_events(detail);
+    if events.is_empty() {
+        return vec![
+            Line::from(format!(
+                "events: {} {}",
+                compact_timestamp_label(&detail.updated_at),
+                display_supersession_state_label(&detail.state_label)
+            )),
+            Line::from(format!(
+                "last event: {}",
+                truncate_timeline_text(&detail.latest_summary, 96)
+            )),
+        ];
+    }
+
+    let event_flow = events
+        .iter()
+        .map(|event| format!("{} {}", event.timestamp, event.state_label))
+        .collect::<Vec<_>>()
+        .join(" -> ");
+    let last_event = events
+        .last()
+        .map(|event| {
+            format!(
+                "{} {} / {}",
+                event.timestamp,
+                event.state_label,
+                truncate_timeline_text(&event.summary, 96)
+            )
+        })
+        .unwrap_or_else(|| "not captured yet".to_string());
+
+    vec![
+        Line::from(format!("events: {event_flow}")),
+        Line::from(format!("last event: {last_event}")),
+    ]
+}
+
+struct SupersessionTimelineEvent {
+    state_label: String,
+    timestamp: String,
+    summary: String,
+}
+
+fn compact_timeline_events(
+    detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
+) -> Vec<SupersessionTimelineEvent> {
+    let mut events = detail
+        .history
+        .iter()
+        .filter(|entry| !entry.state_label.trim().is_empty())
+        .map(|entry| SupersessionTimelineEvent {
+            state_label: display_supersession_state_label(&entry.state_label),
+            timestamp: compact_timestamp_label(&entry.timestamp),
+            summary: entry.summary.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let current_state = display_supersession_state_label(&detail.state_label);
+    let current_timestamp = compact_timestamp_label(&detail.updated_at);
+    let current_summary = detail.latest_summary.clone();
+    let current_already_recorded = events.last().is_some_and(|event| {
+        event.state_label == current_state && event.timestamp == current_timestamp
+    });
+    if !current_already_recorded {
+        events.push(SupersessionTimelineEvent {
+            state_label: current_state,
+            timestamp: current_timestamp,
+            summary: current_summary,
+        });
+    }
+
+    const MAX_TIMELINE_EVENTS: usize = 6;
+    if events.len() > MAX_TIMELINE_EVENTS {
+        let drain_count = events.len() - MAX_TIMELINE_EVENTS;
+        events.drain(0..drain_count);
+        if let Some(first) = events.first_mut() {
+            first.state_label = format!("... {}", first.state_label);
+        }
+    }
+
+    events
 }
 
 fn build_distributor_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {
@@ -526,6 +624,40 @@ fn display_supersession_state_label(state_label: &str) -> String {
         "commit_ready" => "official".to_string(),
         other => other.replace('_', " "),
     }
+}
+
+fn compact_timestamp_label(timestamp: &str) -> String {
+    let trimmed = timestamp.trim();
+    if trimmed.is_empty() {
+        return "time?".to_string();
+    }
+
+    let time_part = trimmed
+        .split_once('T')
+        .map(|(_, time)| time)
+        .unwrap_or(trimmed)
+        .trim_end_matches('Z');
+
+    let mut parts = time_part.split(':');
+    let Some(hour) = parts.next() else {
+        return trimmed.to_string();
+    };
+    let Some(minute) = parts.next() else {
+        return trimmed.to_string();
+    };
+    format!("{hour}:{minute}")
+}
+
+fn truncate_timeline_text(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut truncated = trimmed.chars().take(keep).collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 fn display_roster_duration_label(state_label: &str, duration_label: &str) -> String {
