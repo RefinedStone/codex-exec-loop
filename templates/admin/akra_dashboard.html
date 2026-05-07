@@ -14,6 +14,8 @@
     --game-yellow: #f5c84b;
     --game-red: #ff6b6b;
     --game-violet: #9d7cff;
+    --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
+    --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -48,19 +50,19 @@
     place-items: center;
     width: 46px;
     height: 46px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0;
+    border: 2px solid rgba(255, 255, 255, 0.2);
     background:
       linear-gradient(90deg, transparent 12px, rgba(255,255,255,0.08) 12px 14px, transparent 14px),
       linear-gradient(#203b63 0 48%, #5a442e 48% 100%);
-    box-shadow: inset 0 0 0 3px rgba(0,0,0,0.22), 0 10px 26px rgba(0,0,0,0.32);
+    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.5);
   }
   .pixel-emblem::before,
   .pixel-avatar::before {
     content: "";
     width: 24px;
     height: 20px;
-    border-radius: 3px;
+    border-radius: 0;
     background:
       linear-gradient(90deg, #f0c64c 0 5px, transparent 5px 9px, #f0c64c 9px 14px, transparent 14px 18px, #f0c64c 18px 100%),
       linear-gradient(#1d304e 0 50%, #2b1720 50% 100%);
@@ -101,10 +103,11 @@
   }
   .mode-toggle b {
     padding: 4px 10px;
-    border-radius: 999px;
+    border-radius: 0;
     color: #061525;
     background: var(--game-green);
     font-size: 12px;
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
   }
   .admin-user {
     display: flex;
@@ -126,10 +129,10 @@
   .game-panel,
   .office-board,
   .pool-overlay {
-    border: 1px solid var(--game-line);
-    border-radius: 8px;
+    border: 2px solid var(--game-line);
+    border-radius: 0;
     background: linear-gradient(180deg, var(--game-panel-strong), rgba(8, 18, 32, 0.98));
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.6);
   }
   .kpi {
     min-height: 96px;
@@ -160,7 +163,9 @@
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: 7px;
+    border-radius: 0;
+    border: 2px solid rgba(255,255,255,0.2);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
     color: #061525;
     background: var(--game-blue);
     font-size: 12px;
@@ -247,9 +252,10 @@
     gap: 8px;
     align-items: center;
     padding: 10px;
-    border: 1px solid rgba(255,255,255,0.11);
-    border-radius: 8px;
+    border: 2px solid rgba(255,255,255,0.11);
+    border-radius: 0;
     background: rgba(255,255,255,0.05);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2);
     cursor: pointer;
   }
   .slot-card.is-linked,
@@ -277,13 +283,13 @@
   .slot-card.severity-muted { border-color: rgba(160, 172, 190, 0.25); background: rgba(160, 172, 190, 0.08); }
   .mini-server {
     height: 48px;
-    border-radius: 6px;
-    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 0;
+    border: 2px solid rgba(255,255,255,0.16);
     background:
       radial-gradient(circle at 24px 11px, var(--game-green) 0 3px, transparent 4px),
       radial-gradient(circle at 34px 25px, var(--game-blue) 0 3px, transparent 4px),
       linear-gradient(90deg, #263d5d 0 48%, #0f1b2d 48% 100%);
-    box-shadow: inset 0 0 0 3px rgba(0,0,0,0.22);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.1);
   }
   .scene-object {
     appearance: none;
@@ -306,6 +312,8 @@
   }
   .object-sprite {
     display: none;
+    background-image: var(--object-sprite-sheet);
+    background-size: 627px 627px;
   }
   .desk,
   .distributor-desk,
@@ -333,11 +341,11 @@
     z-index: 3;
     max-width: 132px;
     padding: 5px 8px;
-    border: 1px solid rgba(24, 69, 42, 0.24);
-    border-radius: 6px;
+    border: 2px solid rgba(24, 69, 42, 0.4);
+    border-radius: 0;
     color: #102015;
     background: #f2fff4;
-    box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.3);
     font-size: 12px;
     font-weight: 800;
     overflow: hidden;
@@ -354,6 +362,8 @@
     background: rgba(53, 208, 127, 0.15);
     border: 1px solid rgba(53, 208, 127, 0.35);
     border-radius: 8px;
+    background-image: url("/assets/admin/admin-character-sprites.svg");
+    background-size: 528px 96px;
     font-size: 10px;
     font-weight: 900;
     text-shadow: 0 1px 0 #06101d, 1px 0 0 #06101d, -1px 0 0 #06101d, 0 -1px 0 #06101d;
@@ -441,7 +451,9 @@
     place-items: center;
     width: 24px;
     height: 24px;
-    border-radius: 6px;
+    border-radius: 0;
+    border: 2px solid rgba(255,255,255,0.2);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
     color: #071120;
     background: var(--game-blue);
     font-size: 10px;
@@ -476,15 +488,17 @@
   }
   .progress-track {
     width: 100%;
-    height: 9px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.1);
+    height: 12px;
+    border-radius: 0;
+    border: 2px solid rgba(255,255,255,0.2);
+    background: rgba(0,0,0,0.3);
+    box-shadow: inset 2px 2px 0 rgba(0,0,0,0.4);
   }
   .progress-fill {
     height: 100%;
-    border-radius: inherit;
-    background: linear-gradient(90deg, var(--game-blue), var(--game-green));
+    border-radius: 0;
+    background: var(--game-green);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2), inset 2px 2px 0 rgba(255,255,255,0.3);
   }
   .timeline {
     display: grid;
@@ -526,8 +540,8 @@
     position: relative;
     min-height: 60px;
     padding: 10px 8px;
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 7px;
+    border: 2px solid rgba(255,255,255,0.12);
+    border-radius: 0;
     background: rgba(255,255,255,0.05);
     color: var(--game-muted);
     font-size: 12px;
@@ -539,8 +553,9 @@
     width: 14px;
     height: 14px;
     margin: 0 auto 7px;
-    border-radius: 999px;
+    border-radius: 0;
     background: rgba(152,171,196,0.45);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
   }
   .step.done,
   .step.active {
@@ -567,7 +582,9 @@
     place-items: center;
     width: 32px;
     height: 32px;
-    border-radius: 7px;
+    border-radius: 0;
+    border: 2px solid rgba(255,255,255,0.2);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
     color: #061525;
     background: var(--game-yellow);
     font-size: 11px;
@@ -576,7 +593,8 @@
   .queue-state {
     min-width: 76px;
     padding: 7px 8px;
-    border-radius: 7px;
+    border-radius: 0;
+    border: 2px solid rgba(93,169,255,0.4);
     color: var(--game-blue);
     background: rgba(93,169,255,0.12);
     text-align: center;
@@ -591,15 +609,15 @@
   .badge,
   .system-chip {
     padding: 7px 9px;
-    border: 1px solid rgba(53, 208, 127, 0.42);
-    border-radius: 999px;
+    border: 2px solid rgba(53, 208, 127, 0.42);
+    border-radius: 0;
     color: var(--game-green);
     background: rgba(53, 208, 127, 0.08);
     font-size: 12px;
   }
   .system-chip {
     flex: 1 1 116px;
-    border-radius: 8px;
+    border-radius: 0;
     text-align: center;
   }
   .error-notice {
@@ -612,8 +630,8 @@
   .event-detail {
     margin: 12px 0;
     padding: 12px;
-    border: 1px solid rgba(130, 155, 193, 0.22);
-    border-radius: 8px;
+    border: 2px solid rgba(130, 155, 193, 0.22);
+    border-radius: 0;
     background: rgba(255,255,255,0.04);
   }
   .ops-status {
@@ -753,6 +771,9 @@
   <div class="board-row">
     <div class="office-board" id="agents" aria-label="AKRA isometric office board">
       <div id="pixi-diorama" style="position:absolute;inset:0;z-index:0;"></div>
+      <div class="scene-object object-sprite server-rack" aria-hidden="true"></div>
+      <div class="scene-object object-sprite whiteboard" aria-hidden="true"></div>
+      <div class="scene-object object-sprite couch" aria-hidden="true"></div>
 
       <aside class="pool-overlay" id="pool">
         <div class="panel-title">

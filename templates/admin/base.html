@@ -6,6 +6,12 @@
     <title>{{ page_title }} | Planning Admin</title>
     <meta name="csrf-token" content="{{ csrf_token }}">
     <style>
+      @font-face {
+        font-family: 'DungGeunMo';
+        src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_six@1.2/DungGeunMo.woff') format('woff');
+        font-weight: normal;
+        font-style: normal;
+      }
       :root {
         --bg: #eef2f6;
         --panel: #ffffff;
@@ -40,6 +46,9 @@
         --accent: #35d07f;
         --accent-soft: rgba(53, 208, 127, 0.13);
         --sidebar: #07101d;
+        font-family: 'DungGeunMo', monospace;
+        -webkit-font-smoothing: none;
+        font-smooth: never;
       }
       body.akra-graphic .admin-layout {
         grid-template-columns: 228px minmax(0, 1fr);
