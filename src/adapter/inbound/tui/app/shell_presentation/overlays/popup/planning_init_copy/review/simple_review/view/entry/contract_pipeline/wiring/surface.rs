@@ -16,6 +16,6 @@ pub(super) fn build_simple_review_overlay_view_from_copy(
     // copy는 값으로 받아 delegation에 그대로 넘긴다. 이 layer는 ownership을 변경하거나 복제하지 않는다.
     copy: PlanningSimpleReviewCopy,
 ) -> PlanningInitOverlayView {
-    // delegation module이 다음 handoff target을 결정하므로, surface index는 위임 경계만 명명한다.
+    // delegation module이 실제 assembly target을 결정하므로, surface index는 위임 경계만 명명한다.
     delegation::build_simple_review_overlay_view_from_copy(copy)
 }
