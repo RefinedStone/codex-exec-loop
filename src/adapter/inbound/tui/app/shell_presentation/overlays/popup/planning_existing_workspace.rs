@@ -54,9 +54,10 @@ mod tests {
 
     use super::super::super::super::super::{ConversationState, ConversationViewModel};
     use super::resolve_existing_workspace_snapshot;
-    use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
+    use crate::adapter::inbound::tui::app::test_helpers::{
+        sample_planning_runtime_snapshot, test_planning_services,
+    };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::service::planning::PlanningServices;
 
     #[test]
     // Ready state must preserve session-local planning state even when the shell workspace argument differs.
@@ -67,9 +68,7 @@ mod tests {
             "queue summary from ready conversation",
         );
         conversation.replace_planning_runtime_snapshot(snapshot.clone());
-        let planning = PlanningServices::from_workspace_port(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
+        let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
 
         let resolved = resolve_existing_workspace_snapshot(
             &ConversationState::ready(conversation),
@@ -83,9 +82,7 @@ mod tests {
     #[test]
     // Loading state has no conversation cache, so the service loader provides the invalid/fallback snapshot.
     fn loading_state_uses_runtime_loader() {
-        let planning = PlanningServices::from_workspace_port(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
+        let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
         let workspace_directory = "/tmp/nonexistent-planning-workspace";
 
         let resolved = resolve_existing_workspace_snapshot(

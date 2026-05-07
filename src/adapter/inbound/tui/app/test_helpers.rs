@@ -7,8 +7,12 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
+use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::parallel_mode::ParallelModeService;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
@@ -115,6 +119,17 @@ pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
             }],
             skipped_tasks: Vec::new(),
         },
+    )
+}
+
+pub(crate) fn test_planning_services(
+    planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+) -> PlanningServices {
+    PlanningServices::from_ports(
+        planning_workspace_port,
+        Arc::new(NoopPlanningAuthorityPort::default()),
+        Arc::new(NoopPlanningTaskRepositoryPort),
+        Arc::new(NoopPlanningWorkerPort),
     )
 }
 

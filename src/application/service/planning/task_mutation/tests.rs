@@ -460,19 +460,6 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
     assert!(error.to_string().contains("at most 16 command"));
 }
 #[test]
-fn legacy_task_authority_is_rejected_by_extractor() {
-    // full task-authority rewrite는 의도적으로 거부된다. worker는 mutation service가 검증하는
-    // 좁은 command envelope만 보낼 수 있다.
-    let message = r#"```json
-{"task_authority":{"version":1,"tasks":[]}}
-```"#;
-
-    assert!(matches!(
-        extract_planning_task_commands(message),
-        PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(_)
-    ));
-}
-#[test]
 fn unknown_command_fields_and_delete_ops_are_invalid() {
     /*
      * command schema는 의도적으로 엄격하다. caller가 create command에 id를 몰래 넣을 수 없고,

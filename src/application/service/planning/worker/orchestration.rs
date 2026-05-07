@@ -384,8 +384,8 @@ impl PlanningWorkerOrchestrationService {
         let mut authority_result = PlanningReconciliationResult::default();
         let mut task_authority_changed = false;
         if let Some(final_message) = worker_response.final_agent_message.as_deref() {
-            // legacy full task_authority output은 거절한다. accepted path는 command 기반이라 validation, conflict handling,
-            // queue projection rebuild가 PlanningTaskMutationService에 중앙화된다.
+            // accepted path는 command 기반이라 validation, conflict handling, queue projection rebuild가
+            // PlanningTaskMutationService에 중앙화된다.
             match extract_planning_task_commands(final_message) {
                 PlanningTaskCommandExtraction::Commands(commands) => {
                     match self
@@ -418,14 +418,6 @@ impl PlanningWorkerOrchestrationService {
                             )?;
                         }
                     }
-                }
-                PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(rejected_json) => {
-                    // rejected payload를 repair prompt용으로 보존한다. 후속 worker가 이를 valid command로 변환할 수 있게 한다.
-                    authority_result = self.build_rejected_command_result(
-                        workspace_directory,
-                        "planning worker returned legacy task_authority; expected planning_task_commands",
-                        Some(rejected_json),
-                    )?;
                 }
                 PlanningTaskCommandExtraction::InvalidCommands {
                     error,

@@ -215,7 +215,7 @@ mod tests {
                 crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
             ),
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            PlanningServices::from_workspace_port(Arc::new(
+            crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),
         )

@@ -118,22 +118,6 @@ impl PlanningChangeSet {
 }
 
 impl PlanningReconciliationService {
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // test constructor는 historical dependency shape를 유지하면서 production constructor로 라우팅한다.
-    pub fn new(
-        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-        planning_validation_service: PlanningValidationService,
-        priority_queue_service: PriorityQueueService,
-    ) -> Self {
-        Self::with_task_repository(
-            planning_workspace_port,
-            planning_validation_service,
-            priority_queue_service,
-            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
-        )
-    }
-
     /*
      * production constructor는 full reconciliation dependency set을 받는다. 현재 protected-file
      * restoration은 workspace port만 저장하지만, prefix가 붙은 인자들은 일시적으로 dormant한

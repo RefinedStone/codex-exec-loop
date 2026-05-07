@@ -16,7 +16,7 @@ use crate::application::port::outbound::startup_probe_port::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
@@ -116,7 +116,9 @@ pub(super) fn make_test_app() -> NativeTuiApp {
         // The test parallel-mode service exposes the same control surface without slot/worktree orchestration.
         crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
         // Planning services stay real enough for status copy, then the conversation snapshot is reset to a neutral baseline below.
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
+        crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        )),
     );
     // Inline rendering fixtures assume the app opens on an editable draft; fail loudly if constructor semantics change.
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {

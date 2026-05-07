@@ -83,22 +83,6 @@ pub struct PlanningResetService {
     priority_queue_service: PriorityQueueService,
 }
 impl PlanningResetService {
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // test constructor는 예전 dependency shape를 보존하고, production은 전체 repository boundary를 쓴다.
-    pub fn new(
-        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-        planning_bootstrap_service: PlanningBootstrapService,
-    ) -> Self {
-        Self::with_task_repository(
-            planning_workspace_port,
-            planning_bootstrap_service,
-            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
-            PlanningValidationService::new(),
-            PriorityQueueService::new(),
-        )
-    }
-
     // production constructor는 file authority와 DB authority 표면을 모두 다시 쓸 collaborator를 받는다.
     pub fn with_task_repository(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,

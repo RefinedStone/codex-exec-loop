@@ -119,23 +119,6 @@ pub struct PlanningWorkspaceInitResult {
     pub created_paths: Vec<String>,
 }
 impl PlanningInitService {
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn new(
-        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-        planning_bootstrap_service: PlanningBootstrapService,
-        planning_validation_service: PlanningValidationService,
-    ) -> Self {
-        // test constructor는 noop authority repository를 사용한다. unit test가 DB-backed planning store 없이 workspace
-        // draft behavior와 validation 흐름에 집중하게 하기 위한 축약 경로다.
-        Self::with_task_repository(
-            planning_workspace_port,
-            planning_bootstrap_service,
-            planning_validation_service,
-            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
-            PriorityQueueService::new(),
-        )
-    }
     pub fn with_task_repository(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_bootstrap_service: PlanningBootstrapService,
@@ -678,8 +661,5 @@ mod tests {
             ".codex-exec-loop/planning/direction-authority"
         ));
         assert!(!is_operator_editable_draft_path("DB task authority"));
-        assert!(!is_operator_editable_draft_path(
-            ".codex-exec-loop/planning/legacy-queue-snapshot.json"
-        ));
     }
 }

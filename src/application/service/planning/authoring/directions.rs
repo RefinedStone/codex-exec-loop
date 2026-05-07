@@ -23,12 +23,9 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use std::collections::HashSet;
 use std::sync::Arc;
-#[cfg(test)]
-mod doctor;
 mod supporting_files;
 use self::supporting_files::{
-    normalize_queue_idle_review_prompt_markdown, set_direction_detail_doc_path,
-    set_queue_idle_prompt_path, trimmed_non_empty,
+    set_direction_detail_doc_path, set_queue_idle_prompt_path, trimmed_non_empty,
 };
 
 /*
@@ -85,26 +82,6 @@ pub struct QueueIdleReviewContext {
     pub policy: QueueIdlePolicy,
     pub prompt_path: Option<String>,
     pub prompt_markdown: Option<String>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningDoctorOutcome {
-    // doctor output은 authority mapping repair와 workspace file creation을 분리해 기록한다. operator feedback이
-    // "catalog path를 고쳤는가"와 "실제 markdown file을 만들었는가"를 구분해서 설명할 수 있게 하기 위함이다.
-    pub repaired_detail_doc_mappings: usize,
-    pub created_detail_doc_files: usize,
-    pub repaired_queue_idle_prompt_mapping: bool,
-    pub created_queue_idle_prompt_file: bool,
-    pub validation_report: PlanningValidationReport,
-}
-impl PlanningDoctorOutcome {
-    pub fn applied_fix_count(&self) -> usize {
-        // coarse count는 status copy용이다. post-repair contract의 자세한 상태는 validation_report가 담으므로,
-        // 여기서는 몇 가지 자동 repair가 적용됐는지만 합산한다.
-        self.repaired_detail_doc_mappings
-            + self.created_detail_doc_files
-            + usize::from(self.repaired_queue_idle_prompt_mapping)
-            + usize::from(self.created_queue_idle_prompt_file)
-    }
 }
 #[derive(Clone)]
 pub struct PlanningDirectionsService {
@@ -239,7 +216,7 @@ impl PlanningDirectionsService {
         let prompt_markdown = prompt_path
             .as_deref()
             .and_then(|path| self.load_supporting_file_best_effort(workspace_dir, path))
-            .map(|prompt| normalize_queue_idle_review_prompt_markdown(&prompt));
+            .map(|prompt| prompt.to_string());
         Ok(QueueIdleReviewContext {
             policy: directions.queue_idle.policy,
             prompt_path,
@@ -506,8 +483,7 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         configured_path: Option<&str>,
     ) -> Result<(String, String)> {
-        // valid configured prompt path는 보존하되, loaded content는 canonical queue-idle review prompt shape로
-        // normalize한다. legacy file authority copy가 runtime으로 새지 않게 하는 repair 지점이다.
+        // valid configured prompt path는 보존하고 loaded content를 operator-owned prompt body로 그대로 연다.
         if let Some(path) = configured_path
             .filter(|path| is_valid_planning_markdown_path(path, PLANNING_PROMPTS_DIRECTORY))
         {
@@ -515,12 +491,7 @@ impl PlanningDirectionsService {
                 .planning_workspace_port
                 .load_optional_planning_file(workspace_dir, path)
             {
-                Ok(Some(body)) => {
-                    return Ok((
-                        path.to_string(),
-                        normalize_queue_idle_review_prompt_markdown(&body),
-                    ));
-                }
+                Ok(Some(body)) => return Ok((path.to_string(), body)),
                 Ok(None) => {
                     return Ok((
                         path.to_string(),

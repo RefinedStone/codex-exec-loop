@@ -6,14 +6,13 @@ use super::{
 use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
+    test_planning_services,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
     PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeUseCases, PlanningServices,
-};
+use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningRuntimeUseCases};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationRuntimeControlTruth,
     ConversationSnapshot,
@@ -156,7 +155,7 @@ impl PlanningWorkspacePort for FakePlanningWorkspacePort {
 }
 
 fn planning_runtime() -> PlanningRuntimeUseCases {
-    PlanningServices::from_workspace_port(Arc::new(FakePlanningWorkspacePort)).runtime
+    test_planning_services(Arc::new(FakePlanningWorkspacePort)).runtime
 }
 
 // This group protects the handoff boundary from "final answer received" to

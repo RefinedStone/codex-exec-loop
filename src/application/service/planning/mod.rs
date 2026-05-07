@@ -49,11 +49,10 @@ pub use self::admin::{
 pub use self::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
-// directions 타입은 queue idle 검토, supporting file 상태, doctor 결과처럼 planning 방향 문서 작성/검토 화면이 쓰는
-// projection 계약이다.
+// directions 타입은 queue idle 검토와 supporting file 상태처럼 planning 방향 문서 작성/검토 화면이 쓰는 projection 계약이다.
 pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
-    DirectionsSupportingFileStatus, PlanningDoctorOutcome, QueueIdleReviewContext,
+    DirectionsSupportingFileStatus, QueueIdleReviewContext,
 };
 // init 타입은 draft editor와 workspace 초기화 흐름이 주고받는 파일 목록, 저장 결과, promote 결과를 공개한다.
 pub use self::authoring::init::{

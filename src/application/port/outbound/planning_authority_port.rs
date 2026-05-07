@@ -1,22 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
-use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
-    ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
-};
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogPort;
+#[cfg(test)]
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+#[cfg(test)]
+use crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorQueueItem,
-    ParallelModePoolResetReport, ParallelModeQueueItemState, ParallelModeRuntimeEventsSnapshot,
-    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModePoolResetReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
-use crate::domain::planning::{
-    PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
-    PlanningAuthorityShadowStoreSyncState,
-};
+#[cfg(test)]
+use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
+use crate::domain::planning::{PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
@@ -381,16 +383,16 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
 
 #[derive(Default)]
 /*
- * `NoopPlanningAuthorityPort`는 authority DB가 연결되지 않은 경량 조립 경로의 fallback입니다.
- * TUI 테스트, 단일 workspace 실행, `PlanningServices::from_workspace_port`처럼 planning workspace만 주입하는 경로도
- * 같은 application service를 사용할 수 있어야 하므로, 이 구현은 runtime projection을 저장하지 않고
- * claim도 항상 성공한 것처럼 돌려줍니다. 즉 실제 동기화 보장이 아니라 "비영속 단일 실행용 무해한 대체물"입니다.
+ * `NoopPlanningAuthorityPort`는 tests가 authority DB 없이 service graph를 조립하기 위한 fake입니다.
+ * Production composition은 실제 authority boundary를 명시적으로 주입합니다.
  */
+#[cfg(test)]
 pub struct NoopPlanningAuthorityPort {
     // Monotonic refresh counter keeps orchestration on the same path as real adapters.
     next_refresh_order: AtomicU64,
 }
 
+#[cfg(test)]
 impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
     fn load_runtime_event_log(
         &self,
@@ -403,6 +405,7 @@ impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
     }
 }
 
+#[cfg(test)]
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
     // Without a store, the supplied workspace is both workspace root and canonical root.
     fn resolve_authority_location(&self, workspace_dir: &str) -> Result<PlanningAuthorityLocation> {

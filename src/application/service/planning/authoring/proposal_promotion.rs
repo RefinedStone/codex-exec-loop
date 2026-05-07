@@ -69,27 +69,6 @@ pub struct PlanningProposalPromotionService {
 }
 
 impl PlanningProposalPromotionService {
-    #[cfg(test)]
-    #[allow(dead_code)]
-    /*
-     * test는 실제 repository boundary 없이 service를 만들 수 있다. production composition은 with_task_repository를
-     * 사용해 proposal promotion이 manual planning edit와 같은 accepted-authority transaction model에 참여하게 한다.
-     */
-    pub fn new(
-        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-        planning_prompt_service: PlanningPromptService,
-        planning_validation_service: PlanningValidationService,
-        priority_queue_service: PriorityQueueService,
-    ) -> Self {
-        Self::with_task_repository(
-            planning_workspace_port,
-            planning_prompt_service,
-            planning_validation_service,
-            priority_queue_service,
-            Arc::new(crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort),
-        )
-    }
-
     /*
      * composition은 모든 collaboration point를 명시적으로 주입한다. repository를 port dependency로 유지하면
      * filesystem-backed/DB-backed authority store가 promotion logic을 바꾸지 않고도 같은 optimistic revision

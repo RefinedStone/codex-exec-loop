@@ -8,23 +8,13 @@
 // adapter의 구체 타입을 알지 않고 Arc<dyn ...> 경계만 받아 application use case 묶음으로 바꾼다.
 use std::sync::Arc;
 
-// authority port는 planning의 authoritative 상태를 읽고 쓰는 outbound 경계다. Noop 구현은 workspace-only
-// 구성에서도 feature가 만들어지게 하는 기본값이고, 실제 저장소가 연결되면 dyn PlanningAuthorityPort로 들어온다.
-use crate::application::port::outbound::planning_authority_port::{
-    NoopPlanningAuthorityPort, PlanningAuthorityPort,
-};
-// task repository port는 task authority 스냅샷과 큐 관련 데이터를 저장하는 경계다. from_workspace_port 경로는
-// 이 저장소가 없는 호출자를 위해 NoopPlanningTaskRepositoryPort를 꽂아 feature 표면을 유지한다.
-use crate::application::port::outbound::planning_task_repository_port::{
-    NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
-};
-// worker port는 실제 planning worker 실행을 application service 밖으로 밀어내는 경계다. Noop worker는 테스트나
-// 제한된 TUI 흐름에서 worker 실행 없이도 workspace/runtime use case를 구성할 수 있게 한다.
-use crate::application::port::outbound::planning_worker_port::{
-    NoopPlanningWorkerPort, PlanningWorkerPort,
-};
-// workspace port는 파일 기반 planning workspace를 읽고 쓰는 핵심 경계다. from_workspace_port가 이 포트만 요구하는
-// 이유는 기존 호출자들이 최소한의 workspace 기능만으로 PlanningFeature를 만들 수 있어야 하기 때문이다.
+// authority port는 planning의 authoritative 상태를 읽고 쓰는 outbound 경계다.
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+// task repository port는 task authority 스냅샷과 큐 관련 데이터를 저장하는 경계다.
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+// worker port는 실제 planning worker 실행을 application service 밖으로 밀어내는 경계다.
+use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
+// workspace port는 파일 기반 planning workspace를 읽고 쓰는 핵심 경계다.
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 
 // feature.rs는 public 생성자만 노출하고, 실제 서비스 그래프 조립은 composition 모듈에 맡긴다. 이렇게 하면 이 파일은
@@ -77,21 +67,5 @@ impl PlanningFeature {
             planning_worker_port,
         ))
         .build()
-    }
-
-    // from_workspace_port는 예전 호출자와 가벼운 테스트를 위한 축약 생성자다. workspace 포트만 실제 구현으로 받고,
-    // authority/task repository/worker는 noop으로 채워 feature의 public shape를 그대로 유지한다.
-    pub fn from_workspace_port(planning_workspace_port: Arc<dyn PlanningWorkspacePort>) -> Self {
-        // 아래 호출은 축약 경로도 결국 from_ports를 타게 만든다. 그래서 production 경로와 noop 경로가 서로 다른
-        // 조립 로직을 갖지 않고, composition 변경이 한곳에만 반영된다.
-        Self::from_ports(
-            planning_workspace_port,
-            // Noop authority는 DB-backed authority가 없어도 관련 호출이 기본 동작으로 끝나게 하는 안전한 대체 포트다.
-            Arc::new(NoopPlanningAuthorityPort::default()),
-            // Noop task repository는 task 저장소가 없는 구성에서 repository 의존성을 만족시키는 빈 구현이다.
-            Arc::new(NoopPlanningTaskRepositoryPort),
-            // Noop worker는 worker 실행 요청을 실제 app-server 호출로 보내지 않는 테스트/축약 구성용 구현이다.
-            Arc::new(NoopPlanningWorkerPort),
-        )
     }
 }

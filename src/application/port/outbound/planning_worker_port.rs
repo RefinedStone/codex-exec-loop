@@ -58,11 +58,11 @@ pub trait PlanningWorkerPort: Send + Sync {
     ) -> Result<PlanningWorkerResponse>;
 }
 
-// `NoopPlanningWorkerPort`는 planning worker capability가 없는 구성에서 쓰는 안전한 fallback이다.
-// worker가 실제 파일을 바꾸지 않았음을 명확히 하면서도 orchestration이 panic 없이 진행되도록
-// response 형태를 맞춘다.
+// `NoopPlanningWorkerPort`는 tests에서 planning worker capability 없이 service graph를 조립하기 위한 fake다.
+#[cfg(test)]
 pub struct NoopPlanningWorkerPort;
 
+#[cfg(test)]
 impl PlanningWorkerPort for NoopPlanningWorkerPort {
     // noop 구현은 요청 operation을 그대로 돌려주고, agent message에 비활성 상태를 남긴다. 이를
     // 통해 caller는 "worker가 성공적으로 아무 것도 하지 않았다"와 "worker 실행 실패"를 구분할 수 있다.

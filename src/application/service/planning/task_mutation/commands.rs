@@ -4,9 +4,8 @@ use crate::domain::planning::TaskStatus;
 
 /*
  * worker/LLM output에서 task mutation command만 엄격하게 뽑아내는 JSON extractor다.
- * mutation service는 typed create/update command만 소비하고, legacy full task-authority
- * document는 거부한다. 자동 응답이 accepted DB authority 전체를 한 번에 교체하지 못하게
- * 하고, 모든 변경을 command 단위 audit/revision 경로에 태우기 위한 경계다.
+ * mutation service는 typed create/update command만 소비한다. 자동 응답이 accepted DB authority 전체를
+ * 한 번에 교체하지 못하게 하고, 모든 변경을 command 단위 audit/revision 경로에 태우기 위한 경계다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskCreateInput {
@@ -50,9 +49,6 @@ pub enum PlanningTaskMutationCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningTaskCommandExtraction {
     Commands(Vec<PlanningTaskMutationCommand>),
-    // rejected JSON은 repair prompt 증거로 보존한다. caller가 원본 markdown을 다시 slicing하지 않고
-    // model이 실제로 낸 payload를 그대로 보여 줄 수 있게 한다.
-    LegacyTaskAuthorityRejected(String),
     InvalidCommands {
         error: String,
         rejected_json: Option<String>,
@@ -128,15 +124,6 @@ pub fn extract_planning_task_commands(message: &str) -> PlanningTaskCommandExtra
         let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) else {
             continue;
         };
-        // old-style full task authority export는 이 경계에서 위험하다. 이를 허용하면 create/update
-        // audit semantics와 repository revision check를 우회해 ledger 전체를 교체할 수 있다.
-        if value.get("task_authority").is_some()
-            || (value.get("version").is_some() && value.get("tasks").is_some())
-        {
-            let rejected =
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| candidate.to_string());
-            return PlanningTaskCommandExtraction::LegacyTaskAuthorityRejected(rejected);
-        }
         if value.get("planning_task_commands").is_some() {
             // serde error와 함께 normalized rejected JSON을 보존한다. repair prompt는 원본 응답의
             // 깨지기 쉬운 slice가 아니라 pretty JSON을 기준으로 unknown field나 unsupported version을

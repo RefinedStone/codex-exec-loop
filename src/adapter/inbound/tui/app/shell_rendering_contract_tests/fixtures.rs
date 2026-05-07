@@ -8,7 +8,7 @@ use crate::application::port::outbound::startup_probe_port::{
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::{
-    PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeSnapshot, PlanningServices,
+    PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeSnapshot,
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -129,7 +129,9 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
             crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
         ),
         test_helpers::test_parallel_mode_service(),
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
+        crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        )),
     );
     app.show_startup_ascii_art = false;
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {

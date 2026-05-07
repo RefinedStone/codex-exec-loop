@@ -1,7 +1,4 @@
-use super::{
-    PlanningChangeSet, PlanningRepairPromptHandoff, PlanningRepairRequest,
-    build_planning_repair_prompt,
-};
+use super::{PlanningRepairPromptHandoff, PlanningRepairRequest, build_planning_repair_prompt};
 use crate::domain::planning::{
     PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskStatus,
@@ -119,18 +116,6 @@ fn find_task<'a>(
         .tasks
         .iter()
         .find(|task| task.id.trim() == task_id)
-}
-
-// DB 작업 권한과 레거시 큐 산출물은 더 이상 보호해야 하는 workspace 파일이 아니다.
-#[test]
-fn change_set_ignores_legacy_task_file_paths() {
-    let paths = vec![
-        "DB task authority".to_string(),
-        ".codex-exec-loop/planning/legacy-queue-snapshot.json".to_string(),
-    ];
-    let change_set = PlanningChangeSet::from_paths(&paths);
-
-    assert!(!change_set.has_relevant_changes());
 }
 
 /*

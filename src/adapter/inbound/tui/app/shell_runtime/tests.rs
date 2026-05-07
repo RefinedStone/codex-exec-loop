@@ -5,7 +5,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
 };
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, PlannerWorkerPanelState,
-    PlannerWorkerStatus,
+    PlannerWorkerStatus, test_helpers,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -180,7 +180,7 @@ fn make_test_runtime() -> ShellRuntime {
                 crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
             ),
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            PlanningServices::from_workspace_port(Arc::new(
+            test_helpers::test_planning_services(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),
         );
@@ -196,7 +196,7 @@ fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>
                 crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
             ),
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            PlanningServices::from_workspace_port(Arc::new(
+            test_helpers::test_planning_services(Arc::new(
                 FilesystemPlanningWorkspaceAdapter::new(),
             )),
         );
@@ -320,7 +320,7 @@ fn run_git(repo_root: &Path, args: &[&str]) {
 // operators use in normal TUI sessions.
 fn bootstrap_active_planning_workspace(workspace_dir: &str) {
     let planning =
-        PlanningServices::from_workspace_port(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+        test_helpers::test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
     bootstrap_active_planning_workspace_with_services(&planning, workspace_dir);
 }
 

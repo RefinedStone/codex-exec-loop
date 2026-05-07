@@ -1,4 +1,6 @@
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
@@ -129,12 +131,13 @@ pub trait PlanningTaskRepositoryPort: Send + Sync {
 
 #[derive(Debug, Default)]
 /*
- * `NoopPlanningTaskRepositoryPort`는 실제 DB adapter가 없을 때도 planning service를 조립하기 위한
- * in-memory fallback이다. 이름은 noop이지만 commit/load/clear 동작을 전역 map에 보존하므로,
- * 테스트나 경량 실행에서 authority 흐름의 revision semantics를 그대로 연습할 수 있다.
+ * `NoopPlanningTaskRepositoryPort`는 tests가 DB adapter 없이 authority revision 흐름을 연습하기 위한
+ * in-memory fake다. Production composition은 실제 repository boundary를 명시적으로 주입한다.
  */
+#[cfg(test)]
 pub struct NoopPlanningTaskRepositoryPort;
 
+#[cfg(test)]
 impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
     // direction snapshot 전역 map에서 workspace별 값을 복제해 반환한다.
     fn load_direction_authority_snapshot(
@@ -268,6 +271,7 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
  * `OnceLock`은 첫 호출 때만 `Mutex<BTreeMap<...>>`을 만들고 이후에는 같은 인스턴스를 공유한다.
  * 실제 adapter가 없는 경로에서도 여러 service 인스턴스가 같은 process 안에서 snapshot을 다시 읽을 수 있다.
  */
+#[cfg(test)]
 fn noop_task_authority_store() -> &'static Mutex<BTreeMap<String, PlanningTaskAuthoritySnapshot>> {
     static STORE: OnceLock<Mutex<BTreeMap<String, PlanningTaskAuthoritySnapshot>>> =
         OnceLock::new();
@@ -279,6 +283,7 @@ fn noop_task_authority_store() -> &'static Mutex<BTreeMap<String, PlanningTaskAu
  * task authority와 저장소를 분리해 clear/commit이 서로 간섭하지 않도록 만들고,
  * 두 문서가 독립적인 revision 흐름을 갖는다는 포트 계약도 테스트 double에서 그대로 보존한다.
  */
+#[cfg(test)]
 fn noop_direction_authority_store()
 -> &'static Mutex<BTreeMap<String, PlanningDirectionAuthoritySnapshot>> {
     static STORE: OnceLock<Mutex<BTreeMap<String, PlanningDirectionAuthoritySnapshot>>> =
