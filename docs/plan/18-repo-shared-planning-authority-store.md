@@ -73,12 +73,12 @@ auto-consumes from a directory.
 
 ### 3. Git-Tracked Files Become Exported Review Surfaces
 
-The authority store lives under the canonical repo root:
+The implemented authority store is keyed by the canonical repo root, but the DB file lives in the
+user-level Akra project runtime directory:
 
 | Path | Role |
 | --- | --- |
-| `.codex-exec-loop/runtime/planning-authority.db` | SQLite authority store |
-| `.codex-exec-loop/runtime/planning-authority.lock` | repo-scoped advisory lock for migration, import, and recovery sweep |
+| `.akra/projects/<repo-hash>/runtime/planning-authority.db` | SQLite authority store |
 
 Tracked planning files under `.codex-exec-loop/planning/` remain valuable, but only as:
 

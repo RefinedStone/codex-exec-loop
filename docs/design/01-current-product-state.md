@@ -30,7 +30,8 @@ The canonical current contract for supersession, planning, and directions lives 
 - Accepted planning remains operator-owned through staged drafts and explicit promotion.
 - Invalid planning writes are restored, archived, and surfaced back to the operator instead of
   being silently accepted.
-- Git-backed planning authority is repo-scoped and store-backed under `.codex-exec-loop/runtime/`.
+- Git-backed planning authority is repo-scoped and store-backed under the user-level
+  `.akra/projects/<repo-hash>/runtime/` directory.
 
 ## Active Constraints
 

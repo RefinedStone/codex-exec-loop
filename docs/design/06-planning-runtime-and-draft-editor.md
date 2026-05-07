@@ -7,7 +7,8 @@ The operator-facing current contract lives in
 
 ## Git-Backed Authority Model
 
-- Git-backed workspaces resolve one canonical repo authority root and persist planning authority under `.codex-exec-loop/runtime/planning-authority.db`.
+- Git-backed workspaces resolve one canonical repo authority root and persist planning authority
+  under the user-level `.akra/projects/<repo-hash>/runtime/planning-authority.db` store.
 - Active planning, staged drafts, official refresh claims, distributor queue claims, and runtime slot, session, and distributor projections are repo-scoped authority-store data.
 - Git-backed runtime no longer writes task authority or queue projection JSON files during normal authority updates.
 - Tracked planning files under `.codex-exec-loop/planning/` remain operator-authored prompts, direction detail docs, and result-output guidance only.
