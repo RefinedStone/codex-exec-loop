@@ -69,7 +69,6 @@ pub(crate) struct RecordedAutoFollowupActivity {
 // affordances while still carrying application-layer repair requests verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlanningRepairState {
-    pub(crate) root_turn_id: String,
     pub(crate) attempts_used: usize,
     pub(crate) max_attempts: usize,
     pub(crate) latest_request: PlanningRepairRequest,
