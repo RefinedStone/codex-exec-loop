@@ -250,7 +250,7 @@ impl PlanningTaskToolService {
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
                 source: PlanningTaskMutationSource::Worker,
-                source_turn_id: request.legacy_source_turn_id,
+                legacy_source_turn_id: request.legacy_source_turn_id,
                 provenance,
                 commands: vec![PlanningTaskMutationCommand::CreateTask(
                     request.input.into(),
@@ -282,7 +282,7 @@ impl PlanningTaskToolService {
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
                 source: PlanningTaskMutationSource::Worker,
-                source_turn_id: request.legacy_source_turn_id,
+                legacy_source_turn_id: request.legacy_source_turn_id,
                 provenance,
                 commands: vec![PlanningTaskMutationCommand::UpdateTask(
                     request.input.into(),

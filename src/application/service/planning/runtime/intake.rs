@@ -277,7 +277,7 @@ impl PlanningTaskIntakeService {
             PlanningTaskCreatePreviewRequest {
                 workspace_directory: request.workspace_directory.clone(),
                 source: PlanningTaskMutationSource::User,
-                source_turn_id: request.legacy_source_turn_id.clone(),
+                legacy_source_turn_id: request.legacy_source_turn_id.clone(),
                 provenance: request.provenance.clone(),
                 input: create_input_from_draft(&generated_draft),
             },

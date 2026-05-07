@@ -93,7 +93,7 @@ impl PlanningAdminFacadeService {
                 // admin UI에서 온 명시적 operator edit이므로 source는 User다. model-generated command와 구분해야
                 // audit/debug에서 사람이 바꾼 task와 자동 추출 task를 나눠 볼 수 있다.
                 source: PlanningTaskMutationSource::User,
-                source_turn_id: None,
+                legacy_source_turn_id: None,
                 provenance: TaskMutationProvenance::new(OriginSessionKind::System),
                 commands: vec![command],
             })?;

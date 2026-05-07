@@ -426,7 +426,7 @@ impl PlanningWorkerOrchestrationService {
                         .apply_commands(PlanningTaskMutationRequest {
                             workspace_directory: workspace_directory.to_string(),
                             source: PlanningTaskMutationSource::Worker,
-                            source_turn_id: worker_response.turn_id.clone(),
+                            legacy_source_turn_id: worker_response.turn_id.clone(),
                             provenance: task_provenance.clone(),
                             commands,
                         }) {

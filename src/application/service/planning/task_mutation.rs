@@ -62,10 +62,10 @@ impl PlanningTaskMutationSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskMutationRequest {
     pub workspace_directory: String,
-    // source/source_turn_id/provenance는 command batch 전체와 함께 이동한다. create와 update가
+    // source/legacy_source_turn_id/provenance는 command batch 전체와 함께 이동한다. create와 update가
     // 같은 actor/provenance 규칙으로 audit field를 채우게 하려는 요청 단위 context다.
     pub source: PlanningTaskMutationSource,
-    pub source_turn_id: Option<String>,
+    pub legacy_source_turn_id: Option<String>,
     pub provenance: TaskMutationProvenance,
     pub commands: Vec<PlanningTaskMutationCommand>,
 }
@@ -73,7 +73,7 @@ pub struct PlanningTaskMutationRequest {
 pub struct PlanningTaskCreatePreviewRequest {
     pub workspace_directory: String,
     pub source: PlanningTaskMutationSource,
-    pub source_turn_id: Option<String>,
+    pub legacy_source_turn_id: Option<String>,
     pub provenance: TaskMutationProvenance,
     pub input: PlanningTaskCreateInput,
 }
@@ -140,7 +140,7 @@ impl PlanningTaskMutationService {
         let generated_at = Utc::now();
         let audit_context = TaskMutationAuditContext {
             source: request.source,
-            source_turn_id: request.source_turn_id.as_deref(),
+            legacy_source_turn_id: request.legacy_source_turn_id.as_deref(),
             provenance: &request.provenance,
         };
         let task = self.build_unique_task(
@@ -192,7 +192,7 @@ impl PlanningTaskMutationService {
                     &preview.request.input,
                     TaskMutationAuditContext {
                         source: preview.request.source,
-                        source_turn_id: preview.request.source_turn_id.as_deref(),
+                        legacy_source_turn_id: preview.request.legacy_source_turn_id.as_deref(),
                         provenance: &preview.request.provenance,
                     },
                     PlanningTaskAuthorityView {
@@ -360,7 +360,7 @@ impl PlanningTaskMutationService {
                         input,
                         TaskMutationAuditContext {
                             source: request.source,
-                            source_turn_id: request.source_turn_id.as_deref(),
+                            legacy_source_turn_id: request.legacy_source_turn_id.as_deref(),
                             provenance: &request.provenance,
                         },
                         PlanningTaskAuthorityView {
@@ -379,7 +379,7 @@ impl PlanningTaskMutationService {
                         input,
                         TaskMutationAuditContext {
                             source: request.source,
-                            source_turn_id: request.source_turn_id.as_deref(),
+                            legacy_source_turn_id: request.legacy_source_turn_id.as_deref(),
                             provenance: &request.provenance,
                         },
                         directions,
@@ -476,7 +476,7 @@ impl PlanningTaskMutationService {
             created_by: actor,
             last_updated_by: actor,
             source_turn_id: audit_context
-                .source_turn_id
+                .legacy_source_turn_id
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .or(audit_context.provenance.turn_id.as_deref())
@@ -568,7 +568,7 @@ impl PlanningTaskMutationService {
         }
         task.last_updated_by = audit_context.source.actor();
         if let Some(source_turn_id) = audit_context
-            .source_turn_id
+            .legacy_source_turn_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .or(audit_context.provenance.turn_id.as_deref())
@@ -624,7 +624,7 @@ struct PlanningTaskAuthorityView<'a> {
 struct TaskMutationAuditContext<'a> {
     // 요청 하나의 actor와 provenance를 묶어 create/update path가 같은 감사 규칙을 쓰게 한다.
     source: PlanningTaskMutationSource,
-    source_turn_id: Option<&'a str>,
+    legacy_source_turn_id: Option<&'a str>,
     provenance: &'a TaskMutationProvenance,
 }
 #[cfg(test)]

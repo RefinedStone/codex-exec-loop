@@ -132,7 +132,7 @@ fn user_preview_and_worker_create_share_defaults_and_audit() {
         .preview_create_task(PlanningTaskCreatePreviewRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::User,
-            source_turn_id: Some("turn-user".to_string()),
+            legacy_source_turn_id: Some("turn-user".to_string()),
             provenance: provenance(),
             input: PlanningTaskCreateInput {
                 direction_id: None,
@@ -159,7 +159,7 @@ fn user_preview_and_worker_create_share_defaults_and_audit() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: Some("turn-worker".to_string()),
+            legacy_source_turn_id: Some("turn-worker".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
@@ -230,7 +230,7 @@ fn create_records_generic_thread_turn_provenance() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: None,
+            legacy_source_turn_id: None,
             provenance: provenance.clone(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
@@ -283,7 +283,7 @@ fn update_preserves_unspecified_fields() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: Some("turn-2".to_string()),
+            legacy_source_turn_id: Some("turn-2".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
@@ -340,7 +340,7 @@ fn worker_update_preserves_existing_description_even_when_supplied() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: Some("turn-worker-description".to_string()),
+            legacy_source_turn_id: Some("turn-worker-description".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
@@ -397,7 +397,7 @@ fn user_update_can_replace_existing_description() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::User,
-            source_turn_id: Some("turn-user-description".to_string()),
+            legacy_source_turn_id: Some("turn-user-description".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
@@ -457,7 +457,7 @@ fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: Some("turn-noop".to_string()),
+            legacy_source_turn_id: Some("turn-noop".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
@@ -526,7 +526,7 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace,
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: Some("turn-many".to_string()),
+            legacy_source_turn_id: Some("turn-many".to_string()),
             provenance: provenance(),
             commands,
         })
@@ -614,7 +614,7 @@ fn terminal_status_change_is_rejected() {
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace,
             source: PlanningTaskMutationSource::Worker,
-            source_turn_id: None,
+            legacy_source_turn_id: None,
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
