@@ -305,7 +305,7 @@ pub struct TaskDefinition {
     // 마지막 수정 주체다. LLM이 수정한 task도 relation note를 요구한다.
     pub last_updated_by: TaskActor,
     #[serde(default)]
-    // app-server/root turn과 연결되는 optional provenance id다.
+    // legacy 조회용 source turn id다. 새 감사 정보는 provider-neutral provenance.turn_id를 우선 사용한다.
     pub source_turn_id: Option<String>,
     #[serde(default)]
     // task를 생성하거나 마지막으로 의미 있게 수정한 runtime session/turn provenance다.

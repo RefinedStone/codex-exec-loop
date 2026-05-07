@@ -62,8 +62,8 @@ impl PlanningTaskMutationSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningTaskMutationRequest {
     pub workspace_directory: String,
-    // source/source_turn_id/provenance는 command batch 전체와 함께 이동한다. create와 update가 같은
-    // actor/provenance 규칙으로 audit field를 채우게 하려는 요청 단위 metadata다.
+    // source/source_turn_id/provenance는 command batch 전체와 함께 이동한다. create와 update가
+    // 같은 actor/provenance 규칙으로 audit field를 채우게 하려는 요청 단위 context다.
     pub source: PlanningTaskMutationSource,
     pub source_turn_id: Option<String>,
     pub provenance: TaskMutationProvenance,
@@ -138,14 +138,14 @@ impl PlanningTaskMutationService {
         task_planning_revision: i64,
     ) -> Result<PlanningTaskCreatePreview> {
         let generated_at = Utc::now();
-        let audit_metadata = TaskMutationAuditMetadata {
+        let audit_context = TaskMutationAuditContext {
             source: request.source,
             source_turn_id: request.source_turn_id.as_deref(),
             provenance: &request.provenance,
         };
         let task = self.build_unique_task(
             &request.input,
-            audit_metadata,
+            audit_context,
             PlanningTaskAuthorityView {
                 directions,
                 task_authority,
@@ -190,7 +190,7 @@ impl PlanningTaskMutationService {
             } else {
                 self.build_unique_task(
                     &preview.request.input,
-                    TaskMutationAuditMetadata {
+                    TaskMutationAuditContext {
                         source: preview.request.source,
                         source_turn_id: preview.request.source_turn_id.as_deref(),
                         provenance: &preview.request.provenance,
@@ -358,7 +358,7 @@ impl PlanningTaskMutationService {
                 PlanningTaskMutationCommand::CreateTask(input) => {
                     let task = self.build_unique_task(
                         input,
-                        TaskMutationAuditMetadata {
+                        TaskMutationAuditContext {
                             source: request.source,
                             source_turn_id: request.source_turn_id.as_deref(),
                             provenance: &request.provenance,
@@ -377,7 +377,7 @@ impl PlanningTaskMutationService {
                 PlanningTaskMutationCommand::UpdateTask(input) => {
                     let updated = self.apply_update(
                         input,
-                        TaskMutationAuditMetadata {
+                        TaskMutationAuditContext {
                             source: request.source,
                             source_turn_id: request.source_turn_id.as_deref(),
                             provenance: &request.provenance,
@@ -401,7 +401,7 @@ impl PlanningTaskMutationService {
     fn build_unique_task(
         &self,
         input: &PlanningTaskCreateInput,
-        audit_metadata: TaskMutationAuditMetadata<'_>,
+        audit_context: TaskMutationAuditContext<'_>,
         authority: PlanningTaskAuthorityView<'_>,
         generated_at: DateTime<Utc>,
         starting_suffix: Option<u32>,
@@ -412,7 +412,7 @@ impl PlanningTaskMutationService {
         for _ in 0..MAX_COLLISION_SUFFIX_ATTEMPTS {
             let task = self.build_task(
                 input,
-                audit_metadata,
+                audit_context,
                 authority.directions,
                 generated_at,
                 suffix,
@@ -427,7 +427,7 @@ impl PlanningTaskMutationService {
     fn build_task(
         &self,
         input: &PlanningTaskCreateInput,
-        audit_metadata: TaskMutationAuditMetadata<'_>,
+        audit_context: TaskMutationAuditContext<'_>,
         directions: &DirectionCatalogDocument,
         generated_at: DateTime<Utc>,
         collision_suffix: Option<u32>,
@@ -443,7 +443,7 @@ impl PlanningTaskMutationService {
             .unwrap_or(title.as_str())
             .to_string();
         let direction = select_direction(input.direction_id.as_deref(), directions)?;
-        let actor = audit_metadata.source.actor();
+        let actor = audit_context.source.actor();
         let dynamic_priority_delta = input.dynamic_priority_delta.unwrap_or(0);
         let priority_reason = input
             .priority_reason
@@ -459,12 +459,7 @@ impl PlanningTaskMutationService {
         // authority document에 들어가기 전 모든 field를 normalize한다. 이후 update path가 structural
         // equality만으로 no-op 여부를 판단할 수 있게 하려는 전처리다.
         Ok(TaskDefinition {
-            id: build_task_id(
-                audit_metadata.source,
-                generated_at,
-                &title,
-                collision_suffix,
-            ),
+            id: build_task_id(audit_context.source, generated_at, &title, collision_suffix),
             direction_id: direction.id.trim().to_string(),
             direction_relation_note: default_relation_note(
                 input.direction_relation_note.as_deref(),
@@ -480,20 +475,20 @@ impl PlanningTaskMutationService {
             blocked_by: normalize_references(&input.blocked_by),
             created_by: actor,
             last_updated_by: actor,
-            source_turn_id: audit_metadata
+            source_turn_id: audit_context
                 .source_turn_id
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .or(audit_metadata.provenance.turn_id.as_deref())
+                .or(audit_context.provenance.turn_id.as_deref())
                 .map(str::to_string),
-            provenance: audit_metadata.provenance.clone(),
+            provenance: audit_context.provenance.clone(),
             updated_at: format_timestamp(generated_at),
         })
     }
     fn apply_update(
         &self,
         input: &PlanningTaskUpdateInput,
-        audit_metadata: TaskMutationAuditMetadata<'_>,
+        audit_context: TaskMutationAuditContext<'_>,
         directions: &DirectionCatalogDocument,
         task_authority: &mut TaskAuthorityDocument,
         updated_at: DateTime<Utc>,
@@ -527,7 +522,7 @@ impl PlanningTaskMutationService {
         if let Some(title) = input.title.as_deref() {
             task.title = required_text(title, "task title")?.to_string();
         }
-        if audit_metadata.source.can_update_existing_description() {
+        if audit_context.source.can_update_existing_description() {
             if let Some(description) = input.description.as_deref() {
                 task.description = required_text(description, "task description")?.to_string();
             }
@@ -571,17 +566,17 @@ impl PlanningTaskMutationService {
         if *task == previous_task {
             return Ok(false);
         }
-        task.last_updated_by = audit_metadata.source.actor();
-        if let Some(source_turn_id) = audit_metadata
+        task.last_updated_by = audit_context.source.actor();
+        if let Some(source_turn_id) = audit_context
             .source_turn_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .or(audit_metadata.provenance.turn_id.as_deref())
+            .or(audit_context.provenance.turn_id.as_deref())
         {
             task.source_turn_id = Some(source_turn_id.to_string());
         }
-        if !audit_metadata.provenance.is_empty() {
-            task.provenance = audit_metadata.provenance.clone();
+        if !audit_context.provenance.is_empty() {
+            task.provenance = audit_context.provenance.clone();
         }
         task.updated_at = format_timestamp(updated_at);
         Ok(true)
@@ -626,7 +621,8 @@ struct PlanningTaskAuthorityView<'a> {
     task_authority: &'a TaskAuthorityDocument,
 }
 #[derive(Debug, Clone, Copy)]
-struct TaskMutationAuditMetadata<'a> {
+struct TaskMutationAuditContext<'a> {
+    // 요청 하나의 actor와 provenance를 묶어 create/update path가 같은 감사 규칙을 쓰게 한다.
     source: PlanningTaskMutationSource,
     source_turn_id: Option<&'a str>,
     provenance: &'a TaskMutationProvenance,
