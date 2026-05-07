@@ -45,7 +45,7 @@ pub struct PlanningRuntimeSummaryView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningRuntimePreviewView {
+pub struct PlanningRuntimeAutoFollowPreviewView {
     pub status_label: &'static str,
     pub detail: Option<String>,
 }
@@ -186,7 +186,7 @@ impl PlanningRuntimePolicyService {
         &self,
         decision: PlanningAutoFollowPolicyDecision,
         snapshot: &PlanningRuntimeSnapshot,
-    ) -> PlanningRuntimePreviewView {
+    ) -> PlanningRuntimeAutoFollowPreviewView {
         /*
          * preview는 policy를 다시 계산하지 않고 이미 내려진 decision에서 파생한다. blocked decision은 automation을 멈춘
          * gate를 설명하고, allowed decision은 다음 generated prompt를 설명할 queue/proposal/failure detail을 보여 준다.
@@ -213,13 +213,13 @@ impl PlanningRuntimePolicyService {
                     )
                     .to_string(),
             };
-            return PlanningRuntimePreviewView {
+            return PlanningRuntimeAutoFollowPreviewView {
                 status_label: preview_block_label(reason),
                 detail: Some(detail),
             };
         }
 
-        PlanningRuntimePreviewView {
+        PlanningRuntimeAutoFollowPreviewView {
             status_label: match snapshot.workspace_status() {
                 PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
                 PlanningRuntimeWorkspaceStatus::Invalid => "blocked",
