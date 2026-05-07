@@ -45,8 +45,8 @@ impl ParallelModeService {
         &self,
         // 완료를 보고한 workspace 경로이다. 이 값으로 어떤 slot lease인지 다시 역추적한다.
         workspace_dir: &str,
-        // official completion contract가 어느 root turn에서 파생되었는지 묶는 상위 실행 id이다.
-        root_turn_id: &str,
+        // official completion contract를 유발한 완료 turn id이다.
+        completed_turn_id: &str,
         // 상위 런타임이 이미 예약한 refresh 순번이다. 없으면 이 함수가 authority store에서 새로 예약한다.
         official_completion_refresh_order: Option<u64>,
         // agent가 사용자에게 낸 최종 응답이다. ledger payload와 session summary 생성에 사용된다.
@@ -151,7 +151,7 @@ impl ParallelModeService {
         // 반환값은 hidden official worker가 ledger refresh를 수행할 계약이다.
         // session detail 갱신과 contract 생성이 같은 입력에서 만들어져 recovery 시 서로 맞물린다.
         Ok(Some(PlanningOfficialCompletionRefreshContract::new(
-            root_turn_id,
+            completed_turn_id,
             refresh_order,
             // payload에는 slot identity, task identity, branch/worktree, 고정 commit, 완료 요약이 모두 들어간다.
             PlanningOfficialCompletionRefreshPayload::new(

@@ -349,7 +349,7 @@ fn build_supervisor_snapshot_projects_official_completion_and_commit_ready_state
     assert_eq!(roster_entry.state_label, "commit_ready");
     assert_eq!(detail.state_label, "commit_ready");
     assert_eq!(detail.completion_state_label, "commit_ready");
-    assert_eq!(completion_report.root_turn_id, "turn-1");
+    assert_eq!(completion_report.completed_turn_id, "turn-1");
     assert_eq!(completion_report.refresh_order, 1);
     assert_eq!(completion_report.completion.task_id, "task-1");
     assert_eq!(completion_report.completion.agent_id, "agent-1");

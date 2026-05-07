@@ -43,7 +43,7 @@ use serde_json::json;
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningQueueRefreshRequest<'a> {
-    // parent ids는 hidden worker mutation을 유발한 visible/root turn을 provenance로 남길 때 쓴다.
+    // parent ids는 hidden worker mutation을 유발한 visible turn을 provenance로 남길 때 쓴다.
     pub workspace_directory: &'a str,
     pub parent_thread_id: Option<&'a str>,
     pub parent_turn_id: &'a str,
@@ -207,13 +207,13 @@ impl PlanningWorkerOrchestrationService {
         )?;
         self.run_worker_and_reconcile(
             request.workspace_directory,
-            &format!("planner-refresh-{}", request.contract.root_turn_id),
+            &format!("planner-refresh-{}", request.contract.completed_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             request.previous_handoff_task,
             WorkerParentProvenance {
                 thread_id: request.parent_thread_id,
-                turn_id: Some(request.contract.root_turn_id.as_str()),
+                turn_id: Some(request.contract.completed_turn_id.as_str()),
             },
         )
     }

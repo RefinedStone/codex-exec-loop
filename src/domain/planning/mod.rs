@@ -21,7 +21,7 @@ pub use validation::PlanningSemanticValidationService;
 
 // planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.
 pub const PLANNING_FORMAT_VERSION: u32 = 1;
-// official completion refresh contract는 worker 완료 통지를 root turn에 다시 주입하는 별도 wire contract다.
+// official completion refresh contract는 worker 완료 통지를 planning ledger에 반영하는 별도 wire contract다.
 pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -465,7 +465,7 @@ pub struct PriorityQueueSkippedTask {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningRefreshContractKind {
-    // official worker completion을 root planning turn에 다시 반영하는 refresh다.
+    // official worker completion을 planning ledger에 다시 반영하는 refresh다.
     OfficialCompletion,
 }
 
@@ -481,10 +481,10 @@ pub struct PlanningOfficialCompletionRefreshPayload {
     pub commit_sha: String,
     // worker가 실행한 validation/test summary다.
     pub validation_summary: String,
-    // root turn에 짧게 반영할 완료 요약이다.
+    // ledger와 UI에 짧게 반영할 완료 요약이다.
     pub final_response_summary: String,
     #[serde(default)]
-    // 필요할 때 root turn에 더 긴 final response를 보존한다.
+    // 필요할 때 더 긴 final response를 보존한다.
     pub final_response_text: Option<String>,
     #[serde(default)]
     // 실패/부분 완료의 맥락이다. 성공 payload에서는 비어 있을 수 있다.
@@ -532,9 +532,10 @@ pub struct PlanningOfficialCompletionRefreshContract {
     pub version: u32,
     // future refresh 종류 확장을 위한 discriminator다.
     pub refresh_kind: PlanningRefreshContractKind,
-    // refresh를 받을 root planning turn id다.
-    pub root_turn_id: String,
-    // 같은 root turn에 여러 completion이 들어올 때 ordering을 고정한다.
+    // refresh를 유발한 완료 turn id다. 오래된 저장/로그 payload의 root_turn_id도 입력 호환한다.
+    #[serde(alias = "root_turn_id")]
+    pub completed_turn_id: String,
+    // 같은 완료 turn에 여러 completion이 들어올 때 ordering을 고정한다.
     pub refresh_order: u64,
     pub completion: PlanningOfficialCompletionRefreshPayload,
 }
@@ -542,14 +543,14 @@ pub struct PlanningOfficialCompletionRefreshContract {
 impl PlanningOfficialCompletionRefreshContract {
     // current official completion contract의 version/kind를 한곳에서 고정한다.
     pub fn new(
-        root_turn_id: impl Into<String>,
+        completed_turn_id: impl Into<String>,
         refresh_order: u64,
         completion: PlanningOfficialCompletionRefreshPayload,
     ) -> Self {
         Self {
             version: PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
             refresh_kind: PlanningRefreshContractKind::OfficialCompletion,
-            root_turn_id: root_turn_id.into(),
+            completed_turn_id: completed_turn_id.into(),
             refresh_order,
             completion,
         }
@@ -658,6 +659,8 @@ mod tests {
 
         let serialized =
             serde_json::to_string_pretty(&contract).expect("contract should serialize");
+        assert!(serialized.contains("\"completed_turn_id\""));
+        assert!(!serialized.contains("\"root_turn_id\""));
         let restored: PlanningOfficialCompletionRefreshContract =
             serde_json::from_str(&serialized).expect("contract should deserialize");
 
@@ -669,13 +672,18 @@ mod tests {
             restored.refresh_kind,
             PlanningRefreshContractKind::OfficialCompletion
         );
-        assert_eq!(restored.root_turn_id, "turn-42");
+        assert_eq!(restored.completed_turn_id, "turn-42");
         assert_eq!(restored.refresh_order, 7);
         assert_eq!(restored.completion.task_id, "task-9");
         assert_eq!(
             restored.completion.final_response_text.as_deref(),
             Some("Implemented official completion reporting.")
         );
+
+        let legacy_json = serialized.replace("\"completed_turn_id\"", "\"root_turn_id\"");
+        let restored_legacy: PlanningOfficialCompletionRefreshContract =
+            serde_json::from_str(&legacy_json).expect("legacy contract should deserialize");
+        assert_eq!(restored_legacy.completed_turn_id, "turn-42");
     }
 }
 

@@ -107,7 +107,7 @@ impl PostTurnEvaluationExecutor {
         &mut self,
         // Source conversation supplies transcript context and previous handoff data.
         conversation: &ConversationViewModel,
-        // Original post-turn request identifies the slot workspace and root turn id.
+        // Original post-turn request identifies the slot workspace and completed turn id.
         request: &PostTurnEvaluationRequest,
         // Planning workspace may differ from the slot workspace when supervisor state is external.
         planning_workspace_directory: &str,

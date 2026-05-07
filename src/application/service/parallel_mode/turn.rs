@@ -297,15 +297,15 @@ impl ParallelModeTurnService {
     }
 
     /*
-    official completion은 슬롯 agent가 낸 결과를 root planning authority의 언어로 다시 정리하는
-    단계다. 여기서는 root turn id, refresh 순서, 최종 답변, 검증 요약을 `ParallelModeService`에
+    official completion은 슬롯 agent가 낸 결과를 planning authority의 언어로 다시 정리하는
+    단계다. 여기서는 완료 turn id, refresh 순서, 최종 답변, 검증 요약을 `ParallelModeService`에
     넘겨 슬롯 lease를 "공식 완료 진행 중" 상태로 전환한다. 이 단계를 거쳐야 distributor가 어떤
     task 결과를 어떤 순서로 통합할지 안정적으로 판단할 수 있다.
     */
     pub fn begin_official_completion(
         &self,
         workspace_directory: &str,
-        root_turn_id: &str,
+        completed_turn_id: &str,
         refresh_order: Option<u64>,
         latest_main_reply: Option<&str>,
         validation_summary: Option<&str>,
@@ -313,7 +313,7 @@ impl ParallelModeTurnService {
         self.parallel_mode_service
             .begin_workspace_official_completion(
                 workspace_directory,
-                root_turn_id,
+                completed_turn_id,
                 refresh_order,
                 latest_main_reply,
                 validation_summary,
