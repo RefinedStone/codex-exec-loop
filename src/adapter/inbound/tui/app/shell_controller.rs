@@ -262,13 +262,13 @@ impl NativeTuiApp {
         let request = PlanningTaskIntakeRequest {
             workspace_directory: self.planning_workspace_directory(),
             raw_prompt: prompt,
-            source_turn_id: self.active_task_intake_turn_id(),
+            source_turn_id: self.task_intake_parent_turn_id(),
             provenance: crate::domain::planning::TaskMutationProvenance::new(
                 crate::domain::planning::OriginSessionKind::ManualIntake,
             )
             .with_parent(
-                self.active_task_intake_thread_id(),
-                self.active_task_intake_turn_id(),
+                self.task_intake_parent_thread_id(),
+                self.task_intake_parent_turn_id(),
             ),
             requested_direction_id: None,
             observed_planning_revision: None,
@@ -307,13 +307,13 @@ impl NativeTuiApp {
                 .show_error(format!("Task commit failed: {error}")),
         }
     }
-    fn active_task_intake_turn_id(&self) -> Option<String> {
+    fn task_intake_parent_turn_id(&self) -> Option<String> {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation.active_turn_id.clone(),
             ConversationState::Loading | ConversationState::Failed(_) => None,
         }
     }
-    fn active_task_intake_thread_id(&self) -> Option<String> {
+    fn task_intake_parent_thread_id(&self) -> Option<String> {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => Some(conversation.thread_id.clone())
                 .filter(|thread_id| !thread_id.trim().is_empty()),
