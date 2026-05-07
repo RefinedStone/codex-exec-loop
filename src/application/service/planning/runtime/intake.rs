@@ -268,7 +268,7 @@ impl PlanningTaskIntakeService {
         let generated_draft =
             self.draft_generator
                 .generate(&PlanningTaskIntakeGenerationRequest {
-                    request: &request,
+                    intake_request: &request,
                     directions: &context.directions,
                     generated_at,
                     collision_suffix: None,
@@ -582,7 +582,7 @@ pub(super) mod tests {
         let generated_at = Utc.with_ymd_and_hms(2026, 4, 24, 1, 2, 3).unwrap();
         let draft = LocalPromptTaskDraftGenerator::new()
             .generate(&PlanningTaskIntakeGenerationRequest {
-                request: &existing_request,
+                intake_request: &existing_request,
                 directions: &directions,
                 generated_at,
                 collision_suffix: None,

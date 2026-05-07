@@ -18,13 +18,13 @@ const TASK_TITLE_LIMIT: usize = 72;
 pub trait PlanningTaskDraftGenerator: Send + Sync {
     fn generate(
         &self,
-        request: &PlanningTaskIntakeGenerationRequest<'_>,
+        generation: &PlanningTaskIntakeGenerationRequest<'_>,
     ) -> Result<PlanningTaskIntakeDraft>;
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningTaskIntakeGenerationRequest<'a> {
-    pub request: &'a PlanningTaskIntakeRequest,
+    pub intake_request: &'a PlanningTaskIntakeRequest,
     pub directions: &'a DirectionCatalogDocument,
     // 생성 시각은 호출자가 소유한다. 그래야 preview 계층이 ID 충돌을 보고했을 때
     // 재시도마다 시간 기반 ID가 흔들리지 않고, 확인된 충돌 suffix만 바뀐다.
@@ -44,20 +44,21 @@ impl LocalPromptTaskDraftGenerator {
 impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
     fn generate(
         &self,
-        request: &PlanningTaskIntakeGenerationRequest<'_>,
+        generation: &PlanningTaskIntakeGenerationRequest<'_>,
     ) -> Result<PlanningTaskIntakeDraft> {
-        let normalized_prompt = normalize_prompt(&request.request.raw_prompt);
+        let intake_request = generation.intake_request;
+        let normalized_prompt = normalize_prompt(&intake_request.raw_prompt);
         let direction = select_direction(
-            request.request.requested_direction_id.as_deref(),
-            request.directions,
+            intake_request.requested_direction_id.as_deref(),
+            generation.directions,
         )
         .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
         let task_id = build_task_id(
-            request.generated_at,
+            generation.generated_at,
             &normalized_prompt,
-            request.collision_suffix,
+            generation.collision_suffix,
         );
-        let updated_at = request
+        let updated_at = generation
             .generated_at
             .to_rfc3339_opts(SecondsFormat::Secs, true);
 
@@ -73,7 +74,7 @@ impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
                     direction.id.trim()
                 ),
                 title: build_task_title(&normalized_prompt),
-                description: format!("User prompt:\n\n{}", request.request.raw_prompt.trim()),
+                description: format!("User prompt:\n\n{}", intake_request.raw_prompt.trim()),
                 status: TaskStatus::Ready,
                 base_priority: DEFAULT_RUNTIME_TASK_PRIORITY,
                 dynamic_priority_delta: 0,
@@ -82,14 +83,14 @@ impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
                 blocked_by: Vec::new(),
                 created_by: TaskActor::User,
                 last_updated_by: TaskActor::User,
-                source_turn_id: request.request.legacy_source_turn_id.clone(),
-                provenance: request.request.provenance.clone(),
+                source_turn_id: intake_request.legacy_source_turn_id.clone(),
+                provenance: intake_request.provenance.clone(),
                 updated_at,
             },
             direction_title: direction.title.trim().to_string(),
             normalized_prompt,
-            generated_at: request.generated_at,
-            collision_suffix: request.collision_suffix,
+            generated_at: generation.generated_at,
+            collision_suffix: generation.collision_suffix,
         })
     }
 }
@@ -233,7 +234,7 @@ mod tests {
 
         let draft = LocalPromptTaskDraftGenerator::new()
             .generate(&PlanningTaskIntakeGenerationRequest {
-                request: &request,
+                intake_request: &request,
                 directions: &directions(),
                 generated_at,
                 collision_suffix: None,
