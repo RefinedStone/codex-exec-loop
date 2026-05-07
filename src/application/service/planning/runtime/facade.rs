@@ -18,7 +18,7 @@ use crate::application::service::planning::runtime::policy::{
 use crate::application::service::planning::runtime::prompt::{
     PlanningPromptService, PlanningRuntimeSnapshot,
 };
-use crate::application::service::planning::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+use crate::application::service::planning::shared::auto_follow_copy::QUEUED_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::prompt_component::PromptDocument;
 use crate::application::service::turn_prompt_assembly_service::{
     MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionPromptAssemblyRequest,
@@ -222,7 +222,7 @@ impl PlanningRuntimeFacadeService {
 
     /*
      * main-session handoff는 operator에게 보이는 conversation에 들어가지만 planning fragment를 포함하지 않는다.
-     * transcript marker는 runtime이 built-in continuation을 큐에서 넘겼다는 사실만 기록하고, 내부 queue prompt 전체를
+     * transcript marker는 runtime이 queued-task continuation을 큐에서 넘겼다는 사실만 기록하고, 내부 queue prompt 전체를
      * chat history에 노출하지 않는다.
      */
     fn build_compact_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
@@ -236,7 +236,7 @@ impl PlanningRuntimeFacadeService {
 
         PlanningMainSessionHandoff {
             prompt,
-            transcript_text: BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT.to_string(),
+            transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
             task: planning_task_handoff_from_queue_task(task),
         }
     }

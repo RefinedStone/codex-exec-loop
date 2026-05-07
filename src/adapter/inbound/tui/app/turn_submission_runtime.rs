@@ -10,8 +10,8 @@ mod stream_execution;
 
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, ManualPromptIntakeOutcome, ManualPromptIntakeRequest,
-    PlanningTaskHandoff,
+    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, PlanningTaskHandoff,
+    QUEUED_TASK_TRANSCRIPT_TEXT,
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 use post_turn_execution::PostTurnEvaluationRequest;
@@ -360,7 +360,7 @@ impl NativeTuiApp {
 
     fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {
         if !self.planning_worker_shows_debug_details()
-            || transcript_text != BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
+            || transcript_text != QUEUED_TASK_TRANSCRIPT_TEXT
         {
             return None;
         }

@@ -11,9 +11,9 @@ use crate::diagnostics::event_log;
 use serde_json::json;
 
 // The refresh path reads conversation context and reports progress through the same
-// planning worker panel used by builtin queue refresh and hidden repair.
+// planning worker panel used by queued-task refresh and hidden repair.
 use super::super::super::{ConversationViewModel, PlanningWorkerStatus};
-// Repeated-head detection is shared with builtin refresh so official completion
+// Repeated-head detection is shared with queued-task refresh so official completion
 // cannot requeue a slot task that failed to advance planning.
 use super::logging::post_turn_event_detail;
 use super::queue_head_detail::repeated_queue_head_detail;

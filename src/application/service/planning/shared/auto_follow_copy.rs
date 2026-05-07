@@ -4,8 +4,8 @@
 
 // 이 문구는 queue head를 자동으로 이어 실행할 때 transcript에 남기는 사용자-facing marker이다.
 // runtime facade와 TUI post-turn 처리 경로가 이 값을 비교해 "사용자가 직접 입력한 prompt"와
-// "내장 next-task handoff"를 구분한다.
-pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str = "다음 queued-task 1개를 이어서 진행합니다.";
+// "queued-task handoff"를 구분한다.
+pub const QUEUED_TASK_TRANSCRIPT_TEXT: &str = "다음 queued-task 1개를 이어서 진행합니다.";
 // DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN은 queue가 비었을 때 planning evaluator가 어떤 기준으로
 // 후속 task를 만들지 판단하게 하는 기본 prompt이다. bootstrap은 새 workspace에 이 내용을 seed하고,
 // doctor/supporting file 경로는 drift 여부를 이 상수와 비교한다.

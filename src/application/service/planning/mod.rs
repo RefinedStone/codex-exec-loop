@@ -106,9 +106,9 @@ pub use self::runtime::policy::PlanningAutoFollowBlockReason;
 pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 // validation service는 여러 planning service와 테스트가 같은 검증 규칙을 직접 재사용할 수 있게 공개한다.
 pub use self::runtime::validation::PlanningValidationService;
-// builtin transcript copy는 auto-follow가 다음 작업 지시를 만들 때 쓰는 고정 문구다. UI/worker 경로가 같은 문구를
+// queued-task transcript copy는 auto-follow가 다음 작업 지시를 만들 때 쓰는 고정 문구다. UI/worker 경로가 같은 문구를
 // 쓰도록 planning 모듈 표면에서 재수출한다.
-pub use self::shared::auto_follow_copy::BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT;
+pub use self::shared::auto_follow_copy::QUEUED_TASK_TRANSCRIPT_TEXT;
 // shared contract 재수출은 planning 파일 경로와 디렉터리 이름을 한 계약으로 고정한다. adapter가 문자열을 직접
 // 재정의하지 않고 이 상수를 쓰면 workspace layout drift를 줄일 수 있다.
 pub use self::shared::contract::{

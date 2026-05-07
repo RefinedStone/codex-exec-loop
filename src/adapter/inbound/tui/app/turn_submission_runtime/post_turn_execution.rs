@@ -104,7 +104,7 @@ impl PostTurnEvaluationExecutor {
 
     // The execution order is deliberate: protect planning files first, repair
     // only when automation can act on the result, finish official parallel
-    // completions before built-in follow-up refreshes, then derive the action
+    // completions before queued-task refreshes, then derive the action
     // from the final runtime snapshot.
     #[tracing::instrument(level = "trace", skip(self, conversation))]
     fn run(
