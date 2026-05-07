@@ -7,13 +7,14 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
     ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
 };
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDistributorQueueRecord;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeQueueItemState,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 use crate::domain::planning::{
     OriginSessionKind, PriorityQueueProjection, TaskActor, TaskAuthorityDocument, TaskDefinition,
@@ -206,6 +207,88 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
 }
 
 #[test]
+fn runtime_task_cleanup_removes_deleted_task_projections_only() {
+    let workspace_dir = temp_workspace("runtime-task-cleanup");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let deleted_lease = slot_lease_for_task(
+        "slot-1",
+        "task-deleted",
+        ParallelModeSlotLeaseState::Running,
+    );
+    let kept_lease =
+        slot_lease_for_task("slot-2", "task-kept", ParallelModeSlotLeaseState::Running);
+
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &deleted_lease)
+        .expect("deleted task slot lease should persist");
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &kept_lease)
+        .expect("kept task slot lease should persist");
+    adapter
+        .upsert_runtime_session_detail(
+            &workspace_dir,
+            &failed_start_session_detail(
+                "session-deleted",
+                "task-deleted",
+                "2026-05-04T12:00:00+00:00",
+            ),
+        )
+        .expect("deleted task session should persist");
+    adapter
+        .upsert_runtime_session_detail(
+            &workspace_dir,
+            &failed_start_session_detail("session-kept", "task-kept", "2026-05-04T12:01:00+00:00"),
+        )
+        .expect("kept task session should persist");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-deleted", "session-deleted", "task-deleted"),
+        )
+        .expect("deleted task queue record should persist");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-kept", "session-kept", "task-kept"),
+        )
+        .expect("kept task queue record should persist");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-deleted", "owner")
+            .expect("queue claim should be acquired")
+    );
+
+    adapter
+        .clear_parallel_runtime_projections_for_tasks(
+            &workspace_dir,
+            &["task-deleted".to_string()],
+            "test task delete",
+        )
+        .expect("deleted task runtime projections should clear");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(
+        snapshot
+            .slot_leases
+            .values()
+            .map(|lease| lease.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-kept"]
+    );
+    assert_eq!(snapshot.session_details.len(), 1);
+    assert_eq!(snapshot.session_details[0].task_id, "task-kept");
+    assert_eq!(snapshot.distributor_queue_records.len(), 1);
+    assert_eq!(snapshot.distributor_queue_records[0].task_id, "task-kept");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-deleted", "owner-2")
+            .expect("deleted queue claim should be cleared")
+    );
+}
+
+#[test]
 fn runtime_event_log_port_reads_recent_projection_events() {
     let workspace_dir = temp_workspace("runtime-events");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -332,15 +415,58 @@ fn failed_start_session_detail(
 }
 
 fn slot_lease(slot_id: &str, state: ParallelModeSlotLeaseState) -> ParallelModeSlotLeaseSnapshot {
+    slot_lease_for_task(slot_id, "task-1", state)
+}
+
+fn slot_lease_for_task(
+    slot_id: &str,
+    task_id: &str,
+    state: ParallelModeSlotLeaseState,
+) -> ParallelModeSlotLeaseSnapshot {
     ParallelModeSlotLeaseSnapshot::new(
         slot_id,
-        "task-1",
+        task_id,
         "Task One",
         "agent-1",
-        "akra-agent/slot-1/task-one",
+        format!("akra-agent/{slot_id}/{task_id}"),
         "/tmp/worktree",
         state,
         "2026-05-04T10:00:00+00:00",
         Some("2026-05-04T10:05:00+00:00".to_string()),
     )
+}
+
+fn queue_record_for_task(
+    queue_item_id: &str,
+    session_key: &str,
+    task_id: &str,
+) -> PlanningAuthorityDistributorQueueRecord {
+    PlanningAuthorityDistributorQueueRecord {
+        queue_item_id: queue_item_id.to_string(),
+        queue_order_key: 1,
+        session_key: session_key.to_string(),
+        slot_id: "slot-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        task_id: task_id.to_string(),
+        task_title: "Task One".to_string(),
+        source_branch: "prerelease".to_string(),
+        source_commit_sha: "source".to_string(),
+        branch_name: format!("akra-agent/slot-1/{task_id}"),
+        worktree_path: "/tmp/worktree".to_string(),
+        commit_sha: "commit".to_string(),
+        original_commit_sha: None,
+        planning_refresh_state: "complete".to_string(),
+        integration_state: "queued".to_string(),
+        conflict_files: Vec::new(),
+        recovery_note: None,
+        validation_summary: "validation unavailable".to_string(),
+        authority_refresh_outcome: "not refreshed".to_string(),
+        github_capabilities: None,
+        pull_request_number: None,
+        pull_request_url: None,
+        queue_state: ParallelModeQueueItemState::Queued,
+        integration_note: "queued".to_string(),
+        enqueued_at: "2026-05-04T10:00:00+00:00".to_string(),
+        updated_at: "2026-05-04T10:00:00+00:00".to_string(),
+    }
 }

@@ -333,6 +333,14 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
     // Clear current parallel runtime rows when the disposable pool is reset on enable.
     fn clear_parallel_runtime_projections(&self, workspace_dir: &str, reason: &str) -> Result<()>;
 
+    // Clear runtime rows that belong to deleted planning tasks.
+    fn clear_parallel_runtime_projections_for_tasks(
+        &self,
+        workspace_dir: &str,
+        task_ids: &[String],
+        reason: &str,
+    ) -> Result<()>;
+
     // Apply a pool reset report after git reset has succeeded for selected slots.
     fn apply_parallel_pool_reset_report(
         &self,
@@ -517,6 +525,15 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
     fn clear_parallel_runtime_projections(
         &self,
         _workspace_dir: &str,
+        _reason: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn clear_parallel_runtime_projections_for_tasks(
+        &self,
+        _workspace_dir: &str,
+        _task_ids: &[String],
         _reason: &str,
     ) -> Result<()> {
         Ok(())
