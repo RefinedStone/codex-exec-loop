@@ -60,7 +60,7 @@ use serde_json::json;
 
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
-const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning-only sub session.
+const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning-only sub-session.
 Evaluate accepted DB direction authority, accepted DB task authority, and DB queue projection only.
 Do not edit planning files, source files, SQL, or JSON authority directly.
 Use the attached queue-mutation skill and `akra planning-tool run .` before falling back to final planning_task_commands."#;
@@ -742,7 +742,7 @@ mod tests {
         let params = ThreadStartParams {
             cwd: Some("/repo".to_string()),
             developer_instructions: Some(
-                "You are an Akra parallel task sub session running in a leased worktree."
+                "You are an Akra parallel task sub-session running in a leased worktree."
                     .to_string(),
             ),
             service_name: Some("akra-parallel-worker".to_string()),
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn planning_worker_developer_instructions_keep_planning_contract() {
         // Parallel sub-session instructions are assembled in application services; this adapter owns only the planning worker contract.
-        assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("planning-only sub session"));
+        assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("planning-only sub-session"));
         assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("akra planning-tool run ."));
         assert_eq!(PLANNING_WORKER_SERVICE_NAME, "akra-planning-worker");
     }

@@ -20,10 +20,10 @@ pub struct MainSessionPromptAssemblyRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `SubSessionPromptAssemblyRequest`는 parallel mode의 leased worktree에서 실행될 하위 세션 prompt이다.
-// sub session은 코드를 고치거나 작은 commit을 만들 수 있지만 delivery는 distributor가 담당하므로,
+// sub-session은 코드를 고치거나 작은 commit을 만들 수 있지만 delivery는 distributor가 담당하므로,
 // main session과 다른 system prompt로 권한 경계를 강하게 제한한다.
 pub struct SubSessionPromptAssemblyRequest<'a> {
-    // distributor가 만든 queued-task handoff 원문이다. 이 값이 sub session의 유일한 작업 범위이다.
+    // distributor가 만든 queued-task handoff 원문이다. 이 값이 sub-session의 유일한 작업 범위이다.
     pub handoff_prompt: &'a str,
 }
 
@@ -40,7 +40,7 @@ pub struct SubSessionPromptAssembly {
 // `TurnPromptAssemblyService`는 Codex turn에 실제로 넣을 최종 prompt 문자열을 만드는 application service이다.
 // 상태를 들고 있지 않기 때문에 값 자체는 빈 struct이고, 호출자는 shared service 구성에서 cheap clone/default로 주입한다.
 //
-// 이 계층을 따로 둔 이유는 "사용자 입력 그대로"를 app-server에 보내지 않고, main/sub session별
+// 이 계층을 따로 둔 이유는 "사용자 입력 그대로"를 app-server에 보내지 않고, main/sub-session별
 // 시스템 지시와 runtime context를 일관되게 감싸기 위해서이다. prompt 정책이 흩어지면 병렬 세션 권한 경계가 쉽게 깨진다.
 pub struct TurnPromptAssemblyService;
 
@@ -64,12 +64,12 @@ fn main_session_reporting_contract_lines() -> Vec<String> {
     ]
 }
 
-// sub session의 핵심은 "handoff 하나만 수행"과 "delivery 금지"이다.
+// sub-session의 핵심은 "handoff 하나만 수행"과 "delivery 금지"이다.
 // 하위 작업자가 shared branch rebase나 PR merge를 직접 수행하면 distributor의 통합 순서와 worktree 정리가 무너질 수 있다.
 fn sub_session_execution_contract_lines() -> Vec<String> {
     vec![
         "아래 `queued-task-handoff`만 수행하세요.".to_string(),
-        "이 세션은 leased worktree에서 실행되는 Akra sub session입니다.".to_string(),
+        "이 세션은 leased worktree에서 실행되는 Akra sub-session입니다.".to_string(),
         "작업 범위는 handoff의 task 하나로 제한하세요.".to_string(),
         "의미 있는 코드 변경이 있으면 작은 reviewable commit을 남기세요.".to_string(),
     ]
@@ -89,7 +89,7 @@ fn sub_session_reporting_contract_lines() -> Vec<String> {
 
 fn sub_session_developer_instructions() -> String {
     [
-        "You are an Akra parallel task sub session running in a leased worktree.",
+        "You are an Akra parallel task sub-session running in a leased worktree.",
         "Execute only the queued-task handoff supplied in the turn prompt.",
         "Keep changes scoped to that task and leave a small reviewable commit when source changes are needed.",
         "Do not push, open pull requests, merge, rebase shared branches, or clean up the worktree; Akra distributor handles delivery after completion.",
@@ -145,7 +145,7 @@ impl TurnPromptAssemblyService {
         Some(render_main_session_prompt(user_prompt))
     }
 
-    // sub session prompt를 만든다. sub session은 handoff 하나가 작업 범위이므로,
+    // sub-session prompt를 만든다. sub-session은 handoff 하나가 작업 범위이므로,
     // handoff가 비어 있으면 session을 시작하지 않는 것이 맞다.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn build_sub_session_prompt(
@@ -153,7 +153,7 @@ impl TurnPromptAssemblyService {
         // distributor가 lease한 slot에 전달할 handoff 요청이다.
         request: SubSessionPromptAssemblyRequest<'_>,
     ) -> Option<SubSessionPromptAssembly> {
-        // 빈 handoff는 범위 없는 sub session을 만들기 때문에 `None`으로 막는다.
+        // 빈 handoff는 범위 없는 sub-session을 만들기 때문에 `None`으로 막는다.
         let handoff_prompt = request.handoff_prompt.trim();
         if handoff_prompt.is_empty() {
             /*
@@ -193,7 +193,7 @@ fn render_main_session_prompt(
         .render()
 }
 
-// sub session prompt의 문자열 레이아웃이다. main session과 달리 runtime context를 따로 받지 않고,
+// sub-session prompt의 문자열 레이아웃이다. main session과 달리 runtime context를 따로 받지 않고,
 // `queued-task-handoff` 하나만 작업 범위로 전달한다.
 #[tracing::instrument(level = "trace")]
 fn render_sub_session_prompt(handoff_prompt: &str) -> String {
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    // sub session prompt가 delivery 금지 guardrail과 handoff section을 함께 포함하는지 확인한다.
+    // sub-session prompt가 delivery 금지 guardrail과 handoff section을 함께 포함하는지 확인한다.
     // parallel worker가 이 문구를 잃으면 push/PR/merge를 직접 수행해 distributor의 통합 책임을 침범할 수 있다.
     fn sub_session_prompt_has_delivery_guardrails() {
         let service = TurnPromptAssemblyService::new();
@@ -281,10 +281,10 @@ mod tests {
             handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
         });
 
-        let assembly = prompt.expect("sub session prompt should render");
+        let assembly = prompt.expect("sub-session prompt should render");
         let rendered = assembly.turn_prompt;
         assert!(rendered.starts_with("# akra-sub-session-turn\n"));
-        assert!(rendered.contains("Akra sub session"));
+        assert!(rendered.contains("Akra sub-session"));
         assert!(rendered.contains("push, PR 생성, merge"));
         assert!(
             rendered.ends_with(
@@ -296,7 +296,7 @@ mod tests {
         assert!(
             assembly
                 .developer_instructions
-                .contains("parallel task sub session")
+                .contains("parallel task sub-session")
         );
         assert!(assembly.developer_instructions.contains("Do not push"));
     }

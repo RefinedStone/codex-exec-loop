@@ -210,7 +210,7 @@ impl PlanningRuntimeFacadeService {
             .build_sub_session_prompt(SubSessionPromptAssemblyRequest {
                 handoff_prompt: &task_prompt,
             })
-            .expect("queued sub session handoff prompt should not be empty");
+            .expect("queued sub-session handoff prompt should not be empty");
 
         PlanningSubSessionHandoff {
             prompt: prompt.turn_prompt,

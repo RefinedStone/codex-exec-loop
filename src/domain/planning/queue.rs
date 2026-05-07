@@ -7,7 +7,7 @@
  * - validation.rs는 문서가 의미적으로 말이 되는지 폭넓게 검사한다.
  * - queue.rs는 실행 시점에 필요한 더 엄격한 전제, 즉 unknown reference, updated_at 정렬 가능성,
  *   in_progress 단일성을 다시 확인한다.
- * - application/service/planning/runtime 쪽은 projection.next_task를 보고 다음 main/sub session
+ * - application/service/planning/runtime 쪽은 projection.next_task를 보고 다음 main/sub-session
  *   handoff를 만들지 결정한다.
  */
 use std::{collections::HashMap, fmt};
