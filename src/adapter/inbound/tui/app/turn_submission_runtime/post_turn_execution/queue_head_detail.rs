@@ -33,12 +33,12 @@ pub(super) fn repeated_queue_head_detail(
         && queue_head.combined_priority == previous_handoff.combined_priority
         && queue_head.updated_at.trim() == previous_handoff.updated_at.trim()
         && queue_head.status.label() == previous_handoff.status_label;
-    // Handoff metadata가 하나라도 달라졌다면 "완전히 같은 head"가 아니므로 보수적으로 빠진다.
+    // Handoff identity field가 하나라도 달라졌다면 "완전히 같은 head"가 아니므로 보수적으로 빠진다.
     if !unchanged {
         return None;
     }
 
-    // Metadata가 그대로여도 ledger의 다른 부분이 바뀌었을 수 있다. Queue head task
+    // Handoff identity가 그대로여도 ledger의 다른 부분이 바뀌었을 수 있다. Queue head task
     // signature를 따로 비교해 head task 본문/명령 변경만 전진으로 인정하고 unrelated edit은 제외한다.
     let queue_head_task_unchanged = match (
         previous_snapshot.queue_head_task_signature(),
@@ -46,7 +46,7 @@ pub(super) fn repeated_queue_head_detail(
     ) {
         // 양쪽 signature가 있으면 서명 값이 같을 때만 동일 task로 본다.
         (Some(previous), Some(current)) => previous == current,
-        // 둘 다 None이면 정보 수준이 대칭적이다. 추가 증거가 없으므로 metadata 비교 결과를 신뢰한다.
+        // 둘 다 None이면 정보 수준이 대칭적이다. 추가 증거가 없으므로 identity field 비교 결과를 신뢰한다.
         (None, None) => true,
         // 한쪽에만 signature가 있으면 비교 기준이 달라진 것이다. Advancement 가능성으로 보고 block하지 않는다.
         _ => false,
@@ -57,14 +57,14 @@ pub(super) fn repeated_queue_head_detail(
     }
 
     // 여기까지 왔다는 것은 previous handoff와 refresh 후 queue head가 같은 task이고,
-    // metadata와 task signature도 바뀌지 않았다는 뜻이다.
+    // identity field와 task signature도 바뀌지 않았다는 뜻이다.
     Some(format!(
         "planner refresh kept the previously handed-off task unchanged as the queue head; unrelated ledger edits do not count as queue advancement: {}",
         previous_handoff.task_title
     ))
 }
 
-// Tests pin signature-presence boundaries. The production guard combines task metadata
+// Tests pin signature-presence boundaries. The production guard combines task identity
 // and signature comparison, so None/Some transitions must stay intentionally conservative.
 #[cfg(test)]
 mod tests {
@@ -77,7 +77,7 @@ mod tests {
 
     use super::repeated_queue_head_detail;
 
-    // Sample queue head matches the handoff across every metadata field so tests isolate signature policy.
+    // Sample queue head matches the handoff across every identity field so tests isolate signature policy.
     fn sample_queue_head() -> PriorityQueueTask {
         PriorityQueueTask {
             // Rank fields are display-only for this helper but required by the queue row.
@@ -130,7 +130,7 @@ mod tests {
         assert!(detail.is_none());
     }
 
-    // Both missing signatures are symmetric; metadata equality is the only available evidence.
+    // Both missing signatures are symmetric; identity equality is the only available evidence.
     #[test]
     fn repeated_queue_head_detail_accepts_both_missing_signatures_as_unchanged() {
         let detail = repeated_queue_head_detail(

@@ -197,7 +197,7 @@ pub(super) fn reduce_conversation_runtime(
                     state.record_manual_intake_handoff(context.handoff_task.as_ref());
                 }
                 PromptOrigin::AutoFollow(context) => {
-                    // Record the source turn before the provider stream starts.
+                    // Record the completed turn that queued this prompt before the provider stream starts.
                     // If this queued prompt loops back without progress, the
                     // next post-turn evaluation can stop it deterministically.
                     state.record_auto_followup_submission(
