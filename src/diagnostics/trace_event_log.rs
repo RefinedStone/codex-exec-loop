@@ -648,12 +648,33 @@ mod tests {
 
         assert!(merge_detail_field(
             &mut fields,
-            &json!(r#"{"event":"submitted","prompt":"hello","prompt_len":5}"#)
+            &json!(r#"{"prompt":"hello","prompt_len":5}"#)
         ));
 
-        assert_eq!(fields["event"], "submitted");
         assert_eq!(fields["prompt"], "hello");
         assert_eq!(fields["prompt_len"], 5);
+        assert!(!fields.contains_key("detail"));
+    }
+
+    #[test]
+    fn akra_json_visitor_flattens_detail_without_leaving_detail_field() {
+        let mut visitor = super::AkraJsonVisitor::default();
+
+        visitor.insert_value("event", json!("user_prompt_submit_inspected"));
+        visitor.insert_value(
+            "detail",
+            json!(
+                r#"{"origin":"Manual","transcript_text":"typed text","prompt":"final prompt","prompt_len":12}"#
+            ),
+        );
+        let fields = visitor.into_map();
+
+        assert_eq!(fields["event"], "user_prompt_submit_inspected");
+        assert_eq!(fields["origin"], "Manual");
+        assert_eq!(fields["transcript_text"], "typed text");
+        assert_eq!(fields["prompt"], "final prompt");
+        assert_eq!(fields["prompt_len"], 12);
+        assert!(!fields.contains_key("detail"));
     }
 
     #[test]
