@@ -1,16 +1,25 @@
-use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use serde_json::{Value, json};
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
 use super::trace_event_log;
 
-static RAW_LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+static RAW_LOG_WRITER: OnceLock<NonBlocking> = OnceLock::new();
 
 pub fn is_enabled() -> bool {
-    RAW_LOG_FILE.get_or_init(open_raw_log_file).is_some()
+    RAW_LOG_WRITER.get().is_some()
+}
+
+pub(super) fn init_from_env() -> Option<WorkerGuard> {
+    if RAW_LOG_WRITER.get().is_some() {
+        return None;
+    }
+    let (writer, guard) = open_raw_log()?;
+    let _ = RAW_LOG_WRITER.set(writer);
+    Some(guard)
 }
 
 pub fn emit_lazy<F>(event: &str, detail: F)
@@ -33,7 +42,7 @@ pub fn emit(event: &str, detail: Value) {
 }
 
 fn emit_raw_event(event: &str, detail: &Value) {
-    let Some(file) = RAW_LOG_FILE.get_or_init(open_raw_log_file).as_ref() else {
+    let Some(writer) = RAW_LOG_WRITER.get() else {
         return;
     };
     let entry = json!({
@@ -42,22 +51,21 @@ fn emit_raw_event(event: &str, detail: &Value) {
         "event": event,
         "detail": detail,
     });
-    if let Ok(mut file) = file.lock() {
-        let _ = writeln!(file, "{entry}");
-    }
+    let mut writer = writer.clone();
+    let _ = writeln!(writer, "{entry}");
 }
 
-fn open_raw_log_file() -> Option<Mutex<File>> {
+fn open_raw_log() -> Option<(NonBlocking, WorkerGuard)> {
     let path = raw_log_path()?;
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
-        .ok()
-        .map(Mutex::new)
+        .ok()?;
+    Some(tracing_appender::non_blocking(file))
 }
 
 fn raw_log_path() -> Option<PathBuf> {
