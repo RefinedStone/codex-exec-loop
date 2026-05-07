@@ -21,15 +21,12 @@ use crate::domain::planning::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
- * promotion request는 하나의 workspace와 하나의 root turn에 묶인다. workspace는 어떤 planning authority set을
- * rewrite할지 결정하고, root_turn_id는 현재 구현이 repository state에서만 promote하더라도 "queue가 idle이라고
- * 판단한 turn"을 audit/debug에서 추적할 수 있게 request contract에 남긴다.
+ * promotion request는 하나의 workspace에 묶인다. queue-idle 판단 turn 같은 runtime provenance는 이
+ * service가 쓰는 authority mutation에는 참여하지 않으므로 request contract에 싣지 않는다.
  */
 pub struct PlanningProposalPromotionRequest<'a> {
     // filesystem adapter와 repository adapter가 모두 이 값을 planning workspace boundary로 사용한다.
     pub workspace_directory: &'a str,
-    // worker/runtime layer가 내린 queue-idle decision을 나중에 추적하기 위해 보존되는 turn id다.
-    pub root_turn_id: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

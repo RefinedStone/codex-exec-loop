@@ -589,7 +589,6 @@ impl PostTurnEvaluationExecutor {
                 .worker
                 .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                     workspace_directory: &request.workspace_directory,
-                    root_turn_id: &request.queued_from_turn_id,
                 });
             match promotion_outcome {
                 Ok(promotion_outcome) => {
