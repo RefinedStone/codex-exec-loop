@@ -1,5 +1,5 @@
 // Repair loop는 application planning service의 worker 계약을 호출하는 post-turn adapter 경계다.
-// 여기서 만드는 `PlanningLedgerRepairRequest`가 hidden planner worker prompt의 입력이고,
+// 여기서 만드는 `PlanningLedgerRepairRequest`가 hidden planning worker prompt의 입력이고,
 // worker 결과는 다시 TUI가 판단할 `PlanningRuntimeSnapshot`으로 돌아온다.
 use crate::application::service::planning::{
     PlanningLedgerRepairRequest, PlanningRepairRequest, PlanningRepairRetryReason,
@@ -8,9 +8,9 @@ use crate::application::service::planning::{
 use crate::diagnostics::event_log;
 use serde_json::json;
 
-// Repair 진행 상태는 TUI의 planner worker panel에 남는다. 사용자는 hidden prompt를
+// Repair 진행 상태는 TUI의 planning worker panel에 남는다. 사용자는 hidden prompt를
 // 직접 조작하지 않지만, panel status가 실행/성공/실패와 마지막 prompt를 추적한다.
-use super::super::super::PlannerWorkerStatus;
+use super::super::super::PlanningWorkerStatus;
 // 이 파일은 post-turn executor의 retry loop만 분리한다. 최대 시도 횟수와 반환 DTO는
 // parent module이 소유해 official completion과 normal post-turn path가 같은 repair contract를 쓴다.
 use super::logging::{PostTurnWorkerLogContext, post_turn_worker_event_detail};
@@ -98,9 +98,9 @@ impl PostTurnEvaluationExecutor {
                     ],
                 )
             });
-            self.record_planner_worker_running(
-                // RepairRunning은 hidden repair가 planner worker panel을 차지한다는 신호다.
-                PlannerWorkerStatus::RepairRunning,
+            self.record_planning_worker_running(
+                // RepairRunning은 hidden repair가 planning worker panel을 차지한다는 신호다.
+                PlanningWorkerStatus::RepairRunning,
                 "repair",
                 worker_prompt,
             );
@@ -118,8 +118,8 @@ impl PostTurnEvaluationExecutor {
                         "planner repair attempt {attempt_number}/{} failed: {error}",
                         MAX_PLANNING_REPAIR_ATTEMPTS
                     );
-                    self.record_planner_worker_failure(
-                        PlannerWorkerStatus::RepairFailed,
+                    self.record_planning_worker_failure(
+                        PlanningWorkerStatus::RepairFailed,
                         &detail,
                         &runtime_snapshot,
                     );
@@ -146,7 +146,7 @@ impl PostTurnEvaluationExecutor {
             };
 
             // Worker가 정상 종료되면 panel에는 성공 outcome을 기록하고 이후 판단은 outcome snapshot 기준으로 한다.
-            self.record_planner_worker_outcome(PlannerWorkerStatus::RepairSucceeded, &outcome);
+            self.record_planning_worker_outcome(PlanningWorkerStatus::RepairSucceeded, &outcome);
             runtime_snapshot = outcome.runtime_snapshot.clone();
             event_log::emit_lazy("planner_repair_attempt_succeeded", || {
                 post_turn_worker_event_detail(
@@ -203,8 +203,8 @@ impl PostTurnEvaluationExecutor {
                     "planner repair exhausted after {} attempts; the last accepted planning state was kept",
                     MAX_PLANNING_REPAIR_ATTEMPTS
                 );
-                self.record_planner_worker_failure(
-                    PlannerWorkerStatus::RepairFailed,
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RepairFailed,
                     &detail,
                     &runtime_snapshot,
                 );

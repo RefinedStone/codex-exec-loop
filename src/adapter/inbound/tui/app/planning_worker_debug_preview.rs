@@ -1,4 +1,4 @@
-// planner debug block에는 full prompt, model response, generated planning context처럼 긴 원문이 들어올 수 있다.
+// planning worker debug block에는 full prompt, model response, generated planning context처럼 긴 원문이 들어올 수 있다.
 // 이 helper는 TUI preview만 줄인다. worker input과 기록된 raw debug payload는 다른 경계에 그대로 남아야 한다.
 pub(super) fn build_debug_preview_lines(block: &str, max_lines: usize) -> Vec<String> {
     // tail을 선택하려면 전체 line count가 먼저 필요하므로, clone 전에 borrowed line 목록을 만든다.

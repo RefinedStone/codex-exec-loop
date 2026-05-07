@@ -84,7 +84,7 @@ pub(super) enum BackgroundMessage {
         thread_id: String,
         completed_turn_id: String,
         evaluation: Box<ConversationPostTurnEvaluation>,
-        planner_worker_panel_state: super::PlannerWorkerPanelState,
+        planning_worker_panel_state: super::PlanningWorkerPanelState,
     },
     GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
@@ -152,8 +152,8 @@ impl NativeTuiApp {
             parallel_mode_service,
             planning,
             active_turn_execution_snapshot_capture: None,
-            planner_worker_panel_state: super::PlannerWorkerPanelState::default(),
-            planner_visibility: super::PlannerVisibility::from_environment(),
+            planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
+            planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
             inline_history_render_mode: super::InlineHistoryRenderMode::from_environment(),
@@ -241,8 +241,8 @@ impl NativeTuiApp {
         self.active_session = state.active_session;
     }
 
-    pub(super) fn reset_planner_worker_panel_state(&mut self) {
-        self.planner_worker_panel_state = super::PlannerWorkerPanelState::default();
+    pub(super) fn reset_planning_worker_panel_state(&mut self) {
+        self.planning_worker_panel_state = super::PlanningWorkerPanelState::default();
     }
 
     pub(super) fn dispatch_conversation_lifecycle(&mut self, event: ConversationLifecycleEvent) {
@@ -386,10 +386,10 @@ impl NativeTuiApp {
                 });
             }
             ConversationIntentEffect::OpenNewDraft => {
-                // New drafts must leave transient chrome and planner worker context behind;
+                // New drafts must leave transient chrome and planning worker context behind;
                 // otherwise the blank prompt can inherit stale session-side affordances.
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-                self.reset_planner_worker_panel_state();
+                self.reset_planning_worker_panel_state();
                 let workspace_directory = self.current_workspace_directory();
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
                     workspace_directory: workspace_directory.clone(),
@@ -403,7 +403,7 @@ impl NativeTuiApp {
                 // Session selection is a lifecycle transition, not just a transcript swap.
                 // Reset planning side panels before the async load result returns.
                 self.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
-                self.reset_planner_worker_panel_state();
+                self.reset_planning_worker_panel_state();
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
                     session,
                 });

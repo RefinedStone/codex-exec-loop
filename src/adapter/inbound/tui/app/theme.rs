@@ -29,7 +29,7 @@ impl AkraTheme {
         Self::brand()
     }
 
-    // outcome token은 validation, planner worker status, runtime notice, startup diagnostic이 함께 쓰는 상태 색 vocabulary다.
+    // outcome token은 validation, planning worker status, runtime notice, startup diagnostic이 함께 쓰는 상태 색 vocabulary다.
     pub(super) fn success() -> Style {
         Style::default().fg(Color::Green)
     }

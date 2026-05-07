@@ -1,11 +1,12 @@
-// Startup-time switch for exposing raw planner worker diagnostics in TUI surfaces.
+// Startup-time switch for exposing raw planning worker diagnostics in TUI surfaces.
 // Runtime code reads it once so a session has stable visibility semantics.
-const PLANNER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
+const PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY";
+const LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
 // UI-facing lifecycle for the post-turn planning worker.
 // It intentionally combines refresh and repair outcomes because footer/debug panels need one compact status lane.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) enum PlannerWorkerStatus {
+pub(in crate::adapter::inbound::tui::app) enum PlanningWorkerStatus {
     // No observable worker interaction for the current draft/session.
     #[default]
     Idle,
@@ -22,8 +23,8 @@ pub(in crate::adapter::inbound::tui::app) enum PlannerWorkerStatus {
     RepairFailed,
 }
 
-impl PlannerWorkerStatus {
-    // Short operator copy shared by footer, debug preview, and planner panel rendering.
+impl PlanningWorkerStatus {
+    // Short operator copy shared by footer, debug preview, and planning worker panel rendering.
     pub(in crate::adapter::inbound::tui::app) fn label(self) -> &'static str {
         match self {
             Self::Idle => "idle",
@@ -37,19 +38,22 @@ impl PlannerWorkerStatus {
     }
 }
 
-// Visibility policy for planner worker internals.
+// Visibility policy for planning worker internals.
 // Normal keeps repeated TUI usage compact; Debug exposes raw prompt/response and host-side details for diagnosis.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) enum PlannerVisibility {
+pub(in crate::adapter::inbound::tui::app) enum PlanningWorkerVisibility {
     #[default]
     Normal,
     Debug,
 }
 
-impl PlannerVisibility {
+impl PlanningWorkerVisibility {
     // NativeTuiApp calls this during construction; later rendering only consults the stored enum.
     pub(in crate::adapter::inbound::tui::app) fn from_environment() -> Self {
-        Self::from_env_value(std::env::var(PLANNER_VISIBILITY_ENV_VAR).ok().as_deref())
+        let value = std::env::var(PLANNING_WORKER_VISIBILITY_ENV_VAR)
+            .or_else(|_| std::env::var(LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR))
+            .ok();
+        Self::from_env_value(value.as_deref())
     }
 
     // Testable parser for env syntax without mutating process environment in unit tests.
@@ -75,11 +79,11 @@ impl PlannerVisibility {
     }
 }
 
-// Last observed planner worker interaction, cached for status panels after post-turn execution finishes.
+// Last observed planning worker interaction, cached for status panels after post-turn execution finishes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) struct PlannerWorkerPanelState {
+pub(in crate::adapter::inbound::tui::app) struct PlanningWorkerPanelState {
     // Status drives high-level label and success/failure styling.
-    pub(in crate::adapter::inbound::tui::app) status: PlannerWorkerStatus,
+    pub(in crate::adapter::inbound::tui::app) status: PlanningWorkerStatus,
     // Operation label names the worker action, usually refresh or repair.
     pub(in crate::adapter::inbound::tui::app) last_operation_label: Option<String>,
     // Compact accepted result or failure summary shown in normal mode.
@@ -97,10 +101,10 @@ pub(in crate::adapter::inbound::tui::app) struct PlannerWorkerPanelState {
     pub(in crate::adapter::inbound::tui::app) last_host_detail: Option<String>,
 }
 
-impl PlannerWorkerPanelState {
-    // One predicate controls whether planner panels render at all, including debug-only fields.
+impl PlanningWorkerPanelState {
+    // One predicate controls whether planning worker panels render at all, including debug-only fields.
     pub(in crate::adapter::inbound::tui::app) fn has_content(&self) -> bool {
-        !matches!(self.status, PlannerWorkerStatus::Idle)
+        !matches!(self.status, PlanningWorkerStatus::Idle)
             || self.last_operation_label.is_some()
             || self.last_summary.is_some()
             || self.last_rejected_summary.is_some()

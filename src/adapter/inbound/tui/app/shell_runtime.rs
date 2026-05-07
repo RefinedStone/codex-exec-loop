@@ -98,7 +98,7 @@ impl ShellRuntime {
                 BackgroundMessage::ConversationLoaded(result) => {
                     let loaded_successfully = result.is_ok();
                     let draft_workspace_directory = self.app.current_workspace_directory();
-                    self.app.reset_planner_worker_panel_state();
+                    self.app.reset_planning_worker_panel_state();
                     self.app.dispatch_conversation_lifecycle(
                         ConversationLifecycleEvent::ConversationLoaded {
                             result,
@@ -207,7 +207,7 @@ impl ShellRuntime {
                     thread_id,
                     completed_turn_id,
                     evaluation,
-                    planner_worker_panel_state,
+                    planning_worker_panel_state,
                 } => {
                     // Post-turn workers can finish after the operator has moved to another turn.
                     // The stale guard keeps delayed planning output out of the current thread.
@@ -221,7 +221,7 @@ impl ShellRuntime {
                     {
                         conversation.record_post_turn_evaluation_applied(&completed_turn_id);
                     }
-                    self.app.planner_worker_panel_state = planner_worker_panel_state;
+                    self.app.planning_worker_panel_state = planning_worker_panel_state;
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                     self.app.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::PostTurnEvaluated { evaluation },

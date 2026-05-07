@@ -8,7 +8,7 @@ use super::super::conversation_runtime::{
 use super::super::{
     ActiveTurnExecutionSnapshotCapture, ActiveTurnExecutionSnapshotState, AutoFollowupDecision,
     AutoFollowupSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
-    PlannerWorkerPanelState, PlannerWorkerStatus,
+    PlanningWorkerPanelState, PlanningWorkerStatus,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningProposalPromotionRequest;
@@ -28,7 +28,7 @@ use serde_json::json;
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 #[cfg(not(test))]
 const POST_TURN_EVALUATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-const PLANNER_REFRESH_FAILURE_BLOCK_REASON: &str =
+const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str =
     "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
 const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
     "official completion refresh failed; the leased slot stays reserved until planning is repaired";
@@ -36,13 +36,13 @@ const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
 mod logging;
 #[path = "post_turn_execution/official_completion.rs"]
 mod official_completion;
-#[path = "post_turn_execution/planner_worker_panel.rs"]
-mod planner_worker_panel;
+#[path = "post_turn_execution/planning_worker_panel.rs"]
+mod planning_worker_panel;
 #[path = "post_turn_execution/queue_head_detail.rs"]
 mod queue_head_detail;
 #[path = "post_turn_execution/repair.rs"]
 mod repair;
-use self::planner_worker_panel::planner_queue_summary;
+use self::planning_worker_panel::planning_worker_queue_summary;
 use self::queue_head_detail::repeated_queue_head_detail;
 use logging::{
     planner_refresh_skipped_detail, planning_refresh_mode_label, post_turn_action_decision,
@@ -79,27 +79,27 @@ struct PostTurnEvaluationExecution {
     thread_id: String,
     completed_turn_id: String,
     evaluation: ConversationPostTurnEvaluation,
-    planner_worker_panel_state: PlannerWorkerPanelState,
+    planning_worker_panel_state: PlanningWorkerPanelState,
 }
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
     planning: PlanningServices,
     parallel_mode_turn_service: ParallelModeTurnService,
     active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
-    planner_worker_panel_state: PlannerWorkerPanelState,
+    planning_worker_panel_state: PlanningWorkerPanelState,
 }
 impl PostTurnEvaluationExecutor {
     fn new(
         planning: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
         active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
-        planner_worker_panel_state: PlannerWorkerPanelState,
+        planning_worker_panel_state: PlanningWorkerPanelState,
     ) -> Self {
         Self {
             planning,
             parallel_mode_turn_service,
             active_turn_execution_snapshot_capture,
-            planner_worker_panel_state,
+            planning_worker_panel_state,
         }
     }
 
@@ -221,7 +221,7 @@ impl PostTurnEvaluationExecutor {
                 runtime_notices,
                 action,
             },
-            planner_worker_panel_state: self.planner_worker_panel_state,
+            planning_worker_panel_state: self.planning_worker_panel_state,
         }
     }
     fn runtime_snapshot_after_reconciliation(
@@ -457,8 +457,8 @@ impl PostTurnEvaluationExecutor {
                 ],
             )
         });
-        self.record_planner_worker_running(
-            PlannerWorkerStatus::RefreshRunning,
+        self.record_planning_worker_running(
+            PlanningWorkerStatus::RefreshRunning,
             match mode {
                 PlanningQueueRefreshMode::FromLatestReply => "refresh",
                 PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => "active-derive",
@@ -477,11 +477,11 @@ impl PostTurnEvaluationExecutor {
                         format!("planner refresh failed: {error}")
                     }
                     PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => {
-                        format!("planner queue active-derivation failed: {error}")
+                        format!("planning worker queue active-derivation failed: {error}")
                     }
                 };
                 let invalid_snapshot =
-                    PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
+                    PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON);
                 event_log::emit_lazy("planner_refresh_failed", || {
                     post_turn_event_detail(
                         conversation,
@@ -495,13 +495,13 @@ impl PostTurnEvaluationExecutor {
                             ("error", json!(error.to_string())),
                             (
                                 "invalid_reason",
-                                json!(PLANNER_REFRESH_FAILURE_BLOCK_REASON),
+                                json!(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON),
                             ),
                         ],
                     )
                 });
-                self.record_planner_worker_failure(
-                    PlannerWorkerStatus::RefreshFailed,
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
                     &detail,
                     &invalid_snapshot,
                 );
@@ -511,7 +511,7 @@ impl PostTurnEvaluationExecutor {
             }
         };
 
-        self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
+        self.record_planning_worker_outcome(PlanningWorkerStatus::RefreshSucceeded, &outcome);
         event_log::emit_lazy("planner_refresh_succeeded", || {
             post_turn_event_detail(
                 conversation,
@@ -566,12 +566,12 @@ impl PostTurnEvaluationExecutor {
                             ),
                             (
                                 "invalid_reason",
-                                json!(PLANNER_REFRESH_FAILURE_BLOCK_REASON),
+                                json!(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON),
                             ),
                         ],
                     )
                 });
-                PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON)
+                PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
             };
         }
         if !runtime_snapshot.has_actionable_queue_head()
@@ -604,9 +604,9 @@ impl PostTurnEvaluationExecutor {
                             )],
                         )
                     });
-                    self.planner_worker_panel_state.last_queue_summary =
-                        planner_queue_summary(&runtime_snapshot);
-                    self.planner_worker_panel_state.last_host_detail =
+                    self.planning_worker_panel_state.last_queue_summary =
+                        planning_worker_queue_summary(&runtime_snapshot);
+                    self.planning_worker_panel_state.last_host_detail =
                         promotion_outcome.promoted_task_title.map(|title| {
                             format!(
                                 "host promoted top follow-up proposal into the executable queue: {title}"
@@ -615,8 +615,9 @@ impl PostTurnEvaluationExecutor {
                 }
                 Err(error) => {
                     let detail = format!("host proposal promotion failed: {error}");
-                    let invalid_snapshot =
-                        PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
+                    let invalid_snapshot = PlanningRuntimeSnapshot::invalid(
+                        PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON,
+                    );
                     event_log::emit_lazy("planner_proposal_promotion_failed", || {
                         post_turn_event_detail(
                             conversation,
@@ -629,13 +630,13 @@ impl PostTurnEvaluationExecutor {
                                 ("error", json!(error.to_string())),
                                 (
                                     "invalid_reason",
-                                    json!(PLANNER_REFRESH_FAILURE_BLOCK_REASON),
+                                    json!(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON),
                                 ),
                             ],
                         )
                     });
-                    self.record_planner_worker_failure(
-                        PlannerWorkerStatus::RefreshFailed,
+                    self.record_planning_worker_failure(
+                        PlanningWorkerStatus::RefreshFailed,
                         &detail,
                         &invalid_snapshot,
                     );
@@ -652,7 +653,7 @@ impl PostTurnEvaluationExecutor {
                 PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. }
             )
         {
-            self.planner_worker_panel_state.last_host_detail = Some(
+            self.planning_worker_panel_state.last_host_detail = Some(
                 "planner derived no justified follow-up task from the latest request and reply"
                     .to_string(),
             );
@@ -662,8 +663,8 @@ impl PostTurnEvaluationExecutor {
             &conversation.planning_runtime_snapshot,
             &runtime_snapshot,
         ) {
-            self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
-            self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
+            self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshFailed;
+            self.planning_worker_panel_state.last_host_detail = Some(detail.clone());
             event_log::emit_lazy("planner_refresh_paused_repeated_queue_head", || {
                 post_turn_event_detail(
                     conversation,
@@ -805,7 +806,7 @@ impl PostTurnEvaluationExecutor {
 }
 impl NativeTuiApp {
     // Production isolates post-turn planning work behind a timeout so a stalled
-    // planner worker cannot strand the TUI. Tests execute synchronously to keep
+    // planning worker cannot strand the TUI. Tests execute synchronously to keep
     // assertions deterministic while still exercising the same executor.
     #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
@@ -817,12 +818,12 @@ impl NativeTuiApp {
             self.planning.clone(),
             self.parallel_mode_turn_service(),
             self.active_turn_execution_snapshot_capture.take(),
-            self.planner_worker_panel_state.clone(),
+            self.planning_worker_panel_state.clone(),
         );
         #[cfg(test)]
         {
             let execution = executor.run(&conversation, &request);
-            self.planner_worker_panel_state = execution.planner_worker_panel_state;
+            self.planning_worker_panel_state = execution.planning_worker_panel_state;
             self.invalidate_parallel_mode_supervisor_snapshot();
             self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
                 evaluation: Box::new(execution.evaluation),
@@ -851,7 +852,7 @@ impl NativeTuiApp {
                     thread_id: execution.thread_id,
                     completed_turn_id: execution.completed_turn_id,
                     evaluation: Box::new(execution.evaluation),
-                    planner_worker_panel_state: execution.planner_worker_panel_state,
+                    planning_worker_panel_state: execution.planning_worker_panel_state,
                 });
             });
         }
@@ -882,13 +883,13 @@ impl NativeTuiApp {
             .iter()
             .any(|path| PlanningExecutionSnapshot::captures_path(path))
         {
-            self.planner_worker_panel_state.status = PlannerWorkerStatus::RepairRunning;
+            self.planning_worker_panel_state.status = PlanningWorkerStatus::RepairRunning;
         } else if conversation.planning_runtime_snapshot.workspace_status()
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && conversation.planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
         {
         } else {
-            self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshRunning;
+            self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshRunning;
         }
     }
 }
@@ -915,8 +916,8 @@ fn post_turn_evaluation_timeout_execution(
                 reason: AutoFollowupSkipReason::PostTurnEvaluationTimedOut,
             },
         },
-        planner_worker_panel_state: PlannerWorkerPanelState {
-            status: PlannerWorkerStatus::RefreshFailed,
+        planning_worker_panel_state: PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshFailed,
             last_operation_label: Some("post-turn".to_string()),
             last_summary: Some(message),
             last_rejected_summary: None,

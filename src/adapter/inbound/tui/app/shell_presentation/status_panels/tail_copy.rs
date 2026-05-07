@@ -6,7 +6,7 @@ use super::super::capability_copy::{
     startup_initializing_status_line, startup_preparing_status_line,
     thread_history_loading_status_line,
 };
-use super::super::planning::build_planner_panel_lines;
+use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
@@ -57,7 +57,8 @@ pub(super) fn build_inline_tail_lines_with_context(
             false,
         )
     });
-    let planner_panel_lines = build_planner_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
+    let planning_worker_panel_lines =
+        build_planning_worker_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
 
     if context.startup_screen_is_active() {
         let has_buffered_input = context
@@ -192,7 +193,7 @@ pub(super) fn build_inline_tail_lines_with_context(
                 )));
             }
 
-            lines.extend(planner_panel_lines.into_iter().map(Line::from));
+            lines.extend(planning_worker_panel_lines.into_iter().map(Line::from));
             lines.extend(build_recent_transcript_summary_lines(
                 app.inline_history_render_mode,
                 conversation,

@@ -49,14 +49,14 @@ impl NativeTuiApp {
         }
     }
 
-    pub(crate) fn planner_shows_debug_details(&self) -> bool {
+    pub(crate) fn planning_worker_shows_debug_details(&self) -> bool {
         /*
          * Rendering code asks for a capability-shaped bool rather than
-         * matching planner_visibility internals. That keeps presentation
+         * matching planning_worker_visibility internals. That keeps presentation
          * modules independent from the state machine that decides which
          * planning diagnostics are operator-facing.
          */
-        self.planner_visibility.shows_debug_details()
+        self.planning_worker_visibility.shows_debug_details()
     }
 
     pub(crate) fn live_activity_pulse(&self, now: Instant) -> Option<u64> {

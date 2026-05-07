@@ -412,7 +412,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
                     handoff_task: None,
                 })),
             }),
-            planner_worker_panel_state: Default::default(),
+            planning_worker_panel_state: Default::default(),
         })
         .expect("background message should enqueue");
 

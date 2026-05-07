@@ -1,6 +1,6 @@
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningWorkerRunOutcome};
 
-use super::super::super::PlannerWorkerStatus;
+use super::super::super::PlanningWorkerStatus;
 use super::PostTurnEvaluationExecutor;
 
 /*
@@ -11,79 +11,79 @@ use super::PostTurnEvaluationExecutor;
  */
 impl PostTurnEvaluationExecutor {
     // Record the start of a refresh or repair worker call before the potentially long operation begins.
-    pub(super) fn record_planner_worker_running(
+    pub(super) fn record_planning_worker_running(
         &mut self,
-        status: PlannerWorkerStatus,
+        status: PlanningWorkerStatus,
         operation_label: &str,
         prompt: String,
     ) {
         // Running state must clear result-only fields so stale rejection/error text cannot masquerade as the new call.
-        self.planner_worker_panel_state.status = status;
-        self.planner_worker_panel_state.last_operation_label = Some(operation_label.to_string());
-        self.planner_worker_panel_state.last_summary = None;
-        self.planner_worker_panel_state.last_rejected_summary = None;
-        self.planner_worker_panel_state.last_notice_detail = None;
-        self.planner_worker_panel_state.last_prompt = Some(prompt);
-        self.planner_worker_panel_state.last_response = None;
-        self.planner_worker_panel_state.last_host_detail = None;
+        self.planning_worker_panel_state.status = status;
+        self.planning_worker_panel_state.last_operation_label = Some(operation_label.to_string());
+        self.planning_worker_panel_state.last_summary = None;
+        self.planning_worker_panel_state.last_rejected_summary = None;
+        self.planning_worker_panel_state.last_notice_detail = None;
+        self.planning_worker_panel_state.last_prompt = Some(prompt);
+        self.planning_worker_panel_state.last_response = None;
+        self.planning_worker_panel_state.last_host_detail = None;
     }
 
     // Fold a successful worker RPC into the panel cache.
     // A syntactically successful response can still be a failed post-turn outcome when it requests repair or
     // produces a runtime snapshot that blocks auto-follow, so the status is corrected before rendering sees it.
-    pub(super) fn record_planner_worker_outcome(
+    pub(super) fn record_planning_worker_outcome(
         &mut self,
-        success_status: PlannerWorkerStatus,
+        success_status: PlanningWorkerStatus,
         outcome: &PlanningWorkerRunOutcome,
     ) {
-        self.planner_worker_panel_state.status = if outcome.repair_request.is_some()
+        self.planning_worker_panel_state.status = if outcome.repair_request.is_some()
             || outcome.runtime_snapshot.blocks_auto_followup()
         {
             // Preserve the caller's operation lane while downgrading success to the matching attention state.
             match success_status {
-                PlannerWorkerStatus::RefreshSucceeded => PlannerWorkerStatus::RefreshFailed,
-                PlannerWorkerStatus::RepairSucceeded => PlannerWorkerStatus::RepairFailed,
+                PlanningWorkerStatus::RefreshSucceeded => PlanningWorkerStatus::RefreshFailed,
+                PlanningWorkerStatus::RepairSucceeded => PlanningWorkerStatus::RepairFailed,
                 _ => success_status,
             }
         } else {
             success_status
         };
         // Accepted and rejected summaries stay separate so the panel can explain both the chosen path and discarded alternatives.
-        self.planner_worker_panel_state.last_summary = outcome.worker_summary.clone();
-        self.planner_worker_panel_state.last_rejected_summary = outcome.rejected_summary.clone();
+        self.planning_worker_panel_state.last_summary = outcome.worker_summary.clone();
+        self.planning_worker_panel_state.last_rejected_summary = outcome.rejected_summary.clone();
         // Queue summary is derived from the applied runtime snapshot, not from worker prose.
-        self.planner_worker_panel_state.last_queue_summary =
-            planner_queue_summary(&outcome.runtime_snapshot);
+        self.planning_worker_panel_state.last_queue_summary =
+            planning_worker_queue_summary(&outcome.runtime_snapshot);
         // Notice detail keeps diagnostics after summary-prefixed notices have been de-duplicated.
-        self.planner_worker_panel_state.last_notice_detail =
-            planner_notice_detail(&outcome.notices);
+        self.planning_worker_panel_state.last_notice_detail =
+            planning_worker_notice_detail(&outcome.notices);
         // Raw worker response is retained for debug visibility, but normal copy reads the projected fields above.
-        self.planner_worker_panel_state.last_response = outcome.worker_response.clone();
+        self.planning_worker_panel_state.last_response = outcome.worker_response.clone();
         // Host details are set by later orchestration steps such as proposal promotion or repeated-head detection.
-        self.planner_worker_panel_state.last_host_detail = None;
+        self.planning_worker_panel_state.last_host_detail = None;
     }
 
     // Record worker or host-side failure while preserving the best runtime snapshot available at the failure point.
-    pub(super) fn record_planner_worker_failure(
+    pub(super) fn record_planning_worker_failure(
         &mut self,
-        status: PlannerWorkerStatus,
+        status: PlanningWorkerStatus,
         detail: &str,
         runtime_snapshot: &PlanningRuntimeSnapshot,
     ) {
         // Keep the prompt from the running phase, but clear successful-response fields that no longer apply.
-        self.planner_worker_panel_state.status = status;
-        self.planner_worker_panel_state.last_summary = Some(detail.to_string());
-        self.planner_worker_panel_state.last_rejected_summary = None;
-        self.planner_worker_panel_state.last_queue_summary =
-            planner_queue_summary(runtime_snapshot);
-        self.planner_worker_panel_state.last_notice_detail = None;
-        self.planner_worker_panel_state.last_response = None;
-        self.planner_worker_panel_state.last_host_detail = None;
+        self.planning_worker_panel_state.status = status;
+        self.planning_worker_panel_state.last_summary = Some(detail.to_string());
+        self.planning_worker_panel_state.last_rejected_summary = None;
+        self.planning_worker_panel_state.last_queue_summary =
+            planning_worker_queue_summary(runtime_snapshot);
+        self.planning_worker_panel_state.last_notice_detail = None;
+        self.planning_worker_panel_state.last_response = None;
+        self.planning_worker_panel_state.last_host_detail = None;
     }
 }
 
-// Compact queue state used by both the planner worker panel and post-turn host diagnostics.
-pub(super) fn planner_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
+// Compact queue state used by both the planning worker panel and post-turn host diagnostics.
+pub(super) fn planning_worker_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
     snapshot
         // The executable queue head is more actionable than aggregate queue text, so it wins when present.
         .queue_head()
@@ -93,7 +93,7 @@ pub(super) fn planner_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Optio
 }
 
 // Collapse non-summary worker notices into the secondary diagnostic lane.
-fn planner_notice_detail(notices: &[String]) -> Option<String> {
+fn planning_worker_notice_detail(notices: &[String]) -> Option<String> {
     let detail = notices
         .iter()
         // Refresh/repair summary notices duplicate dedicated fields, so keep only extra reasons and warnings.

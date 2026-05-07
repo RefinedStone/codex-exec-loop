@@ -6,7 +6,7 @@ use super::{
 };
 use crate::adapter::inbound::tui::app::{
     ConversationMessage, ConversationMessageKind, ConversationState, INLINE_VIEWPORT_HEIGHT,
-    InlineHistoryRenderMode, NativeTuiApp, PlannerVisibility,
+    InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
 };
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
@@ -506,7 +506,7 @@ fn inline_history_shows_planner_debug_detail_when_visibility_is_debug() {
             None,
         )
         .with_display_label("Auto Follow-up")
-        .with_debug_detail("planner temp session: refresh / refresh ok"),
+        .with_debug_detail("planning worker temp session: refresh / refresh ok"),
     );
     conversation.refresh_conversation_lines();
     let normal_lines = current_inline_history_lines(&app)
@@ -514,15 +514,15 @@ fn inline_history_shows_planner_debug_detail_when_visibility_is_debug() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!normal_lines.contains("planner temp session"));
+    assert!(!normal_lines.contains("planning worker temp session"));
 
-    app.planner_visibility = PlannerVisibility::Debug;
+    app.planning_worker_visibility = PlanningWorkerVisibility::Debug;
     let debug_lines = current_inline_history_lines(&app)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(debug_lines.contains("planner temp session: refresh / refresh ok"));
+    assert!(debug_lines.contains("planning worker temp session: refresh / refresh ok"));
 }
 
 #[test]

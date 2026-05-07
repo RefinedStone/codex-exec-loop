@@ -90,14 +90,14 @@ mod inline_shell_commands;
 mod inline_terminal_adapter;
 #[path = "app/parallel_mode.rs"]
 mod parallel_mode;
-#[path = "app/planner_debug_preview.rs"]
-mod planner_debug_preview;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
+#[path = "app/planning_worker_debug_preview.rs"]
+mod planning_worker_debug_preview;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/session_overlay_ui.rs"]
@@ -163,7 +163,7 @@ use followup_overlay_ui::{
 use github_polling::GithubReviewPollingState;
 use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
-use planning::{PlannerVisibility, PlannerWorkerPanelState, PlannerWorkerStatus};
+use planning::{PlanningWorkerPanelState, PlanningWorkerStatus, PlanningWorkerVisibility};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
@@ -318,8 +318,8 @@ struct NativeTuiApp {
     parallel_mode_service: ParallelModeService,
     planning: PlanningServices,
     active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
-    planner_worker_panel_state: PlannerWorkerPanelState,
-    planner_visibility: PlannerVisibility,
+    planning_worker_panel_state: PlanningWorkerPanelState,
+    planning_worker_visibility: PlanningWorkerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     inline_history_render_mode: InlineHistoryRenderMode,
@@ -348,7 +348,9 @@ fn startup_ascii_art_enabled_from_value(value: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod startup_ascii_art_env_tests {
-    use super::{InlineHistoryRenderMode, PlannerVisibility, startup_ascii_art_enabled_from_value};
+    use super::{
+        InlineHistoryRenderMode, PlanningWorkerVisibility, startup_ascii_art_enabled_from_value,
+    };
     #[test]
     fn startup_ascii_art_defaults_to_enabled() {
         assert!(startup_ascii_art_enabled_from_value(None));
@@ -365,33 +367,33 @@ mod startup_ascii_art_env_tests {
         assert!(!startup_ascii_art_enabled_from_value(Some("no")));
     }
     #[test]
-    fn planner_visibility_defaults_to_normal() {
+    fn planning_worker_visibility_defaults_to_normal() {
         assert_eq!(
-            PlannerVisibility::from_env_value(None),
-            PlannerVisibility::Normal
+            PlanningWorkerVisibility::from_env_value(None),
+            PlanningWorkerVisibility::Normal
         );
         assert_eq!(
-            PlannerVisibility::from_env_value(Some("")),
-            PlannerVisibility::Normal
+            PlanningWorkerVisibility::from_env_value(Some("")),
+            PlanningWorkerVisibility::Normal
         );
         assert_eq!(
-            PlannerVisibility::from_env_value(Some("normal")),
-            PlannerVisibility::Normal
+            PlanningWorkerVisibility::from_env_value(Some("normal")),
+            PlanningWorkerVisibility::Normal
         );
     }
     #[test]
-    fn planner_visibility_supports_debug_values() {
+    fn planning_worker_visibility_supports_debug_values() {
         assert_eq!(
-            PlannerVisibility::from_env_value(Some("debug")),
-            PlannerVisibility::Debug
+            PlanningWorkerVisibility::from_env_value(Some("debug")),
+            PlanningWorkerVisibility::Debug
         );
         assert_eq!(
-            PlannerVisibility::from_env_value(Some("TRUE")),
-            PlannerVisibility::Debug
+            PlanningWorkerVisibility::from_env_value(Some("TRUE")),
+            PlanningWorkerVisibility::Debug
         );
         assert_eq!(
-            PlannerVisibility::from_env_value(Some("verbose")),
-            PlannerVisibility::Debug
+            PlanningWorkerVisibility::from_env_value(Some("verbose")),
+            PlanningWorkerVisibility::Debug
         );
     }
     #[test]

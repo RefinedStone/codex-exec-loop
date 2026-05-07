@@ -4,8 +4,8 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation,
 };
 use crate::adapter::inbound::tui::app::{
-    ConversationInputState, ConversationState, InlineShellCommand, PlannerWorkerPanelState,
-    PlannerWorkerStatus, test_helpers,
+    ConversationInputState, ConversationState, InlineShellCommand, PlanningWorkerPanelState,
+    PlanningWorkerStatus, test_helpers,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -499,7 +499,7 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
 }
 // Post-turn evaluation messages are keyed by the completed turn. Stale or
 // duplicate worker results must not overwrite the current transcript status,
-// runtime notices, or planner worker panel.
+// runtime notices, or planning worker panel.
 #[test]
 fn stale_post_turn_evaluation_background_message_is_ignored() {
     let mut runtime = make_test_runtime();
@@ -527,8 +527,8 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                         reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::PostTurnContinuationPaused,
                     },
                 }),
-                planner_worker_panel_state: crate::adapter::inbound::tui::app::PlannerWorkerPanelState {
-                    status: crate::adapter::inbound::tui::app::PlannerWorkerStatus::RefreshSucceeded,
+                planning_worker_panel_state: crate::adapter::inbound::tui::app::PlanningWorkerPanelState {
+                    status: crate::adapter::inbound::tui::app::PlanningWorkerStatus::RefreshSucceeded,
                     last_operation_label: None,
                     last_queue_summary: Some("next task: stale".to_string()),
                     last_summary: Some("stale".to_string()),
@@ -550,7 +550,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     assert!(
         runtime
             .app()
-            .planner_worker_panel_state
+            .planning_worker_panel_state
             .last_summary
             .is_none()
     );
@@ -575,8 +575,8 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
                 reason: AutoFollowupSkipReason::PlanningBlocked,
             },
         }),
-        planner_worker_panel_state: PlannerWorkerPanelState {
-            status: PlannerWorkerStatus::RefreshFailed,
+        planning_worker_panel_state: PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshFailed,
             last_operation_label: None,
             last_queue_summary: None,
             last_summary: Some(notice.to_string()),
@@ -616,7 +616,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     assert_eq!(
         runtime
             .app()
-            .planner_worker_panel_state
+            .planning_worker_panel_state
             .last_summary
             .as_deref(),
         Some("first evaluation")

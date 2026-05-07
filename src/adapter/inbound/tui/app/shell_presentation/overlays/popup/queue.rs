@@ -29,7 +29,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 "Queue inspection becomes available after the thread loads.",
             )],
             proposal_lines: vec![Line::from("Proposal data is unavailable while loading.")],
-            note_lines: vec![Line::from("No planner notes yet.")],
+            note_lines: vec![Line::from("No planning worker notes yet.")],
             key_lines: build_queue_overlay_key_lines(),
         },
         ConversationState::Failed(message) => QueueOverlayView {
@@ -138,7 +138,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
 
             /*
              * Note section은 actionability 순서로 채운다. auto-followup pause와 failure reason은 queue row보다
-             * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planner host detail은 그 다음 진단이다.
+             * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planning worker host detail은 그 다음 진단이다.
              */
             let mut note_lines = Vec::new();
             if let Some(detail) = snapshot.auto_followup_pause_reason() {
@@ -157,17 +157,19 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             {
                 note_lines.push(Line::from(format!("planning notice: {summary}")));
             }
-            if let Some(queue_summary) =
-                app.planner_worker_panel_state.last_queue_summary.as_deref()
+            if let Some(queue_summary) = app
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref()
             {
                 note_lines.push(Line::from(format!(
-                    "planner queue: {}",
+                    "planning worker queue: {}",
                     compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
-            if let Some(detail) = app.planner_worker_panel_state.last_host_detail.as_deref() {
+            if let Some(detail) = app.planning_worker_panel_state.last_host_detail.as_deref() {
                 note_lines.push(Line::from(format!(
-                    "planner host detail: {}",
+                    "planning worker host detail: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
@@ -177,7 +179,9 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 note_lines.push(detail);
             }
             if note_lines.is_empty() {
-                note_lines.push(Line::from("No planner notices or skipped queue items."));
+                note_lines.push(Line::from(
+                    "No planning worker notices or skipped queue items.",
+                ));
             } else {
                 // popup height를 보호하기 위해 가장 중요한 두 줄만 남긴다. 상세 진단은 shell status/notice panel에 남아 있다.
                 note_lines.truncate(2);

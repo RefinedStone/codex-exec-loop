@@ -401,7 +401,7 @@ impl NativeFlowHarness {
                         },
                     )),
                 }),
-                planner_worker_panel_state: Default::default(),
+                planning_worker_panel_state: Default::default(),
             })
             .expect("post-turn evaluation should enqueue");
     }

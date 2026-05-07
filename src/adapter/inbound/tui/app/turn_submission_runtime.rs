@@ -17,7 +17,7 @@ use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
 
-use super::planner_debug_preview::build_debug_preview_lines;
+use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
     AutoFollowupSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, InlineShellCommandInput,
@@ -359,28 +359,31 @@ impl NativeTuiApp {
     }
 
     fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {
-        if !self.planner_shows_debug_details()
+        if !self.planning_worker_shows_debug_details()
             || transcript_text != BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT
         {
             return None;
         }
-        let planner = &self.planner_worker_panel_state;
-        let operation_label = planner.last_operation_label.as_deref().unwrap_or("unknown");
-        let prompt = planner.last_prompt.as_deref();
-        let response = planner.last_response.as_deref();
-        let summary = planner.last_summary.as_deref();
+        let planning_worker = &self.planning_worker_panel_state;
+        let operation_label = planning_worker
+            .last_operation_label
+            .as_deref()
+            .unwrap_or("unknown");
+        let prompt = planning_worker.last_prompt.as_deref();
+        let response = planning_worker.last_response.as_deref();
+        let summary = planning_worker.last_summary.as_deref();
         if prompt.is_none() && response.is_none() && summary.is_none() {
             return None;
         }
         let mut lines = vec![format!(
-            "planner temp session: {operation_label} / {}",
-            planner.status.label()
+            "planning worker temp session: {operation_label} / {}",
+            planning_worker.status.label()
         )];
         if let Some(summary) = summary.filter(|summary: &&str| !summary.trim().is_empty()) {
-            lines.push(format!("planner summary: {summary}"));
+            lines.push(format!("planning worker summary: {summary}"));
         }
-        append_debug_detail_preview_block(&mut lines, "planner prompt:", prompt);
-        append_debug_detail_preview_block(&mut lines, "planner response:", response);
+        append_debug_detail_preview_block(&mut lines, "planning worker prompt:", prompt);
+        append_debug_detail_preview_block(&mut lines, "planning worker response:", response);
 
         Some(lines.join("\n"))
     }

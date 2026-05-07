@@ -11,8 +11,8 @@ use crate::diagnostics::event_log;
 use serde_json::json;
 
 // The refresh path reads conversation context and reports progress through the same
-// planner worker panel used by builtin queue refresh and hidden repair.
-use super::super::super::{ConversationViewModel, PlannerWorkerStatus};
+// planning worker panel used by builtin queue refresh and hidden repair.
+use super::super::super::{ConversationViewModel, PlanningWorkerStatus};
 // Repeated-head detection is shared with builtin refresh so official completion
 // cannot requeue a slot task that failed to advance planning.
 use super::logging::post_turn_event_detail;
@@ -87,8 +87,8 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                self.record_planner_worker_failure(
-                    PlannerWorkerStatus::RefreshFailed,
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
                     &format!("parallel completion capture failed: {error}"),
                     &conversation.planning_runtime_snapshot,
                 );
@@ -159,8 +159,8 @@ impl PostTurnEvaluationExecutor {
                     ],
                 )
             });
-            self.record_planner_worker_failure(
-                PlannerWorkerStatus::RefreshFailed,
+            self.record_planning_worker_failure(
+                PlanningWorkerStatus::RefreshFailed,
                 failure_detail,
                 &failure_snapshot,
             );
@@ -198,7 +198,7 @@ impl PostTurnEvaluationExecutor {
             contract: completion_report,
         };
         // Record the exact prompt before execution so a failed worker run still leaves
-        // enough state in the planner panel for operator recovery.
+        // enough state in the planning worker panel for operator recovery.
         let worker_prompt = self
             .planning
             .worker
@@ -233,8 +233,8 @@ impl PostTurnEvaluationExecutor {
                 ],
             )
         });
-        self.record_planner_worker_running(
-            PlannerWorkerStatus::RefreshRunning,
+        self.record_planning_worker_running(
+            PlanningWorkerStatus::RefreshRunning,
             "official-refresh",
             worker_prompt,
         );
@@ -273,8 +273,8 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                self.record_planner_worker_failure(
-                    PlannerWorkerStatus::RefreshFailed,
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
                     &detail,
                     &failure_snapshot,
                 );
@@ -285,7 +285,7 @@ impl PostTurnEvaluationExecutor {
             }
         };
 
-        self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
+        self.record_planning_worker_outcome(PlanningWorkerStatus::RefreshSucceeded, &outcome);
         // Outcome snapshot may still carry a repair request; keep it mutable so hidden
         // repair and repeated-head checks can refine the final decision snapshot.
         let mut runtime_snapshot = outcome.runtime_snapshot.clone();
@@ -423,8 +423,8 @@ impl PostTurnEvaluationExecutor {
                     ],
                 )
             });
-            self.record_planner_worker_failure(
-                PlannerWorkerStatus::RefreshFailed,
+            self.record_planning_worker_failure(
+                PlanningWorkerStatus::RefreshFailed,
                 failure_detail,
                 &failure_snapshot,
             );
