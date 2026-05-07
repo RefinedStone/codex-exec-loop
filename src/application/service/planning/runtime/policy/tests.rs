@@ -202,7 +202,7 @@ fn repeated_queue_head_blocks_queue_driven_automation() {
         "next task: rank 1 / task-1".to_string(),
         Some(queue_head()),
     )
-    .with_auto_followup_pause_reason(
+    .with_auto_follow_pause_reason(
         "planning worker refresh kept the previously handed-off task as the queue head",
     );
 

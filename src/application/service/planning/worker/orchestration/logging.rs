@@ -48,7 +48,7 @@ fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) -> Value {
         "queue_summary": snapshot.queue_summary(),
         "proposal_summary": snapshot.proposal_summary(),
         "failure_reason": snapshot.failure_reason(),
-        "pause_reason": snapshot.auto_followup_pause_reason(),
+        "pause_reason": snapshot.auto_follow_pause_reason(),
         "has_actionable_queue_head": snapshot.has_actionable_queue_head(),
         "has_proposal_candidates": snapshot.has_proposal_candidates(),
     })

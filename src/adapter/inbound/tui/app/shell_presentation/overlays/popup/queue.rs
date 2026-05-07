@@ -141,7 +141,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planning worker host detail은 그 다음 진단이다.
              */
             let mut note_lines = Vec::new();
-            if let Some(detail) = snapshot.auto_followup_pause_reason() {
+            if let Some(detail) = snapshot.auto_follow_pause_reason() {
                 note_lines.push(Line::from(format!(
                     "pause: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)

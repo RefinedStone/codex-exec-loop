@@ -505,7 +505,7 @@ impl PlanningWorkerOrchestrationService {
         let reconciliation_result =
             merge_reconciliation_results(authority_result, reconciliation_result);
         let runtime_snapshot =
-            if let Some(block_reason) = reconciliation_result.auto_followup_block_reason.clone() {
+            if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
                 // reconciliation block은 reload로 가리지 않고 즉시 invalid runtime snapshot으로 표면화한다.
                 PlanningRuntimeSnapshot::invalid(block_reason)
             } else {
@@ -550,7 +550,7 @@ impl PlanningWorkerOrchestrationService {
                     ),
                     (
                         "auto_followup_blocked",
-                        json!(reconciliation_result.auto_followup_block_reason.is_some()),
+                        json!(reconciliation_result.auto_follow_block_reason.is_some()),
                     ),
                     ("notices_count", json!(notices.len())),
                     ("has_worker_summary", json!(worker_summary.is_some())),
@@ -711,8 +711,8 @@ fn merge_reconciliation_results(
         .queue_projection_action
         .or(secondary.queue_projection_action);
     primary.repair_request = primary.repair_request.or(secondary.repair_request);
-    primary.auto_followup_block_reason = primary
-        .auto_followup_block_reason
-        .or(secondary.auto_followup_block_reason);
+    primary.auto_follow_block_reason = primary
+        .auto_follow_block_reason
+        .or(secondary.auto_follow_block_reason);
     primary
 }

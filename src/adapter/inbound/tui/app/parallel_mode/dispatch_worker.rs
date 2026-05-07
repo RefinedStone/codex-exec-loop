@@ -427,7 +427,7 @@ fn run_parallel_dispatch_official_completion(
 
     // A repair request or blocked runtime snapshot means the authority file is not safe for
     // auto follow-up even if the worker itself produced a valid TurnCompleted event.
-    if outcome.repair_request.is_some() || outcome.runtime_snapshot.blocks_auto_followup() {
+    if outcome.repair_request.is_some() || outcome.runtime_snapshot.blocks_auto_follow() {
         let detail = outcome
             .runtime_snapshot
             .preview_detail()

@@ -392,12 +392,12 @@ impl PostTurnEvaluationExecutor {
                     ],
                 )
             });
-            runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail);
+            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail);
         }
 
         // Any snapshot that blocks auto-follow also blocks slot finalization. Mark
         // the supervisor reservation failed before returning to the post-turn reducer.
-        if runtime_snapshot.blocks_auto_followup() {
+        if runtime_snapshot.blocks_auto_follow() {
             let failure_detail = runtime_snapshot
                 .preview_detail()
                 .unwrap_or(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON);
@@ -492,5 +492,5 @@ fn official_completion_failure_snapshot(
     } else {
         failure_detail
     };
-    current_snapshot.with_auto_followup_pause_reason(detail.to_string())
+    current_snapshot.with_auto_follow_pause_reason(detail.to_string())
 }

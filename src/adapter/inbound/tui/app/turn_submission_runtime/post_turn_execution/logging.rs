@@ -144,7 +144,7 @@ pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) ->
         "proposal_summary": snapshot.proposal_summary(),
         "queue_head": queue_head,
         "failure_reason": snapshot.failure_reason(),
-        "pause_reason": snapshot.auto_followup_pause_reason(),
+        "pause_reason": snapshot.auto_follow_pause_reason(),
         "has_actionable_queue_head": snapshot.has_actionable_queue_head(),
         "has_proposal_candidates": snapshot.has_proposal_candidates(),
     })

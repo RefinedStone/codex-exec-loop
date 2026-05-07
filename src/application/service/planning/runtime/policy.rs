@@ -114,7 +114,7 @@ impl PlanningRuntimePolicyService {
                 PlanningAutoFollowBlockReason::InvalidWorkspace,
             );
         }
-        if snapshot.auto_followup_pause_reason().is_some() {
+        if snapshot.auto_follow_pause_reason().is_some() {
             return PlanningAutoFollowPolicyDecision::Blocked(
                 PlanningAutoFollowBlockReason::RepeatedQueueHead,
             );
@@ -175,7 +175,7 @@ impl PlanningRuntimePolicyService {
             proposal_summary: request.snapshot.proposal_summary().map(str::to_string),
             failure_summary: request
                 .repair_failure_summary
-                .or_else(|| request.snapshot.auto_followup_pause_reason())
+                .or_else(|| request.snapshot.auto_follow_pause_reason())
                 .or_else(|| request.snapshot.failure_reason())
                 .map(str::to_string),
             workspace_state,
@@ -207,7 +207,7 @@ impl PlanningRuntimePolicyService {
                     }
                 }
                 PlanningAutoFollowBlockReason::RepeatedQueueHead => snapshot
-                    .auto_followup_pause_reason()
+                    .auto_follow_pause_reason()
                     .unwrap_or(
                         "queue-driven auto follow-up is paused until the planning queue advances beyond the previously handed-off task",
                     )

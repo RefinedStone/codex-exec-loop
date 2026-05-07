@@ -71,7 +71,7 @@ pub struct PlanningRuntimeSnapshot {
     task_authority_signature: Option<u64>,
     queue_head_task_signature: Option<u64>,
     failure_reason: Option<String>,
-    auto_followup_pause_reason: Option<String>,
+    auto_follow_pause_reason: Option<String>,
 }
 
 impl PlanningRuntimeSnapshot {
@@ -91,7 +91,7 @@ impl PlanningRuntimeSnapshot {
             task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
-            auto_followup_pause_reason: None,
+            auto_follow_pause_reason: None,
         }
     }
 
@@ -112,7 +112,7 @@ impl PlanningRuntimeSnapshot {
             task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: Some(reason.into()),
-            auto_followup_pause_reason: None,
+            auto_follow_pause_reason: None,
         }
     }
 
@@ -150,7 +150,7 @@ impl PlanningRuntimeSnapshot {
             task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
-            auto_followup_pause_reason: None,
+            auto_follow_pause_reason: None,
         }
     }
 
@@ -183,7 +183,7 @@ impl PlanningRuntimeSnapshot {
             task_authority_signature: None,
             queue_head_task_signature: None,
             failure_reason: None,
-            auto_followup_pause_reason: None,
+            auto_follow_pause_reason: None,
         }
     }
 
@@ -253,14 +253,14 @@ impl PlanningRuntimeSnapshot {
         self.failure_reason.as_deref()
     }
 
-    pub fn auto_followup_pause_reason(&self) -> Option<&str> {
-        self.auto_followup_pause_reason.as_deref()
+    pub fn auto_follow_pause_reason(&self) -> Option<&str> {
+        self.auto_follow_pause_reason.as_deref()
     }
 
-    pub fn with_auto_followup_pause_reason(&self, reason: impl Into<String>) -> Self {
+    pub fn with_auto_follow_pause_reason(&self, reason: impl Into<String>) -> Self {
         // pause reason은 snapshot 자체의 read model을 보존한 채 auto-follow policy가 runtime-local block 사유만 덧붙이는 경로다.
         let mut snapshot = self.clone();
-        snapshot.auto_followup_pause_reason = Some(reason.into());
+        snapshot.auto_follow_pause_reason = Some(reason.into());
         snapshot
     }
 
@@ -289,20 +289,20 @@ impl PlanningRuntimeSnapshot {
     pub fn preview_detail(&self) -> Option<&str> {
         // preview detail은 operator가 바로 행동할 수 있는 정보를 우선한다. 반복 queue head로
         // 멈춘 이유, validation failure, live queue, proposal summary 순서로 내려간다.
-        self.auto_followup_pause_reason()
+        self.auto_follow_pause_reason()
             .or_else(|| self.failure_reason())
             .or_else(|| self.queue_summary())
             .or_else(|| self.proposal_summary())
     }
 
-    pub fn blocks_auto_followup(&self) -> bool {
+    pub fn blocks_auto_follow(&self) -> bool {
         self.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid
-            || self.auto_followup_pause_reason.is_some()
+            || self.auto_follow_pause_reason.is_some()
     }
 
     pub fn has_actionable_queue_head(&self) -> bool {
         self.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask
-            && self.auto_followup_pause_reason.is_none()
+            && self.auto_follow_pause_reason.is_none()
     }
 
     pub fn has_proposal_candidates(&self) -> bool {
@@ -538,7 +538,7 @@ impl PlanningPromptService {
             task_authority_signature: Some(task_authority_signature),
             queue_head_task_signature,
             failure_reason: None,
-            auto_followup_pause_reason: None,
+            auto_follow_pause_reason: None,
         })
     }
 }

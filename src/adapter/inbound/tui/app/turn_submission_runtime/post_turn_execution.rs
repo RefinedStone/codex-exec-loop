@@ -229,7 +229,7 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         reconciliation_result: &PlanningReconciliationResult,
     ) -> PlanningRuntimeSnapshot {
-        if let Some(block_reason) = reconciliation_result.auto_followup_block_reason.clone() {
+        if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
             PlanningRuntimeSnapshot::invalid(block_reason)
         } else if request.changed_planning_file_paths.is_empty() {
             conversation.planning_runtime_snapshot.clone()
@@ -283,7 +283,7 @@ impl PostTurnEvaluationExecutor {
             Ok(result) => result,
             Err(error) => PlanningReconciliationResult {
                 notices: vec![format!("planning reconciliation failed: {error}")],
-                auto_followup_block_reason: Some(
+                auto_follow_block_reason: Some(
                     "planning reconciliation failed; auto follow-up stays paused until the planning workspace is repaired"
                         .to_string(),
                 ),
@@ -675,7 +675,7 @@ impl PostTurnEvaluationExecutor {
                     [("pause_reason", json!(detail.as_str()))],
                 )
             });
-            runtime_snapshot = runtime_snapshot.with_auto_followup_pause_reason(detail.clone());
+            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
         }
 
         QueuedTaskRefreshOutcome { runtime_snapshot }
@@ -949,7 +949,7 @@ fn planning_workspace_directory<'a>(
 fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResult {
     PlanningReconciliationResult {
         notices: vec![message.clone()],
-        auto_followup_block_reason: Some(message),
+        auto_follow_block_reason: Some(message),
         ..PlanningReconciliationResult::default()
     }
 }

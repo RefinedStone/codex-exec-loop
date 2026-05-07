@@ -36,18 +36,17 @@ impl PostTurnEvaluationExecutor {
         success_status: PlanningWorkerStatus,
         outcome: &PlanningWorkerRunOutcome,
     ) {
-        self.planning_worker_panel_state.status = if outcome.repair_request.is_some()
-            || outcome.runtime_snapshot.blocks_auto_followup()
-        {
-            // Preserve the caller's operation lane while downgrading success to the matching attention state.
-            match success_status {
-                PlanningWorkerStatus::RefreshSucceeded => PlanningWorkerStatus::RefreshFailed,
-                PlanningWorkerStatus::RepairSucceeded => PlanningWorkerStatus::RepairFailed,
-                _ => success_status,
-            }
-        } else {
-            success_status
-        };
+        self.planning_worker_panel_state.status =
+            if outcome.repair_request.is_some() || outcome.runtime_snapshot.blocks_auto_follow() {
+                // Preserve the caller's operation lane while downgrading success to the matching attention state.
+                match success_status {
+                    PlanningWorkerStatus::RefreshSucceeded => PlanningWorkerStatus::RefreshFailed,
+                    PlanningWorkerStatus::RepairSucceeded => PlanningWorkerStatus::RepairFailed,
+                    _ => success_status,
+                }
+            } else {
+                success_status
+            };
         // Accepted and rejected summaries stay separate so the panel can explain both the chosen path and discarded alternatives.
         self.planning_worker_panel_state.last_summary = outcome.worker_summary.clone();
         self.planning_worker_panel_state.last_rejected_summary = outcome.rejected_summary.clone();

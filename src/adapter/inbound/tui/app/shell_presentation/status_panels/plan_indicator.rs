@@ -39,7 +39,7 @@ pub(super) fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) ->
     if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
         "invalid"
     // A pause reason suppresses automatic continuation even when queue work exists, so it outranks queue readiness.
-    } else if snapshot.auto_followup_pause_reason().is_some() {
+    } else if snapshot.auto_follow_pause_reason().is_some() {
         "paused"
     } else if snapshot.has_actionable_queue_head() {
         "ready"

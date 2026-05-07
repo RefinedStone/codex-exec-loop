@@ -57,7 +57,7 @@ impl PlanningExecutionSnapshot {
 /*
  * post-turn reconciliation은 단순 success/failure가 아니라 operational report를 반환한다.
  * UI caller는 notices와 restored file list로 status copy를 만들고, future authority repair path는
- * invalid generated planning state를 발견했을 때 repair_request나 auto_followup_block_reason을
+ * invalid generated planning state를 발견했을 때 repair_request나 auto_follow_block_reason을
  * worker orchestration에 넘길 수 있다.
  */
 pub struct PlanningReconciliationResult {
@@ -74,7 +74,7 @@ pub struct PlanningReconciliationResult {
     // automatic reconciliation이 candidate를 안전하게 accept할 수 없을 때 repair worker에게 넘길 prompt payload다.
     pub repair_request: Option<PlanningRepairRequest>,
     // reconciliation이 unsafe planning state를 발견한 뒤 auto-follow를 멈춰야 하는 이유다.
-    pub auto_followup_block_reason: Option<String>,
+    pub auto_follow_block_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
