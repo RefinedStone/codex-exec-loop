@@ -203,7 +203,7 @@ fn repeated_queue_head_blocks_queue_driven_automation() {
         Some(queue_head()),
     )
     .with_auto_followup_pause_reason(
-        "planner refresh kept the previously handed-off task as the queue head",
+        "planning worker refresh kept the previously handed-off task as the queue head",
     );
 
     assert_eq!(

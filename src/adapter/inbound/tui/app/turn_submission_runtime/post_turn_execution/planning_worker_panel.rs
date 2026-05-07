@@ -98,8 +98,8 @@ fn planning_worker_notice_detail(notices: &[String]) -> Option<String> {
         .iter()
         // Refresh/repair summary notices duplicate dedicated fields, so keep only extra reasons and warnings.
         .filter(|notice| {
-            !notice.starts_with("planner refresh summary:")
-                && !notice.starts_with("planner repair summary:")
+            !notice.starts_with("planning worker refresh summary:")
+                && !notice.starts_with("planning worker repair summary:")
         })
         .map(String::as_str)
         .collect::<Vec<_>>()

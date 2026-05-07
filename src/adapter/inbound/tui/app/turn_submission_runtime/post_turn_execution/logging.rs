@@ -79,7 +79,7 @@ where
     Value::Object(detail)
 }
 
-pub(super) fn planner_refresh_skipped_detail(
+pub(super) fn planning_worker_refresh_skipped_detail(
     conversation: &ConversationViewModel,
     request: &PostTurnEvaluationRequest,
     reason: &str,

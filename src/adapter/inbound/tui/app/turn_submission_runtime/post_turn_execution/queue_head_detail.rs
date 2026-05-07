@@ -59,7 +59,7 @@ pub(super) fn repeated_queue_head_detail(
     // 여기까지 왔다는 것은 previous handoff와 refresh 후 queue head가 같은 task이고,
     // identity field와 task signature도 바뀌지 않았다는 뜻이다.
     Some(format!(
-        "planner refresh kept the previously handed-off task unchanged as the queue head; unrelated ledger edits do not count as queue advancement: {}",
+        "planning worker refresh kept the previously handed-off task unchanged as the queue head; unrelated ledger edits do not count as queue advancement: {}",
         previous_handoff.task_title
     ))
 }

@@ -76,7 +76,7 @@ impl PostTurnEvaluationExecutor {
                 .planning
                 .worker
                 .render_repair_task_authority_prompt(&worker_request);
-            event_log::emit_lazy("planner_repair_attempt_started", || {
+            event_log::emit_lazy("planning_worker_repair_attempt_started", || {
                 post_turn_worker_event_detail(
                     log_context,
                     "repair",
@@ -115,7 +115,7 @@ impl PostTurnEvaluationExecutor {
                 Err(error) => {
                     // Attempt 번호를 detail에 넣어 panel/log가 어느 시점의 실패인지 설명하게 한다.
                     let detail = format!(
-                        "planner repair attempt {attempt_number}/{} failed: {error}",
+                        "planning worker repair attempt {attempt_number}/{} failed: {error}",
                         MAX_PLANNING_REPAIR_ATTEMPTS
                     );
                     self.record_planning_worker_failure(
@@ -123,7 +123,7 @@ impl PostTurnEvaluationExecutor {
                         &detail,
                         &runtime_snapshot,
                     );
-                    event_log::emit_lazy("planner_repair_attempt_failed", || {
+                    event_log::emit_lazy("planning_worker_repair_attempt_failed", || {
                         post_turn_worker_event_detail(
                             log_context,
                             "repair",
@@ -148,7 +148,7 @@ impl PostTurnEvaluationExecutor {
             // Worker가 정상 종료되면 panel에는 성공 outcome을 기록하고 이후 판단은 outcome snapshot 기준으로 한다.
             self.record_planning_worker_outcome(PlanningWorkerStatus::RepairSucceeded, &outcome);
             runtime_snapshot = outcome.runtime_snapshot.clone();
-            event_log::emit_lazy("planner_repair_attempt_succeeded", || {
+            event_log::emit_lazy("planning_worker_repair_attempt_succeeded", || {
                 post_turn_worker_event_detail(
                     log_context,
                     "repair",
@@ -181,7 +181,7 @@ impl PostTurnEvaluationExecutor {
 
             // repair_request가 None이면 service 재검증 결과 더 고칠 task authority가 없다는 뜻이다.
             let Some(repair_request) = outcome.repair_request else {
-                event_log::emit_lazy("planner_repair_completed", || {
+                event_log::emit_lazy("planning_worker_repair_completed", || {
                     post_turn_worker_event_detail(
                         log_context,
                         "repair",
@@ -200,7 +200,7 @@ impl PostTurnEvaluationExecutor {
             // 새 repair_request가 왔다는 것은 runtime이 아직 invalid라는 뜻이다. 마지막 attempt면 실패로 마감한다.
             if attempt_number == MAX_PLANNING_REPAIR_ATTEMPTS {
                 let detail = format!(
-                    "planner repair exhausted after {} attempts; the last accepted planning state was kept",
+                    "planning worker repair exhausted after {} attempts; the last accepted planning state was kept",
                     MAX_PLANNING_REPAIR_ATTEMPTS
                 );
                 self.record_planning_worker_failure(
@@ -208,7 +208,7 @@ impl PostTurnEvaluationExecutor {
                     &detail,
                     &runtime_snapshot,
                 );
-                event_log::emit_lazy("planner_repair_exhausted", || {
+                event_log::emit_lazy("planning_worker_repair_exhausted", || {
                     post_turn_worker_event_detail(
                         log_context,
                         "repair",
@@ -239,7 +239,7 @@ impl PostTurnEvaluationExecutor {
             } else {
                 PlanningRepairRetryReason::TaskAuthorityUnchanged
             });
-            event_log::emit_lazy("planner_repair_retrying", || {
+            event_log::emit_lazy("planning_worker_repair_retrying", || {
                 post_turn_worker_event_detail(
                     log_context,
                     "repair",

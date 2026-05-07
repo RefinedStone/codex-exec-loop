@@ -115,7 +115,7 @@ impl AutoFollowupSkipReason {
                     .to_string()
             }
             Self::PostTurnEvaluationTimedOut => {
-                "post-turn planner evaluation did not finish before the recovery timeout"
+                "post-turn planning worker evaluation did not finish before the recovery timeout"
                     .to_string()
             }
         }
@@ -139,7 +139,7 @@ impl AutoFollowupSkipReason {
             Self::PlanningQueueDrained => "complete: planning queue drained",
             Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
             Self::ParallelSessionCompleted => "stopped: parallel session completed",
-            Self::PostTurnEvaluationTimedOut => "paused: post-turn planner timeout",
+            Self::PostTurnEvaluationTimedOut => "paused: post-turn planning worker timeout",
         }
     }
 
@@ -190,7 +190,7 @@ impl AutoFollowupSkipReason {
                     .to_string()
             }
             Self::PostTurnEvaluationTimedOut => {
-                "turn completed / auto follow-up paused: post-turn planner timed out".to_string()
+                "turn completed / auto follow-up paused: post-turn planning worker timed out".to_string()
             }
         }
     }
@@ -230,11 +230,11 @@ mod tests {
         assert!(
             reason
                 .runtime_status(&state)
-                .contains("post-turn planner timed out")
+                .contains("post-turn planning worker timed out")
         );
         assert_eq!(
             reason.activity_summary(),
-            "paused: post-turn planner timeout"
+            "paused: post-turn planning worker timeout"
         );
     }
 }

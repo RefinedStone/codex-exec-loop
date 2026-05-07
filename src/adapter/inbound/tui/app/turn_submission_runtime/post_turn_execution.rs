@@ -28,8 +28,7 @@ use serde_json::json;
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 #[cfg(not(test))]
 const POST_TURN_EVALUATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str =
-    "planner refresh failed; auto follow-up stays paused until the next accepted planner refresh";
+const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto follow-up stays paused until the next accepted planning worker refresh";
 const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
     "official completion refresh failed; the leased slot stays reserved until planning is repaired";
 #[path = "post_turn_execution/logging.rs"]
@@ -45,7 +44,7 @@ mod repair;
 use self::planning_worker_panel::planning_worker_queue_summary;
 use self::queue_head_detail::repeated_queue_head_detail;
 use logging::{
-    planner_refresh_skipped_detail, planning_refresh_mode_label, post_turn_action_decision,
+    planning_refresh_mode_label, planning_worker_refresh_skipped_detail, post_turn_action_decision,
     post_turn_action_log_detail, post_turn_event_detail,
 };
 
@@ -309,8 +308,8 @@ impl PostTurnEvaluationExecutor {
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
                 | PlanningRuntimeWorkspaceStatus::ReadyWithTask
         ) {
-            event_log::emit_lazy("planner_refresh_skipped", || {
-                planner_refresh_skipped_detail(
+            event_log::emit_lazy("planning_worker_refresh_skipped", || {
+                planning_worker_refresh_skipped_detail(
                     conversation,
                     request,
                     "planning_runtime_not_ready",
@@ -326,8 +325,8 @@ impl PostTurnEvaluationExecutor {
             .map(str::trim)
             .filter(|message: &&str| !message.is_empty())
         else {
-            event_log::emit_lazy("planner_refresh_skipped", || {
-                planner_refresh_skipped_detail(
+            event_log::emit_lazy("planning_worker_refresh_skipped", || {
+                planning_worker_refresh_skipped_detail(
                     conversation,
                     request,
                     "latest_main_reply_empty",
@@ -348,8 +347,8 @@ impl PostTurnEvaluationExecutor {
                 {
                     Ok(context) => context,
                     Err(_) => {
-                        event_log::emit_lazy("planner_refresh_skipped", || {
-                            planner_refresh_skipped_detail(
+                        event_log::emit_lazy("planning_worker_refresh_skipped", || {
+                            planning_worker_refresh_skipped_detail(
                                 conversation,
                                 request,
                                 "queue_idle_review_context_unavailable",
@@ -363,8 +362,8 @@ impl PostTurnEvaluationExecutor {
                 };
                 match review_context.policy {
                     QueueIdlePolicy::Stop => {
-                        event_log::emit_lazy("planner_refresh_skipped", || {
-                            planner_refresh_skipped_detail(
+                        event_log::emit_lazy("planning_worker_refresh_skipped", || {
+                            planning_worker_refresh_skipped_detail(
                                 conversation,
                                 request,
                                 "queue_idle_policy_stop",
@@ -377,8 +376,8 @@ impl PostTurnEvaluationExecutor {
                     }
                     QueueIdlePolicy::ReviewAndEnqueue => {
                         let Some(prompt_markdown) = review_context.prompt_markdown else {
-                            event_log::emit_lazy("planner_refresh_skipped", || {
-                                planner_refresh_skipped_detail(
+                            event_log::emit_lazy("planning_worker_refresh_skipped", || {
+                                planning_worker_refresh_skipped_detail(
                                     conversation,
                                     request,
                                     "queue_idle_prompt_missing",
@@ -431,7 +430,7 @@ impl PostTurnEvaluationExecutor {
             .planning
             .worker
             .render_refresh_queue_prompt(&worker_request);
-        event_log::emit_lazy("planner_refresh_started", || {
+        event_log::emit_lazy("planning_worker_refresh_started", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -474,7 +473,7 @@ impl PostTurnEvaluationExecutor {
             Err(error) => {
                 let detail = match mode {
                     PlanningQueueRefreshMode::FromLatestReply => {
-                        format!("planner refresh failed: {error}")
+                        format!("planning worker refresh failed: {error}")
                     }
                     PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => {
                         format!("planning worker queue active-derivation failed: {error}")
@@ -482,7 +481,7 @@ impl PostTurnEvaluationExecutor {
                 };
                 let invalid_snapshot =
                     PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON);
-                event_log::emit_lazy("planner_refresh_failed", || {
+                event_log::emit_lazy("planning_worker_refresh_failed", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -512,7 +511,7 @@ impl PostTurnEvaluationExecutor {
         };
 
         self.record_planning_worker_outcome(PlanningWorkerStatus::RefreshSucceeded, &outcome);
-        event_log::emit_lazy("planner_refresh_succeeded", || {
+        event_log::emit_lazy("planning_worker_refresh_succeeded", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -551,7 +550,7 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
             } else {
-                event_log::emit_lazy("planner_refresh_repair_unresolved", || {
+                event_log::emit_lazy("planning_worker_refresh_repair_unresolved", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -654,7 +653,7 @@ impl PostTurnEvaluationExecutor {
             )
         {
             self.planning_worker_panel_state.last_host_detail = Some(
-                "planner derived no justified follow-up task from the latest request and reply"
+                "planning worker derived no justified follow-up task from the latest request and reply"
                     .to_string(),
             );
         }
@@ -665,7 +664,7 @@ impl PostTurnEvaluationExecutor {
         ) {
             self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshFailed;
             self.planning_worker_panel_state.last_host_detail = Some(detail.clone());
-            event_log::emit_lazy("planner_refresh_paused_repeated_queue_head", || {
+            event_log::emit_lazy("planning_worker_refresh_paused_repeated_queue_head", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -902,7 +901,7 @@ fn post_turn_evaluation_timeout_execution(
     request: &PostTurnEvaluationRequest,
 ) -> PostTurnEvaluationExecution {
     let message = format!(
-        "post-turn planner evaluation timed out after {} seconds",
+        "post-turn planning worker evaluation timed out after {} seconds",
         POST_TURN_EVALUATION_TIMEOUT.as_secs()
     );
     PostTurnEvaluationExecution {
@@ -926,7 +925,7 @@ fn post_turn_evaluation_timeout_execution(
             last_prompt: None,
             last_response: None,
             last_host_detail: Some(
-                "host recovered the main session from a stalled post-turn planner evaluation"
+                "host recovered the main session from a stalled post-turn planning worker evaluation"
                     .to_string(),
             ),
         },
