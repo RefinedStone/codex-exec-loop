@@ -5,7 +5,7 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 /*
 conversation controller는 shell startup, editable draft, resumed thread 사이의 workspace boundary를 소유한다.
 startup diagnostics가 shell cwd를 새로 알려 줄 수 있지만 resumed thread는 여전히 다른 workspace에 속할 수 있다.
-그래서 planning snapshot refresh를 render code의 ad hoc 계산으로 흩뜨리지 않고 이 controller 경계에 모아 둔다.
+그래서 planning runtime snapshot refresh를 render code의 ad hoc 계산으로 흩뜨리지 않고 이 controller 경계에 모아 둔다.
 */
 impl NativeTuiApp {
     // local draft conversation만 shell workspace로 동기화한다. attached session은 기록된 cwd를 그대로 보존한다.
@@ -67,7 +67,7 @@ impl NativeTuiApp {
         );
     }
 
-    // caller가 고른 workspace에 대해 Ready conversation이 가진 cached planning snapshot을 교체한다.
+    // caller가 고른 workspace에 대해 Ready conversation이 가진 cached planning runtime snapshot을 교체한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
         &mut self,
         workspace_directory: &str,

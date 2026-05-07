@@ -324,7 +324,7 @@ impl PlanningInitService {
             }
             self.commit_direction_authority_from_bootstrap(workspace_dir, directions)?;
             // draft promotion은 operator authority rewrite다. incremental task command를 적용하는 것이 아니라,
-            // validation이 끝난 accepted planning snapshot을 통째로 교체한다.
+            // validation이 끝난 accepted task authority snapshot을 통째로 교체한다.
             self.planning_task_repository_port
                 .commit_task_authority_snapshot(
                     workspace_dir,

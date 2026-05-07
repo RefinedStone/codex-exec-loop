@@ -478,7 +478,7 @@ impl PlanningPromptService {
                 /*
                  * ledger가 schema/semantic validation을 통과해도 execution precondition이
                  * 모순이면 queue construction이 실패할 수 있다. 이 경우도 runtime failure로
-                 * 끊지 않고 invalid planning snapshot으로 표면화해 repair 경로가 구체적인
+                 * 끊지 않고 invalid runtime snapshot으로 표면화해 repair 경로가 구체적인
                  * 원인을 보여 주게 한다.
                  */
                 return Ok(PlanningRuntimeSnapshot::invalid(format!(

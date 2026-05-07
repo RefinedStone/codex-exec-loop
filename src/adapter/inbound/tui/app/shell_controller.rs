@@ -286,7 +286,7 @@ impl NativeTuiApp {
                 .show_error("Preview a task before committing it.");
             return;
         };
-        // Commit refreshes the conversation's planning snapshot before opening
+        // Commit refreshes the conversation's planning runtime snapshot before opening
         // the queue overlay, otherwise the queue can render the pre-commit view
         // for one frame.
         match self.planning.runtime.commit_task_intake(&proposal) {

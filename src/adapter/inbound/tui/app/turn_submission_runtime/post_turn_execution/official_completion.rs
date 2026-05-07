@@ -478,7 +478,7 @@ impl PostTurnEvaluationExecutor {
     }
 }
 
-// Convert the latest known planning snapshot into a blocking snapshot that explains
+// Convert the latest known runtime snapshot into a blocking snapshot that explains
 // why official completion could not safely finalize. Keeping the existing snapshot
 // preserves queue/proposal context for panels while adding the pause reason.
 fn official_completion_failure_snapshot(

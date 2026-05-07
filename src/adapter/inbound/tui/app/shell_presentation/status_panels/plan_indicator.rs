@@ -18,7 +18,7 @@ pub(in super::super) struct PlanModeIndicatorView {
     style: Style,
 }
 
-// Select the freshest planning snapshot available for the current shell phase and project it into footer copy.
+// Select the freshest planning runtime snapshot available for the current shell phase and project it into footer copy.
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
     match &app.conversation_state {
         // Ready conversations own the runtime snapshot updated by turn execution, keeping footer copy aligned with auto-follow decisions.

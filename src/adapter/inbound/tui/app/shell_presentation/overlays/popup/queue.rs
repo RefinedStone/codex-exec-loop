@@ -21,7 +21,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         ConversationState::Loading => QueueOverlayView {
             header_lines,
             /*
-             * Conversation이 아직 load 중이면 planning snapshot 자체가 없다. 이 상태에서 queue/proposal
+             * Conversation이 아직 load 중이면 planning runtime snapshot 자체가 없다. 이 상태에서 queue/proposal
              * section을 추측하지 않고 "thread load 뒤 가능" copy로 고정해 stale planning data처럼 보이지 않게 한다.
              */
             summary_lines: vec![Line::from("status: loading conversation planning state")],

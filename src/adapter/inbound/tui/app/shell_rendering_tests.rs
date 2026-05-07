@@ -27,7 +27,7 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
 #[test]
 fn queue_overlay_matches_snapshot() {
     /*
-     * Queue overlay snapshot은 planning runtime snapshot이 popup summary/queue/proposal/note section으로
+     * Queue overlay snapshot은 planning runtime snapshot을 popup summary/queue/proposal/note section으로
      * 압축되는 presentation contract를 잠근다. domain queue ranking 자체는 다른 테스트가 맡고,
      * 여기서는 shell frame이 그 read model을 좁은 overlay에 어떻게 배치하는지 본다.
      */
