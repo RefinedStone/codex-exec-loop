@@ -376,7 +376,7 @@ impl NativeTuiApp {
             return None;
         }
         let mut lines = vec![format!(
-            "planning worker temp session: {operation_label} / {}",
+            "planning worker temporary session: {operation_label} / {}",
             planning_worker.status.label()
         )];
         if let Some(summary) = summary.filter(|summary: &&str| !summary.trim().is_empty()) {

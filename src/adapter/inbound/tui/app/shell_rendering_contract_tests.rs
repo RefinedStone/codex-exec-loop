@@ -43,22 +43,24 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
         None,
     )
     .with_display_label("Auto Follow-up")
-    .with_debug_detail("planning worker temp session: refresh / refresh ok");
+    .with_debug_detail("planning worker temporary session: refresh / refresh ok");
     let without_debug = format_conversation_lines(std::slice::from_ref(&message));
-    assert!(
-        !without_debug
-            .iter()
-            .any(|line| line.to_string().contains("planning worker temp session"))
-    );
+    assert!(!without_debug.iter().any(|line| {
+        line.to_string()
+            .contains("planning worker temporary session")
+    }));
     let with_debug = format_conversation_lines_with_debug(&[message], true);
     let detail_line = with_debug
         .iter()
-        .find(|line: &&Line<'static>| line.to_string().contains("planning worker temp session"))
+        .find(|line: &&Line<'static>| {
+            line.to_string()
+                .contains("planning worker temporary session")
+        })
         .expect("debug transcript should include the planning worker detail line");
 
     assert_eq!(
         detail_line.to_string(),
-        "  planning worker temp session: refresh / refresh ok"
+        "  planning worker temporary session: refresh / refresh ok"
     );
     assert_eq!(detail_line.spans[0].style.fg, Some(Color::Gray));
 }
