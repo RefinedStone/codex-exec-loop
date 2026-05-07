@@ -48,6 +48,8 @@ pub(super) struct PlanningAdminDirectionMutationOutcome {
     pub(super) deleted: bool,
     // direction 삭제 때문에 task authority에서 제거된 task 개수다.
     pub(super) removed_task_count: usize,
+    // direction 삭제 때문에 task authority에서 제거된 task id 목록이다.
+    pub(super) removed_task_ids: BTreeSet<String>,
 }
 
 impl<'a> PlanningAdminDirectionMutationService<'a> {
@@ -105,6 +107,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
             updated,
             deleted: false,
             removed_task_count: 0,
+            removed_task_ids: BTreeSet::new(),
         })
     }
 
@@ -127,6 +130,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
                 updated: false,
                 deleted: false,
                 removed_task_count: 0,
+                removed_task_ids: BTreeSet::new(),
             });
         }
 
@@ -160,6 +164,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
             updated: false,
             deleted: true,
             removed_task_count,
+            removed_task_ids,
         })
     }
 }

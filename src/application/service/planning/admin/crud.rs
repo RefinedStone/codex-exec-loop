@@ -69,6 +69,7 @@ impl PlanningAdminFacadeService {
                 management,
             });
         }
+        self.clear_deleted_task_runtime_projections(&outcome.removed_task_ids)?;
         Ok(PlanningAdminCrudOutcome {
             notice: format!(
                 "direction `{}` deleted with {} child tasks",
@@ -133,11 +134,25 @@ impl PlanningAdminFacadeService {
             &BTreeSet::from([task_id.to_string()]),
         );
         self.commit_operator_planning_documents(documents)?;
+        self.clear_deleted_task_runtime_projections(&BTreeSet::from([task_id.to_string()]))?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
             notice: format!("task `{task_id}` deleted"),
             management,
         })
+    }
+
+    fn clear_deleted_task_runtime_projections(&self, task_ids: &BTreeSet<String>) -> Result<()> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+        let task_ids = task_ids.iter().cloned().collect::<Vec<_>>();
+        self.planning_authority_port
+            .clear_parallel_runtime_projections_for_tasks(
+                self.workspace_dir.as_str(),
+                &task_ids,
+                "admin task delete",
+            )
     }
 }
 

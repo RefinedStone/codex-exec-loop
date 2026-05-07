@@ -643,6 +643,15 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         Self::clear_parallel_runtime_projections(workspace_dir, reason)
     }
 
+    fn clear_parallel_runtime_projections_for_tasks(
+        &self,
+        workspace_dir: &str,
+        task_ids: &[String],
+        reason: &str,
+    ) -> Result<()> {
+        Self::clear_parallel_runtime_projections_for_tasks(workspace_dir, task_ids, reason)
+    }
+
     fn apply_parallel_pool_reset_report(
         &self,
         workspace_dir: &str,

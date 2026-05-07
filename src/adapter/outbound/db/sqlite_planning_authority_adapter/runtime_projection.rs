@@ -571,6 +571,113 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn clear_parallel_runtime_projections_for_tasks(
+        workspace_dir: &str,
+        task_ids: &[String],
+        reason: &str,
+    ) -> Result<()> {
+        let task_ids = task_ids
+            .iter()
+            .map(|task_id| task_id.trim())
+            .filter(|task_id| !task_id.is_empty())
+            .collect::<BTreeSet<_>>();
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open parallel runtime task cleanup transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+
+        let mut lease_rows = 0;
+        let mut invalid_rows = 0;
+        let mut session_rows = 0;
+        let mut dispatch_block_rows = 0;
+        let mut queue_rows = 0;
+        let mut claim_rows = 0;
+        for task_id in &task_ids {
+            let task_id = *task_id;
+            let slot_ids = runtime_slot_ids_for_task(&transaction, task_id)?;
+            let queue_item_ids = runtime_queue_item_ids_for_task(&transaction, task_id)?;
+            lease_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_slot_leases
+                     WHERE json_extract(content, '$.task_id') = ?1",
+                    params![task_id],
+                )
+                .with_context(|| format!("failed to clear runtime slot leases for `{task_id}`"))?;
+            for slot_id in slot_ids {
+                invalid_rows += transaction
+                    .execute(
+                        "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
+                        params![slot_id],
+                    )
+                    .with_context(|| {
+                        format!("failed to clear invalid runtime slot lease `{slot_id}`")
+                    })?;
+            }
+            session_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_session_details
+                     WHERE json_extract(content, '$.task_id') = ?1",
+                    params![task_id],
+                )
+                .with_context(|| {
+                    format!("failed to clear runtime session details for `{task_id}`")
+                })?;
+            dispatch_block_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_task_dispatch_blocks WHERE task_id = ?1",
+                    params![task_id],
+                )
+                .with_context(|| {
+                    format!("failed to clear runtime task dispatch blocks for `{task_id}`")
+                })?;
+            queue_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_distributor_queue
+                     WHERE json_extract(content, '$.task_id') = ?1",
+                    params![task_id],
+                )
+                .with_context(|| {
+                    format!("failed to clear runtime distributor queue records for `{task_id}`")
+                })?;
+            for queue_item_id in queue_item_ids {
+                claim_rows += transaction
+                    .execute(
+                        "DELETE FROM runtime_claims
+                         WHERE claim_kind = ?1
+                           AND scope_key = ?2",
+                        params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id],
+                    )
+                    .with_context(|| {
+                        format!("failed to clear runtime queue claim `{queue_item_id}`")
+                    })?;
+            }
+        }
+
+        append_runtime_event(
+            &transaction,
+            "parallel_runtime_task_cleanup",
+            "parallel_runtime",
+            "task_delete",
+            &format!(
+                "parallel runtime task cleanup / tasks: {} / leases: {lease_rows} / invalid: {invalid_rows} / sessions: {session_rows} / dispatch_blocks: {dispatch_block_rows} / queue: {queue_rows} / claims: {claim_rows} / reason: {reason}",
+                task_ids.len()
+            ),
+            &serde_json::to_string(&task_ids.into_iter().collect::<Vec<_>>())
+                .context("failed to serialize runtime task cleanup event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit parallel runtime task cleanup transaction")?;
+
+        Ok(())
+    }
+
     pub(crate) fn apply_parallel_pool_reset_report(
         workspace_dir: &str,
         report: &ParallelModePoolResetReport,
@@ -1163,6 +1270,51 @@ fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Resul
     }
 
     Ok(preserved_rows)
+}
+
+fn runtime_slot_ids_for_task(transaction: &Transaction<'_>, task_id: &str) -> Result<Vec<String>> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT slot_id
+             FROM runtime_slot_leases
+             WHERE json_extract(content, '$.task_id') = ?1",
+        )
+        .context("failed to read runtime slot ids for task cleanup")?;
+    let rows = statement
+        .query_map(params![task_id], |row| row.get::<_, String>(0))
+        .with_context(|| format!("failed to iterate runtime slot ids for `{task_id}`"))?;
+    let mut slot_ids = Vec::new();
+    for row in rows {
+        slot_ids.push(
+            row.with_context(|| format!("failed to decode runtime slot id for `{task_id}`"))?,
+        );
+    }
+    Ok(slot_ids)
+}
+
+fn runtime_queue_item_ids_for_task(
+    transaction: &Transaction<'_>,
+    task_id: &str,
+) -> Result<Vec<String>> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT queue_item_id
+             FROM runtime_distributor_queue
+             WHERE json_extract(content, '$.task_id') = ?1",
+        )
+        .context("failed to read runtime distributor queue ids for task cleanup")?;
+    let rows = statement
+        .query_map(params![task_id], |row| row.get::<_, String>(0))
+        .with_context(|| {
+            format!("failed to iterate runtime distributor queue ids for `{task_id}`")
+        })?;
+    let mut queue_item_ids = Vec::new();
+    for row in rows {
+        queue_item_ids.push(row.with_context(|| {
+            format!("failed to decode runtime distributor queue id for `{task_id}`")
+        })?);
+    }
+    Ok(queue_item_ids)
 }
 
 fn is_failed_start_session_detail(detail: &ParallelModeAgentSessionDetailSnapshot) -> bool {
