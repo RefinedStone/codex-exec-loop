@@ -664,7 +664,7 @@ mod tests {
         visitor.insert_value(
             "detail",
             json!(
-                r#"{"origin":"Manual","transcript_text":"typed text","prompt":"final prompt","prompt_len":12}"#
+                r#"{"origin":"Manual","transcript_text":"typed text","transcript_text_len":10,"prompt":"final prompt","prompt_len":12,"parallel_mode_enabled":true}"#
             ),
         );
         let fields = visitor.into_map();
@@ -672,8 +672,10 @@ mod tests {
         assert_eq!(fields["event"], "user_prompt_submit_inspected");
         assert_eq!(fields["origin"], "Manual");
         assert_eq!(fields["transcript_text"], "typed text");
+        assert_eq!(fields["transcript_text_len"], 10);
         assert_eq!(fields["prompt"], "final prompt");
         assert_eq!(fields["prompt_len"], 12);
+        assert_eq!(fields["parallel_mode_enabled"], true);
         assert!(!fields.contains_key("detail"));
     }
 
