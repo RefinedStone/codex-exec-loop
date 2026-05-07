@@ -163,11 +163,14 @@ impl PlanningRuntimeFacadeService {
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
         let queue_head = snapshot.queue_head()?;
-        Some(self.build_task_handoff(queue_head))
+        Some(self.build_main_session_task_handoff(queue_head))
     }
 
     // 이미 task를 가진 caller가 planning fragment 없이 main-session handoff만 만들 때 쓰는 public helper다.
-    pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
+    pub fn build_main_session_task_handoff(
+        &self,
+        task: &PriorityQueueTask,
+    ) -> PlanningMainSessionHandoff {
         self.build_compact_task_handoff(task)
     }
 
@@ -226,7 +229,7 @@ impl PlanningRuntimeFacadeService {
             prompt: prompt.turn_prompt,
             developer_instructions: prompt.developer_instructions,
             service_name: prompt.service_name,
-            task: planning_task_handoff_from_queue_task(task),
+            task: planning_task_handoff_from_priority_queue_task(task),
         }
     }
 
@@ -247,7 +250,7 @@ impl PlanningRuntimeFacadeService {
         PlanningMainSessionHandoff {
             prompt,
             transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
-            task: planning_task_handoff_from_queue_task(task),
+            task: planning_task_handoff_from_priority_queue_task(task),
         }
     }
 
@@ -364,8 +367,8 @@ impl PlanningRuntimeFacadeService {
     }
 }
 
-// queue-task field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff identity를 공유한다.
-fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTaskHandoff {
+// PriorityQueueTask field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff identity를 공유한다.
+fn planning_task_handoff_from_priority_queue_task(task: &PriorityQueueTask) -> PlanningTaskHandoff {
     PlanningTaskHandoff {
         task_id: task.task_id.trim().to_string(),
         task_title: task.task_title.trim().to_string(),
@@ -377,7 +380,7 @@ fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTa
 }
 
 /*
- * domain queue-task를 Codex에게 보낼 instruction document로 렌더링한다. task section은 무엇을 이어갈지와 왜 queue
+ * domain PriorityQueueTask를 Codex에게 보낼 instruction document로 렌더링한다. task section은 무엇을 이어갈지와 왜 queue
  * 첫 항목인지 설명하고, rules section은 사용자가 명시적으로 planning maintenance를 요청하지 않은 한 worker가 repository
  * work에 집중하게 한다.
  */

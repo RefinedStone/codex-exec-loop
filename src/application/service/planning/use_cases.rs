@@ -211,8 +211,11 @@ impl PlanningRuntimeUseCases {
         // queued-task handoff는 caller가 따로 들고 있는 queue state가 아니라 current runtime snapshot에서 파생한다.
         self.runtime_facade.build_queued_task_handoff(snapshot)
     }
-    pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
-        self.runtime_facade.build_task_handoff(task)
+    pub fn build_main_session_task_handoff(
+        &self,
+        task: &PriorityQueueTask,
+    ) -> PlanningMainSessionHandoff {
+        self.runtime_facade.build_main_session_task_handoff(task)
     }
     pub fn build_sub_session_task_handoff(
         &self,
