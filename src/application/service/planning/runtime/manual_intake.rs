@@ -23,7 +23,7 @@ pub struct ManualPromptIntakeRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // main-session에 넘길 최종 실행 입력이다. visible transcript에는 `transcript_text`만 남기고, prompt는 app-server로만 간다.
-pub struct ManualPromptMainHandoff {
+pub struct ManualPromptMainSessionHandoff {
     pub prompt: String,
     pub transcript_text: String,
     pub task: Option<PlanningTaskHandoff>,
@@ -32,16 +32,16 @@ pub struct ManualPromptMainHandoff {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // manual intake outcome은 task authority 변경 여부를 명시한다. Failed도 값으로 내려 TUI가 main turn 시작을 막을 수 있다.
 pub enum ManualPromptIntakeOutcome {
-    NoTaskNeeded(ManualPromptMainHandoff),
+    NoTaskNeeded(ManualPromptMainSessionHandoff),
     TaskCommitted {
         committed_task_id: String,
         committed_planning_revision: i64,
-        handoff: ManualPromptMainHandoff,
+        handoff: ManualPromptMainSessionHandoff,
     },
     TaskUpdated {
         updated_task_id: String,
         committed_planning_revision: i64,
-        handoff: ManualPromptMainHandoff,
+        handoff: ManualPromptMainSessionHandoff,
     },
     Rejected {
         reason: String,
@@ -100,7 +100,7 @@ impl ManualPromptIntakeService {
                             "prompt_chars": transcript_text.chars().count(),
                         })
                     });
-                    ManualPromptIntakeOutcome::NoTaskNeeded(ManualPromptMainHandoff {
+                    ManualPromptIntakeOutcome::NoTaskNeeded(ManualPromptMainSessionHandoff {
                         prompt,
                         transcript_text,
                         task: None,
@@ -182,7 +182,7 @@ impl ManualPromptIntakeService {
         ManualPromptIntakeOutcome::TaskCommitted {
             committed_task_id: commit.committed_task_id,
             committed_planning_revision: commit.committed_planning_revision,
-            handoff: ManualPromptMainHandoff {
+            handoff: ManualPromptMainSessionHandoff {
                 prompt: handoff.prompt,
                 transcript_text: transcript_text.to_string(),
                 task: Some(handoff.task),
@@ -276,16 +276,16 @@ pub(super) fn manual_intake_handoff_from_task(
     }
 }
 
-pub(super) fn manual_intake_handoff_from_queue_task(
-    task: &PriorityQueueTask,
+pub(super) fn manual_intake_handoff_from_queue_head(
+    queue_head: &PriorityQueueTask,
 ) -> PlanningTaskHandoff {
     PlanningTaskHandoff {
-        task_id: task.task_id.trim().to_string(),
-        task_title: task.task_title.trim().to_string(),
-        direction_id: task.direction_id.trim().to_string(),
-        combined_priority: task.combined_priority,
-        updated_at: task.updated_at.trim().to_string(),
-        status_label: task.status.label().to_string(),
+        task_id: queue_head.task_id.trim().to_string(),
+        task_title: queue_head.task_title.trim().to_string(),
+        direction_id: queue_head.direction_id.trim().to_string(),
+        combined_priority: queue_head.combined_priority,
+        updated_at: queue_head.updated_at.trim().to_string(),
+        status_label: queue_head.status.label().to_string(),
     }
 }
 

@@ -98,7 +98,7 @@ pub use self::runtime::intake::{
     PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
 };
 pub use self::runtime::manual_intake::{
-    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainHandoff,
+    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainSessionHandoff,
 };
 // auto-follow block reason은 runtime policy가 자동 후속 실행을 막은 이유를 UI copy와 테스트가 분기할 수 있게 공개한다.
 pub use self::runtime::policy::PlanningAutoFollowBlockReason;
