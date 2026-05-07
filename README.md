@@ -174,6 +174,9 @@ cargo clippy --all-targets --all-features -D warnings
 - `AKRA_TRACE=codex_exec_loop_native::application::service::planning=debug cargo run`: trace a selected module filter.
 - `AKRA_TRACE_FILE=/tmp/akra-trace.jsonl`: override the trace JSONL destination with an exact append file instead of daily rolling.
 - `AKRA_RAW_LOG=/tmp/akra-raw.jsonl`: write targeted raw diagnostic events through the same non-blocking appender pattern.
+- `akra_event!(tracing::Level::DEBUG, "message", payload = build_debug_payload())`: emit ad hoc structured diagnostics without evaluating payload expressions when the level is disabled.
+- `codex_exec_loop_native::diagnostics::dropped_log_lines()`: read the in-process trace/raw `tracing_appender` dropped-line counters for future doctor or health surfaces.
+- `akra_diagnostics_dropped_log_lines`: emitted as a shutdown warning when the non-blocking queues dropped any trace/raw lines.
 - `CODEX_EXEC_LOOP_PLANNER_VISIBILITY=debug cargo run`: expose full planner prompt/response details in debug-only TUI surfaces.
 
 ## Docs

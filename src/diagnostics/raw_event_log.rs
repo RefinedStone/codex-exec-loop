@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde_json::{Value, json};
-use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
+use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 
 use super::trace_event_log;
 
 static RAW_LOG_WRITER: OnceLock<NonBlocking> = OnceLock::new();
+static RAW_DROPPED_LINES: OnceLock<ErrorCounter> = OnceLock::new();
 
 pub fn is_enabled() -> bool {
     RAW_LOG_WRITER.get().is_some()
@@ -18,8 +19,16 @@ pub(super) fn init_from_env() -> Option<WorkerGuard> {
         return None;
     }
     let (writer, guard) = open_raw_log()?;
+    let _ = RAW_DROPPED_LINES.set(writer.error_counter());
     let _ = RAW_LOG_WRITER.set(writer);
     Some(guard)
+}
+
+pub(super) fn dropped_lines() -> usize {
+    RAW_DROPPED_LINES
+        .get()
+        .map(ErrorCounter::dropped_lines)
+        .unwrap_or_default()
 }
 
 pub fn emit_lazy<F>(event: &str, detail: F)
@@ -65,7 +74,11 @@ fn open_raw_log() -> Option<(NonBlocking, WorkerGuard)> {
         .append(true)
         .open(path)
         .ok()?;
-    Some(tracing_appender::non_blocking(file))
+    Some(
+        NonBlockingBuilder::default()
+            .thread_name("akra-raw-log")
+            .finish(file),
+    )
 }
 
 fn raw_log_path() -> Option<PathBuf> {
