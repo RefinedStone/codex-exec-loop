@@ -183,7 +183,7 @@ impl PlanningWorkerOrchestrationService {
         let previous_handoff = request.previous_handoff_task.cloned();
         self.run_worker_and_reconcile(
             request.workspace_directory,
-            &format!("planner-refresh-{}", request.completed_turn_id),
+            &format!("planning-worker-refresh-{}", request.completed_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             previous_handoff.as_ref(),
@@ -207,7 +207,7 @@ impl PlanningWorkerOrchestrationService {
         )?;
         self.run_worker_and_reconcile(
             request.workspace_directory,
-            &format!("planner-refresh-{}", request.contract.completed_turn_id),
+            &format!("planning-worker-refresh-{}", request.contract.completed_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             request.previous_handoff_task,
@@ -227,7 +227,7 @@ impl PlanningWorkerOrchestrationService {
         self.run_worker_and_reconcile(
             request.workspace_directory,
             &format!(
-                "planner-repair-{}-{}",
+                "planning-worker-repair-{}-{}",
                 request.completed_turn_id, request.attempt_number
             ),
             PlanningWorkerOperation::RepairTaskAuthority,

@@ -62,7 +62,7 @@ mod tests {
     fn orchestration_event_detail_keeps_core_planning_fields_stable() {
         let detail = orchestration_event_detail(
             "/tmp/workspace",
-            "planner-refresh-turn-1",
+            "planning-worker-refresh-turn-1",
             PlanningWorkerOperation::RefreshQueue,
             "run_planning_session",
             Some("abort"),
@@ -71,7 +71,7 @@ mod tests {
         );
 
         assert_eq!(detail["workspace_directory"], json!("/tmp/workspace"));
-        assert_eq!(detail["orchestration_id"], json!("planner-refresh-turn-1"));
+        assert_eq!(detail["orchestration_id"], json!("planning-worker-refresh-turn-1"));
         assert_eq!(detail["operation"], json!("refresh"));
         assert_eq!(detail["phase"], json!("run_planning_session"));
         assert_eq!(detail["decision"], json!("abort"));
@@ -83,7 +83,7 @@ mod tests {
         let runtime = PlanningRuntimeSnapshot::invalid("planning invalid");
         let detail = orchestration_event_detail(
             "/tmp/workspace",
-            "planner-repair-turn-1-1",
+            "planning-worker-repair-turn-1-1",
             PlanningWorkerOperation::RepairTaskAuthority,
             "completed",
             Some("return_outcome"),
