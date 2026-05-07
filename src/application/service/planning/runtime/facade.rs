@@ -58,7 +58,7 @@ pub enum PlanningRuntimeAutoFollowDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// queued auto-follow는 실제 실행 prompt와 visible session에 남길 transcript metadata를 함께 담는다.
+// queued auto-follow는 실제 실행 prompt와 visible session에 남길 transcript copy를 함께 담는다.
 pub struct PlanningRuntimeQueuedAutoFollowPrompt {
     pub prompt: String,
     pub transcript_text: String,
@@ -91,7 +91,7 @@ pub struct PlanningSubSessionHandoff {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// auto-follow, UI status, repair handoff code가 공유하는 compact task metadata다.
+// auto-follow, UI status, repair handoff code가 공유하는 compact task identity다.
 pub struct PlanningTaskHandoff {
     pub task_id: String,
     pub task_title: String,
@@ -357,7 +357,7 @@ impl PlanningRuntimeFacadeService {
     }
 }
 
-// queue task field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff metadata를 공유한다.
+// queue task field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff identity를 공유한다.
 fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTaskHandoff {
     PlanningTaskHandoff {
         task_id: task.task_id.trim().to_string(),

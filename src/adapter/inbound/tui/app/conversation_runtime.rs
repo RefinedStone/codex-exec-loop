@@ -107,7 +107,7 @@ pub(super) struct QueuedAutoPrompt {
 #[derive(Debug, Clone)]
 pub(super) enum ConversationPostTurnAction {
     // Box keeps the enum small because queued prompts carry several strings and
-    // optional handoff metadata through the background-message channel.
+    // optional handoff identity through the background-message channel.
     QueueAutoPrompt(Box<QueuedAutoPrompt>),
     SkipAutoFollowup { reason: AutoFollowupSkipReason },
 }

@@ -129,7 +129,7 @@ pub struct PlanningTaskUpdatePayload {
 pub struct PlanningTaskToolResponse {
     pub ok: bool,
     pub operation: String,
-    // mutation metadata를 직접 노출해 worker가 성공한 tool call 뒤 final planning_task_commands를
+    // mutation result field를 직접 노출해 worker가 성공한 tool call 뒤 final planning_task_commands를
     // 다시 적용하는 double-apply를 피하게 한다.
     pub task_authority_changed: bool,
     pub applied_command_count: usize,
