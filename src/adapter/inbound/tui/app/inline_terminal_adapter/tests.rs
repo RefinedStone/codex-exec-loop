@@ -493,7 +493,7 @@ fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
     assert!(!rendered.contains("No messages in this thread yet."));
 }
 #[test]
-fn inline_history_shows_planner_debug_detail_when_visibility_is_debug() {
+fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() {
     let mut app = make_test_app();
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");

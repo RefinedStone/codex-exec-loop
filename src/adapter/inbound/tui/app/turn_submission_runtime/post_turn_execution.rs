@@ -587,7 +587,7 @@ impl PostTurnEvaluationExecutor {
             match promotion_outcome {
                 Ok(promotion_outcome) => {
                     runtime_snapshot = promotion_outcome.runtime_snapshot;
-                    event_log::emit_lazy("planner_proposal_promotion_completed", || {
+                    event_log::emit_lazy("planning_worker_proposal_promotion_completed", || {
                         post_turn_event_detail(
                             conversation,
                             request,
@@ -619,7 +619,7 @@ impl PostTurnEvaluationExecutor {
                     let invalid_snapshot = PlanningRuntimeSnapshot::invalid(
                         PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON,
                     );
-                    event_log::emit_lazy("planner_proposal_promotion_failed", || {
+                    event_log::emit_lazy("planning_worker_proposal_promotion_failed", || {
                         post_turn_event_detail(
                             conversation,
                             request,

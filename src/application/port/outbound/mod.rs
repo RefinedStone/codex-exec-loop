@@ -18,7 +18,7 @@ pub mod parallel_mode_runtime_port;
 pub mod planning_authority_port;
 // planning task repository port는 task queue의 영속 조회와 변경 계약을 제공한다.
 pub mod planning_task_repository_port;
-// planning worker port는 queued-task를 실행자로 넘기는 호출 지점을 정의한다.
+// planning worker port는 hidden planning session 실행 경계를 정의한다.
 pub mod planning_worker_port;
 // planning workspace port는 directions와 supporting files가 놓인 작업공간 접근을 추상화한다.
 pub mod planning_workspace_port;

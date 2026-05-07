@@ -1,5 +1,5 @@
 /*
- * planning worker service는 queue에 쌓인 작업을 실제 실행 lane으로 보내는 조율 계층이다.
- * orchestration 하위 모듈은 worker port와 planning 상태 갱신을 엮어 한 작업 단위의 생애주기를 관리한다.
+ * planning worker service는 hidden worker session과 planning authority 갱신을 조율하는 계층이다.
+ * orchestration 하위 모듈은 worker port, task mutation, queue projection, repair 흐름을 한 실행 단위로 묶는다.
  */
 pub(crate) mod orchestration;
