@@ -93,6 +93,9 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     }
 
     assert!(DASHBOARD_TEMPLATE.contains("Open Full Planning Draft"));
+    assert!(ADMIN_MOD.contains(".route(\"/admin\", get(pages::dashboard_page))"));
+    assert!(ADMIN_MOD.contains(".route(\"/\", get(pages::dashboard_page))"));
+    assert!(BASE_TEMPLATE.contains("current_nav == \"dashboard\""));
 }
 
 #[test]
@@ -143,7 +146,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     }
 
     for route in [
-        ".route(\"/admin\", get(pages::akra_dashboard_page))",
+        ".route(\"/admin/akra\", get(pages::akra_dashboard_page))",
         "\"/api/admin/akra/dashboard\"",
         "\"/api/admin/akra/pool\"",
         "\"/api/admin/akra/agents\"",

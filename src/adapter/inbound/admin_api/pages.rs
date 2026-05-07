@@ -78,6 +78,33 @@ pub(super) async fn akra_dashboard_page(
     )
 }
 
+pub(super) async fn dashboard_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    /*
+     * dashboard는 human operator가 admin surface에 들어오는 bootstrap page다.
+     * parallel/Akra 관제 화면과 분리해, 기본 `/admin` 진입은 항상 planning overview를 보여 준다.
+     */
+    let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    let overview = state
+        .facade
+        .load_overview()
+        .map_err(internal_server_error)?;
+    render_html(
+        jar,
+        DashboardTemplate {
+            page_title: "Planning Admin".to_string(),
+            current_nav: "dashboard",
+            workspace_dir: state.facade.workspace_dir().to_string(),
+            csrf_token,
+            notice: query.get("notice").cloned(),
+            overview,
+        },
+    )
+}
+
 pub(super) async fn directions_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,

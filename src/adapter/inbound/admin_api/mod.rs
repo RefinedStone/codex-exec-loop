@@ -186,8 +186,9 @@ fn build_router(state: AdminAppState) -> Router {
      * route registration을 한곳에 모으면 새 operation을 추가할 때 HTML/JSON 양쪽 노출 여부를 같은 diff에서 검토할 수 있다.
      */
     Router::new()
-        .route("/", get(pages::akra_dashboard_page))
-        .route("/admin", get(pages::akra_dashboard_page))
+        .route("/", get(pages::dashboard_page))
+        .route("/admin", get(pages::dashboard_page))
+        .route("/admin/akra", get(pages::akra_dashboard_page))
         .route(
             "/admin/assets/graphics/{asset_name}",
             get(static_assets::admin_graphic_asset),
