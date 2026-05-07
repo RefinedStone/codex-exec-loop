@@ -6,7 +6,7 @@ use super::super::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
 use super::super::{
-    ActiveTurnPlanningCapture, ActiveTurnPlanningSnapshot, AutoFollowupDecision,
+    ActiveTurnExecutionSnapshotCapture, ActiveTurnExecutionSnapshotState, AutoFollowupDecision,
     AutoFollowupSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
     PlannerWorkerPanelState, PlannerWorkerStatus,
 };
@@ -85,20 +85,20 @@ struct PostTurnEvaluationExecution {
 struct PostTurnEvaluationExecutor {
     planning: PlanningServices,
     parallel_mode_turn_service: ParallelModeTurnService,
-    active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
+    active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
 }
 impl PostTurnEvaluationExecutor {
     fn new(
         planning: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
-        active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
+        active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
         planner_worker_panel_state: PlannerWorkerPanelState,
     ) -> Self {
         Self {
             planning,
             parallel_mode_turn_service,
-            active_turn_planning_capture,
+            active_turn_execution_snapshot_capture,
             planner_worker_panel_state,
         }
     }
@@ -261,12 +261,12 @@ impl PostTurnEvaluationExecutor {
             .iter()
             .any(|path| PlanningExecutionSnapshot::captures_path(path));
         if !requires_execution_snapshot {
-            self.active_turn_planning_capture = None;
+            self.active_turn_execution_snapshot_capture = None;
             return PlanningReconciliationResult::default();
         }
-        let Some(capture) = self.active_turn_planning_capture.take() else {
+        let Some(capture) = self.active_turn_execution_snapshot_capture.take() else {
             return blocked_reconciliation_result(
-                "planning reconciliation could not restore protected planning files because the turn snapshot was unavailable"
+                "planning reconciliation could not restore protected planning files because the execution snapshot was unavailable"
                     .to_string(),
             );
         };
@@ -277,8 +277,8 @@ impl PostTurnEvaluationExecutor {
             ));
         }
         let execution_snapshot = match capture.snapshot {
-            ActiveTurnPlanningSnapshot::Ready(snapshot) => snapshot,
-            ActiveTurnPlanningSnapshot::CaptureFailed(error_message) => {
+            ActiveTurnExecutionSnapshotState::Ready(snapshot) => snapshot,
+            ActiveTurnExecutionSnapshotState::CaptureFailed(error_message) => {
                 return blocked_reconciliation_result(error_message);
             }
         };
@@ -824,7 +824,7 @@ impl NativeTuiApp {
         let executor = PostTurnEvaluationExecutor::new(
             self.planning.clone(),
             self.parallel_mode_turn_service(),
-            self.active_turn_planning_capture.take(),
+            self.active_turn_execution_snapshot_capture.take(),
             self.planner_worker_panel_state.clone(),
         );
         #[cfg(test)]

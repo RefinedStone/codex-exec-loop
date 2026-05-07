@@ -208,31 +208,31 @@ enum PromptOrigin {
     AutoFollow(Box<AutoFollowupSubmitContext>),
 }
 
-// Post-turn planning evaluation is tied to the workspace used by the active
-// turn. The capture can fail independently of the conversation stream, so the
-// runtime stores either the snapshot or the failure message for status/reporting
-// reducers to consume.
+// Post-turn reconciliation is tied to the execution snapshot captured for the
+// active turn workspace. The capture can fail independently of the conversation
+// stream, so the runtime stores either the snapshot or the failure message for
+// status/reporting reducers to consume.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ActiveTurnPlanningCapture {
+struct ActiveTurnExecutionSnapshotCapture {
     workspace_directory: String,
-    snapshot: ActiveTurnPlanningSnapshot,
+    snapshot: ActiveTurnExecutionSnapshotState,
 }
-impl ActiveTurnPlanningCapture {
+impl ActiveTurnExecutionSnapshotCapture {
     fn ready(workspace_directory: impl Into<String>, snapshot: PlanningExecutionSnapshot) -> Self {
         Self {
             workspace_directory: workspace_directory.into(),
-            snapshot: ActiveTurnPlanningSnapshot::Ready(snapshot),
+            snapshot: ActiveTurnExecutionSnapshotState::Ready(snapshot),
         }
     }
     fn capture_failed(workspace_directory: impl Into<String>, message: String) -> Self {
         Self {
             workspace_directory: workspace_directory.into(),
-            snapshot: ActiveTurnPlanningSnapshot::CaptureFailed(message),
+            snapshot: ActiveTurnExecutionSnapshotState::CaptureFailed(message),
         }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ActiveTurnPlanningSnapshot {
+enum ActiveTurnExecutionSnapshotState {
     Ready(PlanningExecutionSnapshot),
     CaptureFailed(String),
 }
@@ -317,7 +317,7 @@ struct NativeTuiApp {
     turn_control_truth: ConversationRuntimeControlTruth,
     parallel_mode_service: ParallelModeService,
     planning: PlanningServices,
-    active_turn_planning_capture: Option<ActiveTurnPlanningCapture>,
+    active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
     planner_worker_panel_state: PlannerWorkerPanelState,
     planner_visibility: PlannerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,

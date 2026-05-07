@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::adapter::inbound::tui::app::{
-    ActiveTurnPlanningCapture, BackgroundMessage, ConversationState, NativeTuiApp,
+    ActiveTurnExecutionSnapshotCapture, BackgroundMessage, ConversationState, NativeTuiApp,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
@@ -60,11 +60,11 @@ impl NativeTuiApp {
             };
 
         // The stream may run against a slot worktree instead of the shell's current
-        // workspace. Capture that accepted planning state before the worker can emit
-        // TurnStarted and before post-turn reconciliation compares snapshots.
+        // workspace. Capture the execution snapshot before the worker can emit
+        // TurnStarted and before post-turn reconciliation compares protected files.
         self.sync_active_turn_workspace_directory(&request.workspace_directory);
-        self.active_turn_planning_capture =
-            Some(self.capture_active_turn_planning(&request.workspace_directory));
+        self.active_turn_execution_snapshot_capture =
+            Some(self.capture_active_turn_execution_snapshot(&request.workspace_directory));
 
         if invalidate_supervisor_snapshot {
             self.invalidate_parallel_mode_supervisor_snapshot();
@@ -82,17 +82,22 @@ impl NativeTuiApp {
         );
     }
 
-    fn capture_active_turn_planning(&self, workspace_directory: &str) -> ActiveTurnPlanningCapture {
+    fn capture_active_turn_execution_snapshot(
+        &self,
+        workspace_directory: &str,
+    ) -> ActiveTurnExecutionSnapshotCapture {
         match self
             .planning
             .runtime
             .load_execution_snapshot(workspace_directory)
         {
-            Ok(snapshot) => ActiveTurnPlanningCapture::ready(workspace_directory, snapshot),
-            Err(error) => ActiveTurnPlanningCapture::capture_failed(
+            Ok(snapshot) => {
+                ActiveTurnExecutionSnapshotCapture::ready(workspace_directory, snapshot)
+            }
+            Err(error) => ActiveTurnExecutionSnapshotCapture::capture_failed(
                 workspace_directory,
                 format!(
-                    "planning reconciliation could not capture the accepted planning snapshot before the turn started: {error}"
+                    "planning reconciliation could not capture the execution snapshot before the turn started: {error}"
                 ),
             ),
         }

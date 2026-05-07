@@ -151,7 +151,7 @@ impl NativeTuiApp {
             turn_control_truth,
             parallel_mode_service,
             planning,
-            active_turn_planning_capture: None,
+            active_turn_execution_snapshot_capture: None,
             planner_worker_panel_state: super::PlannerWorkerPanelState::default(),
             planner_visibility: super::PlannerVisibility::from_environment(),
             github_review_poller_service: None,
@@ -304,7 +304,7 @@ impl NativeTuiApp {
             .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
         if clear_turn_snapshot {
-            self.active_turn_planning_capture = None;
+            self.active_turn_execution_snapshot_capture = None;
         }
         // A task-intake command can become executable only after the stream or
         // post-turn evaluation settles planning state. When it fires, suppress the
