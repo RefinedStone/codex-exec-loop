@@ -1098,7 +1098,7 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
 }
 
 #[test]
-fn live_running_slot_blocks_off_to_on_pool_reset() {
+fn live_running_slot_is_preserved_during_off_to_on_pool_reset() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-live-reset-block");
     let lease = harness
@@ -1131,10 +1131,10 @@ fn live_running_slot_blocks_off_to_on_pool_reset() {
     harness.turn_parallel_off();
     harness.enter_parallel();
 
-    let final_status = harness.poll_until_status_contains("pool reset failed");
+    let final_status = harness.poll_until_status_contains("preserved 1 live slot");
     assert!(
-        final_status.contains("live slot"),
-        "reset should report live blocker, got `{final_status}`"
+        final_status.contains("reset 2 pool slot worktree"),
+        "reset should preserve live slot while resetting idle slots, got `{final_status}`"
     );
     let projections = harness.runtime_projections();
     let persisted = projections

@@ -299,7 +299,6 @@ pub(super) fn reset_pool_for_parallel_enable(
                 "live_blockers": report.live_blocker_count(),
             })
         });
-        return Ok(report);
     }
 
     for slot_number in 1..=DEFAULT_POOL_SIZE {
@@ -309,6 +308,11 @@ pub(super) fn reset_pool_for_parallel_enable(
             .worktree_records
             .iter()
             .any(|record| record.path == slot_path)
+        {
+            continue;
+        }
+        if let Some(lease) = context.slot_leases.get(&slot_id)
+            && live_lease_blocks_parallel_entry_reset(lease, &context.session_details)
         {
             continue;
         }

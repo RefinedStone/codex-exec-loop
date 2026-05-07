@@ -418,12 +418,6 @@ impl ParallelModeService {
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn reset_pool_on_parallel_enable(&self, workspace_dir: &str) -> Result<usize, String> {
         let report = self.reset_pool_on_parallel_enable_report(workspace_dir)?;
-        if report.has_live_blockers() {
-            return Err(format!(
-                "pool reset blocked by {} live slot(s)",
-                report.live_blocker_count()
-            ));
-        }
         if report.has_reset_failures() {
             return Err(format!(
                 "pool reset partially failed for {} slot(s)",

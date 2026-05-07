@@ -241,7 +241,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
 // parallel mode를 off -> on으로 켜더라도 Running lease는 live execution 증거다.
 // reset은 projection을 지우거나 worktree를 되돌리지 않고 blocked report만 남긴다.
 #[test]
-fn parallel_entry_from_off_blocks_reset_when_running_slot_is_live() {
+fn parallel_entry_from_off_preserves_live_running_slot_and_resets_idle_slots() {
     let repo = TempGitRepo::new("parallel-enable-reset-active");
     let service = test_parallel_mode_service();
     let lease = service
@@ -272,7 +272,7 @@ fn parallel_entry_from_off_blocks_reset_when_running_slot_is_live() {
     );
 
     assert_eq!(report.live_blocker_count(), 1);
-    assert_eq!(report.succeeded_reset_slot_count(), 0);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE - 1);
     assert_eq!(
         report.slot_reports[0].action,
         ParallelModePoolResetSlotAction::PreserveLive
@@ -334,7 +334,7 @@ fn parallel_entry_from_off_forces_dirty_no_lease_slot_back_to_baseline() {
 // Running lease는 slot worktree가 더 이상 해당 agent branch에 있지 않아도 자동 reset으로
 // 없애지 않는다. branch drift는 destructive reset보다 operator recovery로 남겨야 한다.
 #[test]
-fn parallel_entry_from_off_preserves_running_lease_when_slot_left_agent_branch() {
+fn parallel_entry_from_off_preserves_running_branch_drift_and_resets_idle_slots() {
     let repo = TempGitRepo::new("parallel-enable-reset-stale-running");
     let service = test_parallel_mode_service();
     let lease = service
@@ -365,11 +365,86 @@ fn parallel_entry_from_off_preserves_running_lease_when_slot_left_agent_branch()
     );
 
     assert_eq!(report.live_blocker_count(), 1);
-    assert_eq!(report.succeeded_reset_slot_count(), 0);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE - 1);
     assert_eq!(snapshot.roster.active_count(), 1);
     assert!(repo.slot_lease_path(1).exists());
     assert!(slot_path.join("scratch.tmp").exists());
     assert_eq!(current_branch(&slot_path), "HEAD");
+}
+
+#[test]
+fn parallel_entry_from_off_resets_stale_startup_slots_even_when_another_slot_is_running() {
+    let repo = TempGitRepo::new("parallel-enable-reset-stale-with-running");
+    let service = test_parallel_mode_service();
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let running_lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request(
+                "task-running",
+                "Running Task",
+                "agent-running",
+                "running-task",
+            ),
+        )
+        .expect("running slot lease should be acquired");
+    let running_slot_path = PathBuf::from(running_lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&running_lease.worktree_path)
+        .expect("running slot should transition to running");
+    fs::write(running_slot_path.join("keep-running.tmp"), "keep me\n")
+        .expect("running scratch file should write");
+
+    let mut stale_lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-stale", "Stale Task", "agent-stale", "stale-task"),
+        )
+        .expect("stale slot lease should be acquired");
+    let stale_slot_path = PathBuf::from(stale_lease.worktree_path.clone());
+    stale_lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &stale_lease)
+        .expect("stale lease should be persisted");
+    record_assigned_session_detail(
+        &adapter,
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &stale_lease,
+    )
+    .expect("stale assigned detail should be recorded");
+    fs::write(stale_slot_path.join("scratch.tmp"), "discard me\n")
+        .expect("stale scratch file should write");
+
+    let report = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("parallel enable reset should preserve live slots and reset stale slots");
+    let snapshot = service.build_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+
+    assert_eq!(report.live_blocker_count(), 1);
+    assert!(
+        report
+            .succeeded_reset_slot_ids()
+            .contains(&stale_lease.slot_id)
+    );
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert!(!repo.slot_lease_path(2).exists());
+    assert!(
+        !repo
+            .session_detail_path(&stale_lease.session_key())
+            .exists()
+    );
+    assert!(!stale_slot_path.join("scratch.tmp").exists());
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(running_slot_path.join("keep-running.tmp").exists());
 }
 
 // Leased startup residue is also disposable on off -> on entry. The reset keeps planning task
