@@ -1,13 +1,15 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use serde_json::Value;
 use tracing::Level;
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
 pub(crate) const AKRA_EVENT_TARGET: &str = "codex_exec_loop_native::diagnostics::akra_event";
+static TRACE_DROPPED_LINES: OnceLock<ErrorCounter> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TraceConfig {
@@ -87,6 +89,7 @@ fn trace_config_from_env() -> Option<TraceConfig> {
 
 fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
     let (writer, guard) = non_blocking_writer(config.destination)?;
+    let _ = TRACE_DROPPED_LINES.set(writer.error_counter());
     let env_filter = env_filter_from_filter_value(&config.filter);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
@@ -105,9 +108,16 @@ fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
     Ok(guard)
 }
 
+pub(super) fn dropped_lines() -> usize {
+    TRACE_DROPPED_LINES
+        .get()
+        .map(ErrorCounter::dropped_lines)
+        .unwrap_or_default()
+}
+
 fn non_blocking_writer(
     destination: TraceDestination,
-) -> Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard), String> {
+) -> Result<(NonBlocking, WorkerGuard), String> {
     match destination {
         TraceDestination::DailyRolling {
             directory,
@@ -120,7 +130,7 @@ fn non_blocking_writer(
                 )
             })?;
             let appender = tracing_appender::rolling::daily(directory, file_name);
-            Ok(tracing_appender::non_blocking(appender))
+            Ok(non_blocking_with_thread_name(appender, "akra-trace-log"))
         }
         TraceDestination::ExactFile(path) => {
             if let Some(parent) = path.parent() {
@@ -141,9 +151,18 @@ fn non_blocking_writer(
                         path.display()
                     )
                 })?;
-            Ok(tracing_appender::non_blocking(file))
+            Ok(non_blocking_with_thread_name(file, "akra-trace-log"))
         }
     }
+}
+
+fn non_blocking_with_thread_name<T: std::io::Write + Send + 'static>(
+    writer: T,
+    thread_name: &str,
+) -> (NonBlocking, WorkerGuard) {
+    NonBlockingBuilder::default()
+        .thread_name(thread_name)
+        .finish(writer)
 }
 
 fn trace_settings_from_env() -> Option<TraceSettings> {
