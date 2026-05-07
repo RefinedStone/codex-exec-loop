@@ -319,7 +319,7 @@ pub struct TaskDefinition {
 pub struct TaskMutationProvenance {
     /*
      * provenance는 provider 이름과 무관한 Akra runtime 감사 정보다.
-     * thread_id/turn_id는 실제 mutation을 만든 session/turn이고, parent_*는 hidden/planner/parallel
+     * thread_id/turn_id는 실제 mutation을 만든 session/turn이고, parent_*는 hidden/planning worker/parallel
      * mutation을 유발한 visible 또는 상위 실행 단위를 가리킨다.
      */
     #[serde(default)]

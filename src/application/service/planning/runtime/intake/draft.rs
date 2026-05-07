@@ -63,7 +63,7 @@ impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
             .to_rfc3339_opts(SecondsFormat::Secs, true);
 
         // runtime intake로 태어난 태스크는 의도적으로 Ready, User 소유, 무의존 상태로
-        // 시작한다. 이후 planner가 의존성과 우선순위를 다듬을 수 있지만, 이 경로는
+        // 시작한다. 이후 planning worker가 의존성과 우선순위를 다듬을 수 있지만, 이 경로는
         // 원문 프롬프트를 source description으로 보존하고 목록용 title만 정규화한다.
         Ok(PlanningTaskIntakeDraft {
             task: crate::domain::planning::TaskDefinition {

@@ -173,7 +173,7 @@ impl TurnPromptAssemblyService {
 
 // main-session prompt의 실제 문자열 레이아웃을 담당한다.
 // 형식은 실행 계약, 보고 계약, user prompt 순서이다. planning context와 task authority mutation 규칙은
-// hidden intake/planner 계층에서만 소비되고 main-session에는 compact handoff만 들어온다.
+// hidden intake/planning worker 계층에서만 소비되고 main-session에는 compact handoff만 들어온다.
 #[tracing::instrument(level = "trace")]
 fn render_main_session_prompt(
     // 최종 prompt의 `user prompt:` section에 들어갈 실행 요청이다.
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     // manual prompt는 planning fragment를 main-session prompt에 붙이지 않는다.
-    // task authority context는 hidden intake/planner 쪽에서만 소비되어야 한다.
+    // task authority context는 hidden intake/planning worker 쪽에서만 소비되어야 한다.
     fn manual_prompt_appends_planning_fragment_when_present() {
         let service = TurnPromptAssemblyService::new();
 
