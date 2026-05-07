@@ -199,7 +199,9 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
             validation_report: PlanningValidationReport::default(),
         });
     app.start_max_auto_turns_edit();
-    app.followup_overlay_ui_state.max_auto_turns_editor.buffer = "12".to_string();
+    app.auto_follow_overlay_ui_state
+        .max_auto_turns_editor
+        .buffer = "12".to_string();
 
     // Once the turn-budget editor takes focus, generic promotion guidance would
     // be misleading. This locks the mode-specific validation and save hints.

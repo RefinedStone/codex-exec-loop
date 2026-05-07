@@ -1,5 +1,5 @@
 use super::super::planning::status_projection::build_resumed_session_status_text;
-use super::super::{ConversationState, FollowupControlEvent, NativeTuiApp, StartupState};
+use super::super::{AutoFollowControlEvent, ConversationState, NativeTuiApp, StartupState};
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 /*
@@ -21,7 +21,7 @@ impl NativeTuiApp {
         }
 
         // follow-up control도 draft workspace state를 들고 있으므로 planning refresh 전에 reducer를 통해 같은 cwd로 맞춘다.
-        self.dispatch_followup_controls(FollowupControlEvent::DraftWorkspaceSynced {
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
             workspace_directory: workspace_directory.to_string(),
         });
         self.refresh_ready_conversation_planning_runtime_snapshot();

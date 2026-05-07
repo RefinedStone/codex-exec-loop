@@ -36,7 +36,7 @@ pub(super) fn build_simple_review_copy(app: &NativeTuiApp) -> PlanningSimpleRevi
         // label은 committed budget이고 buffer는 editing mode의 raw draft input이다. 둘을
         // 함께 넘겨 status/key copy가 review controls와 text-input controls를 정확히 전환한다.
         turn_budget_buffer: app
-            .followup_overlay_ui_state
+            .auto_follow_overlay_ui_state
             .max_auto_turns_editor
             .buffer
             .clone(),

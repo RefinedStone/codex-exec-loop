@@ -24,7 +24,7 @@ pub(crate) enum AutoFollowDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
  * Skip reason은 단순 로그 문자열이 아니라 auto-follow safety contract다. 각
- * variant는 서로 다른 guardrail의 이름이며, post_turn_execution/followup_controls/
+ * variant는 서로 다른 guardrail의 이름이며, post_turn_execution/auto_follow_controls/
  * shell_runtime 테스트가 이 값을 통해 queue가 진행되지 않은 이유를 동일하게 해석한다.
  */
 pub(crate) enum AutoFollowSkipReason {

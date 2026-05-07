@@ -60,6 +60,12 @@ const HISTORY_INSERT_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_HISTORY_INSERT_MODE";
  */
 #[path = "app/app_runtime.rs"]
 mod app_runtime;
+#[path = "app/auto_follow/mod.rs"]
+mod auto_follow;
+#[path = "app/auto_follow_controls.rs"]
+mod auto_follow_controls;
+#[path = "app/auto_follow_overlay_ui.rs"]
+mod auto_follow_overlay_ui;
 #[path = "app/conversation/mod.rs"]
 mod conversation;
 #[path = "app/conversation_input.rs"]
@@ -74,12 +80,6 @@ mod conversation_model;
 mod conversation_runtime;
 #[path = "app/directions_maintenance_ui.rs"]
 mod directions_maintenance_ui;
-#[path = "app/followup/mod.rs"]
-mod followup;
-#[path = "app/followup_controls.rs"]
-mod followup_controls;
-#[path = "app/followup_overlay_ui.rs"]
-mod followup_overlay_ui;
 #[path = "app/github_polling.rs"]
 mod github_polling;
 #[path = "app/history_insertion.rs"]
@@ -136,6 +136,12 @@ mod turn_submission_runtime;
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
 use app_runtime::BackgroundMessage;
+use auto_follow_controls::{
+    AutoFollowControlEffect, AutoFollowControlEvent, reduce_auto_follow_controls,
+};
+use auto_follow_overlay_ui::{
+    AutoFollowOverlayUiEvent, AutoFollowOverlayUiState, reduce_auto_follow_overlay_ui,
+};
 use conversation_input::{ConversationInputEvent, reduce_conversation_input};
 use conversation_intents::{
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
@@ -155,10 +161,6 @@ use conversation_runtime::{
 };
 use directions_maintenance_ui::{
     DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
-};
-use followup_controls::{FollowupControlEffect, FollowupControlEvent, reduce_followup_controls};
-use followup_overlay_ui::{
-    FollowupOverlayUiEvent, FollowupOverlayUiState, reduce_followup_overlay_ui,
 };
 use github_polling::GithubReviewPollingState;
 use history_insertion::HistoryInsertionMode;
@@ -303,7 +305,7 @@ struct NativeTuiApp {
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
-    followup_overlay_ui_state: FollowupOverlayUiState,
+    auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,

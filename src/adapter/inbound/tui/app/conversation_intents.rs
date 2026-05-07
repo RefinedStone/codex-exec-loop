@@ -52,7 +52,7 @@ pub(super) enum ConversationIntentEvent {
 pub(super) enum ConversationIntentEffect {
     // Status effect는 navigation을 거부한 이유를 conversation input reducer에 남긴다.
     ShowStatus { status_text: String },
-    // Draft opening은 app_runtime이 lifecycle, shell chrome, follow-up overlay reset으로 확장한다.
+    // Draft opening은 app_runtime이 lifecycle, shell chrome, auto-follow overlay reset으로 확장한다.
     OpenNewDraft,
     // Session opening은 summary ownership만 넘긴다. Snapshot load는 lifecycle effect가 맡는다.
     OpenSession { session: SessionSummary },

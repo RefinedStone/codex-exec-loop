@@ -1,8 +1,8 @@
 /*
- * Follow-up controller code sits at the terminal-input edge of NativeTuiApp.
+ * Auto-follow controller code sits at the terminal-input edge of NativeTuiApp.
  * It deliberately avoids owning policy: conversation-level auto-follow changes
- * are sent to `followup_controls`, while in-progress editor text is sent to
- * `followup_overlay_ui`. Keeping those two event streams separate lets the TUI
+ * are sent to `auto_follow_controls`, while in-progress editor text is sent to
+ * `auto_follow_overlay_ui`. Keeping those two event streams separate lets the TUI
  * offer a forgiving inline text editor without letting half-typed values change
  * the runtime continuation budget.
  */
@@ -17,8 +17,8 @@ use std::time::Instant;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::super::{
-    ConversationState, DEFAULT_AUTO_FOLLOW_MAX_TURNS, FollowupControlEvent, FollowupOverlayUiEvent,
-    NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
+    AutoFollowControlEvent, AutoFollowOverlayUiEvent, ConversationState,
+    DEFAULT_AUTO_FOLLOW_MAX_TURNS, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
 };
 
 impl NativeTuiApp {
@@ -29,7 +29,7 @@ impl NativeTuiApp {
          * copy, post-turn continuation guards, and budget accounting on the
          * same ConversationViewModel state.
          */
-        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowPaused);
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
     }
 
     pub(crate) fn current_max_auto_turns_label(&self) -> String {
@@ -91,7 +91,7 @@ impl NativeTuiApp {
          * a valid max_auto_turns value while the operator is temporarily
          * typing an empty string, `inf`, or another not-yet-valid candidate.
          */
-        self.followup_overlay_ui_state
+        self.auto_follow_overlay_ui_state
             .max_auto_turns_editor
             .is_editing
     }
@@ -123,7 +123,7 @@ impl NativeTuiApp {
          * overlay buffer. From this point until commit/cancel, the buffer is
          * allowed to diverge from the conversation policy.
          */
-        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditStarted {
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::MaxAutoTurnsEditStarted {
             current_value: self.current_max_auto_turns_label(),
         });
     }
@@ -143,9 +143,9 @@ impl NativeTuiApp {
          * centralizes normalization and validation, then emits a UI effect
          * only when the policy accepted a canonical value.
          */
-        self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: self
-                .followup_overlay_ui_state
+                .auto_follow_overlay_ui_state
                 .max_auto_turns_editor
                 .buffer
                 .clone(),
@@ -158,7 +158,7 @@ impl NativeTuiApp {
          * visible buffer from the current policy label. It intentionally does
          * not dispatch a control event because no policy decision changed.
          */
-        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsEditCanceled {
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::MaxAutoTurnsEditCanceled {
             current_value: self.current_max_auto_turns_label(),
         });
     }
@@ -169,9 +169,9 @@ impl NativeTuiApp {
          * save gives this terminal control normal text-editor behavior rather
          * than rejecting intermediate input one key at a time.
          */
-        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsCharacterTyped {
-            character,
-        });
+        self.dispatch_auto_follow_overlay_ui(
+            AutoFollowOverlayUiEvent::MaxAutoTurnsCharacterTyped { character },
+        );
     }
 
     pub(crate) fn pop_max_auto_turns_character(&mut self) {
@@ -179,7 +179,9 @@ impl NativeTuiApp {
          * Backspace edits the same overlay buffer and leaves the canonical
          * auto-follow limit untouched until a later successful save.
          */
-        self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsBackspacePressed);
+        self.dispatch_auto_follow_overlay_ui(
+            AutoFollowOverlayUiEvent::MaxAutoTurnsBackspacePressed,
+        );
     }
 
     pub(crate) fn handle_max_auto_turns_editor_key(&mut self, key: event::KeyEvent) -> bool {

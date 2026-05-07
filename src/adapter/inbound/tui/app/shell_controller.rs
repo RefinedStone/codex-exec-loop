@@ -167,12 +167,12 @@ impl NativeTuiApp {
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
     }
     fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
-        self.dispatch_followup_controls(FollowupControlEvent::MaxAutoTurnsUpdated {
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: argument.unwrap_or_default().to_string(),
         });
     }
     fn handle_stop_shell_command(&mut self) {
-        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowPaused);
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
         self.parallel_mode_enabled = false;
         self.invalidate_parallel_mode_supervisor_snapshot();
         // Stop is both a local mode transition and an app-server control request:
@@ -216,7 +216,7 @@ impl NativeTuiApp {
         command_input: InlineShellCommandInput,
     ) {
         self.pending_task_intake_command = Some(command_input);
-        self.dispatch_followup_controls(FollowupControlEvent::AutoFollowPaused);
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: "task intake queued until the current turn reaches a planning-safe point"
                 .to_string(),

@@ -7,8 +7,8 @@ use crossterm::style::Print;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::{
-    BackgroundMessage, ConversationLifecycleEvent, ConversationRuntimeEvent, ConversationState,
-    FollowupOverlayUiEvent, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
+    AutoFollowOverlayUiEvent, BackgroundMessage, ConversationLifecycleEvent,
+    ConversationRuntimeEvent, ConversationState, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
 };
 
 /* ShellRuntime is the thin event-loop owner around NativeTuiApp. It drains
@@ -112,10 +112,11 @@ impl ShellRuntime {
                     }
                     // A loaded conversation resets follow-up copy because auto-turn affordances
                     // belong to the active thread, not the previous shell contents.
-                    self.app
-                        .dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
+                    self.app.dispatch_auto_follow_overlay_ui(
+                        AutoFollowOverlayUiEvent::ContentReset {
                             max_auto_turns: self.app.current_max_auto_turns_label(),
-                        });
+                        },
+                    );
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.app.dispatch_conversation_runtime(

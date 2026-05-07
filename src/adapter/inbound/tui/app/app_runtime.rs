@@ -21,16 +21,16 @@ use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::conversation_runtime::ConversationPostTurnEvaluation;
 use super::{
-    ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
-    ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
-    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
-    ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
-    FollowupControlEffect, FollowupControlEvent, FollowupOverlayUiEvent, FollowupOverlayUiState,
-    NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState,
-    SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
-    StartupState, reduce_conversation_input, reduce_conversation_intents,
-    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_followup_controls,
-    reduce_followup_overlay_ui, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
+    AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
+    AutoFollowOverlayUiState, ConversationInputEvent, ConversationIntentEffect,
+    ConversationIntentEvent, ConversationIntentMode, ConversationIntentState,
+    ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    ExitConfirmationState, NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE,
+    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
+    ShellOverlay, StartupState, reduce_auto_follow_controls, reduce_auto_follow_overlay_ui,
+    reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
+    reduce_conversation_runtime, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 
 /* NativeTuiApp is assembled as reducer-owned state plus outbound service handles.
@@ -136,7 +136,7 @@ impl NativeTuiApp {
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
-            followup_overlay_ui_state: FollowupOverlayUiState::default(),
+            auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),
             directions_maintenance_overlay_ui_state:
                 super::DirectionsMaintenanceOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
@@ -395,7 +395,7 @@ impl NativeTuiApp {
                     workspace_directory: workspace_directory.clone(),
                 });
                 self.refresh_ready_conversation_planning_runtime_snapshot();
-                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
+                self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
                     max_auto_turns: self.current_max_auto_turns_label(),
                 });
             }
@@ -414,32 +414,34 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn dispatch_followup_controls(&mut self, event: FollowupControlEvent) {
+    pub(super) fn dispatch_auto_follow_controls(&mut self, event: AutoFollowControlEvent) {
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        let reduction = reduce_followup_controls(conversation, event);
+        let reduction = reduce_auto_follow_controls(conversation, event);
         self.conversation_state = ConversationState::ready(reduction.state);
         if !self.is_max_auto_turns_editing() {
-            self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::MaxAutoTurnsValueSynced {
-                value: self.current_max_auto_turns_label(),
-            });
+            self.dispatch_auto_follow_overlay_ui(
+                AutoFollowOverlayUiEvent::MaxAutoTurnsValueSynced {
+                    value: self.current_max_auto_turns_label(),
+                },
+            );
         }
         for effect in reduction.effects {
-            self.execute_followup_control_effect(effect);
+            self.execute_auto_follow_control_effect(effect);
         }
     }
 
-    fn execute_followup_control_effect(&mut self, effect: FollowupControlEffect) {
+    fn execute_auto_follow_control_effect(&mut self, effect: AutoFollowControlEffect) {
         match effect {
-            FollowupControlEffect::OverlayUi => {
-                self.dispatch_followup_overlay_ui(FollowupOverlayUiEvent::ContentReset {
+            AutoFollowControlEffect::OverlayUi => {
+                self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
                     max_auto_turns: self.current_max_auto_turns_label(),
                 });
             }
-            FollowupControlEffect::MaxAutoTurnsEditor { value } => {
-                self.dispatch_followup_overlay_ui(
-                    FollowupOverlayUiEvent::MaxAutoTurnsEditCommitted {
+            AutoFollowControlEffect::MaxAutoTurnsEditor { value } => {
+                self.dispatch_auto_follow_overlay_ui(
+                    AutoFollowOverlayUiEvent::MaxAutoTurnsEditCommitted {
                         current_value: value,
                     },
                 );
@@ -447,8 +449,8 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn dispatch_followup_overlay_ui(&mut self, event: FollowupOverlayUiEvent) {
-        let state = std::mem::take(&mut self.followup_overlay_ui_state);
-        self.followup_overlay_ui_state = reduce_followup_overlay_ui(state, event);
+    pub(super) fn dispatch_auto_follow_overlay_ui(&mut self, event: AutoFollowOverlayUiEvent) {
+        let state = std::mem::take(&mut self.auto_follow_overlay_ui_state);
+        self.auto_follow_overlay_ui_state = reduce_auto_follow_overlay_ui(state, event);
     }
 }
