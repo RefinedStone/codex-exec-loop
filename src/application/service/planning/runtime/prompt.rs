@@ -312,7 +312,7 @@ impl PlanningRuntimeSnapshot {
     pub fn queue_is_drained(&self) -> bool {
         /*
          * Drained is narrower than "no queue head". Review-and-enqueue may
-         * temporarily have no head while the planner derives work, and blocked or
+         * temporarily have no head while the planning worker derives work, and blocked or
          * awaiting-user tasks still mean work remains. Only an empty/proposal-free
          * ready queue whose remaining skipped tasks are terminal counts as all
          * accepted work being finished.

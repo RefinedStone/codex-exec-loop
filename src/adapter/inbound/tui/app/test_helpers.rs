@@ -94,7 +94,7 @@ pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
     proposal_summary: &str,
 ) -> PlanningRuntimeSnapshot {
     /*
-     * Proposal-only state is distinct from an empty queue: the planner has candidate work, but no
+     * Proposal-only state is distinct from an empty queue: the planning worker has candidate work, but no
      * actionable head. Rendering tests use this to ensure proposal copy does not masquerade as a
      * runnable task and that planning notices still surface without active work.
      */

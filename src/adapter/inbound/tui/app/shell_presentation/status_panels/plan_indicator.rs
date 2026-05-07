@@ -72,7 +72,7 @@ fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Plan
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
             | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "Plan ready",
         },
-        // Always include detail so repeated footer scans expose pause and queue readiness without opening the planner popup.
+        // Always include detail so repeated footer scans expose pause and queue readiness without opening the planning popup.
         detail_label: Some(plan_runtime_substate_label(snapshot)),
         // Reserve danger for invalid workspace state; pause and idle are operational states rather than hard failures.
         style: if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {

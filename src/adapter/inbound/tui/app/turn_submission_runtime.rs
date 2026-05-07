@@ -421,7 +421,7 @@ mod prompt_submit_diagnostics_tests {
     #[test]
     fn user_prompt_submit_detail_keeps_operator_text_and_final_prompt() {
         let detail = user_prompt_submit_detail(
-            "planner wrapper\noperator text",
+            "final wrapper\noperator text",
             "operator text",
             &PromptOrigin::Manual,
             true,
@@ -430,8 +430,8 @@ mod prompt_submit_diagnostics_tests {
         assert_eq!(detail["origin"], "Manual");
         assert_eq!(detail["transcript_text"], "operator text");
         assert_eq!(detail["transcript_text_len"], 13);
-        assert_eq!(detail["prompt"], "planner wrapper\noperator text");
-        assert_eq!(detail["prompt_len"], 29);
+        assert_eq!(detail["prompt"], "final wrapper\noperator text");
+        assert_eq!(detail["prompt_len"], 27);
         assert_eq!(detail["parallel_mode_enabled"], true);
     }
 }

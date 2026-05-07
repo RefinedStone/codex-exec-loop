@@ -54,7 +54,7 @@ fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
     let detail_line = with_debug
         .iter()
         .find(|line: &&Line<'static>| line.to_string().contains("planning worker temp session"))
-        .expect("debug transcript should include the planner detail line");
+        .expect("debug transcript should include the planning worker detail line");
 
     assert_eq!(
         detail_line.to_string(),

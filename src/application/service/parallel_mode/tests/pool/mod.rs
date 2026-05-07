@@ -2,10 +2,10 @@ use super::*;
 use std::collections::BTreeSet;
 use std::sync::Barrier;
 
-// 디스패치 계획 테스트는 실제 planner 전체를 띄우지 않고도 큐 우선순위와
+// 디스패치 계획 테스트는 실제 planning worker 전체를 띄우지 않고도 큐 우선순위와
 // `next_task` 파생값이 같은 입력에서 만들어졌는지만 검증하면 충분하다.
 // 이 helper는 활성 task 목록을 그대로 rank 순서의 ready snapshot으로 접어,
-// pool 서비스가 planner snapshot을 소비하는 경계만 작게 고정한다.
+// pool 서비스가 planning snapshot을 소비하는 경계만 작게 고정한다.
 fn planning_snapshot_with_active_tasks(task_ids: &[&str]) -> PlanningRuntimeSnapshot {
     let active_tasks = task_ids
         .iter()
@@ -55,7 +55,7 @@ fn unavailable_pool_board_does_not_report_exhausted() {
     assert!(!pool.exhausted);
 }
 
-// dispatcher는 planner queue가 더 많은 task를 제안해도 idle slot 수만큼만 후보를
+// dispatcher는 planning queue가 더 많은 task를 제안해도 idle slot 수만큼만 후보를
 // 내보내야 한다. 이 테스트는 기본 pool 크기와 active task 순서가 candidate
 // truncation의 기준으로 유지되는지 확인한다.
 #[test]

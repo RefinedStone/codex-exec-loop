@@ -312,7 +312,7 @@ mod tests {
          */
         let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
             events: vec![ConversationStreamEvent::Failed {
-                message: "planner crashed".to_string(),
+                message: "planning worker crashed".to_string(),
             }],
             calls: Mutex::new(Vec::new()),
         }));
@@ -325,6 +325,6 @@ mod tests {
             })
             .expect_err("failed stream should surface as error");
 
-        assert!(error.to_string().contains("planner crashed"));
+        assert!(error.to_string().contains("planning worker crashed"));
     }
 }

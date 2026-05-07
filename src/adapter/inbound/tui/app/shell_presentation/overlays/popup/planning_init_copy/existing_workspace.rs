@@ -29,10 +29,10 @@ pub(super) fn build_existing_workspace_overlay_view(
             ),
         ],
         // summary는 왜 queue inspection이 primary action인지 설명한다. accepted planning은
-        // hidden planner session의 structured payload를 통해 DB task authority를 갱신하므로,
+        // hidden planning worker session의 structured payload를 통해 DB task authority를 갱신하므로,
         // 사용자는 scaffold 생성보다 runtime queue 상태를 봐야 한다.
         summary_lines: vec![Line::from(
-            "Hidden planner sessions update DB task authority through structured payloads.",
+            "Hidden planning worker sessions update DB task authority through structured payloads.",
         )],
         // option lines는 선택지가 아니라 현재 workspace fact sheet다. path, planning substate,
         // queue summary, idle policy를 한 곳에 두어 사용자가 어느 runtime을 관리할지 확인한다.

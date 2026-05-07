@@ -11,7 +11,7 @@ use super::tail_copy::{
 // It keeps text lines, cursor placement, and startup anchoring together so rendering uses one coherent snapshot.
 #[derive(Clone)]
 pub(crate) struct InlineTailView {
-    // Status, notice, planner, and prompt lines in final draw order.
+    // Status, notice, planning detail, and prompt lines in final draw order.
     pub(crate) lines: Vec<Line<'static>>,
     // Cursor offset relative to the tail area; None means the renderer should not move the terminal cursor.
     pub(crate) prompt_cursor_offset: Option<(u16, u16)>,

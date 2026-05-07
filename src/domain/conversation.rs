@@ -24,7 +24,7 @@ pub struct ConversationMessage {
     pub kind: ConversationMessageKind,
     // text는 사용자가 보는 본문이다. debug_detail과 분리해 기본 transcript를 과하게 늘리지 않는다.
     pub text: String,
-    // debug_detail은 planner/debug mode에서만 보이는 보조 설명으로, 기본 사용자 copy와 분리된다.
+    // debug_detail은 debug visibility mode에서만 보이는 보조 설명으로, 기본 사용자 copy와 분리된다.
     pub debug_detail: Option<String>,
     // phase는 app-server item lifecycle 단계이다. streaming/reduction 계층이 상태 message를 묶는 단서로 쓴다.
     pub phase: Option<String>,

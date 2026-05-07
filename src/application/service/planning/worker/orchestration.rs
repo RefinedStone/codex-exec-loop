@@ -522,7 +522,7 @@ impl PlanningWorkerOrchestrationService {
         let mut notices = reconciliation_result.notices;
         if let Some(worker_summary) = worker_summary.as_deref() {
             notices.push(format!(
-                "planner {} summary: {}",
+                "planning worker {} summary: {}",
                 operation_label(operation),
                 worker_summary
             ));
