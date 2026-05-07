@@ -7,6 +7,9 @@
 use askama::Template;
 
 use super::akra_dashboard::AkraAdminDashboardView;
+use crate::application::service::parallel_agent_persona::{
+    ParallelAgentPersonaConfig, ParallelAgentPersonaOption,
+};
 use crate::application::service::planning::{
     PlanningAdminManagementView, PlanningAdminOverview, PlanningAdminSessionView,
 };
@@ -81,6 +84,8 @@ pub(super) struct ControlsTemplate {
     pub(super) notice: Option<String>,
     // button availability, destructive-action context, current runtime 설명에는 overview projection만 있으면 충분하다.
     pub(super) overview: PlanningAdminOverview,
+    pub(super) persona_config: ParallelAgentPersonaConfig,
+    pub(super) persona_options: Vec<ParallelAgentPersonaOption>,
 }
 
 // editor는 session-scoped 화면이다. draft file, validation, queue preview, active file state가 하나의 read model로 이동한다.

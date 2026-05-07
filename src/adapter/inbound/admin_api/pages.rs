@@ -1,6 +1,6 @@
 use super::forms::{
     CreateDraftForm, DirectionMutationForm, DraftMutationForm, EditorQuery, FileSyncForm,
-    IdDeleteForm, ResetForm, TaskMutationForm,
+    IdDeleteForm, ParallelPersonaForm, ResetForm, TaskMutationForm,
 };
 use super::helpers::{
     encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
@@ -12,12 +12,17 @@ use super::views::{
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
+use crate::application::service::parallel_agent_persona::{
+    ParallelAgentPersona, ParallelAgentPersonaConfig, load_parallel_agent_persona_config,
+    save_parallel_agent_persona_config,
+};
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
     PlanningAdminDraftMutationRequest, PlanningAdminFileKey, PlanningAdminSessionView,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
+use anyhow::anyhow;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -295,6 +300,8 @@ pub(super) async fn controls_page(
         .facade
         .load_overview()
         .map_err(internal_server_error)?;
+    let persona_config = load_parallel_agent_persona_config(state.facade.workspace_dir())
+        .map_err(|error| internal_server_error(anyhow!(error)))?;
     render_html(
         jar,
         ControlsTemplate {
@@ -304,8 +311,30 @@ pub(super) async fn controls_page(
             csrf_token,
             notice: query.get("notice").cloned(),
             overview,
+            persona_config,
+            persona_options: ParallelAgentPersonaConfig::options(),
         },
     )
+}
+
+pub(super) async fn update_parallel_persona_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<ParallelPersonaForm>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_form_csrf(&jar, &form.csrf_token)?;
+    let persona =
+        ParallelAgentPersona::from_form_value(&form.persona).ok_or(StatusCode::BAD_REQUEST)?;
+    save_parallel_agent_persona_config(
+        state.facade.workspace_dir(),
+        &ParallelAgentPersonaConfig::new(persona),
+    )
+    .map_err(|error| internal_server_error(anyhow!(error)))?;
+    Ok(Redirect::to(&notice_location(
+        "/admin/controls",
+        &format!("parallel agent persona set to {}", persona.label()),
+    ))
+    .into_response())
 }
 
 pub(super) async fn editor_page(

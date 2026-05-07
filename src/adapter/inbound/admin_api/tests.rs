@@ -287,3 +287,12 @@ fn risky_admin_mutations_require_browser_confirmation() {
     assert_eq!(EDITOR_TEMPLATE.matches("data-confirm=").count(), 1);
     assert_eq!(TASKS_TEMPLATE.matches("data-confirm=").count(), 2);
 }
+
+#[test]
+fn controls_page_exposes_parallel_agent_persona_selector() {
+    assert!(CONTROLS_TEMPLATE.contains("Parallel Agent Persona"));
+    assert!(CONTROLS_TEMPLATE.contains("name=\"persona\""));
+    assert!(CONTROLS_TEMPLATE.contains("No persona prompt will be injected."));
+    assert!(ADMIN_MOD.contains("\"/admin/controls/parallel-persona\""));
+    assert!(ADMIN_MOD.contains("update_parallel_persona_page"));
+}

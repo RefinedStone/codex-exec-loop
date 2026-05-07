@@ -68,6 +68,12 @@ pub(super) struct ResetForm {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(super) struct ParallelPersonaForm {
+    pub(super) csrf_token: String,
+    pub(super) persona: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(super) struct DirectionMutationForm {
     pub(super) csrf_token: String,
     /*

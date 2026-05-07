@@ -25,6 +25,36 @@
   </article>
 
   <article class="card span-6">
+    <h2>Parallel Agent Persona</h2>
+    <p>Default is None, so parallel workers receive no extra persona prompt unless this is changed.</p>
+    <form method="post" action="/admin/controls/parallel-persona" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Persona
+        <select name="persona">
+          {% for option in persona_options %}
+          <option value="{{ option.value }}"{% if persona_config.persona.form_value() == option.value %} selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p>
+        {% for option in persona_options %}
+          {% if persona_config.persona.form_value() == option.value %}
+            {% if option.prompt_preview.is_empty() %}
+              No persona prompt will be injected.
+            {% else %}
+              {{ option.prompt_preview }}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      </p>
+      <div class="actions">
+        <button type="submit" class="secondary">Save Persona</button>
+      </div>
+    </form>
+  </article>
+
+  <article class="card span-6">
     <h2>Reset</h2>
     <p>Reset targets run through the existing planning services and keep the current contract checks.</p>
     <div class="stack">

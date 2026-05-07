@@ -5,6 +5,9 @@ use std::thread;
 
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
+use crate::application::service::parallel_agent_persona::{
+    ParallelAgentPersona, load_parallel_agent_persona_config,
+};
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
     ParallelModeOrchestratorTrigger, ParallelModeService,
@@ -1096,13 +1099,16 @@ fn dispatch_parallel_queue_pool(
 
     let mut launched_titles = Vec::new();
     let mut blocked_details = Vec::new();
+    let persona = load_parallel_agent_persona_config(workspace_directory)
+        .map(|config| config.persona)
+        .unwrap_or(ParallelAgentPersona::None);
     for task in dispatch_plan.candidates {
         // Handoff creation belongs to planning runtime because it knows how
         // to turn a queue task into sub-session prompt text and task identity.
         let handoff = context
             .planning
             .runtime
-            .build_sub_session_task_handoff(&task);
+            .build_sub_session_task_handoff_with_persona(&task, persona);
         let lease_request = parallel_mode_slot_lease_request(&handoff.task);
         match context
             .parallel_mode_service

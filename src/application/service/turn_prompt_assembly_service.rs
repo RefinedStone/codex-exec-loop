@@ -1,3 +1,4 @@
+use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
 use crate::application::service::prompt_component::PromptDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub struct MainSessionPromptAssemblyRequest<'a> {
 pub struct SubSessionPromptAssemblyRequest<'a> {
     // distributor가 만든 queued-task handoff 원문이다. 이 값이 sub-session의 유일한 작업 범위이다.
     pub handoff_prompt: &'a str,
+    // admin surface에서 선택한 병렬 agent 페르소나다. None이면 아무 페르소나 프롬프트도 주입하지 않는다.
+    pub persona: ParallelAgentPersona,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,14 +90,23 @@ fn sub_session_reporting_contract_lines() -> Vec<String> {
     vec!["최종 답변에는 변경 요약, 검증 결과, 남은 작업만 간결하게 포함하세요.".to_string()]
 }
 
-fn sub_session_developer_instructions() -> String {
-    [
+fn sub_session_developer_instructions(persona: ParallelAgentPersona) -> String {
+    let mut lines = vec![
         "You are an Akra parallel task sub-session running in a leased worktree.",
         "Execute only the queued-task handoff supplied in the turn prompt.",
         "Keep changes scoped to that task and leave a small reviewable commit when source changes are needed.",
         "Do not push, open pull requests, merge, rebase shared branches, or clean up the worktree; Akra distributor handles delivery after completion.",
     ]
-    .join("\n")
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    let persona_lines = persona.prompt_lines();
+    if !persona_lines.is_empty() {
+        lines.push(String::new());
+        lines.push("Persona prompt:".to_string());
+        lines.extend(persona_lines);
+    }
+    lines.join("\n")
 }
 
 fn sub_session_service_name() -> String {
@@ -164,8 +176,8 @@ impl TurnPromptAssemblyService {
         }
 
         Some(SubSessionPromptAssembly {
-            turn_prompt: render_sub_session_prompt(handoff_prompt),
-            developer_instructions: sub_session_developer_instructions(),
+            turn_prompt: render_sub_session_prompt(handoff_prompt, request.persona),
+            developer_instructions: sub_session_developer_instructions(request.persona),
             service_name: sub_session_service_name(),
         })
     }
@@ -196,7 +208,7 @@ fn render_main_session_prompt(
 // sub-session prompt의 문자열 레이아웃이다. main-session과 달리 runtime context를 따로 받지 않고,
 // `queued-task-handoff` 하나만 작업 범위로 전달한다.
 #[tracing::instrument(level = "trace")]
-fn render_sub_session_prompt(handoff_prompt: &str) -> String {
+fn render_sub_session_prompt(handoff_prompt: &str, persona: ParallelAgentPersona) -> String {
     /*
      * sub-session rendering에는 의도적으로 runtime-context slot이 없다.
      * 유일한 task body는 queued handoff이므로, parallel worker가 ambient main-session context를 leased-worktree scope에
@@ -205,6 +217,7 @@ fn render_sub_session_prompt(handoff_prompt: &str) -> String {
     PromptDocument::builder("akra-sub-session-turn")
         .lines("execution-contract", sub_session_execution_contract_lines())
         .lines("delivery-boundary", sub_session_delivery_boundary_lines())
+        .lines("persona-prompt", persona.prompt_lines())
         .lines("reporting-contract", sub_session_reporting_contract_lines())
         .text("queued-task-handoff", handoff_prompt)
         .build()
@@ -213,6 +226,8 @@ fn render_sub_session_prompt(handoff_prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
+
     use super::{
         MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest,
         SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
@@ -279,6 +294,7 @@ mod tests {
 
         let prompt = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
             handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
+            persona: ParallelAgentPersona::None,
         });
 
         let assembly = prompt.expect("sub-session prompt should render");
@@ -292,6 +308,7 @@ mod tests {
             )
         );
         assert!(!rendered.contains("[runtime-context]"));
+        assert!(!rendered.contains("[persona-prompt]"));
         assert_eq!(assembly.service_name, "akra-parallel-worker");
         assert!(
             assembly
@@ -299,5 +316,31 @@ mod tests {
                 .contains("parallel task sub-session")
         );
         assert!(assembly.developer_instructions.contains("Do not push"));
+        assert!(!assembly.developer_instructions.contains("Persona prompt:"));
+    }
+
+    #[test]
+    // admin에서 sample persona를 고른 경우에만 sub-session prompt와 developer metadata에 같은 응집 프롬프트를 주입한다.
+    fn sub_session_prompt_includes_selected_persona_prompt() {
+        let service = TurnPromptAssemblyService::new();
+
+        let prompt = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
+            handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
+            persona: ParallelAgentPersona::Sample,
+        });
+
+        let assembly = prompt.expect("sub-session prompt should render");
+        assert!(assembly.turn_prompt.contains("[persona-prompt]"));
+        assert!(
+            assembly
+                .turn_prompt
+                .contains("You are a careful implementation agent.")
+        );
+        assert!(assembly.developer_instructions.contains("Persona prompt:"));
+        assert!(
+            assembly
+                .developer_instructions
+                .contains("Prefer the smallest coherent change")
+        );
     }
 }
