@@ -26,7 +26,7 @@ where
         decision,
     );
     if let Some(runtime) = runtime {
-        detail.insert("runtime".to_string(), planning_snapshot_log_detail(runtime));
+        detail.insert("runtime".to_string(), runtime_snapshot_log_detail(runtime));
     }
     extend_detail(&mut detail, fields);
     Value::Object(detail)
@@ -73,7 +73,7 @@ where
         decision,
     );
     if let Some(runtime) = runtime {
-        detail.insert("runtime".to_string(), planning_snapshot_log_detail(runtime));
+        detail.insert("runtime".to_string(), runtime_snapshot_log_detail(runtime));
     }
     extend_detail(&mut detail, fields);
     Value::Object(detail)
@@ -126,7 +126,7 @@ where
     }
 }
 
-pub(super) fn planning_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) -> Value {
+pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) -> Value {
     let queue_head = snapshot.queue_head().map(|task| {
         json!({
             "task_id": task.task_id,
@@ -214,8 +214,8 @@ mod tests {
     }
 
     #[test]
-    fn planning_snapshot_log_detail_keeps_runtime_summary_shape_stable() {
-        let detail = planning_snapshot_log_detail(&PlanningRuntimeSnapshot::invalid(
+    fn runtime_snapshot_log_detail_keeps_runtime_summary_shape_stable() {
+        let detail = runtime_snapshot_log_detail(&PlanningRuntimeSnapshot::invalid(
             "planning state unavailable",
         ));
 

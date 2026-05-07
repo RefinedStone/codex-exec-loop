@@ -272,7 +272,7 @@ impl PostTurnEvaluationExecutor {
         };
         if capture.workspace_directory != request.workspace_directory {
             return blocked_reconciliation_result(format!(
-                "planning reconciliation ignored a stale planning snapshot captured for {} while the completed turn resolved in {}",
+                "planning reconciliation ignored a stale execution snapshot captured for {} while the completed turn resolved in {}",
                 capture.workspace_directory, request.workspace_directory
             ));
         }
