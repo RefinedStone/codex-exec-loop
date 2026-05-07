@@ -5,9 +5,10 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeDispatchBlockReason, ParallelModeOrchestratorState,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolResetReport, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
+    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
+    ParallelModePoolResetReport, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot,
     ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
@@ -509,6 +510,92 @@ impl ParallelModeService {
         })
     }
 
+    pub fn enqueue_dispatch_commands_for_event(
+        &self,
+        workspace_dir: &str,
+        event: ParallelModeRuntimeEvent,
+        planning_snapshot: &PlanningRuntimeSnapshot,
+        epoch_id: Option<u64>,
+    ) -> Result<usize, String> {
+        if event == ParallelModeRuntimeEvent::ModeDisabled {
+            return self
+                .planning_authority
+                .cancel_runtime_dispatch_commands(workspace_dir, "parallel mode disabled")
+                .map_err(|error| error.to_string());
+        }
+        let queue_head_signature = planning_snapshot
+            .queue_head_task_signature()
+            .map(|signature| signature.to_string())
+            .or_else(|| {
+                planning_snapshot
+                    .queue_head()
+                    .map(|task| task.task_id.clone())
+            });
+        let commands = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+            true,
+            event,
+            planning_snapshot.has_actionable_queue_head(),
+            queue_head_signature,
+            epoch_id,
+            current_timestamp(),
+        );
+        let mut inserted = 0;
+        for command in commands {
+            if self
+                .planning_authority
+                .enqueue_runtime_dispatch_command(workspace_dir, &command)
+                .map_err(|error| error.to_string())?
+            {
+                inserted += 1;
+            }
+        }
+        Ok(inserted)
+    }
+
+    pub fn claim_next_dispatch_command(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<ParallelModeDispatchCommandSnapshot>, String> {
+        self.planning_authority
+            .try_claim_next_runtime_dispatch_command(workspace_dir, &dispatch_command_owner_token())
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn pending_dispatch_command_count(&self, workspace_dir: &str) -> Result<usize, String> {
+        let snapshot = self
+            .planning_authority
+            .load_runtime_projections(workspace_dir)
+            .map_err(|error| error.to_string())?;
+        Ok(snapshot
+            .dispatch_commands
+            .iter()
+            .filter(|command| {
+                command.state
+                    == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Pending
+            })
+            .count())
+    }
+
+    pub fn update_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<(), String> {
+        self.planning_authority
+            .update_runtime_dispatch_command(workspace_dir, command)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn cancel_dispatch_commands(
+        &self,
+        workspace_dir: &str,
+        reason: &str,
+    ) -> Result<usize, String> {
+        self.planning_authority
+            .cancel_runtime_dispatch_commands(workspace_dir, reason)
+            .map_err(|error| error.to_string())
+    }
+
     /*
     orchestrator tick은 distributor queue head를 한 번 진행시키는 public entry다. queue 처리 전에
     integration worktree blocker를 먼저 검사한다. integration branch가 아니거나 dirty하면
@@ -545,6 +632,14 @@ impl ParallelModeService {
             notices,
         })
     }
+}
+
+fn dispatch_command_owner_token() -> String {
+    format!(
+        "pid={} created_at={}",
+        std::process::id(),
+        current_timestamp()
+    )
 }
 
 /*

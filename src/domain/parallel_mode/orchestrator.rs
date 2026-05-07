@@ -32,7 +32,8 @@ pub enum ParallelModeOrchestratorState {
     IntegrationBlocked,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ParallelModeAutomationTrigger {
     MainTurnPostEvaluation,
     ParallelOfficialCompletion,
@@ -80,6 +81,169 @@ impl ParallelModePostTurnQueueDecision {
                 ..
             } => consume_auto_follow_prompt,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeRuntimeEvent {
+    AutoFollowQueued,
+    ParallelCompletionFinalized,
+    TaskIntakeCommitted,
+    SlotCapacityAvailable,
+    ModeDisabled,
+}
+
+impl ParallelModeRuntimeEvent {
+    fn dispatch_trigger(self) -> Option<ParallelModeAutomationTrigger> {
+        match self {
+            Self::AutoFollowQueued => Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation),
+            Self::ParallelCompletionFinalized => {
+                Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion)
+            }
+            Self::TaskIntakeCommitted | Self::SlotCapacityAvailable => {
+                Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
+            }
+            Self::ModeDisabled => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelModeDispatchCommandKind {
+    DispatchReadyQueue,
+}
+
+impl ParallelModeDispatchCommandKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DispatchReadyQueue => "dispatch_ready_queue",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "dispatch_ready_queue" => Some(Self::DispatchReadyQueue),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelModeDispatchCommandState {
+    Pending,
+    Running,
+    Completed,
+    Blocked,
+    Canceled,
+}
+
+impl ParallelModeDispatchCommandState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Blocked => "blocked",
+            Self::Canceled => "canceled",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "pending" => Some(Self::Pending),
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "blocked" => Some(Self::Blocked),
+            "canceled" => Some(Self::Canceled),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeDispatchCommandSnapshot {
+    pub command_id: String,
+    pub kind: ParallelModeDispatchCommandKind,
+    pub trigger: ParallelModeAutomationTrigger,
+    pub state: ParallelModeDispatchCommandState,
+    #[serde(default)]
+    pub queue_head_signature: Option<String>,
+    #[serde(default)]
+    pub epoch_id: Option<u64>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub owner_token: Option<String>,
+    #[serde(default)]
+    pub status_detail: Option<String>,
+}
+
+impl ParallelModeDispatchCommandSnapshot {
+    pub fn dispatch_ready_queue(
+        trigger: ParallelModeAutomationTrigger,
+        queue_head_signature: Option<String>,
+        epoch_id: Option<u64>,
+        timestamp: impl Into<String>,
+    ) -> Self {
+        let timestamp = timestamp.into();
+        Self {
+            command_id: dispatch_ready_queue_command_id(queue_head_signature.as_deref()),
+            kind: ParallelModeDispatchCommandKind::DispatchReadyQueue,
+            trigger,
+            state: ParallelModeDispatchCommandState::Pending,
+            queue_head_signature,
+            epoch_id,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+            owner_token: None,
+            status_detail: None,
+        }
+    }
+
+    pub fn mark_running(&mut self, owner_token: impl Into<String>, timestamp: impl Into<String>) {
+        self.state = ParallelModeDispatchCommandState::Running;
+        self.owner_token = Some(owner_token.into());
+        self.updated_at = timestamp.into();
+    }
+
+    pub fn mark_completed(
+        &mut self,
+        status_detail: impl Into<String>,
+        timestamp: impl Into<String>,
+    ) {
+        self.state = ParallelModeDispatchCommandState::Completed;
+        self.owner_token = None;
+        self.status_detail = Some(status_detail.into());
+        self.updated_at = timestamp.into();
+    }
+
+    pub fn mark_blocked(&mut self, status_detail: impl Into<String>, timestamp: impl Into<String>) {
+        self.state = ParallelModeDispatchCommandState::Blocked;
+        self.owner_token = None;
+        self.status_detail = Some(status_detail.into());
+        self.updated_at = timestamp.into();
+    }
+
+    pub fn mark_canceled(
+        &mut self,
+        status_detail: impl Into<String>,
+        timestamp: impl Into<String>,
+    ) {
+        self.state = ParallelModeDispatchCommandState::Canceled;
+        self.owner_token = None;
+        self.status_detail = Some(status_detail.into());
+        self.updated_at = timestamp.into();
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.state,
+            ParallelModeDispatchCommandState::Completed
+                | ParallelModeDispatchCommandState::Blocked
+                | ParallelModeDispatchCommandState::Canceled
+        )
     }
 }
 
@@ -290,6 +454,31 @@ impl ParallelModeOrchestratorStateMachine {
         }
     }
 
+    pub fn runtime_dispatch_commands(
+        parallel_mode_enabled: bool,
+        event: ParallelModeRuntimeEvent,
+        has_actionable_queue_head: bool,
+        queue_head_signature: Option<String>,
+        epoch_id: Option<u64>,
+        timestamp: impl Into<String>,
+    ) -> Vec<ParallelModeDispatchCommandSnapshot> {
+        if !parallel_mode_enabled || event == ParallelModeRuntimeEvent::ModeDisabled {
+            return Vec::new();
+        }
+        if !has_actionable_queue_head && event != ParallelModeRuntimeEvent::AutoFollowQueued {
+            return Vec::new();
+        }
+        let Some(trigger) = event.dispatch_trigger() else {
+            return Vec::new();
+        };
+        vec![ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+            trigger,
+            queue_head_signature,
+            epoch_id,
+            timestamp,
+        )]
+    }
+
     pub fn tick_state(integration_worktree_blocked: bool) -> ParallelModeOrchestratorState {
         if integration_worktree_blocked {
             ParallelModeOrchestratorState::IntegrationBlocked
@@ -297,4 +486,12 @@ impl ParallelModeOrchestratorStateMachine {
             ParallelModeOrchestratorState::Supervising
         }
     }
+}
+
+fn dispatch_ready_queue_command_id(queue_head_signature: Option<&str>) -> String {
+    let signature = queue_head_signature
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    format!("dispatch-ready-queue-{signature}")
 }

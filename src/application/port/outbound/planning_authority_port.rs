@@ -12,9 +12,9 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::Pa
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeDistributorQueueItem,
-    ParallelModePoolResetReport, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDistributorQueueItem, ParallelModePoolResetReport, ParallelModeQueueItemState,
+    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
 };
 #[cfg(test)]
 use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
@@ -221,6 +221,8 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
     pub task_dispatch_blocks: Vec<ParallelModeTaskDispatchBlockSnapshot>,
     // Queue records still pending, blocked, or otherwise visible to distributor.
     pub distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
+    // Durable orchestrator dispatch commands waiting to assign planning queue work to slots.
+    pub dispatch_commands: Vec<ParallelModeDispatchCommandSnapshot>,
     // Recent append-only runtime events, newest first and bounded by the adapter.
     pub runtime_events: Vec<PlanningAuthorityRuntimeEventRecord>,
 }
@@ -329,6 +331,30 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         // Authority namespace to read.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot>;
+
+    // Insert a pending dispatch command if the same command id is not already stored.
+    fn enqueue_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<bool>;
+
+    // Claim the oldest pending dispatch command so only one scheduler executes it.
+    fn try_claim_next_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        owner_token: &str,
+    ) -> Result<Option<ParallelModeDispatchCommandSnapshot>>;
+
+    // Store the latest state for a dispatch command after execution, block, or cancel.
+    fn update_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<()>;
+
+    // Cancel all non-terminal dispatch commands for mode-off or recovery boundaries.
+    fn cancel_runtime_dispatch_commands(&self, workspace_dir: &str, reason: &str) -> Result<usize>;
 
     // Clear current parallel runtime rows when the disposable pool is reset on enable.
     fn clear_parallel_runtime_projections(&self, workspace_dir: &str, reason: &str) -> Result<()>;
@@ -519,6 +545,38 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
         Ok(PlanningAuthorityRuntimeProjectionSnapshot::default())
+    }
+
+    fn enqueue_runtime_dispatch_command(
+        &self,
+        _workspace_dir: &str,
+        _command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn try_claim_next_runtime_dispatch_command(
+        &self,
+        _workspace_dir: &str,
+        _owner_token: &str,
+    ) -> Result<Option<ParallelModeDispatchCommandSnapshot>> {
+        Ok(None)
+    }
+
+    fn update_runtime_dispatch_command(
+        &self,
+        _workspace_dir: &str,
+        _command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn cancel_runtime_dispatch_commands(
+        &self,
+        _workspace_dir: &str,
+        _reason: &str,
+    ) -> Result<usize> {
+        Ok(0)
     }
 
     // No runtime store exists in the fallback, so clearing is a no-op.

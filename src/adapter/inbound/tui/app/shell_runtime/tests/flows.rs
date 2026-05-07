@@ -12,12 +12,14 @@ use crate::application::service::planning::task_tool::{
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-    ParallelModeCapabilityState, ParallelModeDispatchBlockReason, ParallelModeDistributorSnapshot,
-    ParallelModeLiveSessionDetailDefaults, ParallelModePoolBoardSnapshot,
-    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeCapabilityState, ParallelModeDispatchBlockReason,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
+    ParallelModeDistributorSnapshot, ParallelModeLiveSessionDetailDefaults,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::TaskStatus;
 use anyhow::Result;
@@ -1117,6 +1119,49 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
     assert!(
         requests[0].cwd.contains("slot-"),
         "ready queue head should dispatch into a pool slot: {requests:?}"
+    );
+    let projections = harness.runtime_projections();
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
+    );
+}
+
+#[test]
+fn pending_durable_dispatch_command_polls_without_visible_activity_pulse() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-pending-dispatch-command-poll");
+    let commit = harness.committed_ready_task("pending durable command should dispatch");
+    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
+        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
+        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+    assert!(!harness.runtime.app().parallel_mode_activity_pulse_visible());
+
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        Some(commit.committed_task_id),
+        Some(1),
+        Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+    );
+    harness
+        .authority
+        .enqueue_runtime_dispatch_command(&harness.workspace_dir, &command)
+        .expect("pending durable command should persist");
+
+    harness.poll_until_worker_launches(1);
+    harness.poll_until_dispatch_idle();
+
+    let projections = harness.runtime_projections();
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
     );
 }
 

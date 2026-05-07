@@ -16,8 +16,7 @@ const SPRITE_SERVER_RACK: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/sprite_server_rack.png");
 const SPRITE_WHITEBOARD: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/sprite_whiteboard.png");
-const SPRITE_SOFA: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_sofa.png");
+const SPRITE_SOFA: &[u8] = include_bytes!("../../../../assets/admin/graphics/sprite_sofa.png");
 const SPRITE_POTTED_PLANT: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/sprite_potted_plant.png");
 const SPRITE_AGENT_SITTING: &[u8] =

@@ -1,3 +1,4 @@
+use chrono::Utc;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -15,10 +16,11 @@ use crate::application::service::parallel_mode::{
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger, ParallelModeDispatchOutcome,
+    ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchOutcome,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStateMachine,
     ParallelModePoolBoardSnapshot, ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
-    ParallelModeReadinessSnapshot, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
@@ -659,6 +661,10 @@ impl NativeTuiApp {
     }
 
     fn close_parallel_mode_automation_epoch(&mut self) {
+        let workspace_directory = self.planning_workspace_directory();
+        let _ = self
+            .parallel_mode_service
+            .cancel_dispatch_commands(&workspace_directory, "parallel mode disabled");
         let epoch_id = self.parallel_mode_automation_epoch_id.take();
         self.pending_parallel_mode_dispatch_trigger = None;
         self.last_parallel_mode_dispatch_withheld_reason = None;
@@ -718,7 +724,12 @@ impl NativeTuiApp {
                 "epoch_id": epoch_id,
             })
         });
-        self.spawn_parallel_mode_dispatch_refresh_worker(workspace_directory, trigger, epoch_id);
+        self.spawn_parallel_mode_dispatch_refresh_worker(
+            workspace_directory,
+            trigger,
+            epoch_id,
+            Some(trigger),
+        );
     }
 
     pub(super) fn apply_parallel_mode_dispatch_request(
@@ -752,6 +763,47 @@ impl NativeTuiApp {
         self.request_parallel_mode_dispatch(workspace_directory, trigger);
     }
 
+    pub(super) fn maybe_spawn_parallel_mode_pending_dispatch_command(&mut self) -> bool {
+        if !self.parallel_mode_enabled() || self.parallel_mode_automation_epoch_id.is_none() {
+            return false;
+        }
+        if self.parallel_mode_dispatch_refresh_should_defer()
+            || self.parallel_mode_dispatch_refresh_in_flight
+        {
+            return false;
+        }
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .parallel_mode_service
+            .pending_dispatch_command_count(&workspace_directory)
+        {
+            Ok(0) => false,
+            Ok(_) => {
+                let epoch_id = self
+                    .parallel_mode_automation_epoch_id
+                    .expect("checked automation epoch should exist");
+                self.parallel_mode_dispatch_refresh_in_flight = true;
+                self.last_parallel_mode_automation_trigger =
+                    Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch);
+                self.last_parallel_mode_dispatch_withheld_reason = None;
+                self.spawn_parallel_mode_dispatch_refresh_worker(
+                    workspace_directory,
+                    ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                    epoch_id,
+                    None,
+                );
+                true
+            }
+            Err(error) => {
+                self.record_parallel_mode_dispatch_withheld(
+                    Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+                    &format!("pending dispatch command poll failed: {error}"),
+                );
+                false
+            }
+        }
+    }
+
     fn record_parallel_mode_dispatch_withheld(
         &mut self,
         trigger: Option<ParallelModeAutomationTrigger>,
@@ -774,6 +826,7 @@ impl NativeTuiApp {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
+        enqueue_trigger: Option<ParallelModeAutomationTrigger>,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
@@ -789,17 +842,72 @@ impl NativeTuiApp {
                 parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
 
             let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
-                let outcome = dispatch_parallel_queue_pool(ParallelModeDispatchExecutionContext {
-                    workspace_directory: &workspace_directory,
-                    planning_snapshot: &planning_snapshot,
-                    parallel_mode_service: &parallel_mode_service,
-                    parallel_agent_worker_port,
-                    parallel_mode_turn_service,
-                    planning,
-                    tx: tx.clone(),
-                    trigger,
-                    epoch_id,
-                });
+                if let Some(enqueue_trigger) = enqueue_trigger {
+                    let runtime_event =
+                        parallel_runtime_event_for_dispatch_trigger(enqueue_trigger);
+                    if let Err(error) = parallel_mode_service.enqueue_dispatch_commands_for_event(
+                        &workspace_directory,
+                        runtime_event,
+                        &planning_snapshot,
+                        Some(epoch_id),
+                    ) {
+                        event_log::emit_lazy("parallel_dispatch_command_enqueue_failed", || {
+                            serde_json::json!({
+                                "trigger": enqueue_trigger.label(),
+                                "workspace": &workspace_directory,
+                                "epoch_id": epoch_id,
+                                "error": error,
+                            })
+                        });
+                    }
+                }
+                let outcome = match parallel_mode_service
+                    .claim_next_dispatch_command(&workspace_directory)
+                {
+                    Ok(Some(mut command)) => {
+                        let outcome =
+                            dispatch_parallel_queue_pool(ParallelModeDispatchExecutionContext {
+                                workspace_directory: &workspace_directory,
+                                planning_snapshot: &planning_snapshot,
+                                parallel_mode_service: &parallel_mode_service,
+                                parallel_agent_worker_port,
+                                parallel_mode_turn_service,
+                                planning,
+                                tx: tx.clone(),
+                                trigger: command.trigger,
+                                epoch_id,
+                            });
+                        persist_dispatch_command_outcome(
+                            &parallel_mode_service,
+                            &workspace_directory,
+                            &mut command,
+                            &outcome,
+                        );
+                        outcome
+                    }
+                    Ok(None) => {
+                        let mut outcome = ParallelModeDispatchOutcome::new(
+                            trigger,
+                            workspace_directory.clone(),
+                            epoch_id,
+                        );
+                        outcome.blocked_reason =
+                            Some("no pending durable dispatch command".to_string());
+                        outcome.status_copy_input = outcome.status_detail();
+                        outcome
+                    }
+                    Err(error) => {
+                        let mut outcome = ParallelModeDispatchOutcome::new(
+                            trigger,
+                            workspace_directory.clone(),
+                            epoch_id,
+                        );
+                        outcome.blocked_reason =
+                            Some(format!("dispatch command claim failed: {error}"));
+                        outcome.status_copy_input = outcome.status_detail();
+                        outcome
+                    }
+                };
                 let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
                     &workspace_directory,
                     true,
@@ -1242,6 +1350,47 @@ fn dispatch_parallel_queue_pool(
         })
     });
     outcome
+}
+
+fn parallel_runtime_event_for_dispatch_trigger(
+    trigger: ParallelModeAutomationTrigger,
+) -> ParallelModeRuntimeEvent {
+    match trigger {
+        ParallelModeAutomationTrigger::MainTurnPostEvaluation => {
+            ParallelModeRuntimeEvent::AutoFollowQueued
+        }
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion => {
+            ParallelModeRuntimeEvent::ParallelCompletionFinalized
+        }
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch => {
+            ParallelModeRuntimeEvent::TaskIntakeCommitted
+        }
+    }
+}
+
+fn persist_dispatch_command_outcome(
+    parallel_mode_service: &ParallelModeService,
+    workspace_directory: &str,
+    command: &mut ParallelModeDispatchCommandSnapshot,
+    outcome: &ParallelModeDispatchOutcome,
+) {
+    let timestamp = Utc::now().to_rfc3339();
+    if outcome.blocked_reason.is_some() && outcome.launched_task_ids.is_empty() {
+        command.mark_blocked(outcome.status_detail(), timestamp);
+    } else {
+        command.mark_completed(outcome.status_detail(), timestamp);
+    }
+    if let Err(error) = parallel_mode_service.update_dispatch_command(workspace_directory, command)
+    {
+        event_log::emit_lazy("parallel_dispatch_command_update_failed", || {
+            serde_json::json!({
+                "workspace": workspace_directory,
+                "command_id": &command.command_id,
+                "state": command.state.label(),
+                "error": error,
+            })
+        });
+    }
 }
 
 #[derive(Clone, Copy)]

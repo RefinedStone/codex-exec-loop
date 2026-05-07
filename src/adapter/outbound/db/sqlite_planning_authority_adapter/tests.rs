@@ -13,8 +13,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModeQueueItemState,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
+    ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
 };
 use crate::domain::planning::{
     OriginSessionKind, PriorityQueueProjection, TaskActor, TaskAuthorityDocument, TaskDefinition,
@@ -204,6 +205,62 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
     let block = &snapshot.task_dispatch_blocks[0];
     assert_eq!(block.task_id, "task-1");
     assert_eq!(block.blocked_at, "2026-05-04T12:00:00+00:00");
+}
+
+#[test]
+fn runtime_dispatch_command_enqueue_claim_and_update_round_trips() {
+    let workspace_dir = temp_workspace("dispatch-command");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("queue-head-1".to_string()),
+        Some(11),
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("command should enqueue")
+    );
+    assert!(
+        !adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("duplicate command should not enqueue")
+    );
+
+    let claimed = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-1")
+        .expect("command claim should succeed")
+        .expect("pending command should be claimed");
+    assert_eq!(claimed.command_id, command.command_id);
+    assert_eq!(claimed.state, ParallelModeDispatchCommandState::Running);
+    assert_eq!(claimed.owner_token.as_deref(), Some("owner-1"));
+    assert!(
+        adapter
+            .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-2")
+            .expect("second claim should inspect cleanly")
+            .is_none()
+    );
+
+    let mut completed = claimed;
+    completed.mark_completed("launched workers", "2026-05-08T00:00:10+00:00");
+    adapter
+        .update_runtime_dispatch_command(&workspace_dir, &completed)
+        .expect("completed command should persist");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(snapshot.dispatch_commands.len(), 1);
+    assert_eq!(
+        snapshot.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
+    );
+    assert_eq!(
+        snapshot.dispatch_commands[0].status_detail.as_deref(),
+        Some("launched workers")
+    );
 }
 
 #[test]

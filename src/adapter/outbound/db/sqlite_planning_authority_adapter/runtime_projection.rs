@@ -23,9 +23,10 @@ use crate::application::port::outbound::planning_authority_port::{
 // parallel mode의 slot lease와 agent session은 domain 타입이므로,
 // 여기서는 DB row를 도메인이 이해하는 스냅샷 값으로 복원하는 역할만 맡는다.
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolResetReport,
-    ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
-    ParallelModeSlotLeaseSnapshot, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchCommandState, ParallelModePoolResetReport, ParallelModeRuntimeEventEntry,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 
 // metadata upsert helper는 store 모듈의 스키마 관리와 같은 규칙을 공유한다.
@@ -372,6 +373,257 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn enqueue_runtime_dispatch_command(
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<bool> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let payload_json = serde_json::to_string(command)
+            .context("failed to serialize runtime dispatch command")?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime dispatch command enqueue transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let mut changed_rows = transaction
+            .execute(
+                "INSERT OR IGNORE INTO runtime_dispatch_commands
+                 (command_id, command_kind, trigger, command_state, queue_head_signature,
+                  epoch_id, created_at, updated_at, owner_token, content)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    &command.command_id,
+                    command.kind.label(),
+                    command.trigger.label(),
+                    command.state.label(),
+                    command.queue_head_signature.as_deref(),
+                    command.epoch_id.map(|value| value as i64),
+                    &command.created_at,
+                    &command.updated_at,
+                    command.owner_token.as_deref(),
+                    &payload_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to enqueue runtime dispatch command `{}`",
+                    command.command_id
+                )
+            })?;
+        if changed_rows == 0 {
+            changed_rows = transaction
+                .execute(
+                    "UPDATE runtime_dispatch_commands
+                     SET command_kind = ?1,
+                         trigger = ?2,
+                         command_state = ?3,
+                         queue_head_signature = ?4,
+                         epoch_id = ?5,
+                         updated_at = ?6,
+                         owner_token = NULL,
+                         content = ?7
+                     WHERE command_id = ?8
+                       AND command_state IN (?9, ?10, ?11)",
+                    params![
+                        command.kind.label(),
+                        command.trigger.label(),
+                        command.state.label(),
+                        command.queue_head_signature.as_deref(),
+                        command.epoch_id.map(|value| value as i64),
+                        &command.updated_at,
+                        &payload_json,
+                        &command.command_id,
+                        ParallelModeDispatchCommandState::Completed.label(),
+                        ParallelModeDispatchCommandState::Blocked.label(),
+                        ParallelModeDispatchCommandState::Canceled.label()
+                    ],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to revive terminal runtime dispatch command `{}`",
+                        command.command_id
+                    )
+                })?;
+        }
+        if changed_rows > 0 {
+            append_runtime_event(
+                &transaction,
+                "dispatch_command_enqueued",
+                "dispatch_command",
+                &command.command_id,
+                &format!(
+                    "runtime dispatch command enqueued / trigger: {}",
+                    command.trigger.label()
+                ),
+                &serde_json::to_string(command)
+                    .context("failed to serialize dispatch command event payload")?,
+            )?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit runtime dispatch command enqueue transaction")?;
+        Ok(changed_rows > 0)
+    }
+
+    pub(crate) fn try_claim_next_runtime_dispatch_command(
+        workspace_dir: &str,
+        owner_token: &str,
+    ) -> Result<Option<ParallelModeDispatchCommandSnapshot>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime dispatch command claim transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        let row = transaction
+            .query_row(
+                "SELECT command_id, content
+                 FROM runtime_dispatch_commands
+                 WHERE command_state = ?1
+                 ORDER BY created_at ASC, command_id ASC
+                 LIMIT 1",
+                params![ParallelModeDispatchCommandState::Pending.label()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .context("failed to read pending runtime dispatch command")?;
+        let Some((command_id, content)) = row else {
+            transaction
+                .commit()
+                .context("failed to commit empty dispatch command claim transaction")?;
+            return Ok(None);
+        };
+        let mut command = serde_json::from_str::<ParallelModeDispatchCommandSnapshot>(&content)
+            .with_context(|| {
+                format!("failed to deserialize runtime dispatch command `{command_id}`")
+            })?;
+        command.mark_running(owner_token, Utc::now().to_rfc3339());
+        let payload_json = serde_json::to_string(&command)
+            .context("failed to serialize claimed runtime dispatch command")?;
+        let claimed_rows = transaction
+            .execute(
+                "UPDATE runtime_dispatch_commands
+                 SET command_state = ?1,
+                     updated_at = ?2,
+                     owner_token = ?3,
+                     content = ?4
+                 WHERE command_id = ?5 AND command_state = ?6",
+                params![
+                    command.state.label(),
+                    &command.updated_at,
+                    command.owner_token.as_deref(),
+                    payload_json,
+                    &command.command_id,
+                    ParallelModeDispatchCommandState::Pending.label()
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to claim runtime dispatch command `{}`",
+                    command.command_id
+                )
+            })?;
+        if claimed_rows == 0 {
+            transaction
+                .commit()
+                .context("failed to commit lost dispatch command claim transaction")?;
+            return Ok(None);
+        }
+        append_runtime_event(
+            &transaction,
+            "dispatch_command_claimed",
+            "dispatch_command",
+            &command.command_id,
+            &format!(
+                "runtime dispatch command claimed / trigger: {}",
+                command.trigger.label()
+            ),
+            &serde_json::to_string(&command)
+                .context("failed to serialize claimed dispatch command event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime dispatch command claim transaction")?;
+        Ok(Some(command))
+    }
+
+    pub(crate) fn update_runtime_dispatch_command(
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let payload_json = serde_json::to_string(command)
+            .context("failed to serialize runtime dispatch command update")?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open runtime dispatch command update transaction")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        transaction
+            .execute(
+                "UPDATE runtime_dispatch_commands
+                 SET command_kind = ?1,
+                     trigger = ?2,
+                     command_state = ?3,
+                     queue_head_signature = ?4,
+                     epoch_id = ?5,
+                     updated_at = ?6,
+                     owner_token = ?7,
+                     content = ?8
+                 WHERE command_id = ?9",
+                params![
+                    command.kind.label(),
+                    command.trigger.label(),
+                    command.state.label(),
+                    command.queue_head_signature.as_deref(),
+                    command.epoch_id.map(|value| value as i64),
+                    &command.updated_at,
+                    command.owner_token.as_deref(),
+                    payload_json,
+                    &command.command_id
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to update runtime dispatch command `{}`",
+                    command.command_id
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "dispatch_command_updated",
+            "dispatch_command",
+            &command.command_id,
+            &format!(
+                "runtime dispatch command stored / state: {}",
+                command.state.label()
+            ),
+            &serde_json::to_string(command)
+                .context("failed to serialize dispatch command update event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime dispatch command update transaction")?;
+        Ok(())
+    }
+
+    pub(crate) fn cancel_runtime_dispatch_commands(
+        workspace_dir: &str,
+        reason: &str,
+    ) -> Result<usize> {
+        let mut snapshot = Self::load_runtime_projections(workspace_dir)?;
+        let mut canceled = 0;
+        for command in &mut snapshot.dispatch_commands {
+            if command.is_terminal() {
+                continue;
+            }
+            command.mark_canceled(reason, Utc::now().to_rfc3339());
+            Self::update_runtime_dispatch_command(workspace_dir, command)?;
+            canceled += 1;
+        }
+        Ok(canceled)
+    }
+
     // runtime projection 전체를 application port snapshot으로 읽는 얇은 진입점이다.
     // DB row를 도메인/application 타입으로 조립하는 실제 작업은 아래 free function에 위임한다.
     pub(crate) fn load_runtime_projections(
@@ -542,6 +794,9 @@ impl SqlitePlanningAuthorityAdapter {
         let queue_rows = transaction
             .execute("DELETE FROM runtime_distributor_queue", [])
             .context("failed to clear runtime distributor queue")?;
+        let dispatch_command_rows = transaction
+            .execute("DELETE FROM runtime_dispatch_commands", [])
+            .context("failed to clear runtime dispatch commands")?;
         let claim_rows = transaction
             .execute(
                 "DELETE FROM runtime_claims
@@ -560,7 +815,7 @@ impl SqlitePlanningAuthorityAdapter {
             "parallel_runtime",
             "pool",
             &format!(
-                "parallel runtime reset / leases: {slot_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / claims: {claim_rows} / dispatch_blocks_preserved: {dispatch_block_rows} / reason: {reason}"
+                "parallel runtime reset / leases: {slot_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / dispatch_commands: {dispatch_command_rows} / claims: {claim_rows} / dispatch_blocks_preserved: {dispatch_block_rows} / reason: {reason}"
             ),
             "{}",
         )?;
@@ -981,6 +1236,8 @@ fn load_runtime_projection_snapshot(
     let mut task_dispatch_blocks = Vec::new();
     // distributor queue도 enqueued_at 순서가 의미 있으므로 Vec 순서를 그대로 snapshot 순서로 사용한다.
     let mut distributor_queue_records = Vec::new();
+    // dispatch commands는 orchestrator scheduler가 durable하게 소비할 명령 큐이다.
+    let mut dispatch_commands = Vec::new();
     // runtime event feed는 operator가 최근 전이를 볼 수 있게 최신 sequence부터 제한된 개수만 싣는다.
     let mut runtime_events = Vec::new();
 
@@ -1099,6 +1356,27 @@ fn load_runtime_projection_snapshot(
         );
     }
 
+    let mut dispatch_statement = connection
+        .prepare(
+            "SELECT command_id, content
+             FROM runtime_dispatch_commands
+             ORDER BY created_at ASC, command_id ASC",
+        )
+        .context("failed to read runtime dispatch commands")?;
+    let dispatch_rows = dispatch_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("failed to iterate runtime dispatch commands")?;
+    for row in dispatch_rows {
+        let (command_id, content) = row.context("failed to decode runtime dispatch command row")?;
+        dispatch_commands.push(
+            serde_json::from_str::<ParallelModeDispatchCommandSnapshot>(&content).with_context(
+                || format!("failed to deserialize runtime dispatch command `{command_id}`"),
+            )?,
+        );
+    }
+
     let mut event_statement = connection
         .prepare(
             "SELECT sequence,
@@ -1137,6 +1415,7 @@ fn load_runtime_projection_snapshot(
         session_details,
         task_dispatch_blocks,
         distributor_queue_records,
+        dispatch_commands,
         runtime_events,
     })
 }

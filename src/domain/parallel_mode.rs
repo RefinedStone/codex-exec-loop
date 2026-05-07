@@ -23,9 +23,11 @@ pub use self::distributor::{
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorSnapshot,
 };
 pub use self::orchestrator::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason, ParallelModeDispatchOutcome,
-    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
+    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
+    ParallelModeDispatchOutcome, ParallelModeOrchestratorState,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
+    ParallelModePostTurnQueueSignal, ParallelModeRuntimeEvent,
     ParallelModeTaskDispatchBlockSnapshot,
 };
 pub use self::pool_reset::{

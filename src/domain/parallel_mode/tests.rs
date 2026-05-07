@@ -4,12 +4,12 @@ use super::orchestrator::ParallelModePostTurnQueueDecision;
 use super::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeDispatchBlockReason, ParallelModeDispatchOutcome,
+    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandState, ParallelModeDispatchOutcome,
     ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
     ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState,
     ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
+    ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
 
@@ -216,6 +216,51 @@ fn post_turn_queue_continuation_ignores_parallel_completion_without_ready_head()
 
     assert_eq!(decision, ParallelModePostTurnQueueDecision::NoDispatch);
     assert_eq!(disabled, ParallelModePostTurnQueueDecision::NoDispatch);
+}
+
+#[test]
+fn runtime_dispatch_commands_are_emitted_from_central_parallel_events() {
+    let commands = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+        true,
+        ParallelModeRuntimeEvent::ParallelCompletionFinalized,
+        true,
+        Some("queue-head-42".to_string()),
+        Some(7),
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    assert_eq!(commands.len(), 1);
+    let command = &commands[0];
+    assert_eq!(command.command_id, "dispatch-ready-queue-queue-head-42");
+    assert_eq!(
+        command.trigger,
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion
+    );
+    assert_eq!(command.state, ParallelModeDispatchCommandState::Pending);
+    assert_eq!(command.epoch_id, Some(7));
+}
+
+#[test]
+fn runtime_dispatch_commands_require_mode_and_actionable_head() {
+    let disabled = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+        false,
+        ParallelModeRuntimeEvent::TaskIntakeCommitted,
+        true,
+        Some("queue-head-42".to_string()),
+        None,
+        "2026-05-08T00:00:00+00:00",
+    );
+    let missing_head = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+        true,
+        ParallelModeRuntimeEvent::ParallelCompletionFinalized,
+        false,
+        None,
+        None,
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    assert!(disabled.is_empty());
+    assert!(missing_head.is_empty());
 }
 
 #[test]

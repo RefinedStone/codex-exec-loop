@@ -32,8 +32,8 @@ use crate::application::port::outbound::planning_task_repository_port::{
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolResetReport,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
+    ParallelModePoolResetReport, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
     ParallelModeTaskDispatchBlockSnapshot,
 };
 // active snapshot 테이블을 다루는 하위 모듈이다.
@@ -637,6 +637,34 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
         Self::load_runtime_projections(workspace_dir)
+    }
+
+    fn enqueue_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<bool> {
+        Self::enqueue_runtime_dispatch_command(workspace_dir, command)
+    }
+
+    fn try_claim_next_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        owner_token: &str,
+    ) -> Result<Option<ParallelModeDispatchCommandSnapshot>> {
+        Self::try_claim_next_runtime_dispatch_command(workspace_dir, owner_token)
+    }
+
+    fn update_runtime_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        command: &ParallelModeDispatchCommandSnapshot,
+    ) -> Result<()> {
+        Self::update_runtime_dispatch_command(workspace_dir, command)
+    }
+
+    fn cancel_runtime_dispatch_commands(&self, workspace_dir: &str, reason: &str) -> Result<usize> {
+        Self::cancel_runtime_dispatch_commands(workspace_dir, reason)
     }
 
     fn clear_parallel_runtime_projections(&self, workspace_dir: &str, reason: &str) -> Result<()> {

@@ -194,6 +194,19 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 content TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS runtime_dispatch_commands (
+                command_id TEXT PRIMARY KEY,
+                command_kind TEXT NOT NULL,
+                trigger TEXT NOT NULL,
+                command_state TEXT NOT NULL,
+                queue_head_signature TEXT,
+                epoch_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                owner_token TEXT,
+                content TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS runtime_events (
                 sequence INTEGER PRIMARY KEY,
                 event_kind TEXT NOT NULL,
