@@ -14,8 +14,6 @@
     --game-yellow: #f5c84b;
     --game-red: #ff6b6b;
     --game-violet: #9d7cff;
-    --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
-    --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -28,7 +26,7 @@
     overflow: hidden;
     opacity: 0;
     pointer-events: none;
-    background-image: var(--object-sprite-sheet);
+    background-image: var(--office-bg-image);
   }
   .akra-topbar {
     display: grid;
@@ -182,20 +180,20 @@
     position: relative;
     min-height: 540px;
     overflow: hidden;
-    background:
-      linear-gradient(30deg, transparent 42%, rgba(122, 148, 184, 0.18) 43%, rgba(122, 148, 184, 0.18) 44%, transparent 45%),
-      linear-gradient(150deg, transparent 42%, rgba(122, 148, 184, 0.14) 43%, rgba(122, 148, 184, 0.14) 44%, transparent 45%),
-      radial-gradient(circle at 72% 12%, rgba(125, 91, 188, 0.18), transparent 28%),
-      var(--office-bg-image),
-      linear-gradient(180deg, #142238, #0e1728);
-    background-size: 58px 33px, 58px 33px, auto, cover, auto;
-    background-position: 0 0, 0 0, center, center, center;
-    background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat;
+    background: linear-gradient(180deg, #0a1628, #0e1c30);
+  }
+  .office-board canvas {
+    position: absolute;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+    image-rendering: pixelated;
   }
   .office-board::before {
     content: "";
     position: absolute;
     inset: 0;
+    z-index: 1;
     background:
       linear-gradient(90deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 100%),
       linear-gradient(rgba(255,255,255,0.04) 0 1px, transparent 1px 100%);
@@ -295,65 +293,38 @@
     position: absolute;
     z-index: 2;
     border: 1px solid rgba(232, 241, 255, 0.17);
-    background: linear-gradient(160deg, rgba(104, 76, 48, 0.96), rgba(35, 51, 71, 0.97));
-    box-shadow: 12px 16px 0 rgba(0,0,0,0.24);
+    background: rgba(10, 22, 40, 0.75);
+    box-shadow: 4px 6px 0 rgba(0,0,0,0.24);
     cursor: pointer;
+    backdrop-filter: blur(4px);
+    border-radius: 6px;
+    padding: 10px;
+  }
+  .scene-object:hover {
+    border-color: rgba(93, 169, 255, 0.55);
+    background: rgba(15, 30, 55, 0.85);
   }
   .object-sprite {
-    width: 132px;
-    height: 120px;
-    padding: 0;
-    border: 0;
-    color: transparent;
-    background-color: transparent;
-    background-image: var(--object-sprite-sheet);
-    background-repeat: no-repeat;
-    background-size: 627px 627px;
-    image-rendering: pixelated;
-    box-shadow: none;
-    cursor: default;
-    overflow: hidden;
-  }
-  .server-rack {
-    left: 16%;
-    top: 15%;
-    width: 96px;
-    height: 170px;
-    background-position: -42px -53px;
-  }
-  .whiteboard {
-    right: 22%;
-    top: 13%;
-    width: 132px;
-    height: 160px;
-    background-position: -480px -442px;
-  }
-  .couch {
-    right: 20%;
-    bottom: 17%;
-    background-position: -334px -460px;
+    display: none;
   }
   .desk,
   .distributor-desk,
   .event-board {
-    width: 154px;
-    min-height: 90px;
-    padding: 12px;
+    width: 150px;
+    min-height: 80px;
   }
-  .desk.agent-1 { left: 35%; top: 28%; }
+  .desk.agent-1 { left: 32%; top: 26%; }
   .desk.agent-2 { left: 48%; top: 50%; }
-  .desk.agent-3 { left: 26%; top: 56%; }
-  .desk.agent-4 { left: 59%; top: 35%; }
-  .desk.agent-5 { left: 39%; top: 68%; }
+  .desk.agent-3 { left: 22%; top: 54%; }
+  .desk.agent-4 { left: 60%; top: 32%; }
+  .desk.agent-5 { left: 38%; top: 70%; }
   .distributor-desk {
-    right: 12%;
-    top: 33%;
-    background: linear-gradient(160deg, rgba(48, 69, 92, 0.98), rgba(23, 34, 50, 0.99));
+    right: 10%;
+    top: 30%;
   }
   .event-board {
-    right: 6%;
-    bottom: 10%;
-    background: linear-gradient(160deg, rgba(87, 64, 42, 0.98), rgba(21, 34, 51, 0.99));
+    right: 8%;
+    bottom: 12%;
   }
   .speech {
     position: absolute;
@@ -377,14 +348,12 @@
     position: relative;
     display: grid;
     place-items: center;
-    width: 48px;
-    height: 48px;
+    width: 36px;
+    height: 36px;
     color: #f7fbff;
-    background-image: url("/assets/admin/admin-character-sprites.svg");
-    background-repeat: no-repeat;
-    background-size: 528px 96px;
-    background-position: 0 0;
-    image-rendering: pixelated;
+    background: rgba(53, 208, 127, 0.15);
+    border: 1px solid rgba(53, 208, 127, 0.35);
+    border-radius: 8px;
     font-size: 10px;
     font-weight: 900;
     text-shadow: 0 1px 0 #06101d, 1px 0 0 #06101d, -1px 0 0 #06101d, 0 -1px 0 #06101d;
@@ -393,17 +362,17 @@
     position: absolute;
     left: 2px;
     right: 2px;
-    bottom: 4px;
+    bottom: 2px;
     overflow: hidden;
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .severity-danger .agent-sprite { background-position: -96px 0; }
-  .severity-warning .agent-sprite { background-position: -48px 0; }
-  .severity-normal .agent-sprite { background-position: 0 0; }
-  .agent-sprite.role-distributor { background-position: -144px 0; }
-  .agent-sprite.role-events { background-position: -192px 0; }
+  .severity-danger .agent-sprite { background: rgba(255, 107, 107, 0.18); border-color: rgba(255, 107, 107, 0.42); }
+  .severity-warning .agent-sprite { background: rgba(245, 200, 75, 0.18); border-color: rgba(245, 200, 75, 0.42); }
+  .severity-normal .agent-sprite { background: rgba(53, 208, 127, 0.15); border-color: rgba(53, 208, 127, 0.35); }
+  .agent-sprite.role-distributor { background: rgba(157, 124, 255, 0.18); border-color: rgba(157, 124, 255, 0.42); }
+  .agent-sprite.role-events { background: rgba(93, 169, 255, 0.18); border-color: rgba(93, 169, 255, 0.42); }
   .object-label {
     display: grid;
     gap: 2px;
@@ -783,10 +752,7 @@
 
   <div class="board-row">
     <div class="office-board" id="agents" aria-label="AKRA isometric office board">
-      <div class="room" aria-hidden="true"></div>
-      <div class="scene-object object-sprite server-rack" aria-hidden="true"></div>
-      <div class="scene-object object-sprite whiteboard" aria-hidden="true"></div>
-      <div class="scene-object object-sprite couch" aria-hidden="true"></div>
+      <div id="pixi-diorama" style="position:absolute;inset:0;z-index:0;"></div>
 
       <aside class="pool-overlay" id="pool">
         <div class="panel-title">
@@ -966,6 +932,172 @@
     </section>
   </div>
 </section>
+<script>
+// ── PixiJS Isometric Diorama ──
+(async () => {
+  const container = document.getElementById("pixi-diorama");
+  if (!container || typeof PIXI === "undefined") return;
+
+  const boardEl = container.closest(".office-board");
+  const W = boardEl.offsetWidth || 900;
+  const H = boardEl.offsetHeight || 540;
+
+  const app = new PIXI.Application({
+    width: W,
+    height: H,
+    backgroundAlpha: 0,
+    antialias: false,
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true,
+  });
+  container.appendChild(app.view);
+
+  // Force pixelated rendering
+  PIXI.BaseTexture.defaultOptions.scaleMode = PIXI.SCALE_MODES.NEAREST;
+
+  const basePath = "/admin/assets/graphics/";
+  const assets = {
+    floor:      basePath + "sprite_floor_tile.png",
+    desk:       basePath + "sprite_desk_workstation.png",
+    server:     basePath + "sprite_server_rack.png",
+    whiteboard: basePath + "sprite_whiteboard.png",
+    sofa:       basePath + "sprite_sofa.png",
+    plant:      basePath + "sprite_potted_plant.png",
+    agentSit:   basePath + "sprite_agent_sitting.png",
+    agentStand: basePath + "sprite_agent_standing.png",
+  };
+
+  // Load all textures
+  const textures = {};
+  for (const [key, url] of Object.entries(assets)) {
+    try {
+      textures[key] = await PIXI.Assets.load(url);
+    } catch (e) {
+      console.warn(`Failed to load sprite: ${key}`, e);
+    }
+  }
+
+  // ── Isometric floor grid ──
+  const floorLayer = new PIXI.Container();
+  floorLayer.alpha = 0.5;
+  app.stage.addChild(floorLayer);
+
+  if (textures.floor) {
+    const TILE_SIZE = 64;
+    const cols = 10;
+    const rows = 8;
+    const offsetX = W * 0.48;
+    const offsetY = 30;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const isoX = (c - r) * (TILE_SIZE / 2);
+        const isoY = (c + r) * (TILE_SIZE / 4);
+        const tile = new PIXI.Sprite(textures.floor);
+        tile.width = TILE_SIZE;
+        tile.height = TILE_SIZE / 2;
+        tile.x = offsetX + isoX;
+        tile.y = offsetY + isoY;
+        tile.alpha = 0.6;
+        floorLayer.addChild(tile);
+      }
+    }
+  }
+
+  // ── Furniture and props layer ──
+  const furnitureLayer = new PIXI.Container();
+  app.stage.addChild(furnitureLayer);
+
+  const placeSprite = (key, x, y, scale, opts = {}) => {
+    if (!textures[key]) return null;
+    const sprite = new PIXI.Sprite(textures[key]);
+    sprite.anchor.set(0.5, 1);
+    sprite.x = x;
+    sprite.y = y;
+    sprite.scale.set(scale);
+    sprite.eventMode = "static";
+    sprite.cursor = "pointer";
+
+    // Floating animation
+    const baseY = y;
+    const floatOffset = opts.floatOffset || (Math.random() * Math.PI * 2);
+    const floatAmplitude = opts.floatAmplitude || 2;
+    sprite._floatData = { baseY, offset: floatOffset, amp: floatAmplitude };
+
+    // Hover glow
+    sprite.on("pointerover", () => {
+      sprite.tint = 0xccddff;
+      sprite.scale.set(scale * 1.06);
+    });
+    sprite.on("pointerout", () => {
+      sprite.tint = 0xffffff;
+      sprite.scale.set(scale);
+    });
+
+    furnitureLayer.addChild(sprite);
+    return sprite;
+  };
+
+  // Place furniture - positions tuned for ~900x540 board
+  placeSprite("server",     W * 0.12,  H * 0.55, 0.15);
+  placeSprite("server",     W * 0.18,  H * 0.50, 0.13);
+
+  placeSprite("desk",       W * 0.35,  H * 0.50, 0.14);
+  placeSprite("desk",       W * 0.50,  H * 0.65, 0.14);
+  placeSprite("desk",       W * 0.28,  H * 0.72, 0.14);
+  placeSprite("desk",       W * 0.60,  H * 0.52, 0.14);
+  placeSprite("desk",       W * 0.43,  H * 0.82, 0.14);
+
+  placeSprite("whiteboard", W * 0.78,  H * 0.38, 0.16);
+  placeSprite("sofa",       W * 0.82,  H * 0.70, 0.12);
+  placeSprite("plant",      W * 0.08,  H * 0.35, 0.08);
+  placeSprite("plant",      W * 0.70,  H * 0.85, 0.07);
+  placeSprite("plant",      W * 0.90,  H * 0.55, 0.06);
+
+  // ── Agent characters ──
+  const agentLayer = new PIXI.Container();
+  app.stage.addChild(agentLayer);
+
+  // Place agents next to desks
+  const agentPositions = [
+    { x: W * 0.37, y: H * 0.47, sitting: true },
+    { x: W * 0.52, y: H * 0.62, sitting: true },
+    { x: W * 0.30, y: H * 0.69, sitting: false },
+    { x: W * 0.62, y: H * 0.49, sitting: true },
+    { x: W * 0.45, y: H * 0.79, sitting: true },
+  ];
+
+  for (const pos of agentPositions) {
+    const key = pos.sitting ? "agentSit" : "agentStand";
+    placeSprite(key, pos.x, pos.y, 0.10, { floatAmplitude: 1.5 });
+  }
+
+  // ── Distributor character ──
+  placeSprite("agentStand", W * 0.80, H * 0.52, 0.09, { floatAmplitude: 1 });
+
+  // ── Ambient floating animation tick ──
+  let elapsed = 0;
+  app.ticker.add((delta) => {
+    elapsed += delta * 0.02;
+    for (const child of furnitureLayer.children.concat(agentLayer.children)) {
+      if (child._floatData) {
+        const { baseY, offset, amp } = child._floatData;
+        child.y = baseY + Math.sin(elapsed + offset) * amp;
+      }
+    }
+  });
+
+  // ── Handle resize ──
+  const onResize = () => {
+    const newW = boardEl.offsetWidth;
+    const newH = boardEl.offsetHeight;
+    if (newW > 0 && newH > 0) {
+      app.renderer.resize(newW, newH);
+    }
+  };
+  window.addEventListener("resize", onResize);
+})();
+</script>
 <script>
 (() => {
   const root = document.querySelector("[data-admin-graphic]");

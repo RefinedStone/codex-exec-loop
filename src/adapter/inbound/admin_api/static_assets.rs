@@ -7,12 +7,38 @@ const AKRA_OFFICE_BACKGROUND: &[u8] =
 const AKRA_OBJECT_SPRITES: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/akra-object-sprites.png");
 
+// Individual isometric sprites for PixiJS diorama
+const SPRITE_FLOOR_TILE: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_floor_tile.png");
+const SPRITE_DESK_WORKSTATION: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_desk_workstation.png");
+const SPRITE_SERVER_RACK: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_server_rack.png");
+const SPRITE_WHITEBOARD: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_whiteboard.png");
+const SPRITE_SOFA: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_sofa.png");
+const SPRITE_POTTED_PLANT: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_potted_plant.png");
+const SPRITE_AGENT_SITTING: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_agent_sitting.png");
+const SPRITE_AGENT_STANDING: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_agent_standing.png");
+
 pub(super) async fn admin_graphic_asset(
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
     let bytes = match asset_name.as_str() {
         "akra-office-background.png" => AKRA_OFFICE_BACKGROUND,
         "akra-object-sprites.png" => AKRA_OBJECT_SPRITES,
+        "sprite_floor_tile.png" => SPRITE_FLOOR_TILE,
+        "sprite_desk_workstation.png" => SPRITE_DESK_WORKSTATION,
+        "sprite_server_rack.png" => SPRITE_SERVER_RACK,
+        "sprite_whiteboard.png" => SPRITE_WHITEBOARD,
+        "sprite_sofa.png" => SPRITE_SOFA,
+        "sprite_potted_plant.png" => SPRITE_POTTED_PLANT,
+        "sprite_agent_sitting.png" => SPRITE_AGENT_SITTING,
+        "sprite_agent_standing.png" => SPRITE_AGENT_STANDING,
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
