@@ -257,19 +257,18 @@ impl NativeTuiApp {
             return;
         }
         // Preview runs against the active planning workspace and current turn
-        // identity so the proposal can preserve provenance before it is
-        // committed into the planning queue.
+        // identity. The mutation layer stores the active turn as a legacy lookup
+        // key while provenance records it as the parent turn.
+        let active_thread_id = self.task_intake_active_thread_id();
+        let active_turn_id = self.task_intake_active_turn_id();
         let request = PlanningTaskIntakeRequest {
             workspace_directory: self.planning_workspace_directory(),
             raw_prompt: prompt,
-            legacy_source_turn_id: self.task_intake_parent_turn_id(),
+            legacy_source_turn_id: active_turn_id.clone(),
             provenance: crate::domain::planning::TaskMutationProvenance::new(
                 crate::domain::planning::OriginSessionKind::ManualIntake,
             )
-            .with_parent(
-                self.task_intake_parent_thread_id(),
-                self.task_intake_parent_turn_id(),
-            ),
+            .with_parent(active_thread_id, active_turn_id),
             requested_direction_id: None,
             observed_planning_revision: None,
         };
@@ -307,13 +306,13 @@ impl NativeTuiApp {
                 .show_error(format!("Task commit failed: {error}")),
         }
     }
-    fn task_intake_parent_turn_id(&self) -> Option<String> {
+    fn task_intake_active_turn_id(&self) -> Option<String> {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => conversation.active_turn_id.clone(),
             ConversationState::Loading | ConversationState::Failed(_) => None,
         }
     }
-    fn task_intake_parent_thread_id(&self) -> Option<String> {
+    fn task_intake_active_thread_id(&self) -> Option<String> {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => Some(conversation.thread_id.clone())
                 .filter(|thread_id| !thread_id.trim().is_empty()),
