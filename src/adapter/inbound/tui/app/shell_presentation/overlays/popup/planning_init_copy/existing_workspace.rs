@@ -40,7 +40,7 @@ pub(super) fn build_existing_workspace_overlay_view(
             Line::from(format!("workspace: {}", copy.workspace_directory)),
             Line::from(format!("planning state: {}", copy.plan_state_label)),
             Line::from(format!("queue state: {}", copy.queue_summary)),
-            Line::from(format!("queue idle policy: {}", copy.queue_idle_policy)),
+            Line::from(format!("queue-idle policy: {}", copy.queue_idle_policy)),
         ],
         status_lines,
         // key lines는 init wizard의 promote/edit vocabulary를 쓰지 않는다. Enter/Q/D/Esc가

@@ -119,7 +119,7 @@ pub(super) fn map_runtime_snapshot(
 pub(super) fn map_directions_summary(
     summary: DirectionsMaintenanceSummary,
 ) -> PlanningAdminDirectionsSummaryView {
-    // maintenance summary는 detail doc 존재 여부와 queue idle prompt 상태 같은 filesystem 검사를 이미 수행한
+    // maintenance summary는 detail doc 존재 여부와 queue-idle prompt 상태 같은 filesystem 검사를 이미 수행한
     // 값이다. admin view는 template branch에 필요한 label과 needs_attention flag만 얹어, UI가 service enum의
     // 내부 의미를 다시 계산하지 않게 한다.
     PlanningAdminDirectionsSummaryView {

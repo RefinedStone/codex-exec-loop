@@ -29,7 +29,7 @@ pub(super) fn build_existing_workspace_copy(
         workspace_directory: workspace_directory.to_string(),
         plan_state_label,
         queue_summary,
-        // queue idle policy는 renderer가 분기하지 않도록 여기서 최종 label로 고정한다.
+        // queue-idle policy는 renderer가 분기하지 않도록 여기서 최종 label로 고정한다.
         queue_idle_policy: snapshot.queue_idle_policy().label().to_string(),
         failure_summary,
     }

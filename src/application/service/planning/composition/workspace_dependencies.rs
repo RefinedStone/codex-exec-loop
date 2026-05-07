@@ -12,7 +12,7 @@ use crate::domain::planning::PriorityQueueService;
 // bootstrap service는 새 planning workspace를 만들 때 기본 파일과 seed 자료를 준비한다. workspace use
 // case 표면에서 초기화 명령을 처리하려면 이 서비스가 필요하다.
 use super::super::authoring::bootstrap::PlanningBootstrapService;
-// directions service는 방향 문서와 queue idle prompt editor session을 다룬다. workspace use case가
+// directions service는 방향 문서와 queue-idle prompt editor session을 다룬다. workspace use case가
 // draft/summary 흐름을 열어 주기 때문에 이 dependency bundle에 포함된다.
 use super::super::authoring::directions::PlanningDirectionsService;
 // prompt service는 workspace 파일과 task repository를 읽어 runtime snapshot/prompt context를 만들며, workspace summary와
@@ -40,7 +40,7 @@ pub(super) struct PlanningWorkspaceUseCaseDependencies {
     pub(super) validation: PlanningValidationService,
     // priority_queue는 planning 방향과 task summary를 같은 우선순위 기준으로 정렬하게 한다.
     pub(super) priority_queue: PriorityQueueService,
-    // directions는 draft editor, direction summary, queue idle prompt 작성 흐름을 workspace use case에 연결한다.
+    // directions는 draft editor, direction summary, queue-idle prompt 작성 흐름을 workspace use case에 연결한다.
     pub(super) directions: PlanningDirectionsService,
     // prompt는 workspace use case에서도 runtime-facing summary나 prompt preview를 만들 때 재사용된다.
     pub(super) prompt: PlanningPromptService,

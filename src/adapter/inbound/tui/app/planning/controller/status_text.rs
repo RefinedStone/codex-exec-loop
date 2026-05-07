@@ -88,7 +88,7 @@ pub(super) fn planning_doctor_status_text(report: &PlanningDoctorReport) -> Stri
         report.planning_state().label()
     )];
 
-    // queue idle policy는 worker scheduling 정책이므로 workspace state 뒤에 붙는 보조 진단이다.
+    // queue-idle policy는 worker scheduling 정책이므로 workspace state 뒤에 붙는 보조 진단이다.
     if let Some(queue_idle_policy) = report.queue_idle_policy() {
         parts.push(format!("queue-idle: {queue_idle_policy}"));
     }

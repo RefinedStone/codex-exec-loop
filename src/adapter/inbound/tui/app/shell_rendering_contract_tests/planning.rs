@@ -57,7 +57,7 @@ fn inline_planning_init_inspection_renders_existing_auto_seeded_workspace_inside
 
     assert!(rendered.contains("Planning / inline inspection"));
     assert!(rendered.contains("planning state:"));
-    assert!(rendered.contains("queue idle policy:"));
+    assert!(rendered.contains("queue-idle policy:"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
     std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");

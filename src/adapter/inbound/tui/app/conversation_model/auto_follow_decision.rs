@@ -134,7 +134,7 @@ impl AutoFollowupSkipReason {
             Self::StopKeywordMatched => "stopped: stop keyword matched",
             Self::NoFileChanges => "stopped: no file changes",
             Self::PlanningBlocked => "paused: planning files invalid",
-            Self::PlanningQueueIdlePolicyStop => "stopped: queue idle policy stop",
+            Self::PlanningQueueIdlePolicyStop => "stopped: queue-idle policy stop",
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
             Self::PlanningQueueDrained => "complete: planning queue drained",
             Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
@@ -171,7 +171,7 @@ impl AutoFollowupSkipReason {
                 "turn completed / auto follow-up paused: planning files invalid".to_string()
             }
             Self::PlanningQueueIdlePolicyStop => {
-                "turn completed / auto follow-up stopped: planning queue idle policy is stop"
+                "turn completed / auto follow-up stopped: planning queue-idle policy is stop"
                     .to_string()
             }
             Self::PlanningQueueHeadRequired => {

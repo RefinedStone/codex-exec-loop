@@ -36,7 +36,7 @@ pub(super) fn set_direction_detail_doc_path(
 
 /*
  * queue-idle prompt path는 direction별 값이 아니라 catalog-level queue_idle 설정이다. authoring init,
- * reset, directions maintenance가 이 setter를 거치면 queue idle review prompt 위치가 validation과
+ * reset, directions maintenance가 이 setter를 거치면 queue-idle review prompt 위치가 validation과
  * runtime prompt assembly에서 같은 source of truth로 읽힌다.
  */
 pub(super) fn set_queue_idle_prompt_path(

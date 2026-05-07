@@ -49,7 +49,7 @@ pub use self::admin::{
 pub use self::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
-// directions 타입은 queue idle 검토와 supporting file 상태처럼 planning 방향 문서 작성/검토 화면이 쓰는 projection 계약이다.
+// directions 타입은 queue-idle 검토와 supporting file 상태처럼 planning 방향 문서 작성/검토 화면이 쓰는 projection 계약이다.
 pub use self::authoring::directions::{
     DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus, QueueIdleReviewContext,

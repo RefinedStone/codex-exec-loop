@@ -451,7 +451,7 @@ pub(super) fn load_direction_authority_snapshot_from_connection(
 direction authority 테이블들을 domain의 `DirectionCatalogDocument`로 다시 조립한다.
 
 저장 구조는 config row 하나와 direction row 여러 개로 나뉜다. config row에는 catalog 전체에 적용되는
-format version과 queue idle 설정이 들어 있고, `planning_directions`에는 각 direction의 JSON 원문이
+format version과 queue-idle 설정이 들어 있고, `planning_directions`에는 각 direction의 JSON 원문이
 순서와 함께 들어 있다. 이 함수는 그 둘을 합쳐 application 계층이 기대하는 catalog 문서 형태로
 복원한다.
 
@@ -508,7 +508,7 @@ pub(super) fn load_direction_catalog_from_connection(
         })?);
     }
     /*
-        queue idle 설정은 DB column 두 개로 저장되어 있지만 domain 타입은 structured enum/record이다.
+        queue-idle 설정은 DB column 두 개로 저장되어 있지만 domain 타입은 structured enum/record이다.
     작은 JSON value로 다시 감싼 뒤 serde가 domain 타입으로 decode하게 해서, 문자열 policy 해석 규칙을
     이 store 함수 안에 중복 구현하지 않는다.
     */

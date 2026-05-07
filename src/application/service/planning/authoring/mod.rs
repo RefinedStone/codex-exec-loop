@@ -1,7 +1,7 @@
 // bootstrap은 새 planning workspace를 만들고 기본 supporting file을 seed하는 작성 시작점이다. authoring 안에서도
 // 초기화 전용 책임이라 별도 모듈로 둔다.
 pub(crate) mod bootstrap;
-// directions는 planning direction 문서, queue idle prompt, supporting file summary를 다룬다. 사용자가 작업 방향을
+// directions는 planning direction 문서, queue-idle prompt, supporting file summary를 다룬다. 사용자가 작업 방향을
 // 검토하고 선택하는 authoring의 중심 모듈이다.
 pub(crate) mod directions;
 // init은 TUI planning init overlay가 draft editor와 promote/save flow를 열 때 쓰는 application service다.

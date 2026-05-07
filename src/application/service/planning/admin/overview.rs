@@ -33,7 +33,7 @@ impl PlanningAdminFacadeService {
             // 보므로 admin 화면의 각 패널이 서로 다른 루트를 보여주지 않는다.
             .planning
             .workspace
-            // load_summary는 planning 방향 목록과 queue idle review context를 읽어온다. 성공 결과만 admin DTO로 올린다.
+            // load_summary는 planning 방향 목록과 queue-idle review context를 읽어온다. 성공 결과만 admin DTO로 올린다.
             .load_summary(self.workspace_dir.as_str())
             // ok()는 Result를 Option으로 낮춘다. directions panel은 보조 정보라서 실패해도 overview 자체는 열 수 있게
             // 하는 정책이고, 실패 세부 원인은 doctor report에 맡긴다.

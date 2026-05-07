@@ -81,7 +81,7 @@ pub(super) fn build_overview_overlay_view(
                 "directions: {total_direction_count} total / {missing_doc_count} missing docs / {broken_doc_count} broken docs"
             )),
             Line::from(format!(
-                "queue idle: policy {queue_idle_policy} / prompt {queue_idle_prompt_status} / {queue_idle_prompt}"
+                "queue-idle: policy {queue_idle_policy} / prompt {queue_idle_prompt_status} / {queue_idle_prompt}"
             )),
             Line::from(match parse_error_summary {
                 Some(error) => format!("directions parse error: {error}"),

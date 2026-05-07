@@ -218,7 +218,7 @@ fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> 
     // 이 command는 TUI가 supervise하는 같은 distributor queue를 수동/cron 환경에서 tick하는 driver다.
     match service.process_distributor_queue(&workspace_label) {
         Ok(notices) if notices.is_empty() => {
-            writeln!(stdout, "parallel distributor queue idle")?;
+            writeln!(stdout, "parallel distributor queue-idle")?;
             Ok(0)
         }
         Ok(notices) => {
