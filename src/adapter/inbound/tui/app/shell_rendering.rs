@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use super::shell_presentation::{build_inline_live_transcript_lines, build_inline_tail_view};
 use super::*;
+use ratatui::widgets::{Paragraph, Wrap};
 
 /*
  * 이 파일은 native inline shell의 ratatui frame boundary다.
@@ -12,21 +13,15 @@ use super::*;
 mod inline_inspection;
 #[path = "shell_rendering/inline_layout.rs"]
 mod inline_layout;
-#[path = "shell_rendering/popup_frame.rs"]
-mod popup_frame;
-#[path = "shell_rendering/popup_helpers.rs"]
-mod popup_helpers;
 
 #[cfg(test)]
 use super::shell_presentation::build_planning_draft_editor_overlay_view;
 use inline_inspection::draw_inline_shell_inspection;
-#[cfg(test)]
 use inline_layout::centered_rect;
 use inline_layout::{
     build_inline_terminal_flow_layout, inline_body_render_area, render_inline_body,
     set_cursor_if_visible,
 };
-use popup_frame::draw_exit_confirmation;
 
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
     // prepare signature를 draw와 맞춰 두면, 나중에 frontend mode별 pre-render state가 필요해도 entrypoint를 늘리지 않는다.
@@ -76,6 +71,24 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     if app.is_exit_confirmation_visible() {
         draw_exit_confirmation(frame);
     }
+}
+
+fn draw_exit_confirmation(frame: &mut Frame<'_>) {
+    let popup_area = centered_rect(42, 22, frame.area());
+    frame.render_widget(Clear, popup_area);
+    let popup = Paragraph::new(vec![
+        Line::from("You are already at the shell home."),
+        Line::from("Exit codex-exec-loop?"),
+        Line::from(""),
+        AkraTheme::key_line("y: exit    n: stay"),
+    ])
+    .block(AkraTheme::panel_block(AkraTheme::title_line(
+        "Confirm Exit",
+        "",
+    )))
+    .wrap(Wrap { trim: true });
+
+    frame.render_widget(popup, popup_area);
 }
 
 fn draw_inline_conversation_shell(

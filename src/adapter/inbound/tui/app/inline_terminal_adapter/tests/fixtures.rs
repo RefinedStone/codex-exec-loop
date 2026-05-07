@@ -9,8 +9,10 @@ use anyhow::Result;
 
 use crate::adapter::inbound::tui::app::{ConversationState, NativeTuiApp};
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort,
+use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+use crate::application::port::outbound::startup_probe_port::{
+    AppServerStartupContext, StartupProbePort,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
@@ -22,9 +24,9 @@ use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 
 // Shared app-server fake for inline rendering tests.
 // It models a healthy bridge and quiet streams because these tests seed UI state directly on NativeTuiApp.
-struct FakeCodexAppServerPort;
+struct FakeAppServerPort;
 
-impl CodexAppServerPort for FakeCodexAppServerPort {
+impl StartupProbePort for FakeAppServerPort {
     // Startup diagnostics stay green so inline terminal tests do not accidentally validate startup failure copy.
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         Ok(AppServerStartupContext {
@@ -36,15 +38,28 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
             warnings: Vec::new(),
         })
     }
+}
 
+impl SessionCatalogPort for FakeAppServerPort {
     // Return a successful empty catalog: session capability is available, but no session rows pollute viewport assertions.
-    fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
+    fn load_session_catalog(
+        &self,
+        _request: crate::domain::recent_sessions::SessionCatalogRequest,
+    ) -> Result<SessionCatalog> {
         Ok(RecentSessions {
             items: Vec::new(),
             warnings: Vec::new(),
             next_cursor: None,
         }
         .into())
+    }
+}
+
+impl InteractiveTurnRuntimePort for FakeAppServerPort {
+    fn runtime_control_truth(
+        &self,
+    ) -> crate::domain::conversation::ConversationRuntimeControlTruth {
+        crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server()
     }
 
     // Resumed-session paths need a stable snapshot whose identity follows the request but whose content is fixed.
@@ -89,7 +104,7 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
 // The service graph mirrors production wiring while every nondeterministic boundary is pinned to a local fake/default.
 pub(super) fn make_test_app() -> NativeTuiApp {
     // One Arc-backed port is shared across startup, session, and conversation services to preserve production ownership shape.
-    let codex_port = Arc::new(FakeCodexAppServerPort);
+    let codex_port = Arc::new(FakeAppServerPort);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),

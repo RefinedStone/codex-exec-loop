@@ -72,7 +72,7 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("class=\"admin-layout\""));
     assert!(BASE_TEMPLATE.contains("aria-label=\"Admin navigation\""));
     assert!(BASE_TEMPLATE.contains("class=\"workspace-chip\""));
-    assert!(BASE_TEMPLATE.contains("href=\"/admin/legacy\""));
+    assert!(!BASE_TEMPLATE.contains("legacy"));
     assert!(BASE_TEMPLATE.contains("href=\"#pool\""));
     assert!(BASE_TEMPLATE.contains("href=\"#pipeline\""));
     assert!(BASE_TEMPLATE.contains("href=\"#system\""));
@@ -96,7 +96,7 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
 }
 
 #[test]
-fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
+fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     for copy in [
         "게임발전국",
         "AKRA Admin Control Center",
@@ -144,7 +144,6 @@ fn akra_graphic_dashboard_keeps_legacy_admin_and_snapshot_surfaces() {
 
     for route in [
         ".route(\"/admin\", get(pages::akra_dashboard_page))",
-        ".route(\"/admin/legacy\", get(pages::dashboard_page))",
         "\"/api/admin/akra/dashboard\"",
         "\"/api/admin/akra/pool\"",
         "\"/api/admin/akra/agents\"",
@@ -200,7 +199,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "admin-character-sprites.svg",
         "ADMIN_GRAPHIC_CAPTURE",
         "akra-admin",
-        "/admin/legacy",
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
         "/api/admin/akra/dashboard",

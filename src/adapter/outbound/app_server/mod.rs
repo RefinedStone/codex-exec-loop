@@ -38,11 +38,13 @@ use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
-use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort,
-};
+use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+};
+use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+use crate::application::port::outbound::startup_probe_port::{
+    AppServerStartupContext, StartupProbePort,
 };
 use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, emit_codex_app_server_launch_attachment,
@@ -50,7 +52,9 @@ use crate::application::service::conversation_runtime_event::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
-use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+use crate::domain::recent_sessions::{
+    RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 use serde_json::json;
 
@@ -504,7 +508,7 @@ impl CodexAppServerAdapter {
     }
 }
 
-impl CodexAppServerPort for CodexAppServerAdapter {
+impl StartupProbePort for CodexAppServerAdapter {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         /*
          * Startup context is the first consumer of the shared runtime batch. It combines
@@ -528,8 +532,10 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             warnings: output.warnings,
         })
     }
+}
 
-    fn load_recent_sessions(&self, limit: usize) -> Result<SessionCatalog> {
+impl SessionCatalogPort for CodexAppServerAdapter {
+    fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog> {
         /*
          * Recent sessions are provider-backed because app-server owns thread storage,
          * pagination, and source metadata. This adapter only maps wire records to
@@ -538,7 +544,7 @@ impl CodexAppServerPort for CodexAppServerAdapter {
         let output =
             self.with_shared_runtime(SharedRuntimeRequestKind::RecentSessions, |connection, _| {
                 connection.list_threads(ThreadListParams {
-                    limit: Some(limit),
+                    limit: Some(request.limit),
                     ..ThreadListParams::default()
                 })
             })?;
@@ -558,7 +564,9 @@ impl CodexAppServerPort for CodexAppServerAdapter {
             },
         ))
     }
+}
 
+impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
     fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
         ConversationRuntimeControlTruth::codex_app_server()
     }

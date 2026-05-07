@@ -10,11 +10,6 @@ use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
  * 이 파일은 그 상태가 overlay마다 다른 단어로 번역되는 것을 막아 startup gate와 recent-session
  * capability를 같은 vocabulary로 보여 준다.
  */
-#[cfg(test)]
-pub(super) fn thread_history_loading_header_line() -> &'static str {
-    "Reading thread history from codex app-server."
-}
-
 pub(super) fn thread_history_loading_status_line() -> &'static str {
     "status: waiting for thread history from codex app-server"
 }

@@ -18,11 +18,6 @@ mod option_lines;
 #[path = "overlays/popup.rs"]
 mod popup;
 
-// shell frame view builder는 contract test가 layout/view boundary를 직접 고정할 때만
-// 필요하다. production renderer는 더 높은 frontend path에서 overlay view를 조합한다.
-#[cfg(test)]
-pub(crate) use base::build_conversation_shell_frame_view;
-
 // startup banner는 modal이 아니라 shell boot copy다. 그래도 shell presentation
 // ownership에 속하므로 overlay surface에서 함께 공개한다.
 pub(crate) use base::build_startup_banner_lines;

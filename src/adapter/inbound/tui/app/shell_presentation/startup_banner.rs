@@ -1,6 +1,4 @@
 use super::Line;
-#[cfg(test)]
-use super::ShellCorePresentationContext;
 
 // Startup banner art is intentionally compile-time data: the first shell frame can be built before diagnostics,
 // file IO, or app-server attachment complete, and every frontend receives the same terminal-safe glyph grid.
@@ -12,22 +10,6 @@ const STARTUP_ASCII_ART_DEFAULT: &str = r#"
 ██║  ██║██║  ██╗██║  ██║██║  ██║
 ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
 "#;
-
-// Test-only context entrypoint mirrors the production wrapper without requiring a full NativeTuiApp fixture.
-// It verifies that the shared startup-screen predicate and the shared art renderer stay coupled.
-#[cfg(test)]
-pub(super) fn build_startup_banner_lines_from_context(
-    context: &ShellCorePresentationContext<'_>,
-    // Inline terminal and small popups can pass their measured height so the banner crops before layout.
-    max_height: Option<u16>,
-) -> Option<Vec<Line<'static>>> {
-    // None means "render the normal shell body"; an empty Vec would look like an active but blank startup surface.
-    if !context.startup_banner_is_active() || max_height == Some(0) {
-        return None;
-    }
-
-    Some(startup_ascii_art_lines(max_height))
-}
 
 // Convert the raw AKRA logo into ratatui lines and apply the only geometry policy owned by this module.
 // Callers decide whether a startup banner is active; this function only normalizes and crops the art.

@@ -87,12 +87,6 @@ impl AkraTheme {
             .title(title)
     }
 
-    #[cfg(test)]
-    // geometry test는 runtime에 layout helper를 노출하지 않고도 production과 같은 border contract를 사용한다.
-    pub(super) fn panel_inner(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-        Block::default().borders(Borders::ALL).inner(area)
-    }
-
     // shared heading grammar다. brand, section title, suffix가 surface마다 예측 가능한 span 순서로 배치된다.
     pub(super) fn title_line(text: &'static str, suffix: &'static str) -> Line<'static> {
         Line::from(vec![

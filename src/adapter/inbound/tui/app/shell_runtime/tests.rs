@@ -10,15 +10,16 @@ use crate::adapter::inbound::tui::app::{
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort,
-};
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+use crate::application::port::outbound::startup_probe_port::{
+    AppServerStartupContext, StartupProbePort,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
@@ -54,8 +55,8 @@ mod scheduler;
 // background workers, and TUI state meet. The fakes below keep outbound ports
 // deterministic while still driving the same message paths as the real app.
 #[derive(Default)]
-struct FakeCodexAppServerPort;
-impl CodexAppServerPort for FakeCodexAppServerPort {
+struct FakeAppServerPort;
+impl StartupProbePort for FakeAppServerPort {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         Ok(AppServerStartupContext {
             attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
@@ -65,13 +66,22 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
             warnings: Vec::new(),
         })
     }
-    fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
+}
+impl SessionCatalogPort for FakeAppServerPort {
+    fn load_session_catalog(&self, _request: SessionCatalogRequest) -> Result<SessionCatalog> {
         Ok(RecentSessions {
             items: Vec::new(),
             warnings: Vec::new(),
             next_cursor: None,
         }
         .into())
+    }
+}
+impl InteractiveTurnRuntimePort for FakeAppServerPort {
+    fn runtime_control_truth(
+        &self,
+    ) -> crate::domain::conversation::ConversationRuntimeControlTruth {
+        crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server()
     }
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
         Ok(ConversationSnapshot {
@@ -161,7 +171,7 @@ struct ShellRuntimeParallelFixture {
 // Runtime fixtures use real services around fake ports so tests cover
 // ShellRuntime orchestration instead of isolated state mutations.
 fn make_test_runtime() -> ShellRuntime {
-    let codex_port = Arc::new(FakeCodexAppServerPort);
+    let codex_port = Arc::new(FakeAppServerPort);
     let app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
@@ -177,7 +187,7 @@ fn make_test_runtime() -> ShellRuntime {
     ShellRuntime::new(app)
 }
 fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>) -> ShellRuntime {
-    let codex_port = Arc::new(FakeCodexAppServerPort);
+    let codex_port = Arc::new(FakeAppServerPort);
     let app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(session_port),
@@ -221,7 +231,7 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
     let worker_port = Arc::new(CountingParallelAgentWorkerPort {
         launch_count: launch_count.clone(),
     });
-    let codex_port = Arc::new(FakeCodexAppServerPort);
+    let codex_port = Arc::new(FakeAppServerPort);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),

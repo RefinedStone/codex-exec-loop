@@ -3,12 +3,6 @@
 #[cfg(test)]
 use ratatui::text::Line;
 
-// 실제 shell budget을 재사용해 test projection이 production composer/footer constraint와 함께 움직이게 한다.
-#[cfg(test)]
-use super::{
-    MAX_COMPOSER_HEIGHT, MAX_SHELL_STATUS_HEIGHT, MIN_COMPOSER_HEIGHT, MIN_SHELL_STATUS_HEIGHT,
-};
-
 // bounded viewport 안에서 최신 transcript row가 보이도록 scroll offset을 계산한다.
 #[cfg(test)]
 pub(super) fn build_conversation_scroll_offset(
@@ -42,27 +36,6 @@ fn count_rendered_conversation_lines(lines: &[Line<'static>], content_width: u16
         // Line::width는 ratatui span display width를 따르며 renderer가 wrap하는 단위와 같다.
         .map(|line| count_wrapped_rows(line, content_width))
         .sum()
-}
-
-// composer height는 content row와 chrome의 합이고, 긴 prompt가 transcript 영역을 먹지 않도록 clamp한다.
-#[cfg(test)]
-pub(super) fn build_input_block_height(lines: &[Line<'_>]) -> u16 {
-    block_height_for_lines(lines, MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)
-}
-
-// footer/status는 더 조밀한 runtime copy를 담으므로 같은 block formula를 쓰되 별도 budget으로 제한한다.
-#[cfg(test)]
-pub(super) fn build_shell_footer_height(lines: &[Line<'_>]) -> u16 {
-    block_height_for_lines(lines, MIN_SHELL_STATUS_HEIGHT, MAX_SHELL_STATUS_HEIGHT)
-}
-
-// shared shell block formula는 content line과 panel chrome 두 row를 더한 뒤 caller budget 안으로 제한한다.
-#[cfg(test)]
-pub(super) fn block_height_for_lines(lines: &[Line<'_>], min_height: u16, max_height: u16) -> u16 {
-    lines
-        .len()
-        .saturating_add(2)
-        .clamp(min_height as usize, max_height as usize) as u16
 }
 
 // styled logical line 하나가 차지하는 physical terminal row 수로 변환한다.

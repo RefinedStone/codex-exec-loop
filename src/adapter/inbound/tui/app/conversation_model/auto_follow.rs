@@ -101,15 +101,6 @@ impl AutoFollowState {
     }
 
     #[cfg(test)]
-    pub(crate) fn compact_completed_progress_label(&self) -> String {
-        format!(
-            "{}/{} done",
-            self.completed_auto_turns,
-            self.max_auto_turns_label()
-        )
-    }
-
-    #[cfg(test)]
     pub(crate) fn max_auto_turns_value(&self) -> usize {
         self.max_auto_turns
     }

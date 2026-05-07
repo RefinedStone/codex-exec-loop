@@ -1,7 +1,9 @@
 use crate::adapter::inbound::tui::app::{ConversationState, NativeTuiApp, test_helpers};
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::application::port::outbound::codex_app_server_port::{
-    AppServerStartupContext, CodexAppServerPort,
+use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+use crate::application::port::outbound::startup_probe_port::{
+    AppServerStartupContext, StartupProbePort,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
@@ -29,9 +31,9 @@ use std::sync::Arc;
  * intentionally stable because many tests compare visible labels, paths, readiness summaries, and
  * overlay placement.
  */
-struct FakeCodexAppServerPort;
+struct FakeAppServerPort;
 
-impl CodexAppServerPort for FakeCodexAppServerPort {
+impl StartupProbePort for FakeAppServerPort {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
         /*
          * StartupService reads this during app construction. Keeping every startup check healthy
@@ -46,8 +48,13 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
             warnings: Vec::new(),
         })
     }
+}
 
-    fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
+impl SessionCatalogPort for FakeAppServerPort {
+    fn load_session_catalog(
+        &self,
+        _request: crate::domain::recent_sessions::SessionCatalogRequest,
+    ) -> Result<SessionCatalog> {
         // Most shell contracts start from an empty history and inject session rows only when needed.
         Ok(RecentSessions {
             items: Vec::new(),
@@ -55,6 +62,14 @@ impl CodexAppServerPort for FakeCodexAppServerPort {
             next_cursor: None,
         }
         .into())
+    }
+}
+
+impl InteractiveTurnRuntimePort for FakeAppServerPort {
+    fn runtime_control_truth(
+        &self,
+    ) -> crate::domain::conversation::ConversationRuntimeControlTruth {
+        crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server()
     }
 
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
@@ -105,7 +120,7 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
      * uses the filesystem workspace adapter, and parallel mode uses the test helper service. The
      * fixture then normalizes volatile UI state such as cwd, ASCII art, and planning runtime.
      */
-    let codex_port = Arc::new(FakeCodexAppServerPort);
+    let codex_port = Arc::new(FakeAppServerPort);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),

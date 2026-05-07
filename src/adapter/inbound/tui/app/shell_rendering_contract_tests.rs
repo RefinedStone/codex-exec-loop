@@ -302,7 +302,7 @@ fn inline_startup_inspection_replaces_transcript_panel() {
     assert!(!rendered.contains("┌"));
 }
 #[test]
-fn inline_sessions_inspection_renders_browser_panels_without_popup_frame() {
+fn inline_sessions_inspection_renders_browser_panels() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());

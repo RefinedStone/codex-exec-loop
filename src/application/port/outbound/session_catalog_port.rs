@@ -7,8 +7,8 @@ use anyhow::Result;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 
 // `SessionCatalogPort`는 최근/재첨부 가능한 session 목록을 읽는 outbound 계약이다.
-// `SessionService`는 이 trait 하나만 보고 catalog를 요청하고, app-server adapter는 legacy `CodexAppServerPort`
-// 구현을 blanket impl로 이 작은 use-case port에 연결한다.
+// `SessionService`는 이 trait 하나만 보고 catalog를 요청하고, app-server adapter는 이 작은 use-case port를
+// 직접 구현한다.
 //
 // startup probe, interactive turn runtime과 별도 port로 나눈 이유는 TUI가 session overlay를 열 때
 // 긴 turn stream과 무관하게 짧은 catalog 조회만 수행할 수 있게 하기 위해서이다. 테스트도 fake port로 request mapping만

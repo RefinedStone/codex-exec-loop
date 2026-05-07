@@ -285,21 +285,10 @@ pub(super) enum SandboxPolicyValue {
     DangerFullAccess,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(super) enum ReasoningEffortValue {
-    #[serde(rename = "none")]
-    None,
-    #[serde(rename = "minimal")]
-    Minimal,
-    #[serde(rename = "low")]
-    Low,
     #[serde(rename = "medium")]
     Medium,
-    #[serde(rename = "high")]
-    High,
-    #[serde(rename = "xhigh")]
-    XHigh,
 }
 
 // ThreadStartParams creates new app-server threads, including hidden planning/parallel worker threads.

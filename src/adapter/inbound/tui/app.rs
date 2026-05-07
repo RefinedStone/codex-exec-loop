@@ -45,21 +45,7 @@ const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 20;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
-#[cfg(test)]
-const SHELL_FRAME_MARGIN: u16 = 1;
-#[cfg(test)]
-const MIN_SHELL_HEADER_HEIGHT: u16 = 4;
-#[cfg(test)]
-const MAX_SHELL_HEADER_HEIGHT: u16 = 6;
 const MIN_TRANSCRIPT_PANEL_HEIGHT: u16 = 12;
-#[cfg(test)]
-const MIN_SHELL_STATUS_HEIGHT: u16 = 5;
-#[cfg(test)]
-const MAX_SHELL_STATUS_HEIGHT: u16 = 8;
-#[cfg(test)]
-const MIN_COMPOSER_HEIGHT: u16 = 4;
-#[cfg(test)]
-const MAX_COMPOSER_HEIGHT: u16 = 8;
 const MAX_INLINE_TAIL_HEIGHT: u16 = 10;
 const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
@@ -187,11 +173,6 @@ use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
 use shell_frontend::ShellFrontendMode;
-#[cfg(test)]
-use shell_layout::{
-    block_height_for_lines, build_conversation_scroll_offset, build_input_block_height,
-    build_shell_footer_height,
-};
 #[cfg(test)]
 use shell_presentation::format_conversation_lines;
 #[cfg(test)]

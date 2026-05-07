@@ -119,8 +119,10 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::shell_chrome::StartupState;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::codex_app_server_port::{
-        AppServerStartupContext, CodexAppServerPort,
+    use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::application::port::outbound::startup_probe_port::{
+        AppServerStartupContext, StartupProbePort,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::domain::conversation::ConversationSnapshot;
@@ -133,9 +135,9 @@ mod tests {
      * letting background session/conversation behavior dominate the assertion.
      */
     #[derive(Default)]
-    struct FakeCodexAppServerPort;
+    struct FakeAppServerPort;
 
-    impl CodexAppServerPort for FakeCodexAppServerPort {
+    impl StartupProbePort for FakeAppServerPort {
         fn load_startup_context(&self) -> Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
                 attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
@@ -145,13 +147,27 @@ mod tests {
                 warnings: Vec::new(),
             })
         }
-        fn load_recent_sessions(&self, _limit: usize) -> Result<SessionCatalog> {
+    }
+
+    impl SessionCatalogPort for FakeAppServerPort {
+        fn load_session_catalog(
+            &self,
+            _request: crate::domain::recent_sessions::SessionCatalogRequest,
+        ) -> Result<SessionCatalog> {
             Ok(RecentSessions {
                 items: Vec::new(),
                 warnings: Vec::new(),
                 next_cursor: None,
             }
             .into())
+        }
+    }
+
+    impl InteractiveTurnRuntimePort for FakeAppServerPort {
+        fn runtime_control_truth(
+            &self,
+        ) -> crate::domain::conversation::ConversationRuntimeControlTruth {
+            crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server()
         }
         fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
             Ok(ConversationSnapshot {
@@ -190,7 +206,7 @@ mod tests {
          * fake app-server, noop parallel worker, test parallel-mode service, and local filesystem
          * planning workspace. That keeps prepare_runtime tests about shell startup sequencing.
          */
-        let codex_port = Arc::new(FakeCodexAppServerPort);
+        let codex_port = Arc::new(FakeAppServerPort);
         NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),

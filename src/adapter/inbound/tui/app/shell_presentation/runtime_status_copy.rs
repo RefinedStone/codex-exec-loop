@@ -2,8 +2,6 @@ use std::time::{Duration, Instant};
 
 use crate::domain::text::compact_whitespace_detail;
 
-#[cfg(test)]
-use super::Style;
 use super::{
     AkraTheme, AutoFollowRuntimePhase, ConversationInputState, ConversationViewModel, Line,
     Modifier, Span,
@@ -135,19 +133,6 @@ pub(super) fn auto_follow_prompt_status_line(
     })
 }
 
-#[cfg(test)]
-pub(super) fn auto_follow_prompt_lines(
-    conversation: &ConversationViewModel,
-) -> Option<Vec<Line<'static>>> {
-    // 테스트용 multiline helper는 동일한 status core를 써서 inline/multiline copy가
-    // phase mapping을 따로 drift하지 않게 한다.
-    let detail = auto_follow_prompt_status_line(conversation, false)?;
-    Some(vec![
-        Line::from(format!("Auto follow-up is {detail}.")),
-        Line::from("Type now; press Enter after the shell returns idle."),
-    ])
-}
-
 pub(in super::super) fn format_elapsed(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
     let hours = total_seconds / 3600;
@@ -173,19 +158,6 @@ pub(super) fn inline_input_state_label(input_state: ConversationInputState) -> &
         ConversationInputState::ReadyToContinue => "ready",
         ConversationInputState::SubmittingTurn => "sending",
         ConversationInputState::StreamingTurn => "streaming",
-    }
-}
-
-#[cfg(test)]
-pub(super) fn input_state_style(input_state: ConversationInputState) -> Style {
-    // 상태 색은 테스트 snapshot에서만 직접 검증한다. production 렌더링은 같은 helper를
-    // 거쳐 ready/sending/streaming의 시각적 의미를 맞춘다.
-    match input_state {
-        ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue => {
-            AkraTheme::success()
-        }
-        ConversationInputState::SubmittingTurn => AkraTheme::warning(),
-        ConversationInputState::StreamingTurn => AkraTheme::accent(),
     }
 }
 

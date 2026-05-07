@@ -52,15 +52,6 @@ pub(crate) enum ConversationInputState {
     StreamingTurn,
 }
 impl ConversationInputState {
-    #[cfg(test)]
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::DraftReady => "draft ready",
-            Self::ReadyToContinue => "ready",
-            Self::SubmittingTurn => "submitting",
-            Self::StreamingTurn => "streaming",
-        }
-    }
     pub(crate) fn can_submit_now(self) -> bool {
         matches!(self, Self::DraftReady | Self::ReadyToContinue)
     }

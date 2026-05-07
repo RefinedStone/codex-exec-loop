@@ -17,7 +17,7 @@ use super::{AkraTheme, Line, NativeTuiApp, Span, StartupState};
 /*
  * capability_projection은 NativeTuiApp의 runtime capability 상태를 renderer-ready Line/String으로
  * 접는 계층이다. capability_copy가 문구 자체를 소유하고, 이 파일은 StartupState/SessionState 같은
- * app state를 읽어 어떤 문구와 색을 선택할지 결정한다. shell_core, popup_frame, inline_inspection은
+ * app state를 읽어 어떤 문구와 색을 선택할지 결정한다. shell_core와 inline_inspection은
  * 이 projection 결과만 받아 배치한다.
  */
 pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

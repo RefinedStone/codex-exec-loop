@@ -207,7 +207,7 @@ impl NativeFlowHarness {
         );
         bootstrap_active_planning_workspace_with_services(&planning, &workspace_dir);
         let worker_port = Arc::new(FlowParallelAgentWorkerPort::default());
-        let codex_port = Arc::new(FakeCodexAppServerPort);
+        let codex_port = Arc::new(FakeAppServerPort);
         let mut app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),

@@ -28,7 +28,7 @@ impl ShellFrontend {
     // production draw path는 ratatui adapter에서 같은 값을 직접 전달한다.
     #[cfg(test)]
     pub(super) fn mode(self) -> ShellFrontendMode {
-        // 이 값이 바뀌면 shell_rendering, popup_frame, inline terminal testkit의 layout contract도 같이 바뀐다.
+        // 이 값이 바뀌면 shell_rendering과 inline terminal testkit의 layout contract도 같이 바뀐다.
         ShellFrontendMode::InlineMainBuffer
     }
 

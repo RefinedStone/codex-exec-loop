@@ -14,7 +14,6 @@ capture_mode="${ADMIN_GRAPHIC_CAPTURE:-auto}"
 output_dir="${ADMIN_GRAPHIC_OUTPUT_DIR:-target/admin-graphic-visual}"
 server_log="${output_dir}/akra-admin.log"
 admin_html="${output_dir}/admin.html"
-legacy_html="${output_dir}/legacy.html"
 dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
@@ -107,7 +106,6 @@ base_url="http://127.0.0.1:${port}"
 wait_for_server "${base_url}/admin"
 
 curl -fsS "${base_url}/admin" >"${admin_html}"
-curl -fsS "${base_url}/admin/legacy" >"${legacy_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
@@ -134,7 +132,6 @@ for token in \
   'Automation Epoch' \
   'Last Updated' \
   'akra_admin' \
-  'Legacy Admin' \
   'data-admin-graphic' \
   'data-api-base' \
   'data-poll-interval-ms' \
@@ -198,10 +195,6 @@ for token in \
   '"operatorMessage":"Runtime event API limit must be 200 or less."'; do
   require_contains "${events_error_json}" "${token}"
 done
-
-require_contains "${legacy_html}" "Workspace Status"
-require_contains "${legacy_html}" "Open Full Planning Draft"
-require_not_contains "${legacy_html}" '<body class="akra-graphic">'
 
 cmp -s assets/admin/graphics/akra-office-background.png "${office_asset}" || {
   echo "served office background asset does not match workspace asset" >&2

@@ -7,10 +7,9 @@ use super::super::{
 };
 
 /*
- * tail_shared는 inline tail과 footer가 같이 쓰는 "짧은 상태 문장"의 정책 모듈이다.
+ * tail_shared는 inline tail이 쓰는 "짧은 상태 문장"의 정책 모듈이다.
  * renderer마다 직접 ConversationViewModel을 뒤지면 thread label, auto-follow 상태, operator notice의
- * 우선순위와 축약 규칙이 달라지기 쉽다. 그래서 이 파일이 공통 copy를 만들고, tail_copy/footer_copy는
- * 배치와 스타일에만 집중한다.
+ * 우선순위와 축약 규칙이 달라지기 쉽다. 그래서 이 파일이 공통 copy를 만들고, tail_copy는 배치와 스타일에만 집중한다.
  */
 pub(super) fn current_live_agent_lines(
     conversation: &ConversationViewModel,

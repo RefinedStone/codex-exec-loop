@@ -78,35 +78,6 @@ pub(super) async fn akra_dashboard_page(
     )
 }
 
-pub(super) async fn dashboard_page(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    query: Query<HashMap<String, String>>,
-) -> std::result::Result<Response, StatusCode> {
-    /*
-     * dashboard는 human operator가 admin surface에 들어오는 bootstrap page다.
-     * CSRF cookie를 갱신하고 service overview에 active workspace path를 붙여 template context를 만든다.
-     * JSON client가 summary_api에서 받는 state와 같은 projection을 쓰지만, browser page에는 nav marker와 redirect notice가
-     * 추가된다.
-     */
-    let (jar, csrf_token) = ensure_csrf_cookie(jar);
-    let overview = state
-        .facade
-        .load_overview()
-        .map_err(internal_server_error)?;
-    render_html(
-        jar,
-        DashboardTemplate {
-            page_title: "Planning Admin".to_string(),
-            current_nav: "dashboard",
-            workspace_dir: state.facade.workspace_dir().to_string(),
-            csrf_token,
-            notice: query.get("notice").cloned(),
-            overview,
-        },
-    )
-}
-
 pub(super) async fn directions_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
