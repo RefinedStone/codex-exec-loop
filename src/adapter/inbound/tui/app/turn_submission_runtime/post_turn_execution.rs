@@ -216,7 +216,7 @@ impl PostTurnEvaluationExecutor {
             thread_id: conversation.thread_id.clone(),
             completed_turn_id: request.completed_turn_id.clone(),
             evaluation: ConversationPostTurnEvaluation {
-                planning_runtime_snapshot: runtime_snapshot,
+                runtime_snapshot,
                 planning_repair_state: None,
                 runtime_notices,
                 action,
@@ -908,7 +908,7 @@ fn post_turn_evaluation_timeout_execution(
         thread_id: conversation.thread_id.clone(),
         completed_turn_id: request.completed_turn_id.clone(),
         evaluation: ConversationPostTurnEvaluation {
-            planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
+            runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
             planning_repair_state: None,
             runtime_notices: vec![message.clone()],
             action: ConversationPostTurnAction::SkipAutoFollowup {

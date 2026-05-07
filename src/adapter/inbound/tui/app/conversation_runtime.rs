@@ -76,7 +76,7 @@ pub(super) enum ConversationRuntimeEffect {
 pub(super) struct ConversationPostTurnEvaluation {
     // Fresh planning projection after the just-finished turn. It replaces the
     // embedded conversation snapshot before auto-follow copy is derived.
-    pub planning_runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
     // Repair state is presentation state, but it is decided by post-turn
     // execution where planning files and runtime diagnostics are inspected.
     pub planning_repair_state: Option<PlanningRepairState>,
@@ -363,7 +363,7 @@ pub(super) fn reduce_conversation_runtime(
             let evaluation = *evaluation;
             // Apply the new planning view before acting on the decision; queued
             // or skipped auto-follow copy should describe the latest queue state.
-            state.replace_planning_runtime_snapshot(evaluation.planning_runtime_snapshot);
+            state.replace_planning_runtime_snapshot(evaluation.runtime_snapshot);
             state.planning_repair_state = evaluation.planning_repair_state;
             state.extend_runtime_notices(evaluation.runtime_notices);
             match evaluation.action {
@@ -480,7 +480,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::PostTurnEvaluated {
                 evaluation: Box::new(ConversationPostTurnEvaluation {
-                    planning_runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
+                    runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
                         "Planning Context".to_string(),
                         "queue idle: no executable planning task".to_string(),
                         None,

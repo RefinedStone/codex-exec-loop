@@ -518,7 +518,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: "turn-1".to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
-                    planning_runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
+                    runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
                         "stale snapshot".to_string(),
                     ),
                     planning_repair_state: None,
@@ -568,7 +568,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
         thread_id: "thread-1".to_string(),
         completed_turn_id: "turn-1".to_string(),
         evaluation: Box::new(ConversationPostTurnEvaluation {
-            planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
+            runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
             planning_repair_state: None,
             runtime_notices: vec![notice.to_string()],
             action: ConversationPostTurnAction::SkipAutoFollowup {

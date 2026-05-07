@@ -388,7 +388,7 @@ impl NativeFlowHarness {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
-                    planning_runtime_snapshot: planning_snapshot,
+                    runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
