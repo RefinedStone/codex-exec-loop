@@ -95,7 +95,7 @@ pub struct PlanningTaskCreatePreview {
 pub struct PlanningTaskMutationCommitResult {
     pub committed_planning_revision: i64,
     // queue_head는 caller cache가 아니라 방금 재계산한 projection에서 온다. commit 직후 TUI의
-    // next-task view가 저장된 authority와 같은 상태를 보게 하기 위한 응답 값이다.
+    // queue-head view가 저장된 authority와 같은 상태를 보게 하기 위한 응답 값이다.
     pub queue_head: Option<PriorityQueueTask>,
     pub task_authority_changed: bool,
     pub applied_command_count: usize,
@@ -155,11 +155,11 @@ impl PlanningTaskMutationService {
         )?;
         let direction_title = direction_title(directions, &task.direction_id)
             .unwrap_or_else(|| task.direction_id.clone());
-        let mut next_task_authority = task_authority.clone();
-        next_task_authority.tasks.push(task.clone());
+        let mut candidate_task_authority = task_authority.clone();
+        candidate_task_authority.tasks.push(task.clone());
         // preview는 결과 authority document가 실제로 validation을 통과하고 app이 표시할 queue projection을
         // 만들 수 있을 때만 의미가 있다.
-        let queue_projection = self.validate_and_project(directions, &next_task_authority)?;
+        let queue_projection = self.validate_and_project(directions, &candidate_task_authority)?;
         Ok(PlanningTaskCreatePreview {
             request,
             task,
@@ -204,14 +204,14 @@ impl PlanningTaskMutationService {
                 )?
             };
             let committed_task_id = task.id.clone();
-            let mut next_task_authority = context.task_authority.clone();
-            next_task_authority.tasks.push(task);
+            let mut candidate_task_authority = context.task_authority.clone();
+            candidate_task_authority.tasks.push(task);
             let queue_projection =
-                self.validate_and_project(&context.directions, &next_task_authority)?;
+                self.validate_and_project(&context.directions, &candidate_task_authority)?;
             match self.commit_authority(
                 &preview.request.workspace_directory,
                 Some(observed_revision),
-                &next_task_authority,
+                &candidate_task_authority,
                 &queue_projection,
             )? {
                 PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
@@ -268,15 +268,15 @@ impl PlanningTaskMutationService {
         for _ in 0..=MAX_REVISION_CONFLICT_RETRIES {
             let context = self.load_context(&request.workspace_directory)?;
             observed_revision = Some(context.task_planning_revision);
-            let mut next_task_authority = context.task_authority.clone();
+            let mut candidate_task_authority = context.task_authority.clone();
             let application = self.apply_commands_to_authority(
                 &request,
                 &context.directions,
-                &mut next_task_authority,
+                &mut candidate_task_authority,
                 Utc::now(),
             )?;
             let queue_projection =
-                self.validate_and_project(&context.directions, &next_task_authority)?;
+                self.validate_and_project(&context.directions, &candidate_task_authority)?;
             if !application.changed {
                 // 현재 task definition과 같게 normalize되는 update는 inspected id를 보고하되
                 // authority file은 다시 쓰지 않는다.
@@ -291,7 +291,7 @@ impl PlanningTaskMutationService {
             match self.commit_authority(
                 &request.workspace_directory,
                 observed_revision,
-                &next_task_authority,
+                &candidate_task_authority,
                 &queue_projection,
             )? {
                 PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
