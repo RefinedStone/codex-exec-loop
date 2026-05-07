@@ -421,7 +421,7 @@ impl PostTurnEvaluationExecutor {
             workspace_directory: &request.workspace_directory,
             parent_thread_id: Some(conversation.thread_id.as_str())
                 .filter(|thread_id| !thread_id.trim().is_empty()),
-            parent_turn_id: &request.completed_turn_id,
+            completed_turn_id: &request.completed_turn_id,
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
