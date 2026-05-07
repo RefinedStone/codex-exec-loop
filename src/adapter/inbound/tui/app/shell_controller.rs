@@ -262,7 +262,7 @@ impl NativeTuiApp {
         let request = PlanningTaskIntakeRequest {
             workspace_directory: self.planning_workspace_directory(),
             raw_prompt: prompt,
-            source_turn_id: self.task_intake_parent_turn_id(),
+            legacy_source_turn_id: self.task_intake_parent_turn_id(),
             provenance: crate::domain::planning::TaskMutationProvenance::new(
                 crate::domain::planning::OriginSessionKind::ManualIntake,
             )

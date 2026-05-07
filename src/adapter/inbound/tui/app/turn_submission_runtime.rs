@@ -202,7 +202,7 @@ impl NativeTuiApp {
             .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
                 workspace_directory,
                 raw_prompt: transcript_text.clone(),
-                source_turn_id: None,
+                legacy_source_turn_id: None,
                 parent_thread_id,
                 parent_turn_id,
             }) {

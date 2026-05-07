@@ -237,7 +237,7 @@ impl NativeFlowHarness {
             .prepare_task_intake(PlanningTaskIntakeRequest {
                 workspace_directory: self.workspace_dir.clone(),
                 raw_prompt: prompt.to_string(),
-                source_turn_id: None,
+                legacy_source_turn_id: None,
                 provenance: Default::default(),
                 requested_direction_id: None,
                 observed_planning_revision: None,

@@ -40,7 +40,8 @@ pub use self::draft::{
 pub struct PlanningTaskIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
-    pub source_turn_id: Option<String>,
+    // Legacy task lookup key. New audit fields should be carried in `provenance`.
+    pub legacy_source_turn_id: Option<String>,
     pub provenance: TaskMutationProvenance,
     pub requested_direction_id: Option<String>,
     pub observed_planning_revision: Option<i64>,
@@ -276,7 +277,7 @@ impl PlanningTaskIntakeService {
             PlanningTaskCreatePreviewRequest {
                 workspace_directory: request.workspace_directory.clone(),
                 source: PlanningTaskMutationSource::User,
-                source_turn_id: request.source_turn_id.clone(),
+                source_turn_id: request.legacy_source_turn_id.clone(),
                 provenance: request.provenance.clone(),
                 input: create_input_from_draft(&generated_draft),
             },
@@ -566,7 +567,7 @@ pub(super) mod tests {
         PlanningTaskIntakeRequest {
             workspace_directory: "/tmp/workspace".to_string(),
             raw_prompt: prompt.to_string(),
-            source_turn_id: Some("turn-1".to_string()),
+            legacy_source_turn_id: Some("turn-1".to_string()),
             provenance: TaskMutationProvenance::default(),
             requested_direction_id: None,
             observed_planning_revision: None,
