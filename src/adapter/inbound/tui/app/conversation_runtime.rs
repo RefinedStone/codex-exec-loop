@@ -161,7 +161,9 @@ pub(super) fn reduce_conversation_runtime(
                 });
                 return ConversationRuntimeReduction { state, effects };
             }
-            if matches!(origin, PromptOrigin::Manual) && !state.can_accept_manual_prompt() {
+            if matches!(origin, PromptOrigin::Manual | PromptOrigin::ManualIntake(_))
+                && !state.can_accept_manual_prompt()
+            {
                 // Manual prompts are stricter than internal auto-follow prompts:
                 // startup gates and input state can block the operator even when
                 // an internally queued follow-up is allowed to continue.
@@ -187,6 +189,12 @@ pub(super) fn reduce_conversation_runtime(
                     state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_followup_skip();
                     state.clear_last_planning_task_handoff();
+                }
+                PromptOrigin::ManualIntake(context) => {
+                    state.planning_repair_state = None;
+                    state.auto_follow_state.reset_for_manual_turn();
+                    state.clear_auto_followup_skip();
+                    state.record_manual_intake_handoff(context.handoff_task.as_ref());
                 }
                 PromptOrigin::AutoFollow(context) => {
                     // Record the source turn before the provider stream starts.
@@ -223,7 +231,7 @@ pub(super) fn reduce_conversation_runtime(
                     }
                     message
                 }
-                _ => ConversationMessage::new(
+                PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => ConversationMessage::new(
                     ConversationMessageKind::User,
                     transcript_text,
                     None,
@@ -233,10 +241,10 @@ pub(super) fn reduce_conversation_runtime(
             state.record_submitted_prompt(
                 transcript_message,
                 workspace_directory.clone(),
-                matches!(origin, PromptOrigin::Manual),
+                matches!(origin, PromptOrigin::Manual | PromptOrigin::ManualIntake(_)),
             );
             state.status_text = match origin {
-                PromptOrigin::Manual => "starting turn".to_string(),
+                PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
                     "auto follow-up submitted / turn {auto_follow_progress} / mode: {}",
                     context.mode_label
@@ -407,6 +415,7 @@ pub(super) fn reduce_conversation_runtime(
 fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
     match origin {
         PromptOrigin::Manual => "manual",
+        PromptOrigin::ManualIntake(_) => "manual_intake",
         PromptOrigin::AutoFollow(_) => "auto_follow",
     }
 }

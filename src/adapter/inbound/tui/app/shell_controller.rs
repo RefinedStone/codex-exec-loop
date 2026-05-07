@@ -47,7 +47,7 @@ impl NativeTuiApp {
         // needs a non-interactive pause reason that can be surfaced in status.
         match (prompt_origin, self.shell_action_availability()) {
             (_, ShellActionAvailability::Ready) => "ready".to_string(),
-            (PromptOrigin::Manual, state) => {
+            (PromptOrigin::Manual | PromptOrigin::ManualIntake(_), state) => {
                 format!("{}; open diagnostics with Ctrl+d", state.status_text())
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Pending) => {

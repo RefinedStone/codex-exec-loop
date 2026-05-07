@@ -161,6 +161,7 @@ impl PlanningRuntimeUseCaseBuilder {
         PlanningRuntimeUseCases::new(
             self.dependencies.runtime_facade,
             self.dependencies.task_intake,
+            self.dependencies.manual_intake,
         )
     }
 }

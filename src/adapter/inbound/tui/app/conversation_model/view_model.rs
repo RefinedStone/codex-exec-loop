@@ -20,8 +20,8 @@ use crate::application::service::planning::{
     PlanningTaskHandoff,
 };
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationMessage, ConversationRuntimeControlTruth,
-    ConversationSnapshot,
+    ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
+    ConversationRuntimeControlTruth, ConversationSnapshot,
 };
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
@@ -286,6 +286,21 @@ impl ConversationViewModel {
         }
         self.mark_turn_submitting(workspace_directory);
     }
+    pub(crate) fn record_manual_preparation_failure(
+        &mut self,
+        transcript_text: String,
+        status_text: String,
+    ) {
+        self.push_message(ConversationMessage::new(
+            ConversationMessageKind::User,
+            transcript_text,
+            None,
+            None,
+        ));
+        self.input_buffer.clear();
+        self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
+        self.status_text = status_text;
+    }
     pub(crate) fn record_thread_prepared(&mut self, thread_id: String, title: String, cwd: String) {
         // Thread preparation upgrades a draft into an app-server backed conversation.
         self.thread_id = thread_id;
@@ -439,6 +454,12 @@ impl ConversationViewModel {
     }
     pub(crate) fn clear_last_planning_task_handoff(&mut self) {
         self.last_planning_task_handoff = None;
+    }
+    pub(crate) fn record_manual_intake_handoff(
+        &mut self,
+        handoff_task: Option<&PlanningTaskHandoff>,
+    ) {
+        self.last_planning_task_handoff = handoff_task.cloned();
     }
     pub(crate) fn record_auto_followup_submission(
         &mut self,

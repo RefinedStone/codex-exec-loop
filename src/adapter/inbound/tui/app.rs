@@ -192,12 +192,19 @@ struct AutoFollowupSubmitContext {
     handoff_task: Option<PlanningTaskHandoff>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManualIntakeSubmitContext {
+    transcript_text: String,
+    handoff_task: Option<PlanningTaskHandoff>,
+}
+
 // Prompt origin is captured at submission time so later stream handling can
 // distinguish a manual turn from a reducer-scheduled continuation without
 // inferring intent from prompt text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptOrigin {
     Manual,
+    ManualIntake(Box<ManualIntakeSubmitContext>),
     AutoFollow(Box<AutoFollowupSubmitContext>),
 }
 

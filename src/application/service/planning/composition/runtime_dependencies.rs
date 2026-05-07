@@ -4,6 +4,7 @@ use super::super::runtime::facade::PlanningRuntimeFacadeService;
 // task intake service는 외부 입력을 planning task ledger와 priority queue에 반영하는 runtime path이다.
 // ports와 shared validation/queue services를 조립해 새 instance로 만든다.
 use super::super::runtime::intake::PlanningTaskIntakeService;
+use super::super::runtime::manual_intake::ManualPromptIntakeService;
 // feature ports는 workspace, repository 같은 outbound boundary adapter들을 담는 composition input이다.
 use super::PlanningFeaturePorts;
 // shared services는 validation, runtime facade, priority queue처럼 여러 use case가 공유하는 application
@@ -17,6 +18,7 @@ pub(super) struct PlanningRuntimeUseCaseDependencies {
     pub(super) runtime_facade: PlanningRuntimeFacadeService,
     // task_intake는 inbound runtime 요청을 workspace/task repository/queue update로 변환한다.
     pub(super) task_intake: PlanningTaskIntakeService,
+    pub(super) manual_intake: ManualPromptIntakeService,
 }
 
 // constructor는 composition root의 wiring policy를 캡슐화한다. runtime use case는 원본 ports/services
@@ -36,6 +38,15 @@ impl PlanningRuntimeUseCaseDependencies {
                 ports.task_repository.clone(),
                 services.validation.clone(),
                 services.priority_queue.clone(),
+            ),
+            manual_intake: ManualPromptIntakeService::new(
+                PlanningTaskIntakeService::new(
+                    ports.workspace.clone(),
+                    ports.task_repository.clone(),
+                    services.validation.clone(),
+                    services.priority_queue.clone(),
+                ),
+                services.runtime_facade.clone(),
             ),
         }
     }

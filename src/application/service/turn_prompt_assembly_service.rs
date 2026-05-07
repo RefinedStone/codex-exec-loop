@@ -7,9 +7,6 @@ use crate::application::service::prompt_component::PromptDocument;
 pub struct ManualPromptAssemblyRequest<'a> {
     // operator가 입력한 원문이다. 서비스는 앞뒤 공백만 정리하고 의미를 재작성하지 않는다.
     pub operator_prompt: &'a str,
-    // planning runtime이 현재 queue/readiness/context를 요약해 붙일 수 있는 선택 fragment이다.
-    // 없거나 공백뿐이면 prompt에서 runtime context section 자체가 빠진다.
-    pub planning_prompt_fragment: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,9 +16,6 @@ pub struct ManualPromptAssemblyRequest<'a> {
 pub struct MainSessionPromptAssemblyRequest<'a> {
     // 사용자 요청 또는 distributor가 main session에 넘긴 queue handoff 본문이다.
     pub user_prompt: &'a str,
-    // planning fragment는 user prompt보다 앞의 `runtime context` section에 들어간다.
-    // 모델이 현재 계획/큐 상태를 먼저 읽고 그 다음 사용자 요청을 실행하게 하는 배치이다.
-    pub planning_prompt_fragment: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,8 +49,8 @@ pub struct TurnPromptAssemblyService;
 fn main_session_execution_contract_lines() -> Vec<String> {
     vec![
         "아래 `user-prompt`를 수행하세요.".to_string(),
-        "기존 정책, runtime context, 사용자 요청이 충돌하면 더 구체적이고 최신인 지시를 우선하되 전체 의도를 하나의 실행 계획으로 통합하세요.".to_string(),
-        "`runtime-context`는 현재 저장소/계획/큐 상태를 설명하는 실행 근거이고, `user-prompt`는 이번 turn의 직접 작업 지시입니다.".to_string(),
+        "기존 정책과 사용자 요청이 충돌하면 더 구체적이고 최신인 지시를 우선하되 전체 의도를 하나의 실행 계획으로 통합하세요.".to_string(),
+        "task authority, planning queue, direction authority를 직접 생성/수정/삭제하지 마세요. 필요한 후속 작업은 최종 답변의 follow-up suggestion으로만 남기세요.".to_string(),
     ]
 }
 
@@ -126,8 +120,6 @@ impl TurnPromptAssemblyService {
         self.build_main_session_prompt(MainSessionPromptAssemblyRequest {
             // operator prompt는 main session 관점에서는 user prompt이다.
             user_prompt: request.operator_prompt,
-            // planning fragment도 그대로 전달해 manual turn이 현재 planning context를 잃지 않게 한다.
-            planning_prompt_fragment: request.planning_prompt_fragment,
         })
     }
 
@@ -150,10 +142,7 @@ impl TurnPromptAssemblyService {
             return None;
         }
 
-        Some(render_main_session_prompt(
-            user_prompt,
-            request.planning_prompt_fragment,
-        ))
+        Some(render_main_session_prompt(user_prompt))
     }
 
     // sub session prompt를 만든다. sub session은 handoff 하나가 작업 범위이므로,
@@ -183,20 +172,13 @@ impl TurnPromptAssemblyService {
 }
 
 // main session prompt의 실제 문자열 레이아웃을 담당한다.
-// 형식은 실행 계약, 보고 계약, 선택 runtime context, user prompt 순서이다. 이 순서는 모델이 전역 실행 규칙을 먼저 읽고,
-// 현재 계획 상태를 다음에 읽은 뒤, 마지막으로 수행할 사용자 요청을 보도록 의도한 것이다.
+// 형식은 실행 계약, 보고 계약, user prompt 순서이다. planning context와 task authority mutation 규칙은
+// hidden intake/planner 계층에서만 소비되고 main session에는 compact handoff만 들어온다.
 #[tracing::instrument(level = "trace")]
 fn render_main_session_prompt(
     // 최종 prompt의 `user prompt:` section에 들어갈 실행 요청이다.
     user_prompt: &str,
-    // 있을 때만 `runtime context:` section을 삽입할 planning fragment이다.
-    planning_prompt_fragment: Option<&str>,
 ) -> String {
-    /*
-     * runtime context는 optional이지만, 있으면 system prompt와 final user prompt 사이에 있어야 한다.
-     * 이 위치는 model에게 현재 planning state를 제공하면서도 operator의 직접 요청이 마지막 concrete task instruction으로
-     * 남게 한다.
-     */
     PromptDocument::builder("akra-main-session-turn")
         .lines(
             "execution-contract",
@@ -206,7 +188,6 @@ fn render_main_session_prompt(
             "reporting-contract",
             main_session_reporting_contract_lines(),
         )
-        .optional_text("runtime-context", planning_prompt_fragment)
         .text("user-prompt", user_prompt)
         .build()
         .render()
@@ -238,14 +219,13 @@ mod tests {
     };
 
     #[test]
-    // manual prompt가 공백을 정리하고 빈 planning fragment를 runtime context로 렌더링하지 않는지 확인한다.
-    // 이 테스트가 깨지면 TUI에서 단순 manual 실행을 했을 때 불필요한 빈 context section이 agent 입력에 섞일 수 있다.
+    // manual prompt가 공백을 정리하고 runtime context를 렌더링하지 않는지 확인한다.
+    // 이 테스트가 깨지면 TUI manual 실행에 hidden intake 전용 context가 섞일 수 있다.
     fn manual_prompt_is_trimmed_and_keeps_empty_planning_fragment_out() {
         let service = TurnPromptAssemblyService::new();
 
         let prompt = service.build_manual_prompt(ManualPromptAssemblyRequest {
             operator_prompt: "  ship it  ",
-            planning_prompt_fragment: Some("   "),
         });
 
         let rendered = prompt.expect("manual prompt should render");
@@ -257,20 +237,20 @@ mod tests {
     }
 
     #[test]
-    // planning fragment가 있을 때 system prompt와 user prompt 사이에 runtime context로 들어가는지 확인한다.
-    // 이 위치가 바뀌면 main session이 현재 계획 상태를 읽는 순서가 달라진다.
+    // manual prompt는 planning fragment를 main session prompt에 붙이지 않는다.
+    // task authority context는 hidden intake/planner 쪽에서만 소비되어야 한다.
     fn manual_prompt_appends_planning_fragment_when_present() {
         let service = TurnPromptAssemblyService::new();
 
         let prompt = service.build_manual_prompt(ManualPromptAssemblyRequest {
             operator_prompt: "ship it",
-            planning_prompt_fragment: Some("Planning Context\nQueue Summary"),
         });
 
         let rendered = prompt.expect("manual prompt should render");
-        assert!(rendered.contains("\n[runtime-context]\nPlanning Context\nQueue Summary\n\n"));
+        assert!(!rendered.contains("[runtime-context]"));
+        assert!(!rendered.contains("Planning Context"));
+        assert!(!rendered.contains("Queue Summary"));
         assert!(rendered.ends_with("[user-prompt]\nship it"));
-        assert!(rendered.find("[runtime-context]") < rendered.find("[user-prompt]"));
     }
 
     #[test]
@@ -281,7 +261,6 @@ mod tests {
 
         let prompt = service.build_main_session_prompt(MainSessionPromptAssemblyRequest {
             user_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
-            planning_prompt_fragment: None,
         });
 
         let rendered = prompt.expect("queue prompt should render");

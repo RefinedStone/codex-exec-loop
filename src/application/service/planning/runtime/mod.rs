@@ -4,6 +4,8 @@ pub(crate) mod facade;
 // intake는 사용자 prompt에서 planning task draft/proposal/commit 흐름을 만드는 runtime 입력 계층이다.
 // conversation 입력을 task authority mutation 후보로 낮추는 작업은 runtime의 다른 policy 판단과 분리한다.
 pub(crate) mod intake;
+// manual_intake는 수동 prompt를 main session 전에 task authority handoff 또는 즉답 prompt로 정규화한다.
+pub(crate) mod manual_intake;
 // policy는 auto-follow 가능 여부, workspace invalid 처리, queue head 필요 조건처럼 실행 결정을 순수 규칙으로 분리한다.
 // prompt assembly나 adapter I/O 없이 snapshot만 보고 다음 행동을 판단하게 만든다.
 pub(crate) mod policy;

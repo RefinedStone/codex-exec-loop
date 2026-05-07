@@ -10,23 +10,39 @@ use super::{ConversationViewModel, InlineShellCommand};
 pub(super) enum ConversationInputEvent {
     // Direct buffer edits come from the main prompt composer and must keep the
     // inline command palette derived from the latest buffer text.
-    CharacterTyped { character: char },
+    CharacterTyped {
+        character: char,
+    },
     NewlineInserted,
     BackspacePressed,
     PreviousWordDeleted,
     InputCleared,
     // Palette events are navigation/completion state changes layered on top of
     // the same input buffer; they do not represent prompt submission.
-    InlineCommandPaletteSelectionMoved { delta: isize },
+    InlineCommandPaletteSelectionMoved {
+        delta: isize,
+    },
     InlineCommandPaletteDismissed,
-    InlineCommandPaletteCommandInserted { command: InlineShellCommand },
+    InlineCommandPaletteCommandInserted {
+        command: InlineShellCommand,
+    },
     // Startup submit arm/disarm is the gate between "operator pressed Enter" and
     // "startup checks are ready enough to submit". Edits cancel the arm.
-    StartupSubmitArmed { status_text: String },
-    StartupSubmitDisarmed { status_text: Option<String> },
+    StartupSubmitArmed {
+        status_text: String,
+    },
+    StartupSubmitDisarmed {
+        status_text: Option<String>,
+    },
     // Status-only events let planning, parallel-mode, and shell controllers share
     // the same conversation status field without mutating transcript state.
-    StatusMessageShown { status_text: String },
+    StatusMessageShown {
+        status_text: String,
+    },
+    ManualPromptPreparationFailed {
+        transcript_text: String,
+        status_text: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +102,12 @@ pub(super) fn reduce_conversation_input(
         }
         ConversationInputEvent::StatusMessageShown { status_text } => {
             state.status_text = status_text;
+        }
+        ConversationInputEvent::ManualPromptPreparationFailed {
+            transcript_text,
+            status_text,
+        } => {
+            state.record_manual_preparation_failure(transcript_text, status_text);
         }
     }
 

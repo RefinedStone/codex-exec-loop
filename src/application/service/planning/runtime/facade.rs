@@ -7,6 +7,10 @@
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
+use crate::application::service::planning::runtime::manual_intake::{
+    manual_intake_handoff_from_queue_task, manual_intake_handoff_from_task,
+    manual_intake_task_prompt,
+};
 use crate::application::service::planning::runtime::policy::{
     PlanningAutoFollowBlockReason, PlanningAutoFollowPolicyDecision, PlanningAutoFollowPromptMode,
     PlanningRuntimePolicyService,
@@ -20,7 +24,7 @@ use crate::application::service::turn_prompt_assembly_service::{
     MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionPromptAssemblyRequest,
     TurnPromptAssemblyService,
 };
-use crate::domain::planning::PriorityQueueTask;
+use crate::domain::planning::{PriorityQueueTask, TaskDefinition};
 use anyhow::Result;
 
 // policy view model을 facade에서 re-export해 caller가 runtime import surface 하나만 바라보게 한다.
@@ -142,18 +146,11 @@ impl PlanningRuntimeFacadeService {
             })
     }
 
-    // manual prompt는 user-authored prompt에 current planning fragment를 붙인 형태다. snapshot이 ready가 아니면
-    // prompt assembly service가 fragment 없이 안전하게 조립한다.
-    pub fn build_manual_prompt(
-        &self,
-        operator_prompt: &str,
-        snapshot: &PlanningRuntimeSnapshot,
-    ) -> Option<String> {
+    // manual prompt는 user-authored prompt만 main session으로 넘긴다. planning context와 task mutation 규칙은
+    // hidden intake/planner 경로의 입력으로만 쓰고, main prompt에는 주입하지 않는다.
+    pub fn build_manual_prompt(&self, operator_prompt: &str) -> Option<String> {
         self.turn_prompt_assembly_service
-            .build_manual_prompt(ManualPromptAssemblyRequest {
-                operator_prompt,
-                planning_prompt_fragment: snapshot.prompt_fragment(),
-            })
+            .build_manual_prompt(ManualPromptAssemblyRequest { operator_prompt })
     }
 
     /*
@@ -165,12 +162,38 @@ impl PlanningRuntimeFacadeService {
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
         let queue_head = snapshot.queue_head()?;
-        Some(self.build_task_handoff_with_planning_fragment(queue_head, snapshot.prompt_fragment()))
+        Some(self.build_task_handoff(queue_head))
     }
 
     // 이미 task를 가진 caller가 planning fragment 없이 main-session handoff만 만들 때 쓰는 public helper다.
     pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
-        self.build_task_handoff_with_planning_fragment(task, None)
+        self.build_task_handoff_with_planning_fragment(task)
+    }
+
+    pub fn build_manual_intake_task_handoff(
+        &self,
+        task: &TaskDefinition,
+        direction_title: &str,
+        queue_head: Option<&PriorityQueueTask>,
+        original_prompt: &str,
+    ) -> PlanningMainSessionHandoff {
+        let task_prompt = manual_intake_task_prompt(task, direction_title, original_prompt);
+        let prompt = self
+            .turn_prompt_assembly_service
+            .build_main_session_prompt(MainSessionPromptAssemblyRequest {
+                user_prompt: &task_prompt,
+            })
+            .expect("manual intake task handoff prompt should not be empty");
+        let handoff_task = queue_head
+            .filter(|queue_task| queue_task.task_id.trim() == task.id.trim())
+            .map(manual_intake_handoff_from_queue_task)
+            .unwrap_or_else(|| manual_intake_handoff_from_task(task, direction_title));
+
+        PlanningMainSessionHandoff {
+            prompt,
+            transcript_text: original_prompt.trim().to_string(),
+            task: handoff_task,
+        }
     }
 
     /*
@@ -198,21 +221,19 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * main-session handoff는 operator에게 보이는 conversation에 들어가며 current planning fragment를 포함할 수 있다.
+     * main-session handoff는 operator에게 보이는 conversation에 들어가지만 planning fragment를 포함하지 않는다.
      * transcript marker는 runtime이 built-in continuation을 큐에서 넘겼다는 사실만 기록하고, 내부 queue prompt 전체를
      * chat history에 노출하지 않는다.
      */
     fn build_task_handoff_with_planning_fragment(
         &self,
         task: &PriorityQueueTask,
-        planning_prompt_fragment: Option<&str>,
     ) -> PlanningMainSessionHandoff {
         let task_prompt = render_builtin_next_task_handoff_prompt(task);
         let prompt = self
             .turn_prompt_assembly_service
             .build_main_session_prompt(MainSessionPromptAssemblyRequest {
                 user_prompt: &task_prompt,
-                planning_prompt_fragment,
             })
             .expect("queued task handoff prompt should not be empty");
 

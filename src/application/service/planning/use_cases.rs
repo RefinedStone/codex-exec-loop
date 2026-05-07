@@ -25,6 +25,9 @@ use super::runtime::intake::{
     PlanningTaskIntakeCommitResult, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
     PlanningTaskIntakeService,
 };
+use super::runtime::manual_intake::{
+    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptIntakeService,
+};
 use super::runtime::prompt::PlanningRuntimeSnapshot;
 use super::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
@@ -173,24 +176,32 @@ pub struct PlanningRuntimeUseCases {
     // proposed task intake는 mutation-backed intake service로 위임한다.
     runtime_facade: PlanningRuntimeFacadeService,
     task_intake: PlanningTaskIntakeService,
+    manual_intake: ManualPromptIntakeService,
 }
 impl PlanningRuntimeUseCases {
     pub(crate) fn new(
         runtime_facade: PlanningRuntimeFacadeService,
         task_intake: PlanningTaskIntakeService,
+        manual_intake: ManualPromptIntakeService,
     ) -> Self {
         Self {
             runtime_facade,
             task_intake,
+            manual_intake,
         }
     }
     pub fn build_manual_prompt(
         &self,
         operator_prompt: &str,
-        snapshot: &PlanningRuntimeSnapshot,
+        _snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<String> {
-        self.runtime_facade
-            .build_manual_prompt(operator_prompt, snapshot)
+        self.runtime_facade.build_manual_prompt(operator_prompt)
+    }
+    pub fn prepare_manual_prompt_intake(
+        &self,
+        request: ManualPromptIntakeRequest,
+    ) -> ManualPromptIntakeOutcome {
+        self.manual_intake.prepare_manual_turn(request)
     }
     pub fn build_builtin_next_task_handoff(
         &self,

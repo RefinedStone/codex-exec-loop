@@ -10,7 +10,8 @@ mod stream_execution;
 
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
-    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
+    BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, ManualPromptIntakeOutcome, ManualPromptIntakeRequest,
+    PlanningTaskHandoff,
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 use post_turn_execution::PostTurnEvaluationRequest;
@@ -19,8 +20,9 @@ use stream_execution::PreparedTurnStreamRequest;
 use super::planner_debug_preview::build_debug_preview_lines;
 use super::{
     AutoFollowupSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
-    ConversationRuntimeEvent, ConversationState, InlineShellCommandInput, NativeTuiApp,
-    PromptOrigin, ShellActionAvailability, ShellChromeEvent,
+    ConversationRuntimeEvent, ConversationState, InlineShellCommandInput,
+    ManualIntakeSubmitContext, NativeTuiApp, PromptOrigin, ShellActionAvailability,
+    ShellChromeEvent,
 };
 
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
@@ -185,24 +187,49 @@ impl NativeTuiApp {
             return;
         }
 
-        // Manual prompts are rewritten through the planning runtime. If bootstrap
-        // cannot produce a workspace snapshot, the prompt remains unsubmitted.
-        let prompt = match &self.conversation_state {
-            ConversationState::Ready(conversation) => self
-                .planning
-                .runtime
-                .build_manual_prompt(&transcript_text, &conversation.planning_runtime_snapshot),
-            ConversationState::Loading | ConversationState::Failed(_) => None,
-        };
-        let Some(prompt) = prompt else {
-            return;
-        };
-        let _ = self.submit_prompt_with_transcript(prompt, transcript_text, PromptOrigin::Manual);
+        let workspace_directory = self.planning_workspace_directory();
+        match self
+            .planning
+            .runtime
+            .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                workspace_directory,
+                raw_prompt: transcript_text.clone(),
+                active_turn_id: None,
+            }) {
+            ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
+                let _ = self.submit_prompt_with_transcript(
+                    handoff.prompt,
+                    handoff.transcript_text,
+                    PromptOrigin::Manual,
+                );
+            }
+            ManualPromptIntakeOutcome::TaskCommitted { handoff, .. }
+            | ManualPromptIntakeOutcome::TaskUpdated { handoff, .. } => {
+                let _ = self.submit_prompt_with_transcript(
+                    handoff.prompt,
+                    handoff.transcript_text.clone(),
+                    PromptOrigin::ManualIntake(Box::new(ManualIntakeSubmitContext {
+                        transcript_text: handoff.transcript_text,
+                        handoff_task: handoff.task,
+                    })),
+                );
+            }
+            ManualPromptIntakeOutcome::Rejected { reason }
+            | ManualPromptIntakeOutcome::Failed { reason } => {
+                self.dispatch_conversation_input(
+                    ConversationInputEvent::ManualPromptPreparationFailed {
+                        transcript_text,
+                        status_text: format!("turn preparation failed / {reason}"),
+                    },
+                );
+            }
+        }
     }
 
     pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) -> bool {
         let transcript_text = match &prompt_origin {
             PromptOrigin::Manual => prompt.trim().to_string(),
+            PromptOrigin::ManualIntake(context) => context.transcript_text.clone(),
             PromptOrigin::AutoFollow(context) => context.transcript_text.clone(),
         };
         self.submit_prompt_with_transcript(prompt, transcript_text, prompt_origin)
@@ -214,12 +241,13 @@ impl NativeTuiApp {
         transcript_text: String,
         prompt_origin: PromptOrigin,
     ) -> bool {
-        if matches!(prompt_origin, PromptOrigin::Manual)
-            && matches!(
-                self.shell_action_availability(),
-                ShellActionAvailability::Pending
-            )
-        {
+        if matches!(
+            prompt_origin,
+            PromptOrigin::Manual | PromptOrigin::ManualIntake(_)
+        ) && matches!(
+            self.shell_action_availability(),
+            ShellActionAvailability::Pending
+        ) {
             self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
                 status_text: "prompt queued until startup checks finish".to_string(),
             });
@@ -368,6 +396,7 @@ fn user_prompt_submit_detail(
 fn prompt_origin_label(prompt_origin: &PromptOrigin) -> &'static str {
     match prompt_origin {
         PromptOrigin::Manual => "Manual",
+        PromptOrigin::ManualIntake(_) => "ManualIntake",
         PromptOrigin::AutoFollow(_) => "AutoFollow",
     }
 }

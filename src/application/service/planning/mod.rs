@@ -97,6 +97,9 @@ pub use self::runtime::intake::{
     PlanningTaskIntakeDraft, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
     PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
 };
+pub use self::runtime::manual_intake::{
+    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainHandoff,
+};
 // auto-follow block reason은 runtime policy가 자동 후속 실행을 막은 이유를 UI copy와 테스트가 분기할 수 있게 공개한다.
 pub use self::runtime::policy::PlanningAutoFollowBlockReason;
 // runtime snapshot/status는 현재 planning workspace가 실행 가능한지, task가 있는지, invalid인지 판단하는 핵심 projection이다.
