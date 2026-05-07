@@ -4,6 +4,7 @@
  * inbound adapter가 바로 소비할 return shape로 순서화한다. adapter는 내부 service graph를 모르고 이 facade의
  * 작은 DTO와 method만 알면 된다.
  */
+use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
@@ -204,11 +205,20 @@ impl PlanningRuntimeFacadeService {
         &self,
         task: &PriorityQueueTask,
     ) -> PlanningSubSessionHandoff {
+        self.build_sub_session_task_handoff_with_persona(task, ParallelAgentPersona::None)
+    }
+
+    pub fn build_sub_session_task_handoff_with_persona(
+        &self,
+        task: &PriorityQueueTask,
+        persona: ParallelAgentPersona,
+    ) -> PlanningSubSessionHandoff {
         let task_prompt = render_queued_task_handoff_prompt(task);
         let prompt = self
             .turn_prompt_assembly_service
             .build_sub_session_prompt(SubSessionPromptAssemblyRequest {
                 handoff_prompt: &task_prompt,
+                persona,
             })
             .expect("queued sub-session handoff prompt should not be empty");
 

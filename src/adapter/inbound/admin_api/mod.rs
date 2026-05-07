@@ -209,6 +209,10 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/admin/tasks/delete", post(pages::delete_task_page))
         .route("/admin/files/export", post(pages::export_files_page))
         .route("/admin/files/apply", post(pages::apply_files_page))
+        .route(
+            "/admin/controls/parallel-persona",
+            post(pages::update_parallel_persona_page),
+        )
         .route("/admin/drafts/{draft_name}", get(pages::editor_page))
         .route(
             "/admin/drafts/{draft_name}/save",
