@@ -232,15 +232,12 @@ impl NativeTuiApp {
         }
 
         raw_event_log::emit_lazy("user_prompt_submit_inspected", || {
-            serde_json::json!({
-                "origin": match &prompt_origin {
-                    PromptOrigin::Manual => "Manual",
-                    PromptOrigin::AutoFollow(_) => "AutoFollow",
-                },
-                "transcript_text_len": transcript_text.len(),
-                "prompt_len": prompt.len(),
-                "parallel_mode_enabled": self.parallel_mode_enabled(),
-            })
+            user_prompt_submit_detail(
+                &prompt,
+                &transcript_text,
+                &prompt_origin,
+                self.parallel_mode_enabled(),
+            )
         });
 
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::SubmitPrompt {
@@ -344,6 +341,51 @@ impl NativeTuiApp {
         append_debug_detail_preview_block(&mut lines, "planner response:", response);
 
         Some(lines.join("\n"))
+    }
+}
+
+fn user_prompt_submit_detail(
+    prompt: &str,
+    transcript_text: &str,
+    prompt_origin: &PromptOrigin,
+    parallel_mode_enabled: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "origin": prompt_origin_label(prompt_origin),
+        "transcript_text": transcript_text,
+        "transcript_text_len": transcript_text.len(),
+        "prompt": prompt,
+        "prompt_len": prompt.len(),
+        "parallel_mode_enabled": parallel_mode_enabled,
+    })
+}
+
+fn prompt_origin_label(prompt_origin: &PromptOrigin) -> &'static str {
+    match prompt_origin {
+        PromptOrigin::Manual => "Manual",
+        PromptOrigin::AutoFollow(_) => "AutoFollow",
+    }
+}
+
+#[cfg(test)]
+mod prompt_submit_diagnostics_tests {
+    use super::{PromptOrigin, user_prompt_submit_detail};
+
+    #[test]
+    fn user_prompt_submit_detail_keeps_operator_text_and_final_prompt() {
+        let detail = user_prompt_submit_detail(
+            "planner wrapper\noperator text",
+            "operator text",
+            &PromptOrigin::Manual,
+            true,
+        );
+
+        assert_eq!(detail["origin"], "Manual");
+        assert_eq!(detail["transcript_text"], "operator text");
+        assert_eq!(detail["transcript_text_len"], 13);
+        assert_eq!(detail["prompt"], "planner wrapper\noperator text");
+        assert_eq!(detail["prompt_len"], 29);
+        assert_eq!(detail["parallel_mode_enabled"], true);
     }
 }
 
