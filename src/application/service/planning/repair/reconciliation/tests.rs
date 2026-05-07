@@ -330,6 +330,7 @@ fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
         created_by: TaskActor::Llm,
         last_updated_by: TaskActor::Llm,
         source_turn_id: None,
+        provenance: Default::default(),
         updated_at: updated_at.to_string(),
     }
 }

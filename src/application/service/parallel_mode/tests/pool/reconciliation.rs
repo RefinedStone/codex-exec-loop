@@ -445,6 +445,7 @@ fn parallel_entry_reset_preserves_existing_planning_tasks() {
             created_by: TaskActor::User,
             last_updated_by: TaskActor::User,
             source_turn_id: None,
+            provenance: Default::default(),
             updated_at: queue_task.updated_at.clone(),
         }],
     };

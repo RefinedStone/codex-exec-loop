@@ -192,8 +192,10 @@ fn upsert_task_row(
         .execute(
             "INSERT INTO planning_tasks
              (task_id, task_order, direction_id, title, status, base_priority,
-              dynamic_priority_delta, combined_priority, updated_at, source_turn_id, content_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+              dynamic_priority_delta, combined_priority, updated_at, source_turn_id,
+              origin_session_kind, thread_id, turn_id, parent_thread_id, parent_turn_id,
+              content_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(task_id) DO UPDATE SET
                  task_order = excluded.task_order,
                  direction_id = excluded.direction_id,
@@ -204,6 +206,11 @@ fn upsert_task_row(
                  combined_priority = excluded.combined_priority,
                  updated_at = excluded.updated_at,
                  source_turn_id = excluded.source_turn_id,
+                 origin_session_kind = excluded.origin_session_kind,
+                 thread_id = excluded.thread_id,
+                 turn_id = excluded.turn_id,
+                 parent_thread_id = excluded.parent_thread_id,
+                 parent_turn_id = excluded.parent_turn_id,
                  content_json = excluded.content_json",
             params![
                 task_id,
@@ -216,6 +223,13 @@ fn upsert_task_row(
                 task.combined_priority(),
                 task.updated_at.as_str(),
                 task.source_turn_id.as_deref(),
+                task.provenance
+                    .origin_session_kind
+                    .map(|origin_session_kind| origin_session_kind.label()),
+                task.provenance.thread_id.as_deref(),
+                task.provenance.turn_id.as_deref(),
+                task.provenance.parent_thread_id.as_deref(),
+                task.provenance.parent_turn_id.as_deref(),
                 serde_json::to_string(task).context("failed to serialize planning task row")?,
             ],
         )

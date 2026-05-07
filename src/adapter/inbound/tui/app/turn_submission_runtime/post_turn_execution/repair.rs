@@ -59,6 +59,7 @@ impl PostTurnEvaluationExecutor {
             // reason을 함께 싣는 이유는 worker가 "몇 번째 복구이며 왜 반복되는지" 알아야 하기 때문이다.
             let worker_request = PlanningLedgerRepairRequest {
                 workspace_directory,
+                root_thread_id: Some(thread_id).filter(|thread_id| !thread_id.trim().is_empty()),
                 root_turn_id,
                 // Request는 같은 attempt 안에서 prompt 렌더링과 worker 실행이 공유하는 immutable input이다.
                 repair_request: &next_request,

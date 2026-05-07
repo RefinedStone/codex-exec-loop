@@ -307,8 +307,92 @@ pub struct TaskDefinition {
     #[serde(default)]
     // app-server/root turn과 연결되는 optional provenance id다.
     pub source_turn_id: Option<String>,
+    #[serde(default)]
+    // task를 생성하거나 마지막으로 의미 있게 수정한 runtime session/turn provenance다.
+    pub provenance: TaskMutationProvenance,
     // RFC3339 timestamp string이다. validation이 형식을 검사한다.
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskMutationProvenance {
+    /*
+     * provenance는 provider 이름과 무관한 Akra runtime 감사 정보다.
+     * thread_id/turn_id는 실제 mutation을 만든 session/turn이고, parent_*는 hidden/planner/parallel
+     * mutation을 유발한 visible 또는 상위 실행 단위를 가리킨다.
+     */
+    #[serde(default)]
+    pub origin_session_kind: Option<OriginSessionKind>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+    #[serde(default)]
+    pub parent_turn_id: Option<String>,
+}
+
+impl TaskMutationProvenance {
+    pub fn new(origin_session_kind: OriginSessionKind) -> Self {
+        Self {
+            origin_session_kind: Some(origin_session_kind),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_thread_turn(mut self, thread_id: Option<String>, turn_id: Option<String>) -> Self {
+        self.thread_id = normalize_optional_id(thread_id);
+        self.turn_id = normalize_optional_id(turn_id);
+        self
+    }
+
+    pub fn with_parent(
+        mut self,
+        parent_thread_id: Option<String>,
+        parent_turn_id: Option<String>,
+    ) -> Self {
+        self.parent_thread_id = normalize_optional_id(parent_thread_id);
+        self.parent_turn_id = normalize_optional_id(parent_turn_id);
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.origin_session_kind.is_none()
+            && self.thread_id.is_none()
+            && self.turn_id.is_none()
+            && self.parent_thread_id.is_none()
+            && self.parent_turn_id.is_none()
+    }
+}
+
+fn normalize_optional_id(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginSessionKind {
+    Main,
+    ManualIntake,
+    Planner,
+    Parallel,
+    System,
+}
+
+impl OriginSessionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::ManualIntake => "manual_intake",
+            Self::Planner => "planner",
+            Self::Parallel => "parallel",
+            Self::System => "system",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -77,6 +77,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut changed_planning_file_paths = Vec::new();
         let mut failure_message = None;
         let mut worker_thread_id = None;
+        let mut worker_turn_id = None;
 
         /*
          * A launch error means no reliable stream exists to drain. Once launch
@@ -123,8 +124,10 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 ConversationStreamEvent::ThreadPrepared { thread_id, .. } => {
                     worker_thread_id = Some(thread_id);
                 }
+                ConversationStreamEvent::TurnStarted { turn_id } => {
+                    worker_turn_id = Some(turn_id);
+                }
                 ConversationStreamEvent::AttachmentObserved { .. }
-                | ConversationStreamEvent::TurnStarted { .. }
                 | ConversationStreamEvent::StatusUpdated { .. }
                 | ConversationStreamEvent::AgentMessageDelta { .. }
                 | ConversationStreamEvent::ToolActivity { .. }
@@ -144,6 +147,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
             event_log::emit_lazy("planning_worker_session_stream_failed", || {
                 json!({
                     "thread_id": worker_thread_id.as_deref(),
+                    "turn_id": worker_turn_id.as_deref(),
                     "operation": operation_label(request.operation),
                     "phase": "stream_failed",
                     "workspace_directory": &request.workspace_directory,
@@ -158,6 +162,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         event_log::emit_lazy("planning_worker_session_reduced", || {
             json!({
                 "thread_id": worker_thread_id.as_deref(),
+                "turn_id": worker_turn_id.as_deref(),
                 "operation": operation_label(request.operation),
                 "phase": "reduced",
                 "workspace_directory": &request.workspace_directory,
@@ -170,6 +175,8 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         });
         Ok(PlanningWorkerResponse {
             operation: request.operation,
+            thread_id: worker_thread_id,
+            turn_id: worker_turn_id,
             final_agent_message,
             changed_planning_file_paths,
         })
@@ -253,6 +260,9 @@ mod tests {
                     phase: None,
                     text: "planning updated".to_string(),
                 },
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-1".to_string(),
+                },
                 ConversationStreamEvent::TurnCompleted {
                     turn_id: "turn-1".to_string(),
                     changed_planning_file_paths: vec!["DB task authority".to_string()],
@@ -278,6 +288,8 @@ mod tests {
             result.changed_planning_file_paths,
             vec!["DB task authority".to_string()]
         );
+        assert_eq!(result.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(result.turn_id.as_deref(), Some("turn-1"));
         assert_eq!(
             fake_launcher
                 .calls

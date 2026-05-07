@@ -15,7 +15,12 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeSlotLeaseSnapshot,
     ParallelModeSlotLeaseState,
 };
-use crate::domain::planning::{PriorityQueueProjection, TaskAuthorityDocument};
+use crate::domain::planning::{
+    OriginSessionKind, PriorityQueueProjection, TaskActor, TaskAuthorityDocument, TaskDefinition,
+    TaskMutationProvenance, TaskStatus,
+};
+
+use super::open_authority_connection;
 
 // 테스트마다 SQLite namespace를 분리하는 workspace directory를 만든다. adapter가 workspace path를
 // DB 파일/row scope의 기준으로 쓰므로, 프로세스 id와 nanos를 섞어 병렬 테스트 충돌을 피한다.
@@ -81,6 +86,91 @@ fn task_authority_snapshot_is_committed_to_db_tables() {
     // 성공을 막는다. 두 값이 같은 snapshot으로 돌아와야 planning runtime과 repair flow가 같은 authority를 본다.
     assert_eq!(snapshot.task_authority, task_authority);
     assert_eq!(snapshot.queue_projection, queue_projection);
+}
+
+#[test]
+fn task_authority_snapshot_persists_queryable_provenance_columns() {
+    let workspace_dir = temp_workspace("task-provenance");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+        .with_thread_turn(
+            Some("worker-thread-1".to_string()),
+            Some("worker-turn-1".to_string()),
+        )
+        .with_parent(
+            Some("main-thread-1".to_string()),
+            Some("main-turn-1".to_string()),
+        );
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![TaskDefinition {
+            id: "task-provenance-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_relation_note: "covers provenance storage".to_string(),
+            title: "Persist provenance".to_string(),
+            description: "Persist generic provenance columns.".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 80,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::Llm,
+            last_updated_by: TaskActor::Llm,
+            source_turn_id: Some("worker-turn-1".to_string()),
+            provenance,
+            updated_at: "2026-05-07T09:00:00Z".to_string(),
+        }],
+    };
+    let queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("task authority should commit");
+
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("authority db should open");
+    let row = connection
+        .query_row(
+            "SELECT origin_session_kind, thread_id, turn_id, parent_thread_id, parent_turn_id
+             FROM planning_tasks WHERE task_id = 'task-provenance-1'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .expect("provenance row should load");
+
+    assert_eq!(
+        row,
+        (
+            "planner".to_string(),
+            "worker-thread-1".to_string(),
+            "worker-turn-1".to_string(),
+            "main-thread-1".to_string(),
+            "main-turn-1".to_string(),
+        )
+    );
 }
 
 #[test]

@@ -63,6 +63,7 @@ fn task(
         created_by: TaskActor::User,
         last_updated_by: TaskActor::User,
         source_turn_id: None,
+        provenance: Default::default(),
         updated_at: updated_at.to_string(),
     }
 }

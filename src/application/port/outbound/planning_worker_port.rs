@@ -39,6 +39,10 @@ pub struct PlanningWorkerRequest {
 pub struct PlanningWorkerResponse {
     // 요청 operation을 response에도 보존해 async orchestration 로그와 후속 분기에서 같은 작업으로 식별한다.
     pub operation: PlanningWorkerOperation,
+    // hidden worker session id다. provider 이름과 무관하게 provenance thread_id로 저장된다.
+    pub thread_id: Option<String>,
+    // hidden worker turn id다. task mutation source_turn_id와 generic provenance turn_id로 연결된다.
+    pub turn_id: Option<String>,
     // worker가 마지막으로 완료한 assistant message이다. stream이 tool-only로 끝날 수 있어 optional이다.
     pub final_agent_message: Option<String>,
     // worker turn이 수정했다고 보고한 planning 파일 경로이다. repair/refresh 후 검증과 UI 알림에 연결된다.
@@ -73,6 +77,8 @@ impl PlanningWorkerPort for NoopPlanningWorkerPort {
     ) -> Result<PlanningWorkerResponse> {
         Ok(PlanningWorkerResponse {
             operation: request.operation,
+            thread_id: None,
+            turn_id: None,
             // 사람이 로그나 test failure에서 비활성 fallback을 알아볼 수 있는 고정 메시지이다.
             final_agent_message: Some("planner worker disabled".to_string()),
             // 실제 worker가 돌지 않았으므로 변경된 planning 파일은 없다.

@@ -565,6 +565,7 @@ mod tests {
             created_by: TaskActor::User,
             last_updated_by: TaskActor::User,
             source_turn_id: None,
+            provenance: Default::default(),
             updated_at: "2026-04-09T09:00:00Z".to_string(),
         }
     }

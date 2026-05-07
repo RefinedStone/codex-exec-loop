@@ -4,7 +4,8 @@ use super::task_mutation::{
 };
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::domain::planning::{
-    PriorityQueueService, PriorityQueueTask, TaskDefinition, TaskStatus,
+    OriginSessionKind, PriorityQueueService, PriorityQueueTask, TaskDefinition,
+    TaskMutationProvenance, TaskStatus,
 };
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use std::sync::Arc;
 const TASK_TOOL_CONTRACT_JSON: &str = concat!(
     r#"{"tool":"akra planning-tool","version":1,"#,
     r#""commands":["akra planning-tool contract","akra planning-tool run . < request.json"],"#,
-    r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","source_turn_id":"optional","fields":"flat"},"#,
+    r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","source_turn_id/thread_id/turn_id/parent_thread_id/parent_turn_id":"optional provenance","fields":"flat"},"#,
     r#""rules":["Use before final planning_task_commands.","#,
     r#""Do not edit files, SQL, or JSON authority.","#,
     r#""Run against `.`; in completion prompts do not use payload.worktree_path.","#,
@@ -57,6 +58,11 @@ pub struct PlanningTaskToolCreateRequest {
     // dry planning/list 단계로 model을 유도할 수 있게 하는 안전장치다.
     pub apply: bool,
     pub source_turn_id: Option<String>,
+    pub origin_session_kind: Option<OriginSessionKind>,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub parent_turn_id: Option<String>,
     // flatten은 model이 생성할 JSON을 단순하게 만든다. nested task object 대신
     // {"op":"create_task","title":"..."} 형태를 유지해 prompt 예시와 실제 schema가 가까워진다.
     #[serde(flatten)]
@@ -68,6 +74,11 @@ pub struct PlanningTaskToolUpdateRequest {
     pub version: u32,
     pub apply: bool,
     pub source_turn_id: Option<String>,
+    pub origin_session_kind: Option<OriginSessionKind>,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub parent_turn_id: Option<String>,
     #[serde(flatten)]
     pub input: PlanningTaskUpdatePayload,
 }
@@ -218,13 +229,21 @@ impl PlanningTaskToolService {
             ));
         }
         // 이 API는 planning worker tool이 호출하므로 source는 항상 Llm이다.
-        // source_turn_id는 실제 model turn과 mutation audit record를 이어 주는 provenance다.
+        // generic provenance가 없으면 worker/tool 경계라는 origin만 남긴다.
+        let provenance = task_tool_provenance(
+            request.origin_session_kind,
+            request.thread_id,
+            request.turn_id,
+            request.parent_thread_id,
+            request.parent_turn_id,
+        );
         let mutation = self
             .task_mutation_service
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
                 source: PlanningTaskMutationSource::Llm,
                 source_turn_id: request.source_turn_id,
+                provenance,
                 commands: vec![PlanningTaskMutationCommand::CreateTask(
                     request.input.into(),
                 )],
@@ -243,12 +262,20 @@ impl PlanningTaskToolService {
                 "update_task requires apply=true; run list_tasks first if you need context"
             ));
         }
+        let provenance = task_tool_provenance(
+            request.origin_session_kind,
+            request.thread_id,
+            request.turn_id,
+            request.parent_thread_id,
+            request.parent_turn_id,
+        );
         let mutation = self
             .task_mutation_service
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
                 source: PlanningTaskMutationSource::Llm,
                 source_turn_id: request.source_turn_id,
+                provenance,
                 commands: vec![PlanningTaskMutationCommand::UpdateTask(
                     request.input.into(),
                 )],
@@ -297,6 +324,18 @@ pub fn planning_task_tool_contract_json() -> &'static str {
     // contract는 prompt와 CLI output에 삽입된다. runtime에 Rust type에서 재생성하지 않고
     // compact/stable 문자열로 고정해 model-facing schema drift를 리뷰 가능한 diff로 남긴다.
     TASK_TOOL_CONTRACT_JSON
+}
+
+fn task_tool_provenance(
+    origin_session_kind: Option<OriginSessionKind>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    parent_thread_id: Option<String>,
+    parent_turn_id: Option<String>,
+) -> TaskMutationProvenance {
+    TaskMutationProvenance::new(origin_session_kind.unwrap_or(OriginSessionKind::Planner))
+        .with_thread_turn(thread_id, turn_id)
+        .with_parent(parent_thread_id, parent_turn_id)
 }
 fn validate_version(version: u32) -> Result<()> {
     // tool JSON version은 planning authority document version과 독립이다. command schema가 바뀔 때

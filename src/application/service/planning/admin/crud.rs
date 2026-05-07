@@ -16,7 +16,7 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskMutationRequest,
     PlanningTaskMutationSource, PlanningTaskUpdateInput,
 };
-use crate::domain::planning::TaskStatus;
+use crate::domain::planning::{OriginSessionKind, TaskMutationProvenance, TaskStatus};
 
 /*
  * admin CRUD는 operator-facing mutation bridge다. direction 변경은 direction catalog와 task cascade를 함께
@@ -94,6 +94,7 @@ impl PlanningAdminFacadeService {
                 // audit/debug에서 사람이 바꾼 task와 자동 추출 task를 나눠 볼 수 있다.
                 source: PlanningTaskMutationSource::User,
                 source_turn_id: None,
+                provenance: TaskMutationProvenance::new(OriginSessionKind::System),
                 commands: vec![command],
             })?;
         let task_id = commit.committed_task_ids.first().cloned().ok_or_else(|| {

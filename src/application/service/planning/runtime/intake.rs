@@ -18,7 +18,7 @@ use crate::application::service::planning::task_mutation::{
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles,
-    PriorityQueueTask, TaskAuthorityDocument, TaskDefinition,
+    PriorityQueueTask, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
 };
 
 /*
@@ -41,6 +41,7 @@ pub struct PlanningTaskIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
     pub active_turn_id: Option<String>,
+    pub provenance: TaskMutationProvenance,
     pub requested_direction_id: Option<String>,
     pub observed_planning_revision: Option<i64>,
 }
@@ -276,6 +277,7 @@ impl PlanningTaskIntakeService {
                 workspace_directory: request.workspace_directory.clone(),
                 source: PlanningTaskMutationSource::User,
                 source_turn_id: request.active_turn_id.clone(),
+                provenance: request.provenance.clone(),
                 input: create_input_from_draft(&generated_draft),
             },
             &context.directions,
@@ -528,7 +530,7 @@ pub(super) mod tests {
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig,
-        TaskAuthorityDocument,
+        TaskAuthorityDocument, TaskMutationProvenance,
     };
 
     // active direction 두 개를 두어 generator test가 inactive noise 없이 default direction selection을 검증하게 한다.
@@ -565,6 +567,7 @@ pub(super) mod tests {
             workspace_directory: "/tmp/workspace".to_string(),
             raw_prompt: prompt.to_string(),
             active_turn_id: Some("turn-1".to_string()),
+            provenance: TaskMutationProvenance::default(),
             requested_direction_id: None,
             observed_planning_revision: None,
         }

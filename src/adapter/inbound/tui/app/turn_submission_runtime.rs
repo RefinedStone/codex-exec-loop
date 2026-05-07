@@ -188,6 +188,14 @@ impl NativeTuiApp {
         }
 
         let workspace_directory = self.planning_workspace_directory();
+        let (parent_thread_id, parent_turn_id) = match &self.conversation_state {
+            ConversationState::Ready(conversation) => (
+                Some(conversation.thread_id.clone())
+                    .filter(|thread_id| !thread_id.trim().is_empty()),
+                conversation.active_turn_id.clone(),
+            ),
+            ConversationState::Loading | ConversationState::Failed(_) => (None, None),
+        };
         match self
             .planning
             .runtime
@@ -195,6 +203,8 @@ impl NativeTuiApp {
                 workspace_directory,
                 raw_prompt: transcript_text.clone(),
                 active_turn_id: None,
+                parent_thread_id,
+                parent_turn_id,
             }) {
             ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
                 let _ = self.submit_prompt_with_transcript(

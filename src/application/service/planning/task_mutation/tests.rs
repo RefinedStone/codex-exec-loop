@@ -8,9 +8,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskRepositoryPort,
 };
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
-    PriorityQueueProjection, QueueIdleConfig, TaskActor, TaskAuthorityDocument, TaskDefinition,
-    TaskStatus,
+    DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+    PLANNING_FORMAT_VERSION, PriorityQueueProjection, QueueIdleConfig, TaskActor,
+    TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
 };
 use std::sync::Arc;
 
@@ -30,6 +30,9 @@ fn workspace(label: &str) -> String {
 }
 fn repo() -> Arc<NoopPlanningTaskRepositoryPort> {
     Arc::new(NoopPlanningTaskRepositoryPort)
+}
+fn provenance() -> TaskMutationProvenance {
+    TaskMutationProvenance::default()
 }
 fn directions() -> DirectionCatalogDocument {
     // active direction 하나면 mutation layer의 default direction 선택과 실제 direction validation을
@@ -66,6 +69,7 @@ fn task(id: &str, status: TaskStatus) -> TaskDefinition {
         created_by: TaskActor::User,
         last_updated_by: TaskActor::User,
         source_turn_id: None,
+        provenance: provenance(),
         updated_at: "2026-04-29T00:00:00Z".to_string(),
     }
 }
@@ -129,6 +133,7 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::User,
             source_turn_id: Some("turn-user".to_string()),
+            provenance: provenance(),
             input: PlanningTaskCreateInput {
                 direction_id: None,
                 direction_relation_note: None,
@@ -155,6 +160,7 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Llm,
             source_turn_id: Some("turn-llm".to_string()),
+            provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
                     direction_id: None,
@@ -188,6 +194,70 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
     assert_eq!(llm_task.last_updated_by, TaskActor::Llm);
     assert_eq!(llm_task.source_turn_id.as_deref(), Some("turn-llm"));
 }
+
+#[test]
+fn create_records_generic_thread_turn_provenance() {
+    /*
+     * source_turn_id는 legacy 조회 키로 남기되, 새 감사 정보는 provider-neutral
+     * thread_id/turn_id/parent_* 필드에 저장한다. source_turn_id가 없으면 실제 worker
+     * turn_id를 fallback으로 써서 synthetic orchestration id가 accepted task에 남지 않게 한다.
+     */
+    let repo = repo();
+    let workspace = workspace("generic-provenance");
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: Vec::new(),
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+    let provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+        .with_thread_turn(
+            Some("worker-thread-1".to_string()),
+            Some("worker-turn-1".to_string()),
+        )
+        .with_parent(
+            Some("visible-thread-1".to_string()),
+            Some("visible-turn-1".to_string()),
+        );
+
+    service
+        .apply_commands(PlanningTaskMutationRequest {
+            workspace_directory: workspace.clone(),
+            source: PlanningTaskMutationSource::Llm,
+            source_turn_id: None,
+            provenance: provenance.clone(),
+            commands: vec![PlanningTaskMutationCommand::CreateTask(
+                PlanningTaskCreateInput {
+                    direction_id: None,
+                    direction_relation_note: None,
+                    title: "Persist generic provenance".to_string(),
+                    description: None,
+                    status: None,
+                    base_priority: None,
+                    dynamic_priority_delta: None,
+                    priority_reason: None,
+                    depends_on: Vec::new(),
+                    blocked_by: Vec::new(),
+                },
+            )],
+        })
+        .unwrap();
+
+    let snapshot = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap();
+    let task = snapshot.task_authority.tasks.first().unwrap();
+    assert_eq!(task.source_turn_id.as_deref(), Some("worker-turn-1"));
+    assert_eq!(task.provenance, provenance);
+}
+
 #[test]
 fn update_preserves_unspecified_fields() {
     /*
@@ -214,6 +284,7 @@ fn update_preserves_unspecified_fields() {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Llm,
             source_turn_id: Some("turn-2".to_string()),
+            provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
                     task_id: "task-1".to_string(),
@@ -270,6 +341,7 @@ fn llm_update_preserves_existing_description_even_when_supplied() {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Llm,
             source_turn_id: Some("turn-llm-description".to_string()),
+            provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
                     task_id: "task-1".to_string(),
@@ -326,6 +398,7 @@ fn user_update_can_replace_existing_description() {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::User,
             source_turn_id: Some("turn-user-description".to_string()),
+            provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
                     task_id: "task-1".to_string(),
@@ -385,6 +458,7 @@ fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
             workspace_directory: workspace.clone(),
             source: PlanningTaskMutationSource::Llm,
             source_turn_id: Some("turn-noop".to_string()),
+            provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
                     task_id: "task-1".to_string(),
@@ -453,6 +527,7 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
             workspace_directory: workspace,
             source: PlanningTaskMutationSource::Llm,
             source_turn_id: Some("turn-many".to_string()),
+            provenance: provenance(),
             commands,
         })
         .unwrap_err();
@@ -540,6 +615,7 @@ fn terminal_status_change_is_rejected() {
             workspace_directory: workspace,
             source: PlanningTaskMutationSource::Llm,
             source_turn_id: None,
+            provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
                     task_id: "task-1".to_string(),

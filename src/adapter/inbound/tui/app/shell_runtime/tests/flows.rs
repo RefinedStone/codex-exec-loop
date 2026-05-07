@@ -238,6 +238,7 @@ impl NativeFlowHarness {
                 workspace_directory: self.workspace_dir.clone(),
                 raw_prompt: prompt.to_string(),
                 active_turn_id: None,
+                provenance: Default::default(),
                 requested_direction_id: None,
                 observed_planning_revision: None,
             })
@@ -261,6 +262,11 @@ impl NativeFlowHarness {
                     version: 1,
                     apply: true,
                     source_turn_id: Some("flow-update".to_string()),
+                    origin_session_kind: None,
+                    thread_id: None,
+                    turn_id: None,
+                    parent_thread_id: None,
+                    parent_turn_id: None,
                     input: PlanningTaskUpdatePayload {
                         task_id: task_id.to_string(),
                         direction_id: None,

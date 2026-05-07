@@ -5,7 +5,9 @@ use crate::application::service::planning::runtime::intake::{
     PlanningTaskIntakeRequest, PlanningTaskIntakeService,
 };
 use crate::diagnostics::event_log;
-use crate::domain::planning::{PriorityQueueTask, TaskDefinition};
+use crate::domain::planning::{
+    OriginSessionKind, PriorityQueueTask, TaskDefinition, TaskMutationProvenance,
+};
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +16,8 @@ pub struct ManualPromptIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
     pub active_turn_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub parent_turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +149,11 @@ impl ManualPromptIntakeService {
                 workspace_directory: request.workspace_directory.clone(),
                 raw_prompt: transcript_text.to_string(),
                 active_turn_id: request.active_turn_id.clone(),
+                provenance: TaskMutationProvenance::new(OriginSessionKind::ManualIntake)
+                    .with_parent(
+                        request.parent_thread_id.clone(),
+                        request.parent_turn_id.clone(),
+                    ),
                 requested_direction_id: None,
                 observed_planning_revision: None,
             }) {

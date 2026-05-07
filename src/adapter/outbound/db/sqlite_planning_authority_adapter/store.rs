@@ -112,6 +112,11 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 combined_priority INTEGER NOT NULL,
                 updated_at TEXT NOT NULL,
                 source_turn_id TEXT,
+                origin_session_kind TEXT,
+                thread_id TEXT,
+                turn_id TEXT,
+                parent_thread_id TEXT,
+                parent_turn_id TEXT,
                 content_json TEXT NOT NULL
             );
 
@@ -202,7 +207,43 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "#,
         )
         .context("failed to initialize authority-store schema")?;
+    ensure_planning_task_provenance_columns(connection)?;
     Ok(())
+}
+
+fn ensure_planning_task_provenance_columns(connection: &Connection) -> Result<()> {
+    for (column_name, column_definition) in [
+        ("origin_session_kind", "origin_session_kind TEXT"),
+        ("thread_id", "thread_id TEXT"),
+        ("turn_id", "turn_id TEXT"),
+        ("parent_thread_id", "parent_thread_id TEXT"),
+        ("parent_turn_id", "parent_turn_id TEXT"),
+    ] {
+        if !planning_tasks_column_exists(connection, column_name)? {
+            connection
+                .execute(
+                    &format!("ALTER TABLE planning_tasks ADD COLUMN {column_definition}"),
+                    [],
+                )
+                .with_context(|| {
+                    format!("failed to add planning_tasks provenance column `{column_name}`")
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn planning_tasks_column_exists(connection: &Connection, column_name: &str) -> Result<bool> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(planning_tasks)")
+        .context("failed to inspect planning_tasks schema")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column_name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /*

@@ -111,7 +111,7 @@ pub(crate) fn worker_task_authority_output_contract() -> Vec<String> {
         "If `planning-task-tool` has already applied a mutation successfully, return an empty `commands` array so the host does not apply it twice."
             .to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
-        "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
+        "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, `source_turn_id`, `provenance`, `origin_session_kind`, `thread_id`, `turn_id`, `parent_thread_id`, or `parent_turn_id`."
             .to_string(),
         "For `update_task`, omit `description`; existing non-empty descriptions are preserved by the host."
             .to_string(),
@@ -137,7 +137,7 @@ pub(crate) fn repair_task_authority_output_contract() -> Vec<String> {
         "When the rejected candidate used wrapped commands, preserve the same task intent and rewrite it into the flat `op` command shape."
             .to_string(),
         "Do not return `task_authority` or a full task ledger document.".to_string(),
-        "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, or `source_turn_id`."
+        "Do not include fields controlled by the application: `id`, `created_by`, `last_updated_by`, `updated_at`, `source_turn_id`, `provenance`, `origin_session_kind`, `thread_id`, `turn_id`, `parent_thread_id`, or `parent_turn_id`."
             .to_string(),
         "For `update_task`, omit `description`; existing non-empty descriptions are preserved by the host."
             .to_string(),

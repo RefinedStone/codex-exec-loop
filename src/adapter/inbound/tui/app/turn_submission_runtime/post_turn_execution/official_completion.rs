@@ -190,6 +190,8 @@ impl PostTurnEvaluationExecutor {
         // context, and the parallel completion contract.
         let worker_request = PlanningOfficialCompletionRefreshRequest {
             workspace_directory: planning_workspace_directory,
+            root_thread_id: Some(conversation.thread_id.as_str())
+                .filter(|thread_id| !thread_id.trim().is_empty()),
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),

@@ -29,7 +29,9 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskMutationSource, extract_planning_task_commands,
 };
 use crate::diagnostics::event_log;
-use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
+use crate::domain::planning::{
+    OriginSessionKind, PlanningOfficialCompletionRefreshContract, TaskMutationProvenance,
+};
 use anyhow::Result;
 use serde_json::json;
 
@@ -44,6 +46,7 @@ pub struct PlanningQueueRefreshRequest<'a> {
     // root turn id는 synthetic worker turn id를 만드는 데만 쓴다. accepted task authority의 command provenance는
     // 여전히 mutation service가 기록한다.
     pub workspace_directory: &'a str,
+    pub root_thread_id: Option<&'a str>,
     pub root_turn_id: &'a str,
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
@@ -56,6 +59,7 @@ pub struct PlanningOfficialCompletionRefreshRequest<'a> {
     // official completion refresh는 monotonic refresh_order를 가진 contract를 싣는다. 여러 client가 같은 완료 turn을
     // 관찰해도 이 order가 중복 queue derivation을 막는 기준이 된다.
     pub workspace_directory: &'a str,
+    pub root_thread_id: Option<&'a str>,
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
@@ -73,6 +77,7 @@ pub enum PlanningQueueRefreshMode<'a> {
 pub struct PlanningLedgerRepairRequest<'a> {
     // repair attempt도 worker call이지만, prompt는 latest user/main-turn exchange가 아니라 capture된 rejection packet에서 만든다.
     pub workspace_directory: &'a str,
+    pub root_thread_id: Option<&'a str>,
     pub root_turn_id: &'a str,
     pub repair_request: &'a PlanningRepairRequest,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
@@ -114,6 +119,13 @@ struct OfficialCompletionRefreshPermit {
     refresh_order: u64,
     owner_token: String,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct WorkerParentProvenance<'a> {
+    thread_id: Option<&'a str>,
+    turn_id: Option<&'a str>,
+}
+
 impl OfficialCompletionRefreshPermit {
     fn new(
         planning_authority: Arc<dyn PlanningAuthorityPort>,
@@ -176,6 +188,10 @@ impl PlanningWorkerOrchestrationService {
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             previous_handoff.as_ref(),
+            WorkerParentProvenance {
+                thread_id: request.root_thread_id,
+                turn_id: Some(request.root_turn_id),
+            },
         )
     }
     #[tracing::instrument(level = "trace", skip(self))]
@@ -196,6 +212,10 @@ impl PlanningWorkerOrchestrationService {
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             request.previous_handoff_task,
+            WorkerParentProvenance {
+                thread_id: request.root_thread_id,
+                turn_id: Some(request.contract.root_turn_id.as_str()),
+            },
         )
     }
     #[tracing::instrument(level = "trace", skip(self))]
@@ -214,6 +234,10 @@ impl PlanningWorkerOrchestrationService {
             PlanningWorkerOperation::RepairTaskAuthority,
             prompt,
             request.previous_handoff_task,
+            WorkerParentProvenance {
+                thread_id: request.root_thread_id,
+                turn_id: Some(request.root_turn_id),
+            },
         )
     }
     #[tracing::instrument(level = "trace", skip(self))]
@@ -318,6 +342,7 @@ impl PlanningWorkerOrchestrationService {
         operation: PlanningWorkerOperation,
         prompt: String,
         _previous_handoff: Option<&PlanningTaskHandoff>,
+        parent_provenance: WorkerParentProvenance<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
         // worker execution 전에 execution snapshot을 capture한다. protected file reconciliation이 worker file change를
         // synthetic planning turn 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
@@ -381,6 +406,15 @@ impl PlanningWorkerOrchestrationService {
                     return Err(error);
                 }
             };
+        let task_provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_thread_turn(
+                worker_response.thread_id.clone(),
+                worker_response.turn_id.clone(),
+            )
+            .with_parent(
+                parent_provenance.thread_id.map(str::to_string),
+                parent_provenance.turn_id.map(str::to_string),
+            );
         let mut authority_result = PlanningReconciliationResult::default();
         let mut task_authority_changed = false;
         if let Some(final_message) = worker_response.final_agent_message.as_deref() {
@@ -393,7 +427,8 @@ impl PlanningWorkerOrchestrationService {
                         .apply_commands(PlanningTaskMutationRequest {
                             workspace_directory: workspace_directory.to_string(),
                             source: PlanningTaskMutationSource::Llm,
-                            source_turn_id: Some(synthetic_turn_id.to_string()),
+                            source_turn_id: worker_response.turn_id.clone(),
+                            provenance: task_provenance.clone(),
                             commands,
                         }) {
                         Ok(mutation_result) => {
