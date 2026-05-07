@@ -15,7 +15,6 @@ pub use self::agent_session::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
     ParallelModeLiveSessionDetailDefaults, ParallelModeSupervisorDetailSnapshot,
-    roster_latest_summary, roster_state_label,
 };
 use self::agent_session::{roster_recency_key, roster_state_priority};
 pub use self::distributor::{
@@ -24,8 +23,7 @@ pub use self::distributor::{
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorSnapshot,
 };
 pub use self::orchestrator::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
-    ParallelModeDispatchEligibility, ParallelModeDispatchOutcome, ParallelModeEntryPlan,
+    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason, ParallelModeDispatchOutcome,
     ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
     ParallelModePoolResetScope, ParallelModeTaskDispatchBlockSnapshot,
 };

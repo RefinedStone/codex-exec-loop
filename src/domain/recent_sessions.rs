@@ -21,18 +21,6 @@ pub struct SessionCatalogRequest {
 
 impl SessionCatalogRequest {
     /*
-     * `new` represents a provider-wide catalog request. It deliberately leaves
-     * workspace context empty so callers that only need a generic recent list do not
-     * accidentally imply current-workspace filtering or ranking at the port boundary.
-     */
-    pub fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            current_workspace_directory: None,
-        }
-    }
-
-    /*
      * `for_workspace` preserves the shell's current workspace alongside the provider
      * limit. Some adapters still ignore this field, but the request shape carries it
      * through application tests so workspace-scoped catalog behavior can be added
@@ -174,18 +162,6 @@ impl SessionCatalog {
         match self {
             Self::Unsupported(status) | Self::Partial(status) => status.tier,
             Self::Ready { tier, .. } => *tier,
-        }
-    }
-
-    /*
-     * Detail is intentionally absent for Ready. A ready provider may still have
-     * warnings, but a status detail belongs to unavailable/degraded states and should
-     * not be rendered over a valid browser row list.
-     */
-    pub fn detail(&self) -> Option<&str> {
-        match self {
-            Self::Unsupported(status) | Self::Partial(status) => Some(status.detail.as_str()),
-            Self::Ready { .. } => None,
         }
     }
 

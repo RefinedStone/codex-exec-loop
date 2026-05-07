@@ -309,7 +309,7 @@ impl PlanningRuntimePolicyService {
                     ));
                 }
             }
-            PlanningWorkspaceState::Uninitialized | PlanningWorkspaceState::Authoring => {}
+            PlanningWorkspaceState::Uninitialized => {}
         }
 
         Some(segments.join("  |  "))
@@ -385,7 +385,6 @@ fn workspace_status_label(state: PlanningWorkspaceState) -> &'static str {
     // TUI가 오래 유지해 온 짧은 상태 문자열로 낮춘다.
     match state {
         PlanningWorkspaceState::Uninitialized => "inactive",
-        PlanningWorkspaceState::Authoring => "authoring",
         PlanningWorkspaceState::Ready => "valid",
         PlanningWorkspaceState::Executing => "stale",
         PlanningWorkspaceState::Repairing => "repairing",

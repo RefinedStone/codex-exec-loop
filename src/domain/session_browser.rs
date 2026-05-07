@@ -139,17 +139,6 @@ pub struct SessionBrowserProjection {
 }
 
 impl SessionBrowserProjection {
-    pub fn clamp_selected_index(&self, selected_session_index: usize) -> Option<usize> {
-        /*
-         * Selection clamping is projection-aware because only the projection knows the
-         * current page length after search, project filtering, and stale page repair.
-         * Returning None for an empty page lets input handlers clear selection without
-         * peeking into raw RecentSessions.
-         */
-        (!self.page_session_indexes.is_empty())
-            .then(|| selected_session_index.min(self.page_session_indexes.len().saturating_sub(1)))
-    }
-
     pub fn cycled_project_filter(&self, delta: isize) -> Option<SessionProjectFilter> {
         /*
          * Filter cycling uses the already-built option list so keyboard navigation sees

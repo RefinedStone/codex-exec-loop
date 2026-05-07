@@ -13,10 +13,10 @@
  */
 use serde::{Deserialize, Serialize};
 
-pub mod queue;
-pub mod validation;
+mod queue;
+mod validation;
 
-pub use queue::{PriorityQueueBuildError, PriorityQueueService};
+pub use queue::PriorityQueueService;
 pub use validation::PlanningSemanticValidationService;
 
 // planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.
@@ -28,11 +28,9 @@ pub const PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION: u32 = 2;
 pub enum PlanningWorkspaceState {
     /*
      * workspace state는 planning runtime이 "지금 operator에게 무엇을 보여줄지" 결정하는 큰 상태값이다.
-     * Authoring/Ready/Executing/Repairing/BlockedInvalid는 UI copy, 자동 후속 실행 정책, repair prompt
-     * 선택으로 이어진다.
+     * Ready/Executing/Repairing/BlockedInvalid는 UI copy, 자동 후속 실행 정책, repair prompt 선택으로 이어진다.
      */
     Uninitialized,
-    Authoring,
     Ready,
     Executing,
     Repairing,

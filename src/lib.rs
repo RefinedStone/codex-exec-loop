@@ -18,7 +18,7 @@ pub mod application;
 // diagnostics는 TUI/app-server stdout을 오염시키지 않는 선택적 tracing JSONL 관측 hook이다.
 pub mod diagnostics;
 // domain은 planning/parallel-mode의 상태 전이와 값 객체를 framework 없이 표현하는 가장 안쪽 계층이다.
-pub mod domain;
+pub(crate) mod domain;
 // subprocess는 외부 CLI 경계의 non-interactive timeout 실행을 모은 crate-private helper다.
 pub(crate) mod subprocess;
 
