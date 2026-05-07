@@ -170,6 +170,7 @@ cargo clippy --all-targets --all-features -D warnings
 - `AKRA_TRACE=planning cargo run`: focus trace output on planning, post-turn evaluation, and app-server planning-worker paths.
 - `AKRA_TRACE=full cargo run`: enable the old noisy behavior with global `trace` and full span lifecycle events.
 - `RUST_LOG=codex_exec_loop_native=trace cargo run`: use standard `tracing_subscriber::EnvFilter` syntax for module-level filtering.
+- `RUSTFLAGS="--cfg tokio_unstable" AKRA_TOKIO_CONSOLE=1 cargo run --features tokio-console`: add the tokio-console layer while retaining file logging.
 - `AKRA_TRACE_SPANS=none|close|full`: override span events for any trace preset or custom filter.
 - `AKRA_TRACE=codex_exec_loop_native::application::service::planning=debug cargo run`: trace a selected module filter.
 - `AKRA_TRACE_FILE=/tmp/akra-trace.jsonl`: override the trace JSONL destination with an exact append file instead of daily rolling.
