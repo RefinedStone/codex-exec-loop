@@ -239,7 +239,7 @@ mod tests {
     #[test]
     // manual prompt는 planning fragment를 main-session prompt에 붙이지 않는다.
     // task authority context는 hidden intake/planning worker 쪽에서만 소비되어야 한다.
-    fn manual_prompt_appends_planning_fragment_when_present() {
+    fn manual_prompt_keeps_planning_fragment_out() {
         let service = TurnPromptAssemblyService::new();
 
         let prompt = service.build_manual_prompt(ManualPromptAssemblyRequest {

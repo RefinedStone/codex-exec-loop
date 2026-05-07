@@ -167,7 +167,7 @@ impl PlanningRuntimeFacadeService {
 
     // 이미 task를 가진 caller가 planning fragment 없이 main-session handoff만 만들 때 쓰는 public helper다.
     pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
-        self.build_task_handoff_with_planning_fragment(task)
+        self.build_compact_task_handoff(task)
     }
 
     pub fn build_manual_intake_task_handoff(
@@ -225,10 +225,7 @@ impl PlanningRuntimeFacadeService {
      * transcript marker는 runtime이 built-in continuation을 큐에서 넘겼다는 사실만 기록하고, 내부 queue prompt 전체를
      * chat history에 노출하지 않는다.
      */
-    fn build_task_handoff_with_planning_fragment(
-        &self,
-        task: &PriorityQueueTask,
-    ) -> PlanningMainSessionHandoff {
+    fn build_compact_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
         let task_prompt = render_builtin_next_task_handoff_prompt(task);
         let prompt = self
             .turn_prompt_assembly_service
