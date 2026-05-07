@@ -22,19 +22,19 @@ fn stale_candidate_guard_failure(
         let task_id = accepted_task.id.trim();
         let Some(candidate_task) = find_task(candidate_task_authority, task_id) else {
             return Some(format!(
-                "planner task authority candidate removed accepted DB task `{task_id}`"
+                "planning worker task authority candidate removed accepted DB task `{task_id}`"
             ));
         };
         if terminal_status(accepted_task.status) && candidate_task.status != accepted_task.status {
             return Some(format!(
-                "planner task authority candidate regressed accepted DB task `{task_id}` from `{}` to `{}`",
+                "planning worker task authority candidate regressed accepted DB task `{task_id}` from `{}` to `{}`",
                 accepted_task.status.label(),
                 candidate_task.status.label()
             ));
         }
         if timestamp_regressed(&candidate_task.updated_at, &accepted_task.updated_at) {
             return Some(format!(
-                "planner task authority candidate regressed accepted DB task `{task_id}` updated_at from `{}` to `{}`",
+                "planning worker task authority candidate regressed accepted DB task `{task_id}` updated_at from `{}` to `{}`",
                 accepted_task.updated_at.trim(),
                 candidate_task.updated_at.trim()
             ));
@@ -92,13 +92,13 @@ fn queue_advancement_guard_failure(
                 && queue_head.status.label() == previous_handoff.status_label.trim() =>
         {
             Some(format!(
-                "planner refresh kept previous handoff `{}` unchanged as the ready queue head",
+                "planning worker refresh kept previous handoff `{}` unchanged as the ready queue head",
                 previous_handoff.task_id.trim()
             ))
         }
         None if candidate_task.updated_at.trim() == previous_handoff.updated_at.trim() => {
             Some(format!(
-                "planner refresh returned previous handoff `{}` as the queue head without DB baseline evidence of a task update",
+                "planning worker refresh returned previous handoff `{}` as the queue head without DB baseline evidence of a task update",
                 previous_handoff.task_id.trim()
             ))
         }
@@ -192,7 +192,7 @@ fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
 
     assert_eq!(
         failure.as_deref(),
-        Some("planner refresh kept previous handoff `task-1` unchanged as the ready queue head")
+        Some("planning worker refresh kept previous handoff `task-1` unchanged as the ready queue head")
     );
 }
 
@@ -266,7 +266,7 @@ fn stale_candidate_guard_rejects_accepted_db_status_regression() {
     assert_eq!(
         failure.as_deref(),
         Some(
-            "planner task authority candidate regressed accepted DB task `planning-prompt-assembly-remaining-surface-slice` from `done` to `ready`"
+            "planning worker task authority candidate regressed accepted DB task `planning-prompt-assembly-remaining-surface-slice` from `done` to `ready`"
         )
     );
 }
@@ -287,7 +287,7 @@ fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
     assert_eq!(
         failure.as_deref(),
         Some(
-            "planner task authority candidate regressed accepted DB task `task-1` updated_at from `2026-04-29T03:00:32Z` to `2026-04-29T01:43:52Z`"
+            "planning worker task authority candidate regressed accepted DB task `task-1` updated_at from `2026-04-29T03:00:32Z` to `2026-04-29T01:43:52Z`"
         )
     );
 }
