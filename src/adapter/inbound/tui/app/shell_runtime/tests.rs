@@ -1,5 +1,5 @@
 use super::*;
-use crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason;
+use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation,
 };
@@ -523,8 +523,8 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["stale notice".to_string()],
-                    action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollowup {
-                        reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason::PostTurnContinuationPaused,
+                    action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollow {
+                        reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason::PostTurnContinuationPaused,
                     },
                 }),
                 planning_worker_panel_state: crate::adapter::inbound::tui::app::PlanningWorkerPanelState {
@@ -571,8 +571,8 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
             runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
             planning_repair_state: None,
             runtime_notices: vec![notice.to_string()],
-            action: ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::PlanningBlocked,
+            action: ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::PlanningBlocked,
             },
         }),
         planning_worker_panel_state: PlanningWorkerPanelState {

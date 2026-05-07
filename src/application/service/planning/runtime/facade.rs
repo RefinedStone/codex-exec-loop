@@ -262,7 +262,7 @@ impl PlanningRuntimeFacadeService {
      * auto-follow를 결정하고, 허용된 queued-task mode에서만 executable prompt를 materialize한다. 추가 queue-head check는
      * stale snapshot이나 미래 policy 변경이 concrete task 없이 actionable work를 주장하는 상황을 방어한다.
      */
-    pub fn decide_auto_followup(
+    pub fn decide_auto_follow(
         &self,
         request: PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeAutoFollowDecision {

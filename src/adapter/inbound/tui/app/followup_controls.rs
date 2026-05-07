@@ -100,7 +100,7 @@ pub(super) fn reduce_followup_controls(
              * 그렇지 않으면 footer가 새 설정 뒤에도 오래된 "skipped" 상태를 계속 보여 줄 수 있다.
              */
             state.auto_follow_state.set_max_auto_turns(value);
-            state.clear_auto_followup_skip();
+            state.clear_auto_follow_skip();
             state.status_text = format!(
                 "auto follow-up max turns {}",
                 state.auto_follow_state.max_auto_turns_label()
@@ -117,9 +117,7 @@ pub(super) fn reduce_followup_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::inbound::tui::app::{
-        AutoFollowupSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS,
-    };
+    use crate::adapter::inbound::tui::app::{AutoFollowSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS};
 
     #[test]
     fn draft_workspace_sync_updates_blank_draft_and_emits_ui_sync() {
@@ -148,7 +146,7 @@ mod tests {
          * reducer가 sync_draft_workspace를 통해 stale auto-follow activity를 제거하는지 확인한다.
          */
         let mut draft = ConversationViewModel::new_draft("/tmp/root".to_string());
-        draft.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
+        draft.record_auto_follow_skip(AutoFollowSkipReason::NoAgentReply);
 
         let reduced = reduce_followup_controls(
             draft,
@@ -157,7 +155,7 @@ mod tests {
             },
         );
 
-        assert!(reduced.state.last_auto_followup_activity.is_none());
+        assert!(reduced.state.last_auto_follow_activity.is_none());
     }
 
     #[test]
@@ -167,7 +165,7 @@ mod tests {
          * 정책 값, stale skip reason 제거, editor canonical value sync가 한 reducer 결과에 같이 담긴다.
          */
         let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        state.record_auto_followup_skip(AutoFollowupSkipReason::NoAgentReply);
+        state.record_auto_follow_skip(AutoFollowSkipReason::NoAgentReply);
 
         let reduced = reduce_followup_controls(
             state,
@@ -177,7 +175,7 @@ mod tests {
         );
 
         assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 5);
-        assert!(reduced.state.last_auto_followup_activity.is_none());
+        assert!(reduced.state.last_auto_follow_activity.is_none());
         assert_eq!(
             reduced.effects,
             vec![FollowupControlEffect::MaxAutoTurnsEditor {

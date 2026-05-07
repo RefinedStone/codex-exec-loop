@@ -147,7 +147,7 @@ use conversation_lifecycle::{
 };
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
-    AutoFollowRuntimePhase, AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason,
+    AutoFollowDecision, AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState,
     ConversationInputState, ConversationState, ConversationViewModel, StopKeywordRule,
 };
 use conversation_runtime::{
@@ -184,7 +184,7 @@ use theme::AkraTheme;
 // turn that produced the handoff, the transcript line shown to the operator, any
 // debug detail, and the planning task identity needed by parallel-mode leasing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AutoFollowupSubmitContext {
+struct AutoFollowSubmitContext {
     completed_turn_id: String,
     mode_label: String,
     transcript_text: String,
@@ -205,7 +205,7 @@ struct ManualIntakeSubmitContext {
 enum PromptOrigin {
     Manual,
     ManualIntake(Box<ManualIntakeSubmitContext>),
-    AutoFollow(Box<AutoFollowupSubmitContext>),
+    AutoFollow(Box<AutoFollowSubmitContext>),
 }
 
 // Post-turn reconciliation is tied to the execution snapshot captured for the

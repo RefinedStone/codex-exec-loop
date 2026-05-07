@@ -10,9 +10,7 @@
  * to execute.
  */
 use super::PromptOrigin;
-use super::conversation_model::{
-    AutoFollowupSkipReason, ConversationViewModel, PlanningRepairState,
-};
+use super::conversation_model::{AutoFollowSkipReason, ConversationViewModel, PlanningRepairState};
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
@@ -56,7 +54,7 @@ pub(super) enum ConversationRuntimeEffect {
         thread_id: Option<String>,
         prompt: String,
     },
-    EvaluateAutoFollowup {
+    EvaluateAutoFollow {
         workspace_directory: String,
         completed_turn_id: String,
         changed_planning_file_paths: Vec<String>,
@@ -109,7 +107,7 @@ pub(super) enum ConversationPostTurnAction {
     // Box keeps the enum small because queued prompts carry several strings and
     // optional handoff identity through the background-message channel.
     QueueAutoPrompt(Box<QueuedAutoPrompt>),
-    SkipAutoFollowup { reason: AutoFollowupSkipReason },
+    SkipAutoFollow { reason: AutoFollowSkipReason },
 }
 #[derive(Debug, Clone)]
 pub(super) struct ConversationRuntimeReduction {
@@ -187,20 +185,20 @@ pub(super) fn reduce_conversation_runtime(
                     // not leak into this turn.
                     state.planning_repair_state = None;
                     state.auto_follow_state.reset_for_manual_turn();
-                    state.clear_auto_followup_skip();
+                    state.clear_auto_follow_skip();
                     state.clear_last_planning_task_handoff();
                 }
                 PromptOrigin::ManualIntake(context) => {
                     state.planning_repair_state = None;
                     state.auto_follow_state.reset_for_manual_turn();
-                    state.clear_auto_followup_skip();
+                    state.clear_auto_follow_skip();
                     state.record_manual_intake_handoff(context.handoff_task.as_ref());
                 }
                 PromptOrigin::AutoFollow(context) => {
                     // Record the completed turn that queued this prompt before the provider stream starts.
                     // If this queued prompt loops back without progress, the
                     // next post-turn evaluation can stop it deterministically.
-                    state.record_auto_followup_submission(
+                    state.record_auto_follow_submission(
                         &context.completed_turn_id,
                         context.handoff_task.as_ref(),
                     );
@@ -329,7 +327,7 @@ pub(super) fn reduce_conversation_runtime(
                 // so it is emitted as an effect after the model enters evaluating
                 // state.
                 let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
-                state.begin_auto_followup_evaluation();
+                state.begin_auto_follow_evaluation();
                 event_log::emit_lazy("post_turn_evaluation_queued", || {
                     json!({
                         "thread_id": state.thread_id.as_str(),
@@ -341,7 +339,7 @@ pub(super) fn reduce_conversation_runtime(
                         "changed_planning_file_count": changed_planning_file_paths.len(),
                     })
                 });
-                effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
+                effects.push(ConversationRuntimeEffect::EvaluateAutoFollow {
                     workspace_directory,
                     completed_turn_id: turn_id,
                     changed_planning_file_paths,
@@ -378,8 +376,8 @@ pub(super) fn reduce_conversation_runtime(
                         transcript_text,
                         handoff_task,
                     } = *queued_prompt;
-                    state.clear_auto_followup_skip();
-                    state.record_auto_followup_queue(&completed_turn_id);
+                    state.clear_auto_follow_skip();
+                    state.record_auto_follow_queue(&completed_turn_id);
                     state.status_text =
                         format!("turn completed / queued auto follow-up with mode {mode_label}");
                     state.append_status_message(state.status_text.clone());
@@ -391,12 +389,12 @@ pub(super) fn reduce_conversation_runtime(
                         handoff_task,
                     });
                 }
-                ConversationPostTurnAction::SkipAutoFollowup { reason } => {
+                ConversationPostTurnAction::SkipAutoFollow { reason } => {
                     // Skips are durable status messages because they explain why
                     // the automatic loop stopped and often require operator
                     // action before the next manual prompt.
                     let operator_alert = reason.operator_alert();
-                    state.record_auto_followup_skip(reason);
+                    state.record_auto_follow_skip(reason);
                     state.status_text = reason.runtime_status(&state.auto_follow_state);
                     state.append_status_message(state.status_text.clone());
                     if let Some(alert) = operator_alert {
@@ -423,7 +421,7 @@ fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::inbound::tui::app::{AutoFollowupSubmitContext, PromptOrigin};
+    use crate::adapter::inbound::tui::app::{AutoFollowSubmitContext, PromptOrigin};
 
     #[test]
     fn auto_follow_turn_completion_advances_done_progress() {
@@ -435,7 +433,7 @@ mod tests {
             ConversationRuntimeEvent::SubmitPrompt {
                 prompt: "continue queue".to_string(),
                 transcript_text: "continue queue".to_string(),
-                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
+                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
                     completed_turn_id: "turn-root".to_string(),
                     mode_label: "planning queue".to_string(),
                     transcript_text: "continue queue".to_string(),
@@ -488,8 +486,8 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::SkipAutoFollowup {
-                        reason: AutoFollowupSkipReason::PlanningQueueDrained,
+                    action: ConversationPostTurnAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
                 }),
             },

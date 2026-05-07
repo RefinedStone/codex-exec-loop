@@ -12,13 +12,13 @@ use super::AutoFollowState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
- * AutoFollowupDecision은 view model이 post-turn runtime에 돌려주는 실행 계획이다.
+ * AutoFollowDecision은 view model이 post-turn runtime에 돌려주는 실행 계획이다.
  * `QueuePrompt`는 application service가 만든 queue-aware prompt를 그대로 운반하고,
  * `Skip`은 status line, activity notice, runtime action이 같은 stop reason을 보게 한다.
  */
-pub(crate) enum AutoFollowupDecision {
+pub(crate) enum AutoFollowDecision {
     QueuePrompt(PlanningRuntimeQueuedAutoFollowPrompt),
-    Skip(AutoFollowupSkipReason),
+    Skip(AutoFollowSkipReason),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +27,7 @@ pub(crate) enum AutoFollowupDecision {
  * variant는 서로 다른 guardrail의 이름이며, post_turn_execution/followup_controls/
  * shell_runtime 테스트가 이 값을 통해 queue가 진행되지 않은 이유를 동일하게 해석한다.
  */
-pub(crate) enum AutoFollowupSkipReason {
+pub(crate) enum AutoFollowSkipReason {
     // 내부 continuation cycle에서는 operator pause를 존중해 재귀적인 자동 제출을 막는다.
     PostTurnContinuationPaused,
     // max_auto_turns budget은 runaway loop를 막는 최종 수량 guard다.
@@ -59,7 +59,7 @@ pub(crate) enum AutoFollowupSkipReason {
  * 주고, `activity_summary`는 tail/status에 짧은 event label을 주며,
  * `runtime_status`는 turn 완료 문구와 함께 conversation lifecycle에 남는 한 줄 상태를 만든다.
  */
-impl AutoFollowupSkipReason {
+impl AutoFollowSkipReason {
     /*
      * `detail`은 operator가 follow-up이 멈춘 원인을 진단할 때 읽는 가장 설명적인
      * 문구다. AutoFollowState의 budget/keyword와 TurnActivityState의 직전 파일 변경
@@ -145,7 +145,7 @@ impl AutoFollowupSkipReason {
 
     /*
      * Runtime status는 turn lifecycle status line에 붙는 operator-facing 문장이다.
-     * post_turn_execution이 SkipAutoFollowup action을 만들면 conversation model이 이
+     * post_turn_execution이 SkipAutoFollow action을 만들면 conversation model이 이
      * 문구를 상태에 기록해 화면과 로그가 같은 skip reason을 같은 어휘로 설명한다.
      */
     pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
@@ -215,7 +215,7 @@ impl AutoFollowupSkipReason {
 
 #[cfg(test)]
 mod tests {
-    use super::{AutoFollowState, AutoFollowupSkipReason};
+    use super::{AutoFollowSkipReason, AutoFollowState};
 
     #[test]
     fn post_turn_timeout_skip_reason_has_operator_copy() {
@@ -224,7 +224,7 @@ mod tests {
          * 테스트로 놓치기 쉽다. Runtime status와 activity summary는 operator가 읽는
          * copy이므로 variant 추가 시 이 경로의 문구 계약도 함께 유지되어야 한다.
          */
-        let reason = AutoFollowupSkipReason::PostTurnEvaluationTimedOut;
+        let reason = AutoFollowSkipReason::PostTurnEvaluationTimedOut;
         let state = AutoFollowState::new();
 
         assert!(

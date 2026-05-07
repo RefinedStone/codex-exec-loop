@@ -126,7 +126,7 @@ pub(super) fn build_operator_notice_line(
         return Some(notice_line);
     }
 
-    if let Some(activity) = conversation.last_auto_followup_activity.as_ref() {
+    if let Some(activity) = conversation.last_auto_follow_activity.as_ref() {
         /*
          * auto-follow 결과는 turn 종료 직후 operator가 다음 자동 동작이 왜 이어졌거나 멈췄는지 보는 copy다.
          * running tool activity가 없을 때만 보여 주어 현재 실행 상황을 가리지 않는다.

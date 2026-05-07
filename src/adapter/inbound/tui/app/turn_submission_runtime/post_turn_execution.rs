@@ -6,8 +6,8 @@ use super::super::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
 use super::super::{
-    ActiveTurnExecutionSnapshotCapture, ActiveTurnExecutionSnapshotState, AutoFollowupDecision,
-    AutoFollowupSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
+    ActiveTurnExecutionSnapshotCapture, ActiveTurnExecutionSnapshotState, AutoFollowDecision,
+    AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
     PlanningWorkerPanelState, PlanningWorkerStatus,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
@@ -186,11 +186,11 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
         let action = if handled_parallel_completion {
-            ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::ParallelSessionCompleted,
+            ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::ParallelSessionCompleted,
             }
         } else {
-            self.auto_followup_action_from_snapshot(conversation, request, &runtime_snapshot)
+            self.auto_follow_action_from_snapshot(conversation, request, &runtime_snapshot)
         };
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
@@ -685,7 +685,7 @@ impl PostTurnEvaluationExecutor {
     // pause states and queue-idle stop policy win before the conversation model
     // is allowed to enqueue another prompt.
     #[tracing::instrument(level = "trace", skip(self))]
-    fn auto_followup_action_from_snapshot(
+    fn auto_follow_action_from_snapshot(
         &self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
@@ -706,8 +706,8 @@ impl PostTurnEvaluationExecutor {
                     [("reason", json!("PostTurnContinuationPaused"))],
                 )
             });
-            return ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::PostTurnContinuationPaused,
+            return ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::PostTurnContinuationPaused,
             };
         }
         if runtime_snapshot.queue_is_drained() {
@@ -722,8 +722,8 @@ impl PostTurnEvaluationExecutor {
                     [("reason", json!("PlanningQueueDrained"))],
                 )
             });
-            return ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::PlanningQueueDrained,
+            return ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::PlanningQueueDrained,
             };
         }
         if runtime_snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
@@ -740,14 +740,14 @@ impl PostTurnEvaluationExecutor {
                     [("reason", json!("PlanningQueueIdlePolicyStop"))],
                 )
             });
-            return ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::PlanningQueueIdlePolicyStop,
+            return ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
             };
         }
         match conversation
-            .decide_auto_followup_with_snapshot(&self.planning.runtime, runtime_snapshot)
+            .decide_auto_follow_with_snapshot(&self.planning.runtime, runtime_snapshot)
         {
-            AutoFollowupDecision::QueuePrompt(queued_prompt) => {
+            AutoFollowDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
                         conversation,
@@ -786,7 +786,7 @@ impl PostTurnEvaluationExecutor {
                     handoff_task: queued_prompt.handoff_task,
                 }))
             }
-            AutoFollowupDecision::Skip(reason) => {
+            AutoFollowDecision::Skip(reason) => {
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
                         conversation,
@@ -798,7 +798,7 @@ impl PostTurnEvaluationExecutor {
                         [("reason", json!(format!("{:?}", reason)))],
                     )
                 });
-                ConversationPostTurnAction::SkipAutoFollowup { reason }
+                ConversationPostTurnAction::SkipAutoFollow { reason }
             }
         }
     }
@@ -911,8 +911,8 @@ fn post_turn_evaluation_timeout_execution(
             runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
             planning_repair_state: None,
             runtime_notices: vec![message.clone()],
-            action: ConversationPostTurnAction::SkipAutoFollowup {
-                reason: AutoFollowupSkipReason::PostTurnEvaluationTimedOut,
+            action: ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::PostTurnEvaluationTimedOut,
             },
         },
         planning_worker_panel_state: PlanningWorkerPanelState {

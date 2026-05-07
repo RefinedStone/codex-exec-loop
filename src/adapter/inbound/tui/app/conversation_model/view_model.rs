@@ -25,7 +25,7 @@ use crate::domain::conversation::{
 };
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
-use super::auto_follow::{AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason};
+use super::auto_follow::{AutoFollowDecision, AutoFollowSkipReason, AutoFollowState};
 use super::turn_activity::TurnActivityState;
 
 // Shell rendering keeps this wrapper around load failures so the outer app can
@@ -60,7 +60,7 @@ impl ConversationInputState {
 // Last auto-follow action is kept as copy-ready status history after the phase
 // itself has already moved on or been cleared.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RecordedAutoFollowupActivity {
+pub(crate) struct RecordedAutoFollowActivity {
     pub(crate) summary: String,
     pub(crate) detail: String,
 }
@@ -114,7 +114,7 @@ pub(crate) struct ConversationViewModel {
     // Approval review is tied to the currently streaming turn and cleared on a new turn.
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) turn_control_truth: ConversationRuntimeControlTruth,
-    pub(crate) last_auto_followup_activity: Option<RecordedAutoFollowupActivity>,
+    pub(crate) last_auto_follow_activity: Option<RecordedAutoFollowActivity>,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
     // Idempotence guard for async post-turn evaluators racing with newer turns.
     pub(crate) last_applied_post_turn_evaluation_id: Option<String>,
@@ -155,7 +155,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
-            last_auto_followup_activity: None,
+            last_auto_follow_activity: None,
             last_planning_task_handoff: None,
             last_applied_post_turn_evaluation_id: None,
             status_text: String::new(),
@@ -210,7 +210,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
-            last_auto_followup_activity: None,
+            last_auto_follow_activity: None,
             last_planning_task_handoff: None,
             last_applied_post_turn_evaluation_id: None,
             status_text: String::new(),
@@ -266,7 +266,7 @@ impl ConversationViewModel {
         self.auto_follow_state = AutoFollowState::new();
         self.base_warnings.clear();
         self.warnings.clear();
-        self.clear_auto_followup_skip();
+        self.clear_auto_follow_skip();
         self.set_status_with_warnings("draft workspace synced".to_string());
 
         true
@@ -429,24 +429,24 @@ impl ConversationViewModel {
             }
         }
     }
-    pub(crate) fn record_auto_followup_skip(&mut self, reason: AutoFollowupSkipReason) {
+    pub(crate) fn record_auto_follow_skip(&mut self, reason: AutoFollowSkipReason) {
         let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
         // A skip ends post-turn evaluation but keeps a readable activity record for the footer.
         self.auto_follow_state.clear_runtime_phase();
         self.auto_follow_state.clear_post_turn_continuation_pause();
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+        self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: reason.activity_summary().to_string(),
             detail,
         });
     }
-    pub(crate) fn clear_auto_followup_skip(&mut self) {
-        self.last_auto_followup_activity = None;
+    pub(crate) fn clear_auto_follow_skip(&mut self) {
+        self.last_auto_follow_activity = None;
     }
     pub(crate) fn pause_post_turn_continuation(&mut self) {
         self.auto_follow_state.pause_post_turn_continuation();
     }
     pub(crate) fn record_internal_continuation_paused(&mut self) {
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+        self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: "paused: internal continuation".to_string(),
             detail: "post-turn continuation is paused for this internal runtime cycle".to_string(),
         });
@@ -460,7 +460,7 @@ impl ConversationViewModel {
     ) {
         self.last_planning_task_handoff = handoff_task.cloned();
     }
-    pub(crate) fn record_auto_followup_submission(
+    pub(crate) fn record_auto_follow_submission(
         &mut self,
         _completed_turn_id: &str,
         handoff_task: Option<&PlanningTaskHandoff>,
@@ -472,27 +472,27 @@ impl ConversationViewModel {
             self.auto_follow_state.max_auto_turns_label()
         );
         self.last_planning_task_handoff = handoff_task.cloned();
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+        self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: format!("submitted auto turn {progress}"),
             detail: "queued after the previous turn completed; submitted planning auto follow-up"
                 .to_string(),
         });
     }
-    pub(crate) fn record_auto_followup_queue(&mut self, _completed_turn_id: &str) {
+    pub(crate) fn record_auto_follow_queue(&mut self, _completed_turn_id: &str) {
         // Queueing records progress before the runtime owns the prompt submission.
         let turn_index = self.auto_follow_state.mark_auto_turn_queued();
         let next_progress = format!(
             "{turn_index}/{}",
             self.auto_follow_state.max_auto_turns_label()
         );
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+        self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: format!("queued auto turn {next_progress}"),
             detail:
                 "queued after the previous turn completed; waiting to submit planning auto follow-up"
                     .to_string(),
         });
     }
-    pub(crate) fn record_auto_followup_parallel_dispatch(&mut self) {
+    pub(crate) fn record_auto_follow_parallel_dispatch(&mut self) {
         /*
          * Parallel mode consumes the post-turn queue signal as a pool dispatch
          * instead of submitting an in-session auto turn. Clear the queued phase so
@@ -500,13 +500,13 @@ impl ConversationViewModel {
          * never advance.
          */
         self.auto_follow_state.clear_runtime_phase();
-        self.last_auto_followup_activity = Some(RecordedAutoFollowupActivity {
+        self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: "delegated: parallel dispatch".to_string(),
             detail: "post-turn queue handoff opened parallel mode dispatch instead of an auto turn"
                 .to_string(),
         });
     }
-    pub(crate) fn begin_auto_followup_evaluation(&mut self) {
+    pub(crate) fn begin_auto_follow_evaluation(&mut self) {
         // Keep the phase idle when an evaluation would immediately skip; this avoids stale spinners.
         if self.auto_follow_state.post_turn_continuation_paused()
             || !self.auto_follow_state.can_queue_next()
@@ -537,26 +537,26 @@ impl ConversationViewModel {
         self.last_applied_post_turn_evaluation_id = Some(completed_turn_id.to_string());
     }
     #[cfg(test)]
-    pub(crate) fn decide_auto_followup(
+    pub(crate) fn decide_auto_follow(
         &self,
         planning_runtime: &PlanningRuntimeUseCases,
-    ) -> AutoFollowupDecision {
-        self.decide_auto_followup_with_snapshot(planning_runtime, &self.planning_runtime_snapshot)
+    ) -> AutoFollowDecision {
+        self.decide_auto_follow_with_snapshot(planning_runtime, &self.planning_runtime_snapshot)
     }
-    pub(crate) fn decide_auto_followup_with_snapshot(
+    pub(crate) fn decide_auto_follow_with_snapshot(
         &self,
         planning_runtime: &PlanningRuntimeUseCases,
         planning_runtime_snapshot: &PlanningRuntimeSnapshot,
-    ) -> AutoFollowupDecision {
+    ) -> AutoFollowDecision {
         // Local conversation guards run before asking the planning service to compose a prompt.
         if self.auto_follow_state.post_turn_continuation_paused() {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::PostTurnContinuationPaused);
+            return AutoFollowDecision::Skip(AutoFollowSkipReason::PostTurnContinuationPaused);
         }
         if !self.auto_follow_state.can_queue_next() {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::LimitReached);
+            return AutoFollowDecision::Skip(AutoFollowSkipReason::LimitReached);
         }
         let Some(last_message) = self.latest_agent_message_text() else {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoAgentReply);
+            return AutoFollowDecision::Skip(AutoFollowSkipReason::NoAgentReply);
         };
         if self
             .auto_follow_state
@@ -564,34 +564,34 @@ impl ConversationViewModel {
             .stop_keyword
             .matches(last_message)
         {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched);
+            return AutoFollowDecision::Skip(AutoFollowSkipReason::StopKeywordMatched);
         }
         if self
             .auto_follow_state
             .stop_rules
             .should_stop_on_no_file_changes(self.turn_activity.last_completed_file_change_count())
         {
-            return AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges);
+            return AutoFollowDecision::Skip(AutoFollowSkipReason::NoFileChanges);
         }
         // Service block reasons are mapped back to conversation-facing skip copy here.
-        match planning_runtime.decide_auto_followup(PlanningRuntimeAutoFollowRequest {
+        match planning_runtime.decide_auto_follow(PlanningRuntimeAutoFollowRequest {
             stop_keyword: self.auto_follow_state.stop_keyword_value(),
             last_message: last_message.trim(),
             snapshot: planning_runtime_snapshot,
         }) {
             PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
-                AutoFollowupDecision::QueuePrompt(prompt)
+                AutoFollowDecision::QueuePrompt(prompt)
             }
             PlanningRuntimeAutoFollowDecision::Blocked(block_reason) => {
-                AutoFollowupDecision::Skip(match block_reason {
+                AutoFollowDecision::Skip(match block_reason {
                     PlanningAutoFollowBlockReason::InvalidWorkspace => {
-                        AutoFollowupSkipReason::PlanningBlocked
+                        AutoFollowSkipReason::PlanningBlocked
                     }
                     PlanningAutoFollowBlockReason::ActionableQueueRequired => {
-                        AutoFollowupSkipReason::PlanningQueueHeadRequired
+                        AutoFollowSkipReason::PlanningQueueHeadRequired
                     }
                     PlanningAutoFollowBlockReason::RepeatedQueueHead => {
-                        AutoFollowupSkipReason::PlanningRepeatedQueueHead
+                        AutoFollowSkipReason::PlanningRepeatedQueueHead
                     }
                 })
             }

@@ -23,7 +23,7 @@ mod view_model;
 // auto-follow 상태는 shell input handling과 테스트가 함께 쓰므로, 호출부는
 // policy 파일 배치가 아니라 conversation model surface에만 의존한다.
 pub(crate) use auto_follow::{
-    AutoFollowRuntimePhase, AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason,
+    AutoFollowDecision, AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState,
     StopKeywordRule,
 };
 // production rendering은 composed view model을 통해 이 상태를 간접 사용한다.

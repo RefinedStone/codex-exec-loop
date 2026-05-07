@@ -19,7 +19,7 @@ use stream_execution::PreparedTurnStreamRequest;
 
 use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
-    AutoFollowupSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
+    AutoFollowSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, InlineShellCommandInput,
     ManualIntakeSubmitContext, NativeTuiApp, PromptOrigin, ShellActionAvailability,
     ShellChromeEvent,
@@ -80,7 +80,7 @@ impl NativeTuiApp {
                 thread_id,
                 prompt,
             )),
-            ConversationRuntimeEffect::EvaluateAutoFollowup {
+            ConversationRuntimeEffect::EvaluateAutoFollow {
                 workspace_directory,
                 completed_turn_id,
                 changed_planning_file_paths,
@@ -99,7 +99,7 @@ impl NativeTuiApp {
                 let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
                 let _ = self.submit_prompt(
                     prompt,
-                    PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
+                    PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
                         completed_turn_id,
                         mode_label,
                         transcript_text,

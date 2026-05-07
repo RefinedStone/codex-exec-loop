@@ -590,7 +590,7 @@ impl NativeTuiApp {
         effects
             .retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
         if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.record_auto_followup_parallel_dispatch();
+            conversation.record_auto_follow_parallel_dispatch();
         }
         let epoch_id = self.open_parallel_mode_automation_epoch();
         let workspace_directory = self.planning_workspace_directory();

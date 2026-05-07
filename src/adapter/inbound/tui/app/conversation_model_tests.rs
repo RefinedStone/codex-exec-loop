@@ -1,5 +1,5 @@
 use super::{
-    AutoFollowState, AutoFollowupDecision, AutoFollowupSkipReason, ConversationInputState,
+    AutoFollowDecision, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
     ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
     TurnActivityState, format_conversation_lines,
 };
@@ -50,7 +50,7 @@ fn ready_conversation() -> ConversationViewModel {
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         turn_control_truth: ConversationRuntimeControlTruth::default(),
-        last_auto_followup_activity: None,
+        last_auto_follow_activity: None,
         last_planning_task_handoff: None,
         last_applied_post_turn_evaluation_id: None,
         status_text: "thread loaded".to_string(),
@@ -175,8 +175,8 @@ fn queue_handoff_prompt_renders_for_auto_follow() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime())
+    let AutoFollowDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_follow(&planning_runtime())
     else {
         panic!("auto follow-up prompt should render");
     };
@@ -321,7 +321,7 @@ fn max_auto_turn_candidate_accepts_positive_numbers_and_infinite() {
 // snapshots, and invalid planning authority snapshots so the runtime does not
 // keep looping when the planning state says there is no executable next task.
 #[test]
-fn auto_followup_stops_when_stop_keyword_is_present() {
+fn auto_follow_stops_when_stop_keyword_is_present() {
     let mut conversation = ready_conversation();
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -331,13 +331,13 @@ fn auto_followup_stops_when_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
+        conversation.decide_auto_follow(&planning_runtime()),
+        AutoFollowDecision::Skip(AutoFollowSkipReason::StopKeywordMatched)
     );
 }
 
 #[test]
-fn auto_followup_stops_when_custom_stop_keyword_is_present() {
+fn auto_follow_stops_when_custom_stop_keyword_is_present() {
     let mut conversation = ready_conversation();
     conversation
         .auto_follow_state
@@ -350,13 +350,13 @@ fn auto_followup_stops_when_custom_stop_keyword_is_present() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::StopKeywordMatched)
+        conversation.decide_auto_follow(&planning_runtime()),
+        AutoFollowDecision::Skip(AutoFollowSkipReason::StopKeywordMatched)
     );
 }
 
 #[test]
-fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
+fn auto_follow_stops_without_file_changes_when_rule_is_enabled() {
     let mut conversation = ready_conversation();
     conversation
         .auto_follow_state
@@ -370,13 +370,13 @@ fn auto_followup_stops_without_file_changes_when_rule_is_enabled() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::NoFileChanges)
+        conversation.decide_auto_follow(&planning_runtime()),
+        AutoFollowDecision::Skip(AutoFollowSkipReason::NoFileChanges)
     );
 }
 
 #[test]
-fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
+fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
@@ -395,8 +395,8 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    let AutoFollowupDecision::QueuePrompt(prompt) =
-        conversation.decide_auto_followup(&planning_runtime())
+    let AutoFollowDecision::QueuePrompt(prompt) =
+        conversation.decide_auto_follow(&planning_runtime())
     else {
         panic!("auto follow-up should continue when file changes exist");
     };
@@ -409,7 +409,7 @@ fn auto_followup_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
 }
 
 #[test]
-fn auto_followup_skips_main_refresh_prompt_when_queue_is_idle() {
+fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
         "Planning Context\nRuntime Follow-up Proposal Rules",
@@ -424,13 +424,13 @@ fn auto_followup_skips_main_refresh_prompt_when_queue_is_idle() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningQueueHeadRequired)
+        conversation.decide_auto_follow(&planning_runtime()),
+        AutoFollowDecision::Skip(AutoFollowSkipReason::PlanningQueueHeadRequired)
     );
 }
 
 #[test]
-fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
+fn auto_follow_skips_when_planning_runtime_snapshot_is_invalid() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::invalid(
         "planning validation failed: task authority is invalid",
@@ -443,8 +443,8 @@ fn auto_followup_skips_when_planning_runtime_snapshot_is_invalid() {
     ));
 
     assert_eq!(
-        conversation.decide_auto_followup(&planning_runtime()),
-        AutoFollowupDecision::Skip(AutoFollowupSkipReason::PlanningBlocked)
+        conversation.decide_auto_follow(&planning_runtime()),
+        AutoFollowDecision::Skip(AutoFollowSkipReason::PlanningBlocked)
     );
 }
 

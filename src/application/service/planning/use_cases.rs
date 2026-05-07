@@ -219,11 +219,11 @@ impl PlanningRuntimeUseCases {
     ) -> PlanningSubSessionHandoff {
         self.runtime_facade.build_sub_session_task_handoff(task)
     }
-    pub fn decide_auto_followup(
+    pub fn decide_auto_follow(
         &self,
         request: PlanningRuntimeAutoFollowRequest<'_>,
     ) -> PlanningRuntimeAutoFollowDecision {
-        self.runtime_facade.decide_auto_followup(request)
+        self.runtime_facade.decide_auto_follow(request)
     }
     pub fn build_auto_follow_preview(
         &self,

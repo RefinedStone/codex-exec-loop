@@ -239,7 +239,7 @@ fn build_ready_status_ribbon_line(
 }
 
 fn build_completion_alert_line(conversation: &ConversationViewModel) -> Option<Line<'static>> {
-    let activity = conversation.last_auto_followup_activity.as_ref()?;
+    let activity = conversation.last_auto_follow_activity.as_ref()?;
     if activity.summary != "complete: planning queue drained" {
         return None;
     }

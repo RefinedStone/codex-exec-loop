@@ -172,7 +172,7 @@ pub(super) fn post_turn_action_log_detail(action: &ConversationPostTurnAction) -
                 .as_ref()
                 .map(|task| task.task_id.as_str()),
         }),
-        ConversationPostTurnAction::SkipAutoFollowup { reason } => json!({
+        ConversationPostTurnAction::SkipAutoFollow { reason } => json!({
             "type": "skip_auto_followup",
             "reason": format!("{:?}", reason),
         }),
@@ -182,14 +182,14 @@ pub(super) fn post_turn_action_log_detail(action: &ConversationPostTurnAction) -
 pub(super) fn post_turn_action_decision(action: &ConversationPostTurnAction) -> &'static str {
     match action {
         ConversationPostTurnAction::QueueAutoPrompt(_) => "queue_auto_prompt",
-        ConversationPostTurnAction::SkipAutoFollowup { .. } => "skip_auto_followup",
+        ConversationPostTurnAction::SkipAutoFollow { .. } => "skip_auto_followup",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::inbound::tui::app::conversation_model::AutoFollowupSkipReason;
+    use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
     use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction;
     use crate::application::service::planning::PlanningRuntimeSnapshot;
 
@@ -230,8 +230,8 @@ mod tests {
 
     #[test]
     fn post_turn_action_detail_hides_full_queued_prompt_text() {
-        let action = ConversationPostTurnAction::SkipAutoFollowup {
-            reason: AutoFollowupSkipReason::PlanningQueueIdlePolicyStop,
+        let action = ConversationPostTurnAction::SkipAutoFollow {
+            reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
         };
 
         let detail = post_turn_action_log_detail(&action);
