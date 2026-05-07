@@ -516,7 +516,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
             .tx
             .send(BackgroundMessage::PostTurnEvaluated {
                 thread_id: "thread-1".to_string(),
-                queued_from_turn_id: "turn-1".to_string(),
+                completed_turn_id: "turn-1".to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
                     planning_runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
                         "stale snapshot".to_string(),
@@ -566,7 +566,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     let build_message = |notice: &str| BackgroundMessage::PostTurnEvaluated {
         thread_id: "thread-1".to_string(),
-        queued_from_turn_id: "turn-1".to_string(),
+        completed_turn_id: "turn-1".to_string(),
         evaluation: Box::new(ConversationPostTurnEvaluation {
             planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
             planning_repair_state: None,

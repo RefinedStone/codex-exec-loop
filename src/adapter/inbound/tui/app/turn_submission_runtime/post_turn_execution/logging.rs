@@ -19,7 +19,7 @@ where
 {
     let mut detail = core_post_turn_fields(
         Some(conversation.thread_id.as_str()),
-        request.queued_from_turn_id.as_str(),
+        request.completed_turn_id.as_str(),
         request.workspace_directory.as_str(),
         operation,
         phase,
@@ -35,19 +35,19 @@ where
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PostTurnWorkerLogContext<'a> {
     pub(super) thread_id: &'a str,
-    pub(super) queued_from_turn_id: &'a str,
+    pub(super) completed_turn_id: &'a str,
     pub(super) workspace_directory: &'a str,
 }
 
 impl<'a> PostTurnWorkerLogContext<'a> {
     pub(super) fn new(
         thread_id: &'a str,
-        queued_from_turn_id: &'a str,
+        completed_turn_id: &'a str,
         workspace_directory: &'a str,
     ) -> Self {
         Self {
             thread_id,
-            queued_from_turn_id,
+            completed_turn_id,
             workspace_directory,
         }
     }
@@ -66,7 +66,7 @@ where
 {
     let mut detail = core_post_turn_fields(
         Some(context.thread_id),
-        context.queued_from_turn_id,
+        context.completed_turn_id,
         context.workspace_directory,
         operation,
         phase,
@@ -98,7 +98,7 @@ pub(super) fn planner_refresh_skipped_detail(
 
 fn core_post_turn_fields(
     thread_id: Option<&str>,
-    queued_from_turn_id: &str,
+    completed_turn_id: &str,
     workspace_directory: &str,
     operation: &str,
     phase: &str,
@@ -106,10 +106,7 @@ fn core_post_turn_fields(
 ) -> Map<String, Value> {
     let mut detail = Map::new();
     detail.insert("thread_id".to_string(), json!(thread_id));
-    detail.insert(
-        "queued_from_turn_id".to_string(),
-        json!(queued_from_turn_id),
-    );
+    detail.insert("completed_turn_id".to_string(), json!(completed_turn_id));
     detail.insert(
         "workspace_directory".to_string(),
         json!(workspace_directory),
@@ -166,7 +163,7 @@ pub(super) fn post_turn_action_log_detail(action: &ConversationPostTurnAction) -
     match action {
         ConversationPostTurnAction::QueueAutoPrompt(prompt) => json!({
             "type": "queue_auto_prompt",
-            "queued_from_turn_id": prompt.queued_from_turn_id,
+            "completed_turn_id": prompt.completed_turn_id,
             "mode_label": prompt.mode_label,
             "prompt_chars": prompt.prompt.chars().count(),
             "transcript_text_chars": prompt.transcript_text.chars().count(),
@@ -208,7 +205,7 @@ mod tests {
         );
 
         assert_eq!(detail["thread_id"], json!("thread-1"));
-        assert_eq!(detail["queued_from_turn_id"], json!("turn-1"));
+        assert_eq!(detail["completed_turn_id"], json!("turn-1"));
         assert_eq!(detail["workspace_directory"], json!("/tmp/workspace"));
         assert_eq!(detail["operation"], json!("refresh"));
         assert_eq!(detail["phase"], json!("skipped"));

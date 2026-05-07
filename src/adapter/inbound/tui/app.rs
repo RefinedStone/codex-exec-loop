@@ -185,7 +185,7 @@ use theme::AkraTheme;
 // debug detail, and the planning task identity needed by parallel-mode leasing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AutoFollowupSubmitContext {
-    queued_from_turn_id: String,
+    completed_turn_id: String,
     mode_label: String,
     transcript_text: String,
     debug_detail: Option<String>,

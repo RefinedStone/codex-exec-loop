@@ -82,7 +82,7 @@ pub(super) enum BackgroundMessage {
     },
     PostTurnEvaluated {
         thread_id: String,
-        queued_from_turn_id: String,
+        completed_turn_id: String,
         evaluation: Box<ConversationPostTurnEvaluation>,
         planner_worker_panel_state: super::PlannerWorkerPanelState,
     },
@@ -325,11 +325,11 @@ impl NativeTuiApp {
     pub(super) fn should_apply_post_turn_evaluation(
         &self,
         thread_id: &str,
-        queued_from_turn_id: &str,
+        completed_turn_id: &str,
     ) -> bool {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => {
-                conversation.accepts_post_turn_evaluation(thread_id, queued_from_turn_id)
+                conversation.accepts_post_turn_evaluation(thread_id, completed_turn_id)
             }
             ConversationState::Loading | ConversationState::Failed(_) => false,
         }

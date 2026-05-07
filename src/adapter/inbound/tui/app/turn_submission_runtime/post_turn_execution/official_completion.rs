@@ -60,7 +60,7 @@ impl PostTurnEvaluationExecutor {
 
         match self.parallel_mode_turn_service.begin_official_completion(
             &request.workspace_directory,
-            &request.queued_from_turn_id,
+            &request.completed_turn_id,
             None,
             latest_main_reply,
             Some(validation_summary),
@@ -328,7 +328,7 @@ impl PostTurnEvaluationExecutor {
             let repair_outcome = self.run_hidden_planning_repairs(
                 &conversation.thread_id,
                 planning_workspace_directory,
-                &request.queued_from_turn_id,
+                &request.completed_turn_id,
                 repair_request,
                 conversation.last_planning_task_handoff(),
             );

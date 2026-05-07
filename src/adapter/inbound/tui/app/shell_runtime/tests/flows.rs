@@ -386,7 +386,7 @@ impl NativeFlowHarness {
             .tx
             .send(BackgroundMessage::PostTurnEvaluated {
                 thread_id: "thread-1".to_string(),
-                queued_from_turn_id: turn_id.to_string(),
+                completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
                     planning_runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
@@ -394,7 +394,7 @@ impl NativeFlowHarness {
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "run next task".to_string(),
-                            queued_from_turn_id: turn_id.to_string(),
+                            completed_turn_id: turn_id.to_string(),
                             mode_label: "flow".to_string(),
                             transcript_text: "next-task".to_string(),
                             handoff_task: None,

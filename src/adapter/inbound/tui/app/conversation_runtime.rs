@@ -58,12 +58,12 @@ pub(super) enum ConversationRuntimeEffect {
     },
     EvaluateAutoFollowup {
         workspace_directory: String,
-        queued_from_turn_id: String,
+        completed_turn_id: String,
         changed_planning_file_paths: Vec<String>,
     },
     QueueAutoPrompt {
         prompt: String,
-        queued_from_turn_id: String,
+        completed_turn_id: String,
         mode_label: String,
         transcript_text: String,
         handoff_task: Option<PlanningTaskHandoff>,
@@ -94,7 +94,7 @@ pub(super) struct QueuedAutoPrompt {
     pub prompt: String,
     // Turn id used to prevent repeatedly queuing auto-follow for the same queue
     // head after retries or delayed background messages.
-    pub queued_from_turn_id: String,
+    pub completed_turn_id: String,
     // Human label for the auto-follow policy that produced this prompt.
     pub mode_label: String,
     // Transcript marker shown to the operator; deliberately distinct from the
@@ -201,7 +201,7 @@ pub(super) fn reduce_conversation_runtime(
                     // If this queued prompt loops back without progress, the
                     // next post-turn evaluation can stop it deterministically.
                     state.record_auto_followup_submission(
-                        &context.queued_from_turn_id,
+                        &context.completed_turn_id,
                         context.handoff_task.as_ref(),
                     );
                 }
@@ -333,7 +333,7 @@ pub(super) fn reduce_conversation_runtime(
                 event_log::emit_lazy("post_turn_evaluation_queued", || {
                     json!({
                         "thread_id": state.thread_id.as_str(),
-                        "queued_from_turn_id": turn_id,
+                        "completed_turn_id": turn_id,
                         "workspace_directory": workspace_directory,
                         "operation": "post_turn",
                         "phase": "queued",
@@ -343,7 +343,7 @@ pub(super) fn reduce_conversation_runtime(
                 });
                 effects.push(ConversationRuntimeEffect::EvaluateAutoFollowup {
                     workspace_directory,
-                    queued_from_turn_id: turn_id,
+                    completed_turn_id: turn_id,
                     changed_planning_file_paths,
                 });
             }
@@ -373,19 +373,19 @@ pub(super) fn reduce_conversation_runtime(
                     // reducer as SubmitPrompt with PromptOrigin::AutoFollow.
                     let QueuedAutoPrompt {
                         prompt,
-                        queued_from_turn_id,
+                        completed_turn_id,
                         mode_label,
                         transcript_text,
                         handoff_task,
                     } = *queued_prompt;
                     state.clear_auto_followup_skip();
-                    state.record_auto_followup_queue(&queued_from_turn_id);
+                    state.record_auto_followup_queue(&completed_turn_id);
                     state.status_text =
                         format!("turn completed / queued auto follow-up with mode {mode_label}");
                     state.append_status_message(state.status_text.clone());
                     effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
                         prompt,
-                        queued_from_turn_id,
+                        completed_turn_id,
                         mode_label,
                         transcript_text,
                         handoff_task,
@@ -436,7 +436,7 @@ mod tests {
                 prompt: "continue queue".to_string(),
                 transcript_text: "continue queue".to_string(),
                 origin: PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
-                    queued_from_turn_id: "turn-root".to_string(),
+                    completed_turn_id: "turn-root".to_string(),
                     mode_label: "planning queue".to_string(),
                     transcript_text: "continue queue".to_string(),
                     debug_detail: None,

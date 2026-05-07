@@ -82,16 +82,16 @@ impl NativeTuiApp {
             )),
             ConversationRuntimeEffect::EvaluateAutoFollowup {
                 workspace_directory,
-                queued_from_turn_id,
+                completed_turn_id,
                 changed_planning_file_paths,
             } => self.execute_post_turn_evaluation(PostTurnEvaluationRequest {
                 workspace_directory,
-                queued_from_turn_id,
+                completed_turn_id,
                 changed_planning_file_paths,
             }),
             ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt,
-                queued_from_turn_id,
+                completed_turn_id,
                 mode_label,
                 transcript_text,
                 handoff_task,
@@ -100,7 +100,7 @@ impl NativeTuiApp {
                 let _ = self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(Box::new(AutoFollowupSubmitContext {
-                        queued_from_turn_id,
+                        completed_turn_id,
                         mode_label,
                         transcript_text,
                         debug_detail,

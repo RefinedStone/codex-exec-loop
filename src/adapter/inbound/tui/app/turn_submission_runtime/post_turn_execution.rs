@@ -56,7 +56,7 @@ use logging::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
     pub workspace_directory: String,
-    pub queued_from_turn_id: String,
+    pub completed_turn_id: String,
     pub changed_planning_file_paths: Vec<String>,
 }
 #[derive(Debug, Clone)]
@@ -77,7 +77,7 @@ struct OfficialCompletionRefreshOutcome {
 #[cfg_attr(test, allow(dead_code))]
 struct PostTurnEvaluationExecution {
     thread_id: String,
-    queued_from_turn_id: String,
+    completed_turn_id: String,
     evaluation: ConversationPostTurnEvaluation,
     planner_worker_panel_state: PlannerWorkerPanelState,
 }
@@ -160,7 +160,7 @@ impl PostTurnEvaluationExecutor {
             let repair_outcome = self.run_hidden_planning_repairs(
                 &conversation.thread_id,
                 &request.workspace_directory,
-                &request.queued_from_turn_id,
+                &request.completed_turn_id,
                 repair_request,
                 conversation.last_planning_task_handoff(),
             );
@@ -221,7 +221,7 @@ impl PostTurnEvaluationExecutor {
 
         PostTurnEvaluationExecution {
             thread_id: conversation.thread_id.clone(),
-            queued_from_turn_id: request.queued_from_turn_id.clone(),
+            completed_turn_id: request.completed_turn_id.clone(),
             evaluation: ConversationPostTurnEvaluation {
                 planning_runtime_snapshot,
                 planning_repair_state: None,
@@ -284,7 +284,7 @@ impl PostTurnEvaluationExecutor {
         };
         match self.planning.runtime.reconcile_after_turn(
             &request.workspace_directory,
-            &request.queued_from_turn_id,
+            &request.completed_turn_id,
             &request.changed_planning_file_paths,
             &execution_snapshot,
         ) {
@@ -428,7 +428,7 @@ impl PostTurnEvaluationExecutor {
             workspace_directory: &request.workspace_directory,
             parent_thread_id: Some(conversation.thread_id.as_str())
                 .filter(|thread_id| !thread_id.trim().is_empty()),
-            parent_turn_id: &request.queued_from_turn_id,
+            parent_turn_id: &request.completed_turn_id,
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),
@@ -551,7 +551,7 @@ impl PostTurnEvaluationExecutor {
             let repair_outcome = self.run_hidden_planning_repairs(
                 &conversation.thread_id,
                 &request.workspace_directory,
-                &request.queued_from_turn_id,
+                &request.completed_turn_id,
                 repair_request,
                 conversation.last_planning_task_handoff(),
             );
@@ -788,7 +788,7 @@ impl PostTurnEvaluationExecutor {
                 });
                 ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
                     prompt: queued_prompt.prompt,
-                    queued_from_turn_id: request.queued_from_turn_id.clone(),
+                    completed_turn_id: request.completed_turn_id.clone(),
                     mode_label: conversation.auto_follow_state.mode_label().to_string(),
                     transcript_text: queued_prompt.transcript_text,
                     handoff_task: queued_prompt.handoff_task,
@@ -857,7 +857,7 @@ impl NativeTuiApp {
                     });
                 let _ = tx.send(BackgroundMessage::PostTurnEvaluated {
                     thread_id: execution.thread_id,
-                    queued_from_turn_id: execution.queued_from_turn_id,
+                    completed_turn_id: execution.completed_turn_id,
                     evaluation: Box::new(execution.evaluation),
                     planner_worker_panel_state: execution.planner_worker_panel_state,
                 });
@@ -914,7 +914,7 @@ fn post_turn_evaluation_timeout_execution(
     );
     PostTurnEvaluationExecution {
         thread_id: conversation.thread_id.clone(),
-        queued_from_turn_id: request.queued_from_turn_id.clone(),
+        completed_turn_id: request.completed_turn_id.clone(),
         evaluation: ConversationPostTurnEvaluation {
             planning_runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
             planning_repair_state: None,

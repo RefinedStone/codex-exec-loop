@@ -205,7 +205,7 @@ impl ShellRuntime {
                 }
                 BackgroundMessage::PostTurnEvaluated {
                     thread_id,
-                    queued_from_turn_id,
+                    completed_turn_id,
                     evaluation,
                     planner_worker_panel_state,
                 } => {
@@ -213,13 +213,13 @@ impl ShellRuntime {
                     // The stale guard keeps delayed planning output out of the current thread.
                     if !self
                         .app
-                        .should_apply_post_turn_evaluation(&thread_id, &queued_from_turn_id)
+                        .should_apply_post_turn_evaluation(&thread_id, &completed_turn_id)
                     {
                         continue;
                     }
                     if let ConversationState::Ready(conversation) = &mut self.app.conversation_state
                     {
-                        conversation.record_post_turn_evaluation_applied(&queued_from_turn_id);
+                        conversation.record_post_turn_evaluation_applied(&completed_turn_id);
                     }
                     self.app.planner_worker_panel_state = planner_worker_panel_state;
                     self.app.invalidate_parallel_mode_supervisor_snapshot();

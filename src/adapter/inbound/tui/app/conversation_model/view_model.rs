@@ -463,7 +463,7 @@ impl ConversationViewModel {
     }
     pub(crate) fn record_auto_followup_submission(
         &mut self,
-        _queued_from_turn_id: &str,
+        _completed_turn_id: &str,
         handoff_task: Option<&PlanningTaskHandoff>,
     ) {
         // Submission stores the handoff so later status copy can explain which planning task moved.
@@ -479,7 +479,7 @@ impl ConversationViewModel {
                 .to_string(),
         });
     }
-    pub(crate) fn record_auto_followup_queue(&mut self, _queued_from_turn_id: &str) {
+    pub(crate) fn record_auto_followup_queue(&mut self, _completed_turn_id: &str) {
         // Queueing records progress before the runtime owns the prompt submission.
         let turn_index = self.auto_follow_state.mark_auto_turn_queued();
         let next_progress = format!(
@@ -526,16 +526,16 @@ impl ConversationViewModel {
     pub(crate) fn accepts_post_turn_evaluation(
         &self,
         thread_id: &str,
-        queued_from_turn_id: &str,
+        completed_turn_id: &str,
     ) -> bool {
         // Async evaluators are accepted only for the most recently completed turn on this thread.
         self.thread_id == thread_id
             && !self.has_running_turn()
-            && self.last_applied_post_turn_evaluation_id.as_deref() != Some(queued_from_turn_id)
-            && self.turn_activity.last_completed_turn_id.as_deref() == Some(queued_from_turn_id)
+            && self.last_applied_post_turn_evaluation_id.as_deref() != Some(completed_turn_id)
+            && self.turn_activity.last_completed_turn_id.as_deref() == Some(completed_turn_id)
     }
-    pub(crate) fn record_post_turn_evaluation_applied(&mut self, queued_from_turn_id: &str) {
-        self.last_applied_post_turn_evaluation_id = Some(queued_from_turn_id.to_string());
+    pub(crate) fn record_post_turn_evaluation_applied(&mut self, completed_turn_id: &str) {
+        self.last_applied_post_turn_evaluation_id = Some(completed_turn_id.to_string());
     }
     #[cfg(test)]
     pub(crate) fn decide_auto_followup(
