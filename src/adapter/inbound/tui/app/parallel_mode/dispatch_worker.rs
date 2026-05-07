@@ -6,6 +6,7 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningServices, PlanningTaskHandoff,
 };
+use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -103,6 +104,18 @@ pub(super) fn spawn_parallel_dispatch_worker(
          */
         let workspace_directory = request.planning_workspace_directory.clone();
         let automation_epoch_id = request.automation_epoch_id;
+        event_log::emit_lazy("parallel_worker_thread_started", || {
+            serde_json::json!({
+                "planning_workspace": &request.planning_workspace_directory,
+                "worktree": &request.worktree_directory,
+                "epoch_id": request.automation_epoch_id,
+                "task_id": &request.handoff_task.task_id,
+                "task_title": &request.handoff_task.task_title,
+                "service_name": &request.service_name,
+                "prompt_chars": request.prompt.chars().count(),
+                "developer_instructions_chars": request.developer_instructions.chars().count(),
+            })
+        });
         let result =
             run_parallel_dispatch_worker(request, worker_port, turn_service, planning.clone());
         for notice in result.notices {
@@ -136,6 +149,16 @@ fn run_parallel_dispatch_worker(
 ) -> ParallelDispatchWorkerRunResult {
     let (event_tx, event_rx) = mpsc::channel();
     let service_request = request.clone();
+    event_log::emit_lazy("parallel_worker_stream_starting", || {
+        serde_json::json!({
+            "worktree": &request.worktree_directory,
+            "task_id": &request.handoff_task.task_id,
+            "task_title": &request.handoff_task.task_title,
+            "service_name": &request.service_name,
+            "prompt": &request.prompt,
+            "developer_instructions": &request.developer_instructions,
+        })
+    });
     let service_thread = thread::spawn(move || {
         /*
          * ParallelAgentWorkerPort owns app-server execution. This outer worker keeps
@@ -159,6 +182,7 @@ fn run_parallel_dispatch_worker(
     // TurnCompleted 또는 Failed 이후의 이벤트는 official completion 판단에 쓰지 않는다.
     // 워커 스레드 join은 별도로 수행해 스트림 포트 자체의 오류까지 notice로 남긴다.
     while let Ok(event) = event_rx.recv() {
+        emit_parallel_worker_stream_event(&request, &event);
         sync_parallel_dispatch_worker_event(&turn_service, &request, &event, &mut stream_state)
             .into_iter()
             .for_each(|notice| notices.push(notice));
@@ -171,7 +195,18 @@ fn run_parallel_dispatch_worker(
     }
 
     match service_thread.join() {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => {
+            event_log::emit_lazy("parallel_worker_stream_joined", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "result": "ok",
+                    "saw_turn_started": stream_state.saw_turn_started,
+                    "saw_failed_event": stream_state.saw_failed_event,
+                    "turn_completed": stream_state.turn_completed.is_some(),
+                })
+            });
+        }
         Ok(Err(error)) => {
             /*
              * A port error may happen after the event stream already emitted TurnCompleted
@@ -189,6 +224,17 @@ fn run_parallel_dispatch_worker(
                 "parallel worker stream returned an error / task: {} / {error}",
                 request.handoff_task.task_title
             ));
+            event_log::emit_lazy("parallel_worker_stream_joined", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "result": "error",
+                    "error": error.to_string(),
+                    "saw_turn_started": stream_state.saw_turn_started,
+                    "saw_failed_event": stream_state.saw_failed_event,
+                    "turn_completed": stream_state.turn_completed.is_some(),
+                })
+            });
         }
         Err(_) => {
             /*
@@ -206,6 +252,16 @@ fn run_parallel_dispatch_worker(
                 "parallel worker stream panicked / task: {}",
                 request.handoff_task.task_title
             ));
+            event_log::emit_lazy("parallel_worker_stream_joined", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "result": "panic",
+                    "saw_turn_started": stream_state.saw_turn_started,
+                    "saw_failed_event": stream_state.saw_failed_event,
+                    "turn_completed": stream_state.turn_completed.is_some(),
+                })
+            });
         }
     }
 
@@ -232,6 +288,17 @@ fn run_parallel_dispatch_worker(
     if let Some(notice) = completion.runtime_notice {
         notices.push(notice);
     }
+    event_log::emit_lazy("parallel_worker_stream_finalized", || {
+        serde_json::json!({
+            "worktree": &request.worktree_directory,
+            "task_id": &request.handoff_task.task_id,
+            "saw_turn_started": stream_state.saw_turn_started,
+            "saw_failed_before_turn_started": stream_state.saw_failed_before_turn_started,
+            "saw_failed_event": stream_state.saw_failed_event,
+            "turn_completed": stream_state.turn_completed.is_some(),
+            "invalidate_supervisor_snapshot": completion.invalidate_supervisor_snapshot,
+        })
+    });
 
     if stream_state.saw_failed_event {
         /*
@@ -277,6 +344,76 @@ fn run_parallel_dispatch_worker(
         notices,
         official_completion_refresh_succeeded: official_completion
             .official_completion_refresh_succeeded,
+    }
+}
+
+fn emit_parallel_worker_stream_event(
+    request: &ParallelDispatchWorkerRequest,
+    event: &ConversationStreamEvent,
+) {
+    match event {
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id,
+            title,
+            cwd,
+        } => event_log::emit_lazy("parallel_worker_stream_event", || {
+            serde_json::json!({
+                "event": "thread_prepared",
+                "worktree": &request.worktree_directory,
+                "task_id": &request.handoff_task.task_id,
+                "thread_id": thread_id,
+                "title": title,
+                "cwd": cwd,
+            })
+        }),
+        ConversationStreamEvent::TurnStarted { turn_id } => {
+            event_log::emit_lazy("parallel_worker_stream_event", || {
+                serde_json::json!({
+                    "event": "turn_started",
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "turn_id": turn_id,
+                })
+            })
+        }
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        } => event_log::emit_lazy("parallel_worker_stream_event", || {
+            serde_json::json!({
+                "event": "agent_message_completed",
+                "worktree": &request.worktree_directory,
+                "task_id": &request.handoff_task.task_id,
+                "item_id": item_id,
+                "phase": phase,
+                "text_chars": text.chars().count(),
+                "text": text,
+            })
+        }),
+        ConversationStreamEvent::TurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+        } => event_log::emit_lazy("parallel_worker_stream_event", || {
+            serde_json::json!({
+                "event": "turn_completed",
+                "worktree": &request.worktree_directory,
+                "task_id": &request.handoff_task.task_id,
+                "turn_id": turn_id,
+                "changed_planning_file_paths": changed_planning_file_paths,
+            })
+        }),
+        ConversationStreamEvent::Failed { message } => {
+            event_log::emit_lazy("parallel_worker_stream_event", || {
+                serde_json::json!({
+                    "event": "failed",
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "message": message,
+                })
+            })
+        }
+        _ => {}
     }
 }
 
@@ -339,6 +476,18 @@ fn run_parallel_dispatch_official_completion(
     latest_main_reply: Option<&str>,
 ) -> ParallelDispatchOfficialCompletionOutcome {
     let mut notices = Vec::new();
+    event_log::emit_lazy("parallel_official_completion_started", || {
+        serde_json::json!({
+            "planning_workspace": &request.planning_workspace_directory,
+            "worktree": &request.worktree_directory,
+            "task_id": &request.handoff_task.task_id,
+            "task_title": &request.handoff_task.task_title,
+            "turn_id": &turn_completed.turn_id,
+            "changed_planning_file_paths": &turn_completed.changed_planning_file_paths,
+            "latest_main_reply_chars": latest_main_reply.map(|reply| reply.chars().count()),
+            "latest_main_reply": latest_main_reply,
+        })
+    });
 
     // Official completion refreshes are serialized by slot lease order, not by thread wake-up
     // timing. That preserves planning authority when multiple parallel workers finish together.
@@ -347,6 +496,13 @@ fn run_parallel_dispatch_official_completion(
     {
         Ok(Some(order)) => order,
         Ok(None) => {
+            event_log::emit_lazy("parallel_official_completion_blocked", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "blocked_reason": "no running slot lease was found",
+                })
+            });
             return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion skipped official refresh because no running slot lease was found / task: {}",
                 request.handoff_task.task_title
@@ -354,6 +510,14 @@ fn run_parallel_dispatch_official_completion(
         }
         Err(error) => {
             turn_service.mark_official_completion_failed(&request.worktree_directory, &error);
+            event_log::emit_lazy("parallel_official_completion_blocked", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "blocked_reason": "refresh order reservation failed",
+                    "error": &error,
+                })
+            });
             return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion could not reserve official refresh order / task: {} / {error}",
                 request.handoff_task.task_title
@@ -378,6 +542,14 @@ fn run_parallel_dispatch_official_completion(
     ) {
         Ok(Some(report)) => report,
         Ok(None) => {
+            event_log::emit_lazy("parallel_official_completion_blocked", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "blocked_reason": "no running slot to report",
+                    "refresh_order": refresh_order,
+                })
+            });
             return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion had no running slot to report / task: {}",
                 request.handoff_task.task_title
@@ -385,6 +557,15 @@ fn run_parallel_dispatch_official_completion(
         }
         Err(error) => {
             turn_service.mark_official_completion_failed(&request.worktree_directory, &error);
+            event_log::emit_lazy("parallel_official_completion_blocked", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "blocked_reason": "completion capture failed",
+                    "refresh_order": refresh_order,
+                    "error": &error,
+                })
+            });
             return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
                 "parallel worker completion capture failed / task: {} / {error}",
                 request.handoff_task.task_title
@@ -421,6 +602,15 @@ fn run_parallel_dispatch_official_completion(
         Err(error) => {
             let detail = format!("parallel official completion refresh failed: {error}");
             turn_service.mark_official_completion_failed(&request.worktree_directory, &detail);
+            event_log::emit_lazy("parallel_official_completion_failed", || {
+                serde_json::json!({
+                    "planning_workspace": &request.planning_workspace_directory,
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "refresh_order": refresh_order,
+                    "detail": &detail,
+                })
+            });
             return ParallelDispatchOfficialCompletionOutcome::failed(vec![detail]);
         }
     };
@@ -434,6 +624,16 @@ fn run_parallel_dispatch_official_completion(
             .unwrap_or("parallel official completion refresh requires planning repair")
             .to_string();
         turn_service.mark_official_completion_failed(&request.worktree_directory, &detail);
+        event_log::emit_lazy("parallel_official_completion_blocked", || {
+            serde_json::json!({
+                "planning_workspace": &request.planning_workspace_directory,
+                "worktree": &request.worktree_directory,
+                "task_id": &request.handoff_task.task_id,
+                "refresh_order": refresh_order,
+                "blocked_reason": detail,
+                "worker_summary": outcome.worker_summary,
+            })
+        });
         notices.push(format!(
             "parallel official completion refresh blocked / task: {} / {detail}",
             request.handoff_task.task_title
@@ -453,6 +653,16 @@ fn run_parallel_dispatch_official_completion(
          */
         let detail = "parallel official completion refresh left planning unavailable";
         turn_service.mark_official_completion_failed(&request.worktree_directory, detail);
+        event_log::emit_lazy("parallel_official_completion_blocked", || {
+            serde_json::json!({
+                "planning_workspace": &request.planning_workspace_directory,
+                "worktree": &request.worktree_directory,
+                "task_id": &request.handoff_task.task_id,
+                "refresh_order": refresh_order,
+                "blocked_reason": detail,
+                "worker_summary": outcome.worker_summary,
+            })
+        });
         notices.push(format!(
             "parallel official completion refresh blocked / task: {} / {detail}",
             request.handoff_task.task_title
@@ -469,6 +679,16 @@ fn run_parallel_dispatch_official_completion(
         &request.worktree_directory,
         &authority_refresh_outcome,
     ));
+    event_log::emit_lazy("parallel_official_completion_succeeded", || {
+        serde_json::json!({
+            "planning_workspace": &request.planning_workspace_directory,
+            "worktree": &request.worktree_directory,
+            "task_id": &request.handoff_task.task_id,
+            "refresh_order": refresh_order,
+            "authority_refresh_outcome": authority_refresh_outcome,
+            "notice_count": notices.len(),
+        })
+    });
     ParallelDispatchOfficialCompletionOutcome::succeeded(notices)
 }
 

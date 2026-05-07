@@ -1066,6 +1066,16 @@ fn dispatch_parallel_queue_pool(
         .iter()
         .map(|task| task.task_id.clone())
         .collect();
+    event_log::emit_lazy("parallel_dispatch_plan_built", || {
+        serde_json::json!({
+            "trigger": trigger.label(),
+            "workspace": workspace_directory,
+            "epoch_id": epoch_id,
+            "idle_slot_count": dispatch_plan.idle_slot_count,
+            "candidate_task_ids": &outcome.candidate_task_ids,
+            "excluded_task_ids": &dispatch_plan.excluded_task_ids,
+        })
+    });
     // Distinguish infrastructure capacity from queue availability so the
     // operator can decide whether to wait for slots or change planning tasks.
     if dispatch_plan.idle_slot_count == 0 {
@@ -1125,6 +1135,21 @@ fn dispatch_parallel_queue_pool(
             .acquire_slot_lease(workspace_directory, lease_request)
         {
             Ok(lease) => {
+                event_log::emit_lazy("parallel_dispatch_slot_lease_acquired", || {
+                    serde_json::json!({
+                        "trigger": trigger.label(),
+                        "workspace": workspace_directory,
+                        "epoch_id": epoch_id,
+                        "slot_id": &lease.slot_id,
+                        "agent_id": &lease.agent_id,
+                        "task_id": &handoff.task.task_id,
+                        "task_title": &handoff.task.task_title,
+                        "worktree": &lease.worktree_path,
+                        "service_name": &handoff.service_name,
+                        "prompt_chars": handoff.prompt.chars().count(),
+                        "developer_instructions_chars": handoff.developer_instructions.chars().count(),
+                    })
+                });
                 // After the lease is acquired, the worker owns app-server
                 // turn execution in the slot worktree. The TUI keeps only
                 // status copy and receives later updates over its channel.

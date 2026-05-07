@@ -25,6 +25,7 @@ use crate::application::service::turn_prompt_assembly_service::{
     MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionPromptAssemblyRequest,
     TurnPromptAssemblyService,
 };
+use crate::diagnostics::event_log;
 use crate::domain::planning::{PriorityQueueTask, TaskDefinition};
 use anyhow::Result;
 
@@ -224,6 +225,23 @@ impl PlanningRuntimeFacadeService {
                 persona,
             })
             .expect("queued sub-session handoff prompt should not be empty");
+
+        event_log::emit_lazy("parallel_sub_session_handoff_built", || {
+            serde_json::json!({
+                "task_id": &task.task_id,
+                "task_title": &task.task_title,
+                "direction_id": &task.direction_id,
+                "combined_priority": task.combined_priority,
+                "persona": persona.form_value(),
+                "service_name": &prompt.service_name,
+                "handoff_prompt_chars": task_prompt.chars().count(),
+                "turn_prompt_chars": prompt.turn_prompt.chars().count(),
+                "developer_instructions_chars": prompt.developer_instructions.chars().count(),
+                "handoff_prompt": &task_prompt,
+                "turn_prompt": &prompt.turn_prompt,
+                "developer_instructions": &prompt.developer_instructions,
+            })
+        });
 
         PlanningSubSessionHandoff {
             prompt: prompt.turn_prompt,
