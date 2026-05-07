@@ -441,7 +441,7 @@ impl NativeTuiApp {
                         .reset_pool_on_parallel_enable_report(&workspace_directory)
                         .and_then(|report| {
                             if report.has_live_blockers() {
-                                event_log::emit_lazy("parallel_pool_reset_blocked", || {
+                                event_log::emit_lazy("parallel_pool_reset_preserved_live", || {
                                     serde_json::json!({
                                         "workspace": &workspace_directory,
                                         "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
@@ -449,10 +449,6 @@ impl NativeTuiApp {
                                         "live_blockers": report.live_blocker_count(),
                                     })
                                 });
-                                return Err(format!(
-                                    "pool reset blocked by {} live slot(s)",
-                                    report.live_blocker_count()
-                                ));
                             }
                             if report.has_reset_failures() {
                                 return Err(format!(
@@ -469,8 +465,13 @@ impl NativeTuiApp {
                                     "slot_count": count,
                                 })
                             });
+                            let live_suffix = if report.has_live_blockers() {
+                                format!(" / preserved {} live slot(s)", report.live_blocker_count())
+                            } else {
+                                String::new()
+                            };
                             Ok(format!(
-                                "reset {count} pool slot worktree(s) to prerelease after off->on entry / {}",
+                                "reset {count} pool slot worktree(s) to prerelease after off->on entry{live_suffix} / {}",
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
                             ))
                         })
