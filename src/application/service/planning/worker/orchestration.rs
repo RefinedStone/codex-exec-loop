@@ -337,18 +337,18 @@ impl PlanningWorkerOrchestrationService {
     fn run_worker_and_reconcile(
         &self,
         workspace_directory: &str,
-        synthetic_turn_id: &str,
+        orchestration_id: &str,
         operation: PlanningWorkerOperation,
         prompt: String,
         _previous_handoff: Option<&PlanningTaskHandoff>,
         parent_provenance: WorkerParentProvenance<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
         // worker execution 전에 execution snapshot을 capture한다. protected file reconciliation이 worker file change를
-        // synthetic planning turn 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
+        // orchestration 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
         event_log::emit_lazy("planning_worker_orchestration_started", || {
             orchestration_event_detail(
                 workspace_directory,
-                synthetic_turn_id,
+                orchestration_id,
                 operation,
                 "started",
                 Some("capture_execution_snapshot"),
@@ -368,7 +368,7 @@ impl PlanningWorkerOrchestrationService {
                 event_log::emit_lazy("planning_worker_orchestration_failed", || {
                     orchestration_event_detail(
                         workspace_directory,
-                        synthetic_turn_id,
+                        orchestration_id,
                         operation,
                         "load_execution_snapshot",
                         Some("abort"),
@@ -394,7 +394,7 @@ impl PlanningWorkerOrchestrationService {
                     event_log::emit_lazy("planning_worker_orchestration_failed", || {
                         orchestration_event_detail(
                             workspace_directory,
-                            synthetic_turn_id,
+                            orchestration_id,
                             operation,
                             "run_planning_session",
                             Some("abort"),
@@ -473,7 +473,7 @@ impl PlanningWorkerOrchestrationService {
         // 건드렸을 수 있기 때문이다.
         let reconciliation_result = match self.runtime_facade.reconcile_after_turn(
             workspace_directory,
-            synthetic_turn_id,
+            orchestration_id,
             &worker_response.changed_planning_file_paths,
             &execution_snapshot,
         ) {
@@ -482,7 +482,7 @@ impl PlanningWorkerOrchestrationService {
                 event_log::emit_lazy("planning_worker_orchestration_failed", || {
                     orchestration_event_detail(
                         workspace_directory,
-                        synthetic_turn_id,
+                        orchestration_id,
                         operation,
                         "reconcile_after_turn",
                         Some("abort"),
@@ -530,7 +530,7 @@ impl PlanningWorkerOrchestrationService {
         event_log::emit_lazy("planning_worker_orchestration_completed", || {
             orchestration_event_detail(
                 workspace_directory,
-                synthetic_turn_id,
+                orchestration_id,
                 operation,
                 "completed",
                 Some("return_outcome"),

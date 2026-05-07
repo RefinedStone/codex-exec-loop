@@ -12,7 +12,7 @@ pub(super) fn operation_label(operation: PlanningWorkerOperation) -> &'static st
 
 pub(super) fn orchestration_event_detail<I>(
     workspace_directory: &str,
-    synthetic_turn_id: &str,
+    orchestration_id: &str,
     operation: PlanningWorkerOperation,
     phase: &str,
     decision: Option<&str>,
@@ -27,7 +27,7 @@ where
         "workspace_directory".to_string(),
         json!(workspace_directory),
     );
-    detail.insert("synthetic_turn_id".to_string(), json!(synthetic_turn_id));
+    detail.insert("orchestration_id".to_string(), json!(orchestration_id));
     detail.insert("operation".to_string(), json!(operation_label(operation)));
     detail.insert("phase".to_string(), json!(phase));
     detail.insert("decision".to_string(), json!(decision));
@@ -71,7 +71,7 @@ mod tests {
         );
 
         assert_eq!(detail["workspace_directory"], json!("/tmp/workspace"));
-        assert_eq!(detail["synthetic_turn_id"], json!("planner-refresh-turn-1"));
+        assert_eq!(detail["orchestration_id"], json!("planner-refresh-turn-1"));
         assert_eq!(detail["operation"], json!("refresh"));
         assert_eq!(detail["phase"], json!("run_planning_session"));
         assert_eq!(detail["decision"], json!("abort"));
