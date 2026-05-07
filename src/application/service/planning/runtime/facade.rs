@@ -320,7 +320,7 @@ impl PlanningRuntimeFacadeService {
             .build_summary_line(request)
     }
 
-    pub fn build_followup_status_projection(
+    pub fn build_auto_follow_status_projection(
         &self,
         request: PlanningRuntimeStatusProjectionRequest<'_>,
     ) -> PlanningRuntimeStatusProjection {

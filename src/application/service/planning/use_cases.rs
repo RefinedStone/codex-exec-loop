@@ -237,12 +237,12 @@ impl PlanningRuntimeUseCases {
     ) -> Option<String> {
         self.runtime_facade.build_summary_line(request)
     }
-    pub fn build_followup_status_projection(
+    pub fn build_auto_follow_status_projection(
         &self,
         request: PlanningRuntimeStatusProjectionRequest<'_>,
     ) -> PlanningRuntimeStatusProjection {
         self.runtime_facade
-            .build_followup_status_projection(request)
+            .build_auto_follow_status_projection(request)
     }
     pub fn load_runtime_snapshot_or_invalid(&self, workspace_dir: &str) -> PlanningRuntimeSnapshot {
         self.runtime_facade
