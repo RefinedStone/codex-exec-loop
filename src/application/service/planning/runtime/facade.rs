@@ -43,8 +43,8 @@ pub struct PlanningRuntimeAutoFollowRequest<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// preview rendering은 read-only이고, UI가 planning status만 필요로 할 때는 last message 없이도 실행된다.
-pub struct PlanningRuntimePreviewRequest<'a> {
+// auto-follow preview rendering은 read-only이고, UI가 planning status만 필요로 할 때는 last message 없이도 실행된다.
+pub struct PlanningRuntimeAutoFollowPreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
     pub snapshot: &'a PlanningRuntimeSnapshot,
@@ -66,8 +66,8 @@ pub struct PlanningRuntimeQueuedAutoFollowPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// preview bundle은 실제 prompt preview와 policy-derived status copy를 한 응답으로 묶는다.
-pub struct PlanningRuntimeRenderedPreview {
+// auto-follow preview bundle은 실제 prompt preview와 policy-derived status copy를 한 응답으로 묶는다.
+pub struct PlanningRuntimeAutoFollowPreview {
     pub rendered_prompt: String,
     pub planning_status_line: String,
     pub planning_detail_line: Option<String>,
@@ -293,8 +293,8 @@ impl PlanningRuntimeFacadeService {
     // auto-follow submit 전에 보여 주는 read-only prompt/status preview를 만든다.
     pub fn build_auto_follow_preview(
         &self,
-        request: PlanningRuntimePreviewRequest<'_>,
-    ) -> PlanningRuntimeRenderedPreview {
+        request: PlanningRuntimeAutoFollowPreviewRequest<'_>,
+    ) -> PlanningRuntimeAutoFollowPreview {
         let policy_decision = self
             .planning_runtime_policy_service
             .decide_auto_follow(request.snapshot);
@@ -302,7 +302,7 @@ impl PlanningRuntimeFacadeService {
             .planning_runtime_policy_service
             .build_preview_view_for_decision(policy_decision, request.snapshot);
         let rendered_prompt = self.queued_task_preview_prompt(request.snapshot);
-        PlanningRuntimeRenderedPreview {
+        PlanningRuntimeAutoFollowPreview {
             rendered_prompt,
             planning_status_line: format!("planning: {}", planning_view.status_label),
             planning_detail_line: planning_view

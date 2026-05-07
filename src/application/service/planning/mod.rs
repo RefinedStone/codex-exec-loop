@@ -85,8 +85,8 @@ pub use self::repair::reset::{PlanningResetTarget, PlanningWorkspaceResetResult}
 // 중심 계약이다.
 pub use self::runtime::facade::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
-    PlanningRuntimeAutoFollowRequest, PlanningRuntimePreviewRequest,
-    PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeRenderedPreview,
+    PlanningRuntimeAutoFollowPreview, PlanningRuntimeAutoFollowPreviewRequest,
+    PlanningRuntimeAutoFollowRequest, PlanningRuntimeQueuedAutoFollowPrompt,
     PlanningRuntimeRepairAttempt, PlanningRuntimeStatusProjection,
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     PlanningRuntimeSummaryRequest, PlanningSubSessionHandoff, PlanningTaskHandoff,

@@ -16,10 +16,10 @@ use super::repair::reset::{
 };
 use super::runtime::facade::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
-    PlanningRuntimeAutoFollowRequest, PlanningRuntimeFacadeService, PlanningRuntimePreviewRequest,
-    PlanningRuntimeRenderedPreview, PlanningRuntimeStatusProjection,
-    PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
-    PlanningSubSessionHandoff,
+    PlanningRuntimeAutoFollowPreview, PlanningRuntimeAutoFollowPreviewRequest,
+    PlanningRuntimeAutoFollowRequest, PlanningRuntimeFacadeService,
+    PlanningRuntimeStatusProjection, PlanningRuntimeStatusProjectionRequest,
+    PlanningRuntimeSummaryLineRequest, PlanningSubSessionHandoff,
 };
 use super::runtime::intake::{
     PlanningTaskIntakeCommitResult, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
@@ -227,8 +227,8 @@ impl PlanningRuntimeUseCases {
     }
     pub fn build_auto_follow_preview(
         &self,
-        request: PlanningRuntimePreviewRequest<'_>,
-    ) -> PlanningRuntimeRenderedPreview {
+        request: PlanningRuntimeAutoFollowPreviewRequest<'_>,
+    ) -> PlanningRuntimeAutoFollowPreview {
         self.runtime_facade.build_auto_follow_preview(request)
     }
     pub fn build_summary_line(
