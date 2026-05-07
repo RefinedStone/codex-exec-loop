@@ -5,6 +5,8 @@
  */
 mod executable;
 
+use std::fmt;
+
 pub mod event_log;
 pub mod trace_event_log;
 
@@ -50,6 +52,18 @@ pub fn dropped_log_lines() -> DroppedLogLines {
     }
 }
 
+pub struct LazyPayload<F>(pub F);
+
+impl<F, T> fmt::Display for LazyPayload<F>
+where
+    F: Fn() -> T,
+    T: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", (self.0)())
+    }
+}
+
 #[macro_export]
 macro_rules! akra_event {
     ($level:expr, $message:literal $(, $key:ident = $value:expr)* $(,)?) => {{
@@ -62,7 +76,11 @@ macro_rules! akra_event {
                 $level,
                 pid = std::process::id(),
                 event = $message,
-                $( $key = tracing::field::debug(&$value), )*
+                detail = tracing::field::display($crate::diagnostics::LazyPayload(|| {
+                    serde_json::json!({
+                        $( stringify!($key): &$value, )*
+                    })
+                })),
                 "akra_event"
             );
         }
@@ -73,7 +91,7 @@ macro_rules! akra_event {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::DroppedLogLines;
+    use super::{DroppedLogLines, LazyPayload};
 
     #[test]
     fn dropped_log_lines_total_saturates_instead_of_wrapping() {
@@ -96,5 +114,18 @@ mod tests {
         );
 
         assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn lazy_payload_evaluates_only_when_formatted() {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        let payload = LazyPayload(|| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            "formatted"
+        });
+
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+        assert_eq!(payload.to_string(), "formatted");
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     }
 }
