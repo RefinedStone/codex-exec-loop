@@ -112,7 +112,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         primary_name: ":turns",
         aliases: &[":turns", ":auto-turns"],
         suggestion_detail: "auto turn budget",
-        buffered_hint: "Type `:turns <number|infinite>` to set the auto follow-up turn budget.",
+        buffered_hint: "Type `:turns <number|infinite>` to set the auto-follow turn budget.",
         execution_status: None,
         requires_argument: true,
     },
@@ -217,7 +217,7 @@ impl InlineShellCommandInput {
             },
             InlineShellCommand::Turns => match self.argument() {
                 Some(value) => {
-                    format!("Press Enter to set the auto follow-up turn budget to `{value}`.")
+                    format!("Press Enter to set the auto-follow turn budget to `{value}`.")
                 }
                 None => self.command.spec().buffered_hint.to_string(),
             },

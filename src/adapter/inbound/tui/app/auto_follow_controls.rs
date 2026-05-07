@@ -91,7 +91,7 @@ pub(super) fn reduce_auto_follow_controls(
              * AutoFollowState가 canonical parser를 소유하게 해서 runtime limit 판단과 UI 저장 검증이 분리되지 않게 한다.
              */
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
-                state.status_text = "auto follow-up max turns must be a whole number greater than 0 or the word infinite".to_string();
+                state.status_text = "auto-follow max turns must be a whole number greater than 0 or the word infinite".to_string();
                 return AutoFollowControlReduction { state, effects };
             };
 
@@ -102,7 +102,7 @@ pub(super) fn reduce_auto_follow_controls(
             state.auto_follow_state.set_max_auto_turns(value);
             state.clear_auto_follow_skip();
             state.status_text = format!(
-                "auto follow-up max turns {}",
+                "auto-follow max turns {}",
                 state.auto_follow_state.max_auto_turns_label()
             );
             effects.push(AutoFollowControlEffect::MaxAutoTurnsEditor {

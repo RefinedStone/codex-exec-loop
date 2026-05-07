@@ -315,7 +315,7 @@ impl ConversationViewModel {
         if let Some(turn_index) = self.auto_follow_state.mark_auto_turn_started() {
             let max_auto_turns = self.auto_follow_state.max_auto_turns_label();
             let status_text = format!(
-                "auto follow-up running / turn {turn_index}/{max_auto_turns} / mode: {}",
+                "auto-follow running / turn {turn_index}/{max_auto_turns} / mode: {}",
                 self.auto_follow_state.mode_label(),
             );
             self.status_text = status_text.clone();
@@ -474,7 +474,7 @@ impl ConversationViewModel {
         self.last_planning_task_handoff = handoff_task.cloned();
         self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: format!("submitted auto turn {progress}"),
-            detail: "queued after the previous turn completed; submitted planning auto follow-up"
+            detail: "queued after the previous turn completed; submitted planning auto-follow"
                 .to_string(),
         });
     }
@@ -488,7 +488,7 @@ impl ConversationViewModel {
         self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
             summary: format!("queued auto turn {next_progress}"),
             detail:
-                "queued after the previous turn completed; waiting to submit planning auto follow-up"
+                "queued after the previous turn completed; waiting to submit planning auto-follow"
                     .to_string(),
         });
     }
@@ -517,7 +517,7 @@ impl ConversationViewModel {
         }
 
         self.auto_follow_state.begin_post_turn_evaluation();
-        self.status_text = "turn completed / auto follow-up evaluating next turn".to_string();
+        self.status_text = "turn completed / auto-follow evaluating next turn".to_string();
     }
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()

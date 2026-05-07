@@ -436,7 +436,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     assert!(
         !conversation
             .status_text
-            .contains("queued auto follow-up with mode test"),
+            .contains("queued auto-follow with mode test"),
         "parallel mode should suppress the main-session auto-follow submit"
     );
     assert!(

@@ -124,7 +124,7 @@ pub(super) fn reduce_conversation_runtime(
     /*
      * The reducer always mutates local state before returning effects. That order
      * ensures the shell can render a coherent "starting turn", "evaluating", or
-     * "queued auto follow-up" state even if the next background message arrives
+     * "queued auto-follow" state even if the next background message arrives
      * quickly.
      */
     let mut effects = Vec::new();
@@ -244,7 +244,7 @@ pub(super) fn reduce_conversation_runtime(
             state.status_text = match origin {
                 PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
-                    "auto follow-up submitted / turn {auto_follow_progress} / mode: {}",
+                    "auto-follow submitted / turn {auto_follow_progress} / mode: {}",
                     context.mode_label
                 ),
             };
@@ -379,7 +379,7 @@ pub(super) fn reduce_conversation_runtime(
                     state.clear_auto_follow_skip();
                     state.record_auto_follow_queue(&completed_turn_id);
                     state.status_text =
-                        format!("turn completed / queued auto follow-up with mode {mode_label}");
+                        format!("turn completed / queued auto-follow with mode {mode_label}");
                     state.append_status_message(state.status_text.clone());
                     effects.push(ConversationRuntimeEffect::QueueAutoPrompt {
                         prompt,

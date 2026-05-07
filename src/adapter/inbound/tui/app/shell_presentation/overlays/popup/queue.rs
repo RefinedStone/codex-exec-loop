@@ -137,7 +137,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
 
             /*
-             * Note section은 actionability 순서로 채운다. auto follow-up pause와 failure reason은 queue row보다
+             * Note section은 actionability 순서로 채운다. auto-follow pause와 failure reason은 queue row보다
              * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planning worker host detail은 그 다음 진단이다.
              */
             let mut note_lines = Vec::new();

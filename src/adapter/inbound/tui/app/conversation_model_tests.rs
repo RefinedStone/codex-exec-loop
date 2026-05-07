@@ -178,7 +178,7 @@ fn queue_handoff_prompt_renders_for_auto_follow() {
     let AutoFollowDecision::QueuePrompt(prompt) =
         conversation.decide_auto_follow(&planning_runtime())
     else {
-        panic!("auto follow-up prompt should render");
+        panic!("auto-follow prompt should render");
     };
 
     assert!(
@@ -398,7 +398,7 @@ fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let AutoFollowDecision::QueuePrompt(prompt) =
         conversation.decide_auto_follow(&planning_runtime())
     else {
-        panic!("auto follow-up should continue when file changes exist");
+        panic!("auto-follow should continue when file changes exist");
     };
 
     assert!(

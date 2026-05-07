@@ -582,7 +582,7 @@ fn build_inline_ready_prompt_lines(
         visible while making the idle gate explicit.
         */
         lines.push(Line::from(
-            "buffered prompt  |  auto follow-up busy  |  Enter when idle",
+            "buffered prompt  |  auto-follow busy  |  Enter when idle",
         ));
         return lines;
     }

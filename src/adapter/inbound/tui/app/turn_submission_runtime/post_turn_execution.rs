@@ -28,7 +28,7 @@ use serde_json::json;
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 #[cfg(not(test))]
 const POST_TURN_EVALUATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto follow-up stays paused until the next accepted planning worker refresh";
+const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto-follow stays paused until the next accepted planning worker refresh";
 const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
     "official completion refresh failed; the leased slot stays reserved until planning is repaired";
 #[path = "post_turn_execution/logging.rs"]
@@ -241,7 +241,7 @@ impl PostTurnEvaluationExecutor {
     }
 
     // Reconciliation runs only for paths covered by the protected execution
-    // snapshot. Without a matching snapshot, auto follow-up is blocked because
+    // snapshot. Without a matching snapshot, auto-follow is blocked because
     // the host cannot safely restore planning authority after a turn mutation.
     #[tracing::instrument(level = "trace", skip(self))]
     fn reconcile_planning_after_turn(
@@ -284,7 +284,7 @@ impl PostTurnEvaluationExecutor {
             Err(error) => PlanningReconciliationResult {
                 notices: vec![format!("planning reconciliation failed: {error}")],
                 auto_follow_block_reason: Some(
-                    "planning reconciliation failed; auto follow-up stays paused until the planning workspace is repaired"
+                    "planning reconciliation failed; auto-follow stays paused until the planning workspace is repaired"
                         .to_string(),
                 ),
                 ..PlanningReconciliationResult::default()

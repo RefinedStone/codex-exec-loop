@@ -92,14 +92,14 @@ impl AutoFollowSkipReason {
                 turn_activity.last_completed_file_change_count()
             ),
             Self::PlanningBlocked => {
-                "planning files are invalid or incomplete; auto follow-up stays paused until they validate"
+                "planning files are invalid or incomplete; auto-follow stays paused until they validate"
                     .to_string()
             }
             Self::PlanningQueueIdlePolicyStop => {
                 "the planning queue is idle and queue_idle.policy is stop".to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "queue-driven auto follow-up requires an actionable planning queue head"
+                "queue-driven auto-follow requires an actionable planning queue head"
                     .to_string()
             }
             Self::PlanningQueueDrained => {
@@ -107,7 +107,7 @@ impl AutoFollowSkipReason {
                     .to_string()
             }
             Self::PlanningRepeatedQueueHead => {
-                "the planning queue selected the same task again; auto follow-up stays paused until the queue advances"
+                "the planning queue selected the same task again; auto-follow stays paused until the queue advances"
                     .to_string()
             }
             Self::ParallelSessionCompleted => {
@@ -154,43 +154,43 @@ impl AutoFollowSkipReason {
                 "turn completed / internal continuation paused".to_string()
             }
             Self::LimitReached => format!(
-                "turn completed / auto follow-up stopped: turn limit reached ({})",
+                "turn completed / auto-follow stopped: turn limit reached ({})",
                 auto_follow_state.progress_label()
             ),
             Self::NoAgentReply => {
-                "turn completed / auto follow-up skipped: no agent reply".to_string()
+                "turn completed / auto-follow skipped: no agent reply".to_string()
             }
             Self::StopKeywordMatched => format!(
-                "turn completed / auto follow-up stopped: stop keyword matched ({})",
+                "turn completed / auto-follow stopped: stop keyword matched ({})",
                 auto_follow_state.stop_rules.stop_keyword.value()
             ),
             Self::NoFileChanges => {
-                "turn completed / auto follow-up stopped: no file changes".to_string()
+                "turn completed / auto-follow stopped: no file changes".to_string()
             }
             Self::PlanningBlocked => {
-                "turn completed / auto follow-up paused: planning files invalid".to_string()
+                "turn completed / auto-follow paused: planning files invalid".to_string()
             }
             Self::PlanningQueueIdlePolicyStop => {
-                "turn completed / auto follow-up stopped: planning queue-idle policy is stop"
+                "turn completed / auto-follow stopped: planning queue-idle policy is stop"
                     .to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "turn completed / auto follow-up paused: planning queue has no next task"
+                "turn completed / auto-follow paused: planning queue has no next task"
                     .to_string()
             }
             Self::PlanningQueueDrained => {
                 "turn completed / all planning tasks complete".to_string()
             }
             Self::PlanningRepeatedQueueHead => {
-                "turn completed / auto follow-up paused: planning queue repeated the previous task"
+                "turn completed / auto-follow paused: planning queue repeated the previous task"
                     .to_string()
             }
             Self::ParallelSessionCompleted => {
-                "turn completed / auto follow-up stopped: parallel session completion is handed back to the supervisor"
+                "turn completed / auto-follow stopped: parallel session completion is handed back to the supervisor"
                     .to_string()
             }
             Self::PostTurnEvaluationTimedOut => {
-                "turn completed / auto follow-up paused: post-turn planning worker timed out".to_string()
+                "turn completed / auto-follow paused: post-turn planning worker timed out".to_string()
             }
         }
     }

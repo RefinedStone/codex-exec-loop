@@ -426,7 +426,7 @@ fn run_parallel_dispatch_official_completion(
     };
 
     // A repair request or blocked runtime snapshot means the authority file is not safe for
-    // auto follow-up even if the worker itself produced a valid TurnCompleted event.
+    // auto-follow even if the worker itself produced a valid TurnCompleted event.
     if outcome.repair_request.is_some() || outcome.runtime_snapshot.blocks_auto_follow() {
         let detail = outcome
             .runtime_snapshot
@@ -449,7 +449,7 @@ fn run_parallel_dispatch_official_completion(
         /*
          * A non-ready snapshot after refresh means the worker may have changed files but
          * the runtime cannot safely choose a next queue head. Marking official completion
-         * failed keeps auto follow-up from chaining on top of unavailable planning state.
+         * failed keeps auto-follow from chaining on top of unavailable planning state.
          */
         let detail = "parallel official completion refresh left planning unavailable";
         turn_service.mark_official_completion_failed(&request.worktree_directory, detail);

@@ -105,7 +105,7 @@ impl PlanningRuntimePolicyService {
         snapshot: &PlanningRuntimeSnapshot,
     ) -> PlanningAutoFollowPolicyDecision {
         /*
-         * auto follow-up은 queue-driven으로만 허용된다. workspace가 valid하다는 사실만으로는 부족하고, snapshot에
+         * auto-follow는 queue-driven으로만 허용된다. workspace가 valid하다는 사실만으로는 부족하고, snapshot에
          * actionable queue head가 있어야 하며, pause guard가 같은 head를 이미 handoff하지 않았음을 확인해야 한다.
          * 이렇게 해야 proposal refresh나 empty planning state가 무한한 assistant turn을 만들지 않는다.
          */
@@ -199,17 +199,17 @@ impl PlanningRuntimePolicyService {
                 PlanningAutoFollowBlockReason::ActionableQueueRequired => {
                     if let Some(proposal_summary) = snapshot.proposal_summary() {
                         format!(
-                            "queue-driven auto follow-up requires an actionable planning queue head; {proposal_summary}"
+                            "queue-driven auto-follow requires an actionable planning queue head; {proposal_summary}"
                         )
                     } else {
-                        "queue-driven auto follow-up requires an actionable planning queue head"
+                        "queue-driven auto-follow requires an actionable planning queue head"
                             .to_string()
                     }
                 }
                 PlanningAutoFollowBlockReason::RepeatedQueueHead => snapshot
                     .auto_follow_pause_reason()
                     .unwrap_or(
-                        "queue-driven auto follow-up is paused until the planning queue advances beyond the previously handed-off task",
+                        "queue-driven auto-follow is paused until the planning queue advances beyond the previously handed-off task",
                     )
                     .to_string(),
             };

@@ -28,7 +28,7 @@ fn queue_head() -> PriorityQueueTask {
 }
 
 /*
- * auto follow-up 허용 조건은 "planning이 valid하다"보다 좁다. snapshot에 아직 handoff되지
+ * auto-follow 허용 조건은 "planning이 valid하다"보다 좁다. snapshot에 아직 handoff되지
  * 않은 actionable queue head가 있을 때만 generated continuation을 만든다는 queue-driven
  * 계약을 이 테스트 묶음이 고정한다.
  */
@@ -83,7 +83,7 @@ fn queued_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
 
     assert_eq!(preview.status_label, "queue-empty");
     assert!(preview.detail.as_deref().is_some_and(|detail| {
-        detail.contains("queue-driven auto follow-up requires an actionable planning queue head")
+        detail.contains("queue-driven auto-follow requires an actionable planning queue head")
             && detail.contains("promotable follow-up proposals available")
     }));
 }
@@ -182,9 +182,8 @@ fn queued_task_blocks_when_queue_head_and_proposals_are_both_missing() {
             .detail
             .as_deref()
             .is_some_and(|detail| {
-                detail.contains(
-                    "queue-driven auto follow-up requires an actionable planning queue head",
-                )
+                detail
+                    .contains("queue-driven auto-follow requires an actionable planning queue head")
             })
     );
 }

@@ -43,7 +43,7 @@ impl NativeTuiApp {
         }
     }
     pub(super) fn submission_blocked_status(&self, prompt_origin: PromptOrigin) -> String {
-        // Manual prompts can point the operator to diagnostics; auto follow-up
+        // Manual prompts can point the operator to diagnostics; auto-follow
         // needs a non-interactive pause reason that can be surfaced in status.
         match (prompt_origin, self.shell_action_availability()) {
             (_, ShellActionAvailability::Ready) => "ready".to_string(),
@@ -51,10 +51,10 @@ impl NativeTuiApp {
                 format!("{}; open diagnostics with Ctrl+d", state.status_text())
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Pending) => {
-                "auto follow-up paused while startup checks are still running".to_string()
+                "auto-follow paused while startup checks are still running".to_string()
             }
             (PromptOrigin::AutoFollow(_), ShellActionAvailability::Blocked) => {
-                "auto follow-up paused because startup diagnostics need attention".to_string()
+                "auto-follow paused because startup diagnostics need attention".to_string()
             }
         }
     }
