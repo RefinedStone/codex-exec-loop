@@ -20,7 +20,7 @@ use std::sync::Arc;
 const TASK_TOOL_CONTRACT_JSON: &str = concat!(
     r#"{"tool":"akra planning-tool","version":1,"#,
     r#""commands":["akra planning-tool contract","akra planning-tool run . < request.json"],"#,
-    r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","source_turn_id/thread_id/turn_id/parent_thread_id/parent_turn_id":"optional provenance","fields":"flat"},"#,
+    r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","provenance":"application-controlled","fields":"flat"},"#,
     r#""rules":["Use before final planning_task_commands.","#,
     r#""Do not edit files, SQL, or JSON authority.","#,
     r#""Run against `.`; in completion prompts do not use payload.worktree_path.","#,
@@ -57,7 +57,10 @@ pub struct PlanningTaskToolCreateRequest {
     // mutation에는 명시적인 apply flag가 필요하다. prompt가 authority 변경을 허용하기 전
     // dry planning/list 단계로 model을 유도할 수 있게 하는 안전장치다.
     pub apply: bool,
+    // Legacy lookup key accepted only for host-injected payloads; workers should omit it.
     pub source_turn_id: Option<String>,
+    // Provider-neutral audit fields are host-controlled. They stay in the parser for adapter use,
+    // but the worker-facing contract intentionally does not ask the model to populate them.
     pub origin_session_kind: Option<OriginSessionKind>,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
@@ -73,7 +76,10 @@ pub struct PlanningTaskToolCreateRequest {
 pub struct PlanningTaskToolUpdateRequest {
     pub version: u32,
     pub apply: bool,
+    // Legacy lookup key accepted only for host-injected payloads; workers should omit it.
     pub source_turn_id: Option<String>,
+    // Provider-neutral audit fields are host-controlled. They stay in the parser for adapter use,
+    // but the worker-facing contract intentionally does not ask the model to populate them.
     pub origin_session_kind: Option<OriginSessionKind>,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
@@ -380,6 +386,9 @@ mod tests {
         assert!(contract.contains("akra planning-tool run ."));
         assert!(contract.contains("do not use payload.worktree_path"));
         assert!(contract.contains("list_tasks|create_task|update_task"));
+        assert!(contract.contains("application-controlled"));
+        assert!(!contract.contains("optional provenance"));
+        assert!(!contract.contains("source_turn_id/thread_id"));
         assert!(contract.contains("existing descriptions are preserved"));
         assert!(contract.len() < 1550);
     }
