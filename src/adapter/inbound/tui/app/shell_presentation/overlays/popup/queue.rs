@@ -101,8 +101,8 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 });
 
             /*
-             * Summary는 popup 첫 시선에 필요한 next/queue/proposal 상태만 한 줄로 합친다. 상세 row를
-             * 읽기 전에 현재 next task, queue health, proposal lane 유무를 빠르게 확인하게 하는 headline이다.
+             * Summary는 popup 첫 시선에 필요한 queue-head/queue/proposal 상태만 한 줄로 합친다. 상세 row를
+             * 읽기 전에 현재 queue head, queue health, proposal lane 유무를 빠르게 확인하게 하는 headline이다.
              */
             let mut summary_segments = Vec::new();
             if let Some(queue_head) = snapshot.queue_head() {

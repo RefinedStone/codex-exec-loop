@@ -90,7 +90,7 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
     };
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
-        "next task: rank 1 / terminal-bridge plan",
+        "queue head: rank 1 / terminal-bridge plan",
     ));
     conversation.record_turn_started("turn-1".to_string());
     conversation.push_live_agent_delta(

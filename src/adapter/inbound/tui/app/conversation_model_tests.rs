@@ -167,7 +167,7 @@ fn queue_handoff_prompt_renders_for_auto_follow() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
-        "next task: task-1",
+        "queue head: task-1",
     ));
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
@@ -319,7 +319,7 @@ fn max_auto_turn_candidate_accepts_positive_numbers_and_infinite() {
 // Stop rules are evaluated before creating another app-server turn. The cases
 // below cover explicit stop keywords, no-change protection, queue-idle
 // snapshots, and invalid planning authority snapshots so the runtime does not
-// keep looping when the planning state says there is no executable next task.
+// keep looping when the planning state says there is no executable queue head.
 #[test]
 fn auto_follow_stops_when_stop_keyword_is_present() {
     let mut conversation = ready_conversation();
@@ -380,7 +380,7 @@ fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
     conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
         "Planning Context",
-        "next task: task-1",
+        "queue head: task-1",
     ));
     conversation
         .auto_follow_state

@@ -107,7 +107,7 @@ impl PlanningProposalPromotionService {
         let queue_projection = self
             .priority_queue_service
             .build_projection(&directions, &task_authority)?;
-        // ready next task가 있으면 worker orchestration에는 이미 실행 가능한 work가 있다. 이때 promote하면 operator/model이
+        // ready queue head가 있으면 worker orchestration에는 이미 실행 가능한 work가 있다. 이때 promote하면 operator/model이
         // 정한 실행 순서를 임의로 바꾸게 된다.
         if queue_projection.next_task.is_some() || queue_projection.proposed_tasks.is_empty() {
             return Ok(PlanningProposalPromotionOutcome {

@@ -752,11 +752,11 @@ impl PlanningValidationResult {
 }
 
 impl PriorityQueueProjection {
-    // shell/status copy에서 다음 실행 후보를 한 줄로 보여 주기 위한 summary다.
+    // shell/status copy에서 실행 가능한 queue head를 한 줄로 보여 주기 위한 summary다.
     pub fn queue_summary(&self) -> String {
         match self.next_task.as_ref() {
             Some(task) => format!(
-                "next task: rank {} / {} / {} / priority {}",
+                "queue head: rank {} / {} / {} / priority {}",
                 task.rank,
                 task.task_id.trim(),
                 task.task_title.trim(),
@@ -844,7 +844,7 @@ mod priority_queue_projection_tests {
     }
 
     #[test]
-    fn queue_summary_projects_next_task_details() {
+    fn queue_summary_projects_queue_head_details() {
         let projection = projection(
             Some(queue_task(1, " task-1 ", " Extract domain summary ")),
             Vec::new(),
@@ -852,7 +852,7 @@ mod priority_queue_projection_tests {
 
         assert_eq!(
             projection.queue_summary(),
-            "next task: rank 1 / task-1 / Extract domain summary / priority 80"
+            "queue head: rank 1 / task-1 / Extract domain summary / priority 80"
         );
     }
 

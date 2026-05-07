@@ -175,7 +175,7 @@ impl AutoFollowSkipReason {
                     .to_string()
             }
             Self::PlanningQueueHeadRequired => {
-                "turn completed / auto-follow paused: planning queue has no next task"
+                "turn completed / auto-follow paused: planning queue has no queue head"
                     .to_string()
             }
             Self::PlanningQueueDrained => {

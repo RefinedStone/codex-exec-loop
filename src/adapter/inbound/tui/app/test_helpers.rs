@@ -29,7 +29,7 @@ use crate::domain::planning::{
 pub(crate) fn sample_queue_head() -> PriorityQueueTask {
     /*
      * The sample head is deliberately "ready" and high priority. Many footer and queue assertions
-     * look for the actionable next task path, so this fixture keeps the happy-path queue vocabulary
+     * look for the actionable queue-head path, so this fixture keeps the happy-path queue vocabulary
      * stable while still carrying direction and rank metadata used by detail panels.
      */
     PriorityQueueTask {

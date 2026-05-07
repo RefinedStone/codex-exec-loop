@@ -191,7 +191,7 @@ pub(super) fn map_queue_preview(snapshot: &PriorityQueueProjection) -> PlanningA
     PlanningAdminQueuePreview {
         queue_summary: match snapshot.next_task.as_ref() {
             Some(task) => format!("now: {}", task.task_title.trim()),
-            None => "next task: none".to_string(),
+            None => "queue head: none".to_string(),
         },
         proposal_summary: snapshot
             .proposed_tasks

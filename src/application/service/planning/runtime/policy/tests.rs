@@ -198,7 +198,7 @@ fn repeated_queue_head_blocks_queue_driven_automation() {
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
-        "next task: rank 1 / task-1".to_string(),
+        "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     )
     .with_auto_follow_pause_reason(
@@ -243,7 +243,7 @@ fn ready_queue_head_uses_continue_mode() {
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
-        "next task: rank 1 / task-1".to_string(),
+        "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     );
 
@@ -269,7 +269,7 @@ fn summary_view_marks_running_ready_planning_as_executing() {
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
-        "next task: rank 1 / task-1".to_string(),
+        "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     );
     let summary = service.build_summary_view(PlanningRuntimeSummaryRequest {
@@ -283,7 +283,7 @@ fn summary_view_marks_running_ready_planning_as_executing() {
     assert_eq!(summary.status_label, "stale");
     assert_eq!(
         summary.queue_summary.as_deref(),
-        Some("next task: rank 1 / task-1")
+        Some("queue head: rank 1 / task-1")
     );
 }
 
@@ -393,7 +393,7 @@ fn status_projection_uses_queue_head_label_when_actionable_work_exists() {
     let service = PlanningRuntimePolicyService::new();
     let snapshot = PlanningRuntimeSnapshot::ready(
         "Planning Context".to_string(),
-        "next task: rank 1 / task-1".to_string(),
+        "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     );
     let projection = service.build_status_projection(PlanningRuntimeStatusProjectionRequest {
@@ -407,6 +407,6 @@ fn status_projection_uses_queue_head_label_when_actionable_work_exists() {
 
     assert_eq!(
         projection.queue_head_line.as_deref(),
-        Some("planning queue head: next task: rank 1 / task-1")
+        Some("planning queue head: rank 1 / task-1")
     );
 }

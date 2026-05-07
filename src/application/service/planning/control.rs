@@ -320,7 +320,7 @@ mod tests {
                 proposal_summary: Some("1 proposal".to_string()),
                 health: Some("planning workspace ready".to_string()),
                 issue: None,
-                note: Some("next task available".to_string()),
+                note: Some("queue head available".to_string()),
                 preview_status_label: "queue ready".to_string(),
                 preview_detail: Some("head task is executable".to_string()),
                 queue_head: Some(PlanningControlQueueEntry {

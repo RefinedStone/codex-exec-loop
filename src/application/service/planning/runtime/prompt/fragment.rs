@@ -86,7 +86,7 @@ fn queue_idle_lines(directions: &DirectionCatalogDocument) -> Vec<String> {
 
 fn queue_context_lines(queue_projection: &PriorityQueueProjection) -> Vec<String> {
     // queue projection은 이미 domain에서 rank가 계산된 view라 prompt builder는 순서를 재해석하지 않는다.
-    // 여기서는 next task, active backlog, proposed 후보, skipped 사유를 prompt line으로 직렬화하는 역할만 맡는다.
+    // 여기서는 queue head(next_task schema), active backlog, proposed 후보, skipped 사유를 prompt line으로 직렬화하는 역할만 맡는다.
     let mut lines = Vec::new();
     match queue_projection.next_task.as_ref() {
         Some(task) => {

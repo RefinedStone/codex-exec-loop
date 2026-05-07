@@ -530,7 +530,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                 planning_worker_panel_state: crate::adapter::inbound::tui::app::PlanningWorkerPanelState {
                     status: crate::adapter::inbound::tui::app::PlanningWorkerStatus::RefreshSucceeded,
                     last_operation_label: None,
-                    last_queue_summary: Some("next task: stale".to_string()),
+                    last_queue_summary: Some("queue head: stale".to_string()),
                     last_summary: Some("stale".to_string()),
                     last_rejected_summary: None,
                     last_notice_detail: None,

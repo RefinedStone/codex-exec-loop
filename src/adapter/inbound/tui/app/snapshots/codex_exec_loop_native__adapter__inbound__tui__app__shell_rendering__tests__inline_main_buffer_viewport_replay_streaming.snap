@@ -11,7 +11,7 @@ expression: rendered
 "parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |       "
 "queue: inactive                                                                 "
 "◦ Working (0s • turn running / interrupt unsupported)                           "
-"planning: stale  |  queue: next task: rank 1 / terminal-brid...                 "
+"planning: stale  |  queue: queue head: rank 1 / terminal-bri...                 "
 "now: Implement shell planning status  |  next: Trim legacy shell code           "
 "proposed: none  |  blocked: Follow blocked review thread (blocked by tasks:     "
 "task-2(in_progress))                                                            "

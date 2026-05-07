@@ -160,7 +160,7 @@ fn directions_for_mode(mode: PlanningBootstrapMode) -> DirectionCatalogDocument 
                 success_criteria: vec![
                     "Actionable goals are represented in DB task authority as queue-driven execution slices."
                         .to_string(),
-                    "When the latest request and main result leave a clear follow-up, gap, or verification need, that next task is derived into task authority instead of leaving the queue idle.".to_string(),
+                    "When the latest request and main result leave a clear follow-up, gap, or verification need, that queue-head task is derived into task authority instead of leaving the queue idle.".to_string(),
                     "Work advances by updating task authority instead of inventing unmanaged side tasks."
                         .to_string(),
                 ],

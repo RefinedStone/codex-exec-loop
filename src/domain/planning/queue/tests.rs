@@ -553,7 +553,7 @@ fn rejects_invalid_updated_at_instead_of_silently_reordering() {
 #[test]
 fn rejects_multiple_in_progress_tasks_during_queue_build() {
     // queue는 하나의 active execution lane만 handoff할 수 있다. 여러 in_progress record는
-    // domain이 next task를 고르기 전에 orchestration이 repair해야 하는 ledger drift다.
+    // domain이 queue head를 고르기 전에 orchestration이 repair해야 하는 ledger drift다.
     let queue_service = PriorityQueueService::new();
     let directions = directions(&[("direction-a", DirectionState::Active)]);
     let task_authority = TaskAuthorityDocument {

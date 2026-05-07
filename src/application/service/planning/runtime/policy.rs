@@ -337,15 +337,16 @@ impl PlanningRuntimePolicyService {
                 )
             }),
             queue_head_line: summary.queue_summary.as_deref().map(|queue_summary| {
-                let queue_label = if request.snapshot.queue_head().is_some() {
-                    "planning queue head"
+                let compact_summary =
+                    compact_queue_summary(request.snapshot, queue_summary, request.max_detail_len);
+                if request.snapshot.queue_head().is_some() {
+                    let queue_head_summary = compact_summary
+                        .strip_prefix("queue head: ")
+                        .unwrap_or(compact_summary.as_str());
+                    format!("planning queue head: {queue_head_summary}")
                 } else {
-                    "planning queue"
-                };
-                format!(
-                    "{queue_label}: {}",
-                    compact_queue_summary(request.snapshot, queue_summary, request.max_detail_len)
-                )
+                    format!("planning queue: {compact_summary}")
+                }
             }),
             proposal_line: summary.proposal_summary.as_deref().map(|proposal_summary| {
                 format!(

@@ -86,7 +86,7 @@ pub(super) fn planning_worker_queue_summary(snapshot: &PlanningRuntimeSnapshot) 
     snapshot
         // The executable queue head is more actionable than aggregate queue text, so it wins when present.
         .queue_head()
-        .map(|queue_head| format!("next task: {}", queue_head.task_title.trim()))
+        .map(|queue_head| format!("queue head: {}", queue_head.task_title.trim()))
         // If there is no executable head, fall back to the snapshot's own idle/invalid summary.
         .or_else(|| snapshot.queue_summary().map(str::to_string))
 }
