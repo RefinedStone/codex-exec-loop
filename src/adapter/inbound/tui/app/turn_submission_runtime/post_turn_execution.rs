@@ -144,7 +144,7 @@ impl PostTurnEvaluationExecutor {
         });
         let reconciliation_result = self.reconcile_planning_after_turn(request);
         let mut runtime_notices = reconciliation_result.notices.clone();
-        let mut planning_runtime_snapshot = self.planning_runtime_snapshot_after_reconciliation(
+        let mut runtime_snapshot = self.runtime_snapshot_after_reconciliation(
             conversation,
             request,
             &reconciliation_result,
@@ -164,7 +164,7 @@ impl PostTurnEvaluationExecutor {
                 repair_request,
                 conversation.last_planning_task_handoff(),
             );
-            planning_runtime_snapshot = repair_outcome.runtime_snapshot;
+            runtime_snapshot = repair_outcome.runtime_snapshot;
         }
         let handled_parallel_completion =
             if let Some(completion_report) = official_completion_report {
@@ -172,33 +172,26 @@ impl PostTurnEvaluationExecutor {
                     conversation,
                     request,
                     planning_workspace_directory,
-                    &planning_runtime_snapshot,
+                    &runtime_snapshot,
                     &completion_report,
                 );
                 runtime_notices.extend(official_completion_outcome.runtime_notices.clone());
-                planning_runtime_snapshot = official_completion_outcome.runtime_snapshot;
+                runtime_snapshot = official_completion_outcome.runtime_snapshot;
                 true
             } else {
                 false
             };
         if !handled_parallel_completion && continuation_enabled {
-            let refresh_outcome = self.run_builtin_next_task_refresh(
-                conversation,
-                request,
-                planning_runtime_snapshot.clone(),
-            );
-            planning_runtime_snapshot = refresh_outcome.runtime_snapshot;
+            let refresh_outcome =
+                self.run_builtin_next_task_refresh(conversation, request, runtime_snapshot.clone());
+            runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
         let action = if handled_parallel_completion {
             ConversationPostTurnAction::SkipAutoFollowup {
                 reason: AutoFollowupSkipReason::ParallelSessionCompleted,
             }
         } else {
-            self.auto_followup_action_from_snapshot(
-                conversation,
-                request,
-                &planning_runtime_snapshot,
-            )
+            self.auto_followup_action_from_snapshot(conversation, request, &runtime_snapshot)
         };
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
@@ -207,7 +200,7 @@ impl PostTurnEvaluationExecutor {
                 "post_turn",
                 "completed",
                 Some(post_turn_action_decision(&action)),
-                Some(&planning_runtime_snapshot),
+                Some(&runtime_snapshot),
                 [
                     (
                         "handled_parallel_completion",
@@ -223,7 +216,7 @@ impl PostTurnEvaluationExecutor {
             thread_id: conversation.thread_id.clone(),
             completed_turn_id: request.completed_turn_id.clone(),
             evaluation: ConversationPostTurnEvaluation {
-                planning_runtime_snapshot,
+                planning_runtime_snapshot: runtime_snapshot,
                 planning_repair_state: None,
                 runtime_notices,
                 action,
@@ -231,7 +224,7 @@ impl PostTurnEvaluationExecutor {
             planner_worker_panel_state: self.planner_worker_panel_state,
         }
     }
-    fn planning_runtime_snapshot_after_reconciliation(
+    fn runtime_snapshot_after_reconciliation(
         &self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
@@ -696,7 +689,7 @@ impl PostTurnEvaluationExecutor {
         &self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
-        planning_runtime_snapshot: &PlanningRuntimeSnapshot,
+        runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> ConversationPostTurnAction {
         if conversation
             .auto_follow_state
@@ -709,7 +702,7 @@ impl PostTurnEvaluationExecutor {
                     "auto_follow",
                     "decision",
                     Some("skip"),
-                    Some(planning_runtime_snapshot),
+                    Some(runtime_snapshot),
                     [("reason", json!("PostTurnContinuationPaused"))],
                 )
             });
@@ -717,7 +710,7 @@ impl PostTurnEvaluationExecutor {
                 reason: AutoFollowupSkipReason::PostTurnContinuationPaused,
             };
         }
-        if planning_runtime_snapshot.queue_is_drained() {
+        if runtime_snapshot.queue_is_drained() {
             event_log::emit_lazy("auto_follow_decision", || {
                 post_turn_event_detail(
                     conversation,
@@ -725,7 +718,7 @@ impl PostTurnEvaluationExecutor {
                     "auto_follow",
                     "decision",
                     Some("skip"),
-                    Some(planning_runtime_snapshot),
+                    Some(runtime_snapshot),
                     [("reason", json!("PlanningQueueDrained"))],
                 )
             });
@@ -733,9 +726,8 @@ impl PostTurnEvaluationExecutor {
                 reason: AutoFollowupSkipReason::PlanningQueueDrained,
             };
         }
-        if planning_runtime_snapshot.workspace_status()
-            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
+        if runtime_snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            && runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
         {
             event_log::emit_lazy("auto_follow_decision", || {
                 post_turn_event_detail(
@@ -744,7 +736,7 @@ impl PostTurnEvaluationExecutor {
                     "auto_follow",
                     "decision",
                     Some("skip"),
-                    Some(planning_runtime_snapshot),
+                    Some(runtime_snapshot),
                     [("reason", json!("PlanningQueueIdlePolicyStop"))],
                 )
             });
@@ -753,7 +745,7 @@ impl PostTurnEvaluationExecutor {
             };
         }
         match conversation
-            .decide_auto_followup_with_snapshot(&self.planning.runtime, planning_runtime_snapshot)
+            .decide_auto_followup_with_snapshot(&self.planning.runtime, runtime_snapshot)
         {
             AutoFollowupDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
@@ -763,7 +755,7 @@ impl PostTurnEvaluationExecutor {
                         "auto_follow",
                         "decision",
                         Some("queue"),
-                        Some(planning_runtime_snapshot),
+                        Some(runtime_snapshot),
                         [
                             (
                                 "mode_label",
@@ -802,7 +794,7 @@ impl PostTurnEvaluationExecutor {
                         "auto_follow",
                         "decision",
                         Some("skip"),
-                        Some(planning_runtime_snapshot),
+                        Some(runtime_snapshot),
                         [("reason", json!(format!("{:?}", reason)))],
                     )
                 });

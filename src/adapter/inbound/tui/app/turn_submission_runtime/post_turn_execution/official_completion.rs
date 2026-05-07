@@ -39,7 +39,7 @@ impl PostTurnEvaluationExecutor {
      */
     pub(super) fn begin_official_completion_if_needed(
         &mut self,
-        // Conversation supplies the latest committed agent reply and current planning snapshot.
+        // Conversation supplies the latest committed agent reply and current runtime snapshot.
         conversation: &ConversationViewModel,
         // Request anchors the slot workspace and queued turn id used by the supervisor.
         request: &PostTurnEvaluationRequest,
@@ -68,7 +68,7 @@ impl PostTurnEvaluationExecutor {
             Ok(report) => report,
             Err(error) => {
                 // Capture failure means the supervisor could not create the
-                // official-completion report; the current planning snapshot is
+                // official-completion report; the current runtime snapshot is
                 // still the most truthful state for the panel.
                 event_log::emit_lazy("official_completion_capture_failed", || {
                     post_turn_event_detail(

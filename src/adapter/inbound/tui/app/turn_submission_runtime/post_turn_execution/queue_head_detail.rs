@@ -1,4 +1,4 @@
-// Queue head 반복 판단은 refresh 전/후의 planning runtime snapshot을 비교한다.
+// Queue head 반복 판단은 refresh 전/후의 runtime snapshot을 비교한다.
 // Snapshot은 queue head projection과 task authority signature를 함께 들고 있어,
 // "겉보기 head row"와 "실제 task 본문"을 따로 검증할 수 있다.
 use crate::application::service::planning::PlanningRuntimeSnapshot;
@@ -12,7 +12,7 @@ use crate::application::service::planning::PlanningTaskHandoff;
 pub(super) fn repeated_queue_head_detail(
     // 비교 기준이 되는 직전 handoff다. 수동 turn이나 첫 auto-follow처럼 넘긴 task가 없으면 no-op다.
     previous_handoff: Option<&PlanningTaskHandoff>,
-    // 직전 conversation state의 planning runtime이다. Head task signature 비교의 기준점이 된다.
+    // 직전 conversation state의 runtime snapshot이다. Head task signature 비교의 기준점이 된다.
     previous_snapshot: &PlanningRuntimeSnapshot,
     // 방금 refresh한 runtime이다. 이 head가 이전 handoff와 같고 signature도 같으면 반복 위험이다.
     snapshot: &PlanningRuntimeSnapshot,
