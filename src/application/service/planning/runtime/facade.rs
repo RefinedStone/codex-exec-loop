@@ -157,7 +157,7 @@ impl PlanningRuntimeFacadeService {
      * current queue head를 main-session prompt로 변환한다. queue head가 없으면 work를 조작해 만들지 않고 None을
      * 돌려준다. policy는 auto-follow가 허용된 듯 보이더라도 이 상태를 actionable queue-required block으로 낮춘다.
      */
-    pub fn build_builtin_next_task_handoff(
+    pub fn build_queued_task_handoff(
         &self,
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
@@ -204,7 +204,7 @@ impl PlanningRuntimeFacadeService {
         &self,
         task: &PriorityQueueTask,
     ) -> PlanningSubSessionHandoff {
-        let task_prompt = render_builtin_next_task_handoff_prompt(task);
+        let task_prompt = render_queued_task_handoff_prompt(task);
         let prompt = self
             .turn_prompt_assembly_service
             .build_sub_session_prompt(SubSessionPromptAssemblyRequest {
@@ -226,7 +226,7 @@ impl PlanningRuntimeFacadeService {
      * chat history에 노출하지 않는다.
      */
     fn build_compact_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
-        let task_prompt = render_builtin_next_task_handoff_prompt(task);
+        let task_prompt = render_queued_task_handoff_prompt(task);
         let prompt = self
             .turn_prompt_assembly_service
             .build_main_session_prompt(MainSessionPromptAssemblyRequest {
@@ -243,8 +243,8 @@ impl PlanningRuntimeFacadeService {
 
     // preview는 execution과 같은 prompt builder를 사용한다. task가 없을 때만 queue-idle explanatory copy로 대체해,
     // 실제 실행될 prompt와 preview가 서로 다른 규칙을 타지 않게 한다.
-    pub fn builtin_next_task_preview_prompt(&self, snapshot: &PlanningRuntimeSnapshot) -> String {
-        self.build_builtin_next_task_handoff(snapshot)
+    pub fn queued_task_preview_prompt(&self, snapshot: &PlanningRuntimeSnapshot) -> String {
+        self.build_queued_task_handoff(snapshot)
             .map(|handoff| handoff.prompt)
             .unwrap_or_else(|| {
                 match snapshot.queue_idle_policy() {
@@ -275,7 +275,7 @@ impl PlanningRuntimeFacadeService {
             }
             PlanningAutoFollowPolicyDecision::QueuePrompt(
                 PlanningAutoFollowPromptMode::ContinueQueuedTask,
-            ) => match self.build_builtin_next_task_handoff(request.snapshot) {
+            ) => match self.build_queued_task_handoff(request.snapshot) {
                 Some(handoff) => PlanningRuntimeAutoFollowDecision::QueuePrompt(
                     PlanningRuntimeQueuedAutoFollowPrompt {
                         prompt: handoff.prompt,
@@ -301,7 +301,7 @@ impl PlanningRuntimeFacadeService {
         let planning_view = self
             .planning_runtime_policy_service
             .build_preview_view_for_decision(policy_decision, request.snapshot);
-        let rendered_prompt = self.builtin_next_task_preview_prompt(request.snapshot);
+        let rendered_prompt = self.queued_task_preview_prompt(request.snapshot);
         PlanningRuntimeRenderedPreview {
             rendered_prompt,
             planning_status_line: format!("planning: {}", planning_view.status_label),
@@ -371,7 +371,7 @@ fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTa
  * 첫 항목인지 설명하고, rules section은 사용자가 명시적으로 planning maintenance를 요청하지 않은 한 worker가 repository
  * work에 집중하게 한다.
  */
-fn render_builtin_next_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
+fn render_queued_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
     let rank_reason = queue_head
         .rank_reasons
         .iter()

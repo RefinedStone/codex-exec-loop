@@ -203,13 +203,12 @@ impl PlanningRuntimeUseCases {
     ) -> ManualPromptIntakeOutcome {
         self.manual_intake.prepare_manual_turn(request)
     }
-    pub fn build_builtin_next_task_handoff(
+    pub fn build_queued_task_handoff(
         &self,
         snapshot: &PlanningRuntimeSnapshot,
     ) -> Option<PlanningMainSessionHandoff> {
-        // builtin handoff는 caller가 따로 들고 있는 queue state가 아니라 current runtime snapshot에서 파생한다.
-        self.runtime_facade
-            .build_builtin_next_task_handoff(snapshot)
+        // queued-task handoff는 caller가 따로 들고 있는 queue state가 아니라 current runtime snapshot에서 파생한다.
+        self.runtime_facade.build_queued_task_handoff(snapshot)
     }
     pub fn build_task_handoff(&self, task: &PriorityQueueTask) -> PlanningMainSessionHandoff {
         self.runtime_facade.build_task_handoff(task)

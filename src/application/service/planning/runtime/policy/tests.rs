@@ -33,7 +33,7 @@ fn queue_head() -> PriorityQueueTask {
  * 계약을 이 테스트 묶음이 고정한다.
  */
 #[test]
-fn builtin_next_task_blocks_when_planning_is_uninitialized() {
+fn queued_task_blocks_when_planning_is_uninitialized() {
     /*
      * uninitialized planning file은 queue authority 자체가 없다. policy는 이를 empty ready
      * workspace와 같은 actionable-queue gate로 접어, caller가 bootstrap 전 상태를 task 생성
@@ -58,7 +58,7 @@ fn builtin_next_task_blocks_when_planning_is_uninitialized() {
 }
 
 #[test]
-fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
+fn queued_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
     /*
      * proposal summary는 advisory inventory이지 executable queue head가 아니다. main prompt
      * path가 promote 가능한 아이디어를 이미 승인된 작업으로 취급하지 않게 막으면서도, preview에는
@@ -89,7 +89,7 @@ fn builtin_next_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
 }
 
 #[test]
-fn builtin_next_task_blocks_ready_no_task_state_without_existing_proposals() {
+fn queued_task_blocks_ready_no_task_state_without_existing_proposals() {
     /*
      * proposal도 없는 ReadyNoTask는 조용한 idle case다. planning file은 valid하지만 다음
      * assistant turn에 넘길 direction-owned task가 없다는 점을 automation gate가 표현한다.
@@ -161,7 +161,7 @@ fn ready_no_task_snapshot_is_drained_only_when_remaining_work_is_terminal() {
 }
 
 #[test]
-fn builtin_next_task_blocks_when_queue_head_and_proposals_are_both_missing() {
+fn queued_task_blocks_when_queue_head_and_proposals_are_both_missing() {
     /*
      * uninitialized snapshot의 preview detail도 actionable queue head 요구를 설명해야 한다.
      * 이 회귀는 queue/proposal이 모두 없을 때 caller가 빈 detail을 받아 TUI 안내를 잃지 않게 한다.
@@ -213,7 +213,7 @@ fn repeated_queue_head_blocks_queue_driven_automation() {
 }
 
 #[test]
-fn builtin_next_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
+fn queued_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
     /*
      * queue idle 상태에서는 proposal이 있어도 main refresh prompt를 만들지 않는다. proposal을
      * 실행하려면 먼저 promote/queue intent를 거쳐 authority에 반영되어야 한다는 정책을 반복 확인한다.

@@ -98,7 +98,7 @@ impl PostTurnEvaluationExecutor {
     }
 
     /*
-     * Run the official completion ledger refresh. Unlike builtin next-task refresh,
+     * Run the official completion ledger refresh. Unlike queued-task refresh,
      * this path is driven by a completed parallel slot contract and must update the
      * supervisor reservation state before returning a snapshot to post-turn action
      * selection.
