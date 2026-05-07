@@ -16,6 +16,7 @@ struct TraceConfig {
     filter: String,
     destination: TraceDestination,
     span_mode: TraceSpanMode,
+    tokio_console: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +85,7 @@ fn trace_config_from_env() -> Option<TraceConfig> {
         filter: settings.filter,
         span_mode: settings.span_mode,
         destination: trace_destination()?,
+        tokio_console: tokio_console_requested(),
     })
 }
 
@@ -99,11 +101,7 @@ fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
         .with_span_events(config.span_mode.fmt_span())
         .with_writer(writer);
 
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt_layer)
-        .try_init()
-        .map_err(|error| format!("failed to install tracing subscriber: {error}"))?;
+    install_tracing_subscriber(env_filter, fmt_layer, config.tokio_console)?;
 
     Ok(guard)
 }
@@ -163,6 +161,85 @@ fn non_blocking_with_thread_name<T: std::io::Write + Send + 'static>(
     NonBlockingBuilder::default()
         .thread_name(thread_name)
         .finish(writer)
+}
+
+#[cfg(feature = "tokio-console")]
+fn install_tracing_subscriber<L>(
+    env_filter: EnvFilter,
+    fmt_layer: L,
+    tokio_console: bool,
+) -> Result<(), String>
+where
+    L: tracing_subscriber::Layer<
+            tracing_subscriber::layer::Layered<EnvFilter, tracing_subscriber::Registry>,
+        > + Send
+        + Sync
+        + 'static,
+{
+    if tokio_console && tokio_console_runtime_hint_enabled() {
+        return tracing_subscriber::registry()
+            .with(env_filter)
+            .with(fmt_layer)
+            .with(
+                console_subscriber::ConsoleLayer::builder()
+                    .with_default_env()
+                    .spawn(),
+            )
+            .try_init()
+            .map_err(|error| format!("failed to install tracing subscriber: {error}"));
+    }
+    if tokio_console {
+        eprintln!(
+            "akra tokio-console requested but RUSTFLAGS does not include `tokio_unstable`; tracing file logging remains enabled"
+        );
+    }
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer)
+        .try_init()
+        .map_err(|error| format!("failed to install tracing subscriber: {error}"))
+}
+
+#[cfg(not(feature = "tokio-console"))]
+fn install_tracing_subscriber<L>(
+    env_filter: EnvFilter,
+    fmt_layer: L,
+    tokio_console: bool,
+) -> Result<(), String>
+where
+    L: tracing_subscriber::Layer<
+            tracing_subscriber::layer::Layered<EnvFilter, tracing_subscriber::Registry>,
+        > + Send
+        + Sync
+        + 'static,
+{
+    if tokio_console {
+        eprintln!(
+            "akra tokio-console requested but this binary was built without the `tokio-console` feature; tracing file logging remains enabled"
+        );
+    }
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer)
+        .try_init()
+        .map_err(|error| format!("failed to install tracing subscriber: {error}"))
+}
+
+fn tokio_console_requested() -> bool {
+    std::env::var("AKRA_TOKIO_CONSOLE")
+        .ok()
+        .is_some_and(|value| tokio_console_value_is_enabled(&value))
+}
+
+fn tokio_console_value_is_enabled(value: &str) -> bool {
+    trace_value_is_enabled_bool(&value.trim().to_ascii_lowercase())
+}
+
+#[cfg(feature = "tokio-console")]
+fn tokio_console_runtime_hint_enabled() -> bool {
+    std::env::var("RUSTFLAGS")
+        .ok()
+        .is_some_and(|value| value.contains("tokio_unstable"))
 }
 
 fn trace_settings_from_env() -> Option<TraceSettings> {
@@ -342,8 +419,9 @@ fn default_trace_log_directory() -> Option<PathBuf> {
 mod tests {
     use super::{
         AKRA_EVENT_TARGET, TraceDestination, TraceSpanMode, concise_trace_filter,
-        full_trace_filter, planning_trace_filter, trace_filter_from_rust_log_value,
-        trace_settings_from_value, trace_span_mode_from_value, valid_filter_or_fallback,
+        full_trace_filter, planning_trace_filter, tokio_console_value_is_enabled,
+        trace_filter_from_rust_log_value, trace_settings_from_value, trace_span_mode_from_value,
+        valid_filter_or_fallback,
     };
 
     #[test]
@@ -425,6 +503,16 @@ mod tests {
             Some("codex_exec_loop_native=trace".to_string())
         );
         assert_eq!(trace_filter_from_rust_log_value("off"), None);
+    }
+
+    #[test]
+    fn tokio_console_setting_uses_documented_boolean_values() {
+        for value in ["1", "true", "yes", "on", " ON "] {
+            assert!(tokio_console_value_is_enabled(value));
+        }
+        for value in ["", "0", "false", "no", "off", "full"] {
+            assert!(!tokio_console_value_is_enabled(value));
+        }
     }
 
     #[test]

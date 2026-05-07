@@ -4,12 +4,16 @@ version = "0.1.0"
 edition = "2024"
 default-run = "codex-exec-loop-native"
 
+[features]
+tokio-console = ["dep:console-subscriber", "tokio/tracing"]
+
 [dependencies]
 anyhow = "1.0"
 askama = "0.12"
 axum = { version = "0.8", features = ["form", "json", "macros"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 chrono = "0.4"
+console-subscriber = { version = "0.5", default-features = false, features = ["env-filter"], optional = true }
 crossterm = "0.29"
 rand = "0.8"
 ratatui = { version = "0.30", features = ["scrolling-regions", "crossterm_0_29", "unstable-backend-writer"] }
