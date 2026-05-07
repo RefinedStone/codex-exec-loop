@@ -5,6 +5,7 @@
  * 소비하므로 이 enum들이 adapter 내부 protocol 역할을 한다.
  */
 use crate::application::service::planning::PlanningRuntimeQueuedAutoFollowPrompt;
+use crate::domain::operator_alert::OperatorAlert;
 
 use super::super::turn_activity::TurnActivityState;
 use super::AutoFollowState;
@@ -43,6 +44,8 @@ pub(crate) enum AutoFollowupSkipReason {
     PlanningQueueIdlePolicyStop,
     // Queue-driven mode는 다음 task가 있을 때만 handoff prompt를 만들 수 있다.
     PlanningQueueHeadRequired,
+    // 실행/제안 task가 모두 사라지고 남은 accepted work가 완료/취소뿐이면 자동 루프가 정상 종료된다.
+    PlanningQueueDrained,
     // 같은 queue head가 반복되면 agent가 task를 전진시키지 못한 상태라 재제출을 막는다.
     PlanningRepeatedQueueHead,
     // Parallel slot session 완료 뒤에는 supervisor가 후속 분배를 맡아 같은 session을 재사용하지 않는다.
@@ -99,6 +102,10 @@ impl AutoFollowupSkipReason {
                 "queue-driven auto follow-up requires an actionable planning queue head"
                     .to_string()
             }
+            Self::PlanningQueueDrained => {
+                "all accepted planning tasks are complete; no actionable or proposed work remains"
+                    .to_string()
+            }
             Self::PlanningRepeatedQueueHead => {
                 "the planning queue selected the same task again; auto follow-up stays paused until the queue advances"
                     .to_string()
@@ -129,6 +136,7 @@ impl AutoFollowupSkipReason {
             Self::PlanningBlocked => "paused: planning files invalid",
             Self::PlanningQueueIdlePolicyStop => "stopped: queue idle policy stop",
             Self::PlanningQueueHeadRequired => "paused: planning queue empty",
+            Self::PlanningQueueDrained => "complete: planning queue drained",
             Self::PlanningRepeatedQueueHead => "paused: planning queue repeated the same task",
             Self::ParallelSessionCompleted => "stopped: parallel session completed",
             Self::PostTurnEvaluationTimedOut => "paused: post-turn planner timeout",
@@ -170,6 +178,9 @@ impl AutoFollowupSkipReason {
                 "turn completed / auto follow-up paused: planning queue has no next task"
                     .to_string()
             }
+            Self::PlanningQueueDrained => {
+                "turn completed / all planning tasks complete".to_string()
+            }
             Self::PlanningRepeatedQueueHead => {
                 "turn completed / auto follow-up paused: planning queue repeated the previous task"
                     .to_string()
@@ -181,6 +192,23 @@ impl AutoFollowupSkipReason {
             Self::PostTurnEvaluationTimedOut => {
                 "turn completed / auto follow-up paused: post-turn planner timed out".to_string()
             }
+        }
+    }
+
+    pub(crate) fn operator_alert(self) -> Option<OperatorAlert> {
+        match self {
+            Self::PlanningQueueDrained => Some(OperatorAlert::planning_queue_drained()),
+            Self::PostTurnContinuationPaused
+            | Self::LimitReached
+            | Self::NoAgentReply
+            | Self::StopKeywordMatched
+            | Self::NoFileChanges
+            | Self::PlanningBlocked
+            | Self::PlanningQueueIdlePolicyStop
+            | Self::PlanningQueueHeadRequired
+            | Self::PlanningRepeatedQueueHead
+            | Self::ParallelSessionCompleted
+            | Self::PostTurnEvaluationTimedOut => None,
         }
     }
 }

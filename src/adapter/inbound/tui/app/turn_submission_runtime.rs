@@ -106,6 +106,9 @@ impl NativeTuiApp {
                     })),
                 );
             }
+            ConversationRuntimeEffect::DispatchOperatorAlert { alert } => {
+                let _ = self.tx.send(super::BackgroundMessage::OperatorAlert(alert));
+            }
         }
     }
 

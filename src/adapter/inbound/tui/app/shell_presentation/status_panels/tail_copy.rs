@@ -13,7 +13,7 @@ use super::super::{
     AkraTheme, ConversationInputState, ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
     INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
     INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT, INLINE_TAIL_STATUS_DETAIL_LIMIT,
-    INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode, InlineShellCommandInput,
+    INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode, InlineShellCommandInput, Modifier,
     NativeTuiApp, ShellActionAvailability, ShellConversationState, ShellCorePresentationContext,
     ShellOverlay, StartupState, auto_follow_prompt_status_line, build_working_line,
     compact_inline_detail, inline_input_state_label, turn_status_label,
@@ -147,6 +147,9 @@ pub(super) fn build_inline_tail_lines_with_context(
                 context.shell_action_availability.status_text(),
                 context.github_review_polling_status_label.as_str(),
             )));
+            if let Some(completion_line) = build_completion_alert_line(conversation) {
+                lines.push(completion_line);
+            }
             lines.push(Line::from(format!(
                 "runtime: {}  |  {}",
                 runtime_notice_summary.as_deref().unwrap_or("clear"),
@@ -232,6 +235,21 @@ fn build_ready_status_ribbon_line(
         ),
         plan_mode_indicator,
     ))
+}
+
+fn build_completion_alert_line(conversation: &ConversationViewModel) -> Option<Line<'static>> {
+    let activity = conversation.last_auto_followup_activity.as_ref()?;
+    if activity.summary != "complete: planning queue drained" {
+        return None;
+    }
+
+    Some(Line::from(vec![
+        Span::styled(
+            "COMPLETE".to_string(),
+            AkraTheme::success().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  |  all planning tasks complete  |  no actionable or proposed work remains"),
+    ]))
 }
 
 fn build_recent_transcript_summary_lines(

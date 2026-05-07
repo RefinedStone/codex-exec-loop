@@ -5,6 +5,8 @@
 pub(crate) mod conversation;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.
 pub(crate) mod github_review;
+// operator_alert는 TUI/Telegram 같은 delivery adapter가 공유할 수 있는 사용자 알림 이벤트다.
+pub(crate) mod operator_alert;
 // parallel_mode는 lane, branch, worktree처럼 병렬 작업 자체의 의미를 담는다.
 pub(crate) mod parallel_mode;
 // planning은 direction, task, queue, validation 같은 실행 계획의 중심 모델이다.

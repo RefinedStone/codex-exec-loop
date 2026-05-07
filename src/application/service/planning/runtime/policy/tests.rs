@@ -5,7 +5,10 @@ use super::{
     PlanningRuntimeSummaryRequest,
 };
 use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
-use crate::domain::planning::{PlanningWorkspaceState, PriorityQueueTask, TaskStatus};
+use crate::domain::planning::{
+    PlanningWorkspaceState, PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask,
+    TaskStatus,
+};
 
 // runtime policy가 필요로 하는 가장 작은 actionable queue head fixture다. direction authority와
 // ranking metadata를 가진 ready task만 만들고 full catalog는 만들지 않아, 실패 원인이
@@ -112,6 +115,49 @@ fn builtin_next_task_blocks_ready_no_task_state_without_existing_proposals() {
             .status_label,
         "queue-empty"
     );
+}
+
+#[test]
+fn ready_no_task_snapshot_is_drained_only_when_remaining_work_is_terminal() {
+    let drained_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        "Planning Context".to_string(),
+        "queue idle: no executable planning task".to_string(),
+        None,
+        None,
+        PriorityQueueProjection {
+            next_task: None,
+            active_tasks: Vec::new(),
+            proposed_tasks: Vec::new(),
+            skipped_tasks: vec![PriorityQueueSkippedTask {
+                task_id: "done-task".to_string(),
+                task_title: "Finished slice".to_string(),
+                direction_id: "general-workstream".to_string(),
+                status: TaskStatus::Done,
+                reason: "status done is not executable".to_string(),
+            }],
+        },
+    );
+    assert!(drained_snapshot.queue_is_drained());
+
+    let blocked_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        "Planning Context".to_string(),
+        "queue idle: no executable planning task".to_string(),
+        None,
+        None,
+        PriorityQueueProjection {
+            next_task: None,
+            active_tasks: Vec::new(),
+            proposed_tasks: Vec::new(),
+            skipped_tasks: vec![PriorityQueueSkippedTask {
+                task_id: "blocked-task".to_string(),
+                task_title: "Waiting slice".to_string(),
+                direction_id: "general-workstream".to_string(),
+                status: TaskStatus::Blocked,
+                reason: "blocked by tasks: task-1(in_progress)".to_string(),
+            }],
+        },
+    );
+    assert!(!blocked_snapshot.queue_is_drained());
 }
 
 #[test]

@@ -308,6 +308,33 @@ impl PlanningRuntimeSnapshot {
     pub fn has_proposal_candidates(&self) -> bool {
         self.proposal_summary.is_some()
     }
+
+    pub fn queue_is_drained(&self) -> bool {
+        /*
+         * Drained is narrower than "no queue head". Review-and-enqueue may
+         * temporarily have no head while the planner derives work, and blocked or
+         * awaiting-user tasks still mean work remains. Only an empty/proposal-free
+         * ready queue whose remaining skipped tasks are terminal counts as all
+         * accepted work being finished.
+         */
+        if self.workspace_status != PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            || self.queue_head.is_some()
+            || self.has_proposal_candidates()
+        {
+            return false;
+        }
+        self.queue_projection.as_ref().is_none_or(|projection| {
+            projection.active_tasks.is_empty()
+                && projection.proposed_tasks.is_empty()
+                && projection.skipped_tasks.iter().all(|task| {
+                    matches!(
+                        task.status,
+                        crate::domain::planning::TaskStatus::Done
+                            | crate::domain::planning::TaskStatus::Cancelled
+                    )
+                })
+        })
+    }
 }
 
 impl PlanningPromptService {

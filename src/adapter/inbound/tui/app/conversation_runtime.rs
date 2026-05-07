@@ -20,6 +20,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningTaskHandoff};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+use crate::domain::operator_alert::OperatorAlert;
 use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
@@ -66,6 +67,9 @@ pub(super) enum ConversationRuntimeEffect {
         mode_label: String,
         transcript_text: String,
         handoff_task: Option<PlanningTaskHandoff>,
+    },
+    DispatchOperatorAlert {
+        alert: OperatorAlert,
     },
 }
 #[derive(Debug, Clone)]
@@ -383,9 +387,15 @@ pub(super) fn reduce_conversation_runtime(
                     // Skips are durable status messages because they explain why
                     // the automatic loop stopped and often require operator
                     // action before the next manual prompt.
+                    let operator_alert = reason.operator_alert();
                     state.record_auto_followup_skip(reason);
                     state.status_text = reason.runtime_status(&state.auto_follow_state);
                     state.append_status_message(state.status_text.clone());
+                    if let Some(alert) = operator_alert {
+                        state.extend_runtime_notices([alert.runtime_notice()]);
+                        state.append_status_message(alert.transcript_banner());
+                        effects.push(ConversationRuntimeEffect::DispatchOperatorAlert { alert });
+                    }
                 }
             }
         }
@@ -451,5 +461,55 @@ mod tests {
             !reduction.state.auto_follow_state.has_live_activity(),
             "completed auto turn should not leave a stale running phase"
         );
+    }
+
+    #[test]
+    fn drained_planning_queue_skip_emits_operator_alert() {
+        let state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+
+        let reduction = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::PostTurnEvaluated {
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    planning_runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
+                        "Planning Context".to_string(),
+                        "queue idle: no executable planning task".to_string(),
+                        None,
+                        None,
+                    ),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: ConversationPostTurnAction::SkipAutoFollowup {
+                        reason: AutoFollowupSkipReason::PlanningQueueDrained,
+                    },
+                }),
+            },
+        );
+
+        assert!(
+            reduction
+                .state
+                .status_text
+                .contains("all planning tasks complete")
+        );
+        assert!(
+            reduction
+                .state
+                .messages
+                .iter()
+                .any(|message| message.text.contains("ALL PLANNING TASKS COMPLETE"))
+        );
+        assert!(
+            reduction
+                .state
+                .runtime_notices
+                .iter()
+                .any(|notice| notice.contains("All planning tasks complete"))
+        );
+        assert!(reduction.effects.iter().any(|effect| matches!(
+            effect,
+            ConversationRuntimeEffect::DispatchOperatorAlert { alert }
+                if alert.audible && alert.title == "All planning tasks complete"
+        )));
     }
 }

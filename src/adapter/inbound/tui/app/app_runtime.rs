@@ -11,6 +11,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
+use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot,
     ParallelModeSupervisorSnapshot,
@@ -45,6 +46,7 @@ pub(super) enum BackgroundMessage {
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
     ConversationRuntimeNotice(String),
+    OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     RequestParallelModeDispatch {
         workspace_directory: String,

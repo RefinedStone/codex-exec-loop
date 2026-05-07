@@ -716,6 +716,22 @@ impl PostTurnEvaluationExecutor {
                 reason: AutoFollowupSkipReason::PostTurnContinuationPaused,
             };
         }
+        if planning_runtime_snapshot.queue_is_drained() {
+            event_log::emit_lazy("auto_follow_decision", || {
+                post_turn_event_detail(
+                    conversation,
+                    request,
+                    "auto_follow",
+                    "decision",
+                    Some("skip"),
+                    Some(planning_runtime_snapshot),
+                    [("reason", json!("PlanningQueueDrained"))],
+                )
+            });
+            return ConversationPostTurnAction::SkipAutoFollowup {
+                reason: AutoFollowupSkipReason::PlanningQueueDrained,
+            };
+        }
         if planning_runtime_snapshot.workspace_status()
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop

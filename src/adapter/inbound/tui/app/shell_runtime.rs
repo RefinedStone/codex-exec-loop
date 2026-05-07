@@ -1,6 +1,10 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::style::Print;
+
+use crate::domain::operator_alert::OperatorAlert;
 
 use super::{
     BackgroundMessage, ConversationLifecycleEvent, ConversationRuntimeEvent, ConversationState,
@@ -123,6 +127,9 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::StreamExecutionObserved { notice },
                     );
                 }
+                BackgroundMessage::OperatorAlert(alert) => {
+                    self.emit_operator_alert(&alert);
+                }
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
@@ -244,6 +251,14 @@ impl ShellRuntime {
             self.frame_scheduler
                 .request_delayed(now, Duration::from_millis(250));
         }
+    }
+
+    fn emit_operator_alert(&self, alert: &OperatorAlert) {
+        if !alert.audible {
+            return;
+        }
+        let mut stdout = std::io::stdout();
+        let _ = execute!(stdout, Print("\x07"));
     }
 
     fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
