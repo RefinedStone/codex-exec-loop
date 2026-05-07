@@ -132,7 +132,7 @@ fn active_supersession_supervisor_refreshes_periodically() {
 }
 
 #[test]
-fn blocked_supersession_roster_does_not_refresh_periodically() {
+fn blocked_supersession_pool_refreshes_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
@@ -171,8 +171,8 @@ fn blocked_supersession_roster_does_not_refresh_periodically() {
         ));
     let now = Instant::now();
 
-    assert!(!runtime.parallel_supervisor_refresh_due(now));
-    assert!(runtime.app().live_activity_pulse(now).is_none());
+    assert!(runtime.parallel_supervisor_refresh_due(now));
+    assert!(runtime.app().live_activity_pulse(now).is_some());
 }
 
 #[test]

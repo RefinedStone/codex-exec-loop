@@ -86,6 +86,7 @@ impl NativeTuiApp {
         parallel_mode_supervisor_snapshot_is_loading(snapshot)
             || parallel_mode_supervisor_snapshot_has_running_slot(snapshot)
             || parallel_mode_supervisor_snapshot_has_active_distributor_queue(snapshot)
+            || parallel_mode_supervisor_snapshot_has_recoverable_pool_issue(snapshot)
     }
 
     pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
@@ -981,6 +982,14 @@ fn parallel_mode_supervisor_snapshot_has_active_distributor_queue(
     snapshot: &ParallelModeSupervisorSnapshot,
 ) -> bool {
     !snapshot.distributor.queue_items.is_empty()
+}
+
+fn parallel_mode_supervisor_snapshot_has_recoverable_pool_issue(
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> bool {
+    snapshot.pool.blocked_slots > 0
+        || snapshot.pool.missing_slots > 0
+        || snapshot.pool.unavailable_slots > 0
 }
 
 fn parallel_mode_distributor_tick_signature(
