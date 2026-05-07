@@ -455,7 +455,7 @@ impl NativeFlowHarness {
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::RequestParallelModeDispatch {
+            .send(BackgroundMessage::WakeParallelModeOrchestrator {
                 workspace_directory: self.workspace_dir.clone(),
                 trigger,
                 epoch_id,
@@ -535,7 +535,7 @@ impl NativeFlowHarness {
     fn poll_until_dispatch_idle(&mut self) {
         for _ in 0..750 {
             self.runtime.poll_background_messages();
-            if !self.runtime.app().parallel_mode_dispatch_refresh_in_flight {
+            if !self.runtime.app().parallel_mode_orchestrator_wake_in_flight {
                 return;
             }
             thread::sleep(Duration::from_millis(20));
@@ -1179,18 +1179,22 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
     harness.send_post_turn_auto_prompt("turn-1");
     harness.runtime.poll_background_messages();
     assert_eq!(harness.worker_port.launch_count(), 0);
+    let projections = harness.runtime_projections();
+    assert_eq!(projections.dispatch_commands.len(), 1);
     assert_eq!(
-        harness.runtime.app().pending_parallel_mode_dispatch_trigger,
-        Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Pending
     );
 
     harness
         .runtime
         .app_mut()
         .refresh_parallel_mode_dispatch_after_task_update("task-added-while-loading");
+    let projections = harness.runtime_projections();
+    assert_eq!(projections.dispatch_commands.len(), 1);
     assert_eq!(
-        harness.runtime.app().pending_parallel_mode_dispatch_trigger,
-        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Pending
     );
 
     harness
@@ -1199,10 +1203,6 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
     harness.poll_until_dispatch_idle();
 
     assert_eq!(harness.worker_port.launch_count(), 1);
-    assert_eq!(
-        harness.runtime.app().last_parallel_mode_automation_trigger,
-        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
-    );
 }
 
 #[test]

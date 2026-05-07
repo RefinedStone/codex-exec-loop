@@ -48,7 +48,7 @@ pub(super) enum BackgroundMessage {
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
-    RequestParallelModeDispatch {
+    WakeParallelModeOrchestrator {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
@@ -69,7 +69,7 @@ pub(super) enum BackgroundMessage {
         workspace_directory: String,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
     },
-    ParallelModeDispatchRefreshed {
+    ParallelModeOrchestratorWakeCompleted {
         workspace_directory: String,
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
@@ -125,12 +125,11 @@ impl NativeTuiApp {
             parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
             parallel_mode_supervisor_refresh_in_flight: false,
-            parallel_mode_dispatch_refresh_in_flight: false,
+            parallel_mode_orchestrator_wake_in_flight: false,
             parallel_mode_orchestrator_tick_in_flight: false,
             last_parallel_mode_orchestrator_tick_signature: None,
             parallel_mode_automation_epoch_id: None,
             next_parallel_mode_automation_epoch_id: 1,
-            pending_parallel_mode_dispatch_trigger: None,
             last_parallel_mode_automation_trigger: None,
             last_parallel_mode_dispatch_withheld_reason: None,
             conversation_state: ConversationState::ready(initial_conversation),

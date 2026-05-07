@@ -21,7 +21,7 @@ pub(super) struct ShellRuntime {
     frame_scheduler: TuiFrameScheduler,
     last_live_activity_pulse: Option<u64>,
     last_parallel_supervisor_refresh_at: Option<Instant>,
-    last_parallel_dispatch_command_poll_at: Option<Instant>,
+    last_parallel_orchestrator_wake_poll_at: Option<Instant>,
 }
 
 impl ShellRuntime {
@@ -33,7 +33,7 @@ impl ShellRuntime {
             frame_scheduler: TuiFrameScheduler::new(now),
             last_live_activity_pulse: None,
             last_parallel_supervisor_refresh_at: None,
-            last_parallel_dispatch_command_poll_at: None,
+            last_parallel_orchestrator_wake_poll_at: None,
         }
     }
     pub(super) fn app_mut(&mut self) -> &mut NativeTuiApp {
@@ -136,12 +136,12 @@ impl ShellRuntime {
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
-                BackgroundMessage::RequestParallelModeDispatch {
+                BackgroundMessage::WakeParallelModeOrchestrator {
                     workspace_directory,
                     trigger,
                     epoch_id,
                 } => {
-                    self.app.apply_parallel_mode_dispatch_request(
+                    self.app.apply_parallel_mode_orchestrator_wake_request(
                         workspace_directory,
                         trigger,
                         epoch_id,
@@ -182,13 +182,13 @@ impl ShellRuntime {
                         *supervisor_snapshot,
                     );
                 }
-                BackgroundMessage::ParallelModeDispatchRefreshed {
+                BackgroundMessage::ParallelModeOrchestratorWakeCompleted {
                     workspace_directory,
                     readiness_snapshot,
                     supervisor_snapshot,
                     outcome,
                 } => {
-                    self.app.apply_parallel_mode_dispatch_refreshed(
+                    self.app.apply_parallel_mode_orchestrator_wake_completed(
                         &workspace_directory,
                         readiness_snapshot,
                         *supervisor_snapshot,
@@ -247,11 +247,11 @@ impl ShellRuntime {
             self.last_parallel_supervisor_refresh_at = Some(now);
             redraw_requested = true;
         }
-        if self.parallel_dispatch_command_poll_due(now) {
-            self.last_parallel_dispatch_command_poll_at = Some(now);
+        if self.parallel_orchestrator_wake_poll_due(now) {
+            self.last_parallel_orchestrator_wake_poll_at = Some(now);
             redraw_requested |= self
                 .app
-                .maybe_spawn_parallel_mode_pending_dispatch_command();
+                .maybe_wake_parallel_mode_orchestrator_for_pending_command();
         }
         if redraw_requested {
             self.request_redraw_at(now);
@@ -272,7 +272,7 @@ impl ShellRuntime {
 
     fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
         if self.app.parallel_mode_supervisor_refresh_in_flight
-            || self.app.parallel_mode_dispatch_refresh_in_flight
+            || self.app.parallel_mode_orchestrator_wake_in_flight
             || self.app.parallel_mode_orchestrator_tick_in_flight
         {
             return false;
@@ -285,14 +285,14 @@ impl ShellRuntime {
             .is_none_or(|last_refresh| now.duration_since(last_refresh) >= Duration::from_secs(1))
     }
 
-    fn parallel_dispatch_command_poll_due(&self, now: Instant) -> bool {
-        if self.app.parallel_mode_dispatch_refresh_in_flight
+    fn parallel_orchestrator_wake_poll_due(&self, now: Instant) -> bool {
+        if self.app.parallel_mode_orchestrator_wake_in_flight
             || self.app.parallel_mode_supervisor_refresh_in_flight
         {
             return false;
         }
 
-        self.last_parallel_dispatch_command_poll_at
+        self.last_parallel_orchestrator_wake_poll_at
             .is_none_or(|last_poll| now.duration_since(last_poll) >= Duration::from_secs(1))
     }
 

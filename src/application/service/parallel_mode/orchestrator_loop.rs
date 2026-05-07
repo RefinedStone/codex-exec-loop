@@ -46,7 +46,7 @@ pub struct ParallelModeDispatchOrchestratorTickResult {
 pub enum ParallelModeOrchestratorLoopEvent {
     ConversationRuntimeNotice(String),
     InvalidateSupervisorSnapshot,
-    RequestParallelModeDispatch {
+    WakeParallelModeOrchestrator {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
@@ -54,6 +54,21 @@ pub enum ParallelModeOrchestratorLoopEvent {
 }
 
 impl ParallelModeService {
+    pub fn enqueue_dispatch_commands_for_trigger(
+        &self,
+        workspace_dir: &str,
+        trigger: ParallelModeAutomationTrigger,
+        planning_snapshot: &PlanningRuntimeSnapshot,
+        epoch_id: Option<u64>,
+    ) -> Result<usize, String> {
+        self.enqueue_dispatch_commands_for_event(
+            workspace_dir,
+            parallel_runtime_event_for_dispatch_trigger(trigger),
+            planning_snapshot,
+            epoch_id,
+        )
+    }
+
     pub fn run_dispatch_orchestrator_tick(
         &self,
         request: ParallelModeDispatchOrchestratorTickRequest,
@@ -558,7 +573,7 @@ fn spawn_parallel_dispatch_worker(
             && planning_snapshot.has_actionable_queue_head()
         {
             let _ = outer_tx.send(
-                ParallelModeOrchestratorLoopEvent::RequestParallelModeDispatch {
+                ParallelModeOrchestratorLoopEvent::WakeParallelModeOrchestrator {
                     workspace_directory,
                     trigger: ParallelModeAutomationTrigger::ParallelOfficialCompletion,
                     epoch_id: automation_epoch_id,
