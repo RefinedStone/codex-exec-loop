@@ -463,6 +463,7 @@ struct FakeGithubAutomationPort {
     base_branch: Arc<Mutex<Option<String>>>,
     head_branch: Arc<Mutex<Option<String>>>,
     operations: Arc<Mutex<Vec<String>>>,
+    source_push_error: Arc<Mutex<Option<String>>>,
     force_push_error: Arc<Mutex<Option<String>>>,
     integration_push_error: Arc<Mutex<Option<String>>>,
 }
@@ -500,6 +501,7 @@ impl FakeGithubAutomationPort {
             base_branch: Arc::new(Mutex::new(None)),
             head_branch: Arc::new(Mutex::new(None)),
             operations: Arc::new(Mutex::new(Vec::new())),
+            source_push_error: Arc::new(Mutex::new(None)),
             force_push_error: Arc::new(Mutex::new(None)),
             integration_push_error: Arc::new(Mutex::new(None)),
         }
@@ -519,6 +521,15 @@ impl FakeGithubAutomationPort {
             .force_push_error
             .lock()
             .expect("fake github force-push error mutex poisoned") = Some(error.to_string());
+        github
+    }
+
+    fn with_source_push_error(error: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .source_push_error
+            .lock()
+            .expect("fake github source-push error mutex poisoned") = Some(error.to_string());
         github
     }
 
@@ -550,6 +561,15 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
                 .force_push_error
                 .lock()
                 .expect("fake github force-push error mutex poisoned")
+                .clone()
+        {
+            anyhow::bail!(error);
+        }
+        if !force_with_lease
+            && let Some(error) = self
+                .source_push_error
+                .lock()
+                .expect("fake github source-push error mutex poisoned")
                 .clone()
         {
             anyhow::bail!(error);

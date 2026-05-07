@@ -10,6 +10,7 @@ use crate::application::service::planning::{
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
+use crate::subprocess;
 use std::path::Path;
 use std::process::{Command, Stdio};
 const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
@@ -523,10 +524,12 @@ TUI를 멈추지 않게 한다. 값이 필요한 경우에는 `run_command`, 성
 pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -> bool {
     let mut command = Command::new(program);
     command.args(args);
+    command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::null());
     command.env("GIT_TERMINAL_PROMPT", "0");
-    command.status().is_ok_and(|status| status.success())
+    subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
+        .is_ok_and(|output| output.status.success())
 }
 
 /*
@@ -544,9 +547,11 @@ pub(super) fn run_command<const N: usize>(
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
+    command.stdin(Stdio::null());
     command.stderr(Stdio::null());
     command.env("GIT_TERMINAL_PROMPT", "0");
-    let output = command.output().ok()?;
+    let output =
+        subprocess::command_output(&mut command, &format!("{program} {}", args.join(" "))).ok()?;
     if !output.status.success() {
         return None;
     }

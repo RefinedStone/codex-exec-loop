@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use chrono::Utc;
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+use crate::subprocess;
 
 /*
  * GitParallelModeRuntimeAdapter는 parallel mode application service가 요청하는 낮은 수준의
@@ -47,10 +48,12 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
          */
         let mut command = Command::new(program);
         command.args(args);
+        command.stdin(Stdio::null());
         command.stdout(Stdio::null());
         command.stderr(Stdio::null());
         command.env("GIT_TERMINAL_PROMPT", "0");
-        command.status().is_ok_and(|status| status.success())
+        subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
+            .is_ok_and(|output| output.status.success())
     }
 
     fn run_command(
@@ -69,10 +72,13 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         if let Some(current_dir) = current_dir {
             command.current_dir(current_dir);
         }
+        command.stdin(Stdio::null());
         command.stderr(Stdio::null());
         command.env("GIT_TERMINAL_PROMPT", "0");
 
-        let output = command.output().ok()?;
+        let output =
+            subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
+                .ok()?;
         if !output.status.success() {
             return None;
         }
@@ -105,7 +111,8 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         stdin.write_all(stdin_body.as_bytes()).ok()?;
         drop(stdin);
 
-        let output = child.wait_with_output().ok()?;
+        let output =
+            subprocess::wait_with_output(child, &format!("{program} {}", args.join(" "))).ok()?;
         if !output.status.success() {
             return None;
         }
@@ -133,10 +140,12 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         if let Some(repo_root) = repo_root {
             command.current_dir(repo_root);
         }
+        command.stdin(Stdio::null());
         command.stdout(Stdio::null());
         command.stderr(Stdio::null());
         command.env("GIT_TERMINAL_PROMPT", "0");
-        command.status().is_ok_and(|status| status.success())
+        subprocess::command_output(&mut command, "gh auth status")
+            .is_ok_and(|output| output.status.success())
     }
 
     fn current_timestamp(&self) -> String {

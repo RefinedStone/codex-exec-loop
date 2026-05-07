@@ -14,6 +14,7 @@ use crate::application::port::outbound::startup_probe_port::StartupProbePort;
 // `StartupDiagnostics`는 startup overlay, prompt submit gating, recent-session loading gating이
 // 공통으로 읽는 domain snapshot이다.
 use crate::domain::startup_diagnostics::StartupDiagnostics;
+use crate::subprocess;
 
 #[derive(Clone)]
 /*
@@ -147,11 +148,14 @@ impl StartupService {
 
         // git이 현재 directory에서 볼 수 있는 최상위 worktree path를 요청한다.
         // stdout만 읽고 stderr는 버려, git repo가 아닌 일반 directory에서 startup 화면이 에러 로그로 오염되지 않게 한다.
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args(["rev-parse", "--show-toplevel"])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output();
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let output = subprocess::command_output(&mut command, "git rev-parse --show-toplevel");
         /*
         `git rev-parse --show-toplevel`은 현재 directory가 git worktree 안에 있을 때 canonical
         repo root를 돌려준다. stderr는 startup overlay를 어지럽히지 않도록 버리고, 실패는 아래

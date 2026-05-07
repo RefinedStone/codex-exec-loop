@@ -19,6 +19,8 @@ pub mod application;
 pub mod diagnostics;
 // domain은 planning/parallel-mode의 상태 전이와 값 객체를 framework 없이 표현하는 가장 안쪽 계층이다.
 pub mod domain;
+// subprocess는 외부 CLI 경계의 non-interactive timeout 실행을 모은 crate-private helper다.
+pub(crate) mod subprocess;
 
 /*
  * 공용 실행 함수는 native-first UX의 분기점이다. argv가 doctor/init/admin 같은 CLI command로

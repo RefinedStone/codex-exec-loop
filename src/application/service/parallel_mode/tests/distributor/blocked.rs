@@ -111,6 +111,83 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
     );
 }
 
+// source branch push가 실패하면 PR ensure를 실행하지 않아야 한다. 빈 원격 branch에 대한
+// 빈/잘못된 PR을 만들면 operator가 실제 실패 원인을 GitHub 표면에서 추적하기 어려워진다.
+#[test]
+fn distributor_blocks_source_push_rejection_without_ensuring_pull_request() {
+    let repo = TempGitRepo::new("distributor-source-push-rejection");
+    let github = FakeGithubAutomationPort::with_source_push_error("remote rejected signed commit");
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-source-push-rejected",
+            None,
+            Some("Distributor source push rejection completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: distributor delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should be enqueued")
+        .expect("queue item should be created");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("could not be pushed") && notice.contains("remote rejected signed commit")
+    }));
+    let operations = operations
+        .lock()
+        .expect("fake github operations mutex poisoned")
+        .clone();
+    assert_eq!(
+        operations,
+        vec![format!("push:{}:false", lease.branch_name)]
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|operation| !operation.starts_with("ensure-pr:")),
+        "PR ensure must not run after source push failure: {operations:?}"
+    );
+    let queue_records = load_distributor_queue_records(&repo.pool_root());
+    assert_eq!(queue_records.len(), 1);
+    assert_eq!(
+        queue_records[0].queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_records[0]
+            .integration_note
+            .contains("remote rejected signed commit")
+    );
+}
+
 // blocked queue head가 clean한 slot worktree branch mismatch 때문에 멈춘 경우,
 // operator가 slot을 prerelease 기반으로 되돌려 놓으면 distributor가 같은 queue
 // record를 다시 처리할 수 있어야 한다. 핵심은 새 queue item을 만들지 않고 기존

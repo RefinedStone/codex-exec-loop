@@ -18,6 +18,7 @@ use crate::application::port::outbound::github_automation_port::{
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
+use crate::subprocess;
 
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
 const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
@@ -127,26 +128,34 @@ impl GithubAutomationAdapter {
             그래도 command output은 숨긴다. capability inspection은 interactive diagnostic log가 아니라 compact readiness board를
             채우는 입력이다.
             */
-            Command::new("gh")
+            let mut command = Command::new("gh");
+            command
                 .current_dir(repo_root)
                 .args(["auth", "status"])
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .status()
+                .env("GIT_TERMINAL_PROMPT", "0");
+            subprocess::command_output(&mut command, "gh auth status").map(|output| output.status)
         } else {
             /*
             repo wrapper는 이 project의 supported fallback이다.
             CI나 `gh`가 없는 local machine도 아래 write operation과 같은 RefinedStone credential path를 사용하게 한다.
             capability check와 실제 PR write가 같은 wrapper contract를 공유해야 "ready" 판단과 실행 경로가 어긋나지 않는다.
             */
-            Command::new("bash")
+            let mut command = Command::new("bash");
+            command
                 .current_dir(repo_root)
                 .args([GITHUB_SCRIPT_PATH, "auth", "status"])
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .status()
+                .env("GIT_TERMINAL_PROMPT", "0");
+            subprocess::command_output(
+                &mut command,
+                &format!("bash {GITHUB_SCRIPT_PATH} auth status"),
+            )
+            .map(|output| output.status)
         };
 
         if auth_status.is_ok_and(|status| status.success()) {
@@ -453,17 +462,20 @@ fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> 
     terminal prompt를 막아 credential/network gap이 supervisor lane을 멈춰 세우는 interactive wait가 아니라
     일반 command failure로 드러나게 한다.
     */
-    Command::new(program)
+    let mut command = Command::new(program);
+    command
         .current_dir(repo_root)
         .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .with_context(|| {
+        .stdin(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0");
+    subprocess::command_output(&mut command, &format!("{program} {}", args.join(" "))).with_context(
+        || {
             format!(
-                "failed to spawn `{program} {}` in {repo_root}",
+                "failed to run `{program} {}` in {repo_root}",
                 args.join(" ")
             )
-        })
+        },
+    )
 }
 
 fn command_error_detail(output: &Output) -> String {
