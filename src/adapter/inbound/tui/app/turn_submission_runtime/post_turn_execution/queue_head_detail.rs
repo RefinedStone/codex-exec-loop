@@ -6,7 +6,7 @@ use crate::application::service::planning::PlanningRuntimeSnapshot;
 // task를 다시 head로 남기면 queue가 전진하지 않은 것이므로 follow-up pause 근거가 된다.
 use crate::application::service::planning::PlanningTaskHandoff;
 
-// `repeated_queue_head_detail`은 queued-task refresh 뒤에 호출되는 guard다.
+// `repeated_queue_head_detail`은 planning queue refresh 뒤에 호출되는 guard다.
 // Refresh가 성공 snapshot을 만들었더라도 이전 handoff와 같은 queue head가 그대로면,
 // caller가 이를 host detail과 auto-follow pause reason으로 낮출 수 있게 설명을 반환한다.
 pub(super) fn repeated_queue_head_detail(

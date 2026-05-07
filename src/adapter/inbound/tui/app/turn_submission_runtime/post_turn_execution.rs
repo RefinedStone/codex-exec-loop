@@ -64,7 +64,7 @@ struct HiddenPlanningRepairOutcome {
     resolved: bool,
 }
 #[derive(Debug, Clone)]
-struct QueuedTaskRefreshOutcome {
+struct PlanningQueueRefreshOutcome {
     runtime_snapshot: PlanningRuntimeSnapshot,
 }
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ impl PostTurnEvaluationExecutor {
 
     // The execution order is deliberate: protect planning files first, repair
     // only when automation can act on the result, finish official parallel
-    // completions before queued-task refreshes, then derive the action
+    // completions before planning queue refreshes, then derive the action
     // from the final runtime snapshot.
     #[tracing::instrument(level = "trace", skip(self, conversation))]
     fn run(
@@ -182,7 +182,7 @@ impl PostTurnEvaluationExecutor {
             };
         if !handled_parallel_completion && continuation_enabled {
             let refresh_outcome =
-                self.run_queued_task_refresh(conversation, request, runtime_snapshot.clone());
+                self.run_planning_queue_refresh(conversation, request, runtime_snapshot.clone());
             runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
         let action = if handled_parallel_completion {
@@ -292,17 +292,17 @@ impl PostTurnEvaluationExecutor {
         }
     }
 
-    // Queued-task refresh is the normal auto-follow path after a main-session
+    // Planning queue refresh is the normal auto-follow path after a main-session
     // reply. It skips non-ready workspaces, honors queue-idle policy, records
     // worker panel state, and promotes justified proposals into the executable
     // queue when no actionable head exists yet.
     #[tracing::instrument(level = "trace", skip(self, conversation))]
-    fn run_queued_task_refresh(
+    fn run_planning_queue_refresh(
         &mut self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
         current_snapshot: PlanningRuntimeSnapshot,
-    ) -> QueuedTaskRefreshOutcome {
+    ) -> PlanningQueueRefreshOutcome {
         if !matches!(
             current_snapshot.workspace_status(),
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
@@ -316,7 +316,7 @@ impl PostTurnEvaluationExecutor {
                     &current_snapshot,
                 )
             });
-            return QueuedTaskRefreshOutcome {
+            return PlanningQueueRefreshOutcome {
                 runtime_snapshot: current_snapshot,
             };
         }
@@ -333,7 +333,7 @@ impl PostTurnEvaluationExecutor {
                     &current_snapshot,
                 )
             });
-            return QueuedTaskRefreshOutcome {
+            return PlanningQueueRefreshOutcome {
                 runtime_snapshot: current_snapshot,
             };
         };
@@ -355,7 +355,7 @@ impl PostTurnEvaluationExecutor {
                                 &current_snapshot,
                             )
                         });
-                        return QueuedTaskRefreshOutcome {
+                        return PlanningQueueRefreshOutcome {
                             runtime_snapshot: current_snapshot,
                         };
                     }
@@ -370,7 +370,7 @@ impl PostTurnEvaluationExecutor {
                                 &current_snapshot,
                             )
                         });
-                        return QueuedTaskRefreshOutcome {
+                        return PlanningQueueRefreshOutcome {
                             runtime_snapshot: current_snapshot,
                         };
                     }
@@ -384,7 +384,7 @@ impl PostTurnEvaluationExecutor {
                                     &current_snapshot,
                                 )
                             });
-                            return QueuedTaskRefreshOutcome {
+                            return PlanningQueueRefreshOutcome {
                                 runtime_snapshot: current_snapshot,
                             };
                         };
@@ -394,7 +394,7 @@ impl PostTurnEvaluationExecutor {
             }
             PlanningRuntimeWorkspaceStatus::Uninitialized
             | PlanningRuntimeWorkspaceStatus::Invalid => {
-                return QueuedTaskRefreshOutcome {
+                return PlanningQueueRefreshOutcome {
                     runtime_snapshot: current_snapshot,
                 };
             }
@@ -506,7 +506,7 @@ impl PostTurnEvaluationExecutor {
                     &detail,
                     &invalid_snapshot,
                 );
-                return QueuedTaskRefreshOutcome {
+                return PlanningQueueRefreshOutcome {
                     runtime_snapshot: invalid_snapshot,
                 };
             }
@@ -641,7 +641,7 @@ impl PostTurnEvaluationExecutor {
                         &detail,
                         &invalid_snapshot,
                     );
-                    return QueuedTaskRefreshOutcome {
+                    return PlanningQueueRefreshOutcome {
                         runtime_snapshot: invalid_snapshot,
                     };
                 }
@@ -680,7 +680,7 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
         }
 
-        QueuedTaskRefreshOutcome { runtime_snapshot }
+        PlanningQueueRefreshOutcome { runtime_snapshot }
     }
 
     // The final action is always derived from the latest snapshot. Explicit

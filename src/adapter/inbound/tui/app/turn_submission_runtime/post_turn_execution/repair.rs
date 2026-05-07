@@ -30,7 +30,7 @@ impl PostTurnEvaluationExecutor {
         // Thread id ties hidden repair attempts back to the visible conversation without logging prompt text.
         thread_id: &str,
         // Runtime snapshot load와 worker prompt의 기준 workspace다. Post-turn, official
-        // completion, queued-task refresh repair가 모두 이 같은 filesystem boundary를 공유한다.
+        // completion, planning queue refresh repair가 모두 이 같은 filesystem boundary를 공유한다.
         workspace_directory: &str,
         // Repair가 어느 user/agent turn에서 파생됐는지 ledger와 prompt에 묶는 trace id다.
         completed_turn_id: &str,
