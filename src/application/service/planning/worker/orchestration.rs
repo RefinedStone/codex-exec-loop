@@ -69,7 +69,7 @@ pub struct PlanningOfficialCompletionRefreshRequest<'a> {
 pub enum PlanningQueueRefreshMode<'a> {
     FromLatestReply,
     // queue-idle derivation은 이 service에 hard-code하지 않고 direction authority supporting file의 prompt로 조정한다.
-    DeriveNextTaskWhenQueueIdle { queue_idle_prompt_markdown: &'a str },
+    DeriveQueueHeadWhenQueueIdle { queue_idle_prompt_markdown: &'a str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,7 +253,7 @@ impl PlanningWorkerOrchestrationService {
                 request.previous_handoff_task,
                 &authority_context,
             ),
-            PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle {
+            PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle {
                 queue_idle_prompt_markdown,
             } => build_planning_queue_idle_derive_prompt(
                 request.latest_user_message,

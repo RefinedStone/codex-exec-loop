@@ -407,7 +407,7 @@ impl PostTurnEvaluationExecutor {
                 let prompt_markdown = review_prompt_markdown
                     .as_deref()
                     .expect("queue-idle review prompt should exist for review_and_enqueue");
-                PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle {
+                PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle {
                     queue_idle_prompt_markdown: prompt_markdown,
                 }
             }
@@ -460,7 +460,9 @@ impl PostTurnEvaluationExecutor {
             PlanningWorkerStatus::RefreshRunning,
             match mode {
                 PlanningQueueRefreshMode::FromLatestReply => "refresh",
-                PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => "active-derive",
+                PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
+                    "queue-idle-derive"
+                }
             },
             worker_prompt,
         );
@@ -475,8 +477,8 @@ impl PostTurnEvaluationExecutor {
                     PlanningQueueRefreshMode::FromLatestReply => {
                         format!("planning worker refresh failed: {error}")
                     }
-                    PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. } => {
-                        format!("planning worker queue active-derivation failed: {error}")
+                    PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
+                        format!("planning worker queue-idle derivation failed: {error}")
                     }
                 };
                 let invalid_snapshot =
@@ -649,7 +651,7 @@ impl PostTurnEvaluationExecutor {
             && !runtime_snapshot.has_proposal_candidates()
             && matches!(
                 mode,
-                PlanningQueueRefreshMode::DeriveNextTaskWhenQueueIdle { .. }
+                PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. }
             )
         {
             self.planning_worker_panel_state.last_host_detail = Some(
