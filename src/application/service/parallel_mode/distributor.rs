@@ -192,7 +192,6 @@ impl ParallelModeDistributorService {
             queue_item_id: distributor_queue_item_id(&resolution.lease, &timestamp),
             queue_order_key: queue_order_key_from_timestamp(&timestamp),
             session_key,
-            root_turn_id: None,
             slot_id: resolution.lease.slot_id.clone(),
             agent_id: resolution.lease.agent_id.clone(),
             task_id: resolution.lease.task_id.clone(),

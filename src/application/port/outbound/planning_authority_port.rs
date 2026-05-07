@@ -62,9 +62,6 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     pub queue_order_key: u64,
     // Parallel-mode session that produced the queue item.
     pub session_key: String,
-    // Optional root conversation turn; older session-only records leave it empty.
-    #[serde(default)]
-    pub root_turn_id: Option<String>,
     // Slot that ran the work, used to join queue rows with lease projections.
     #[serde(default)]
     pub slot_id: String,

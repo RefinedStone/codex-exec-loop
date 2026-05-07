@@ -97,7 +97,6 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
         queue_item_id: "queued-task-2".to_string(),
         queue_order_key: 1,
         session_key: "slot-2@queued".to_string(),
-        root_turn_id: Some("turn-task-2".to_string()),
         slot_id: "slot-2".to_string(),
         agent_id: "agent-task-2".to_string(),
         task_id: "task-2".to_string(),
