@@ -1,6 +1,10 @@
 # Agent Reference
 
-Keep `AGENT.md` and `AGENTS.md` short. Read them first, then open only the reference that matches the task.
+`AGENTS.md` is the canonical fast-path agent file. `AGENT.md` is only a
+compatibility pointer for tools that still probe that filename.
+
+Keep both root files compact. Read `AGENTS.md` first, then open only the
+reference that matches the task.
 
 ## Files
 

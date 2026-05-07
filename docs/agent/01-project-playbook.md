@@ -3,19 +3,33 @@
 ## Product
 
 - `codex-exec-loop` is a native-first Rust client built on `codex app-server`.
-- Optimize for the TUI and app-server flow first.
+- The operator command is `akra`; the crate and legacy binary name remain `codex-exec-loop-native`.
+- Optimize for the TUI and app-server flow first, while keeping CLI, admin API, Telegram, and automation surfaces on the same application services.
 
 ## Module Map
 
 - `src/domain/`: pure models such as session summaries and startup diagnostics
-- `src/application/service/`: use-case orchestration such as `StartupService` and `ConversationService`
-- `src/application/service/parallel_mode/`: supersession and multi-worktree runtime boundaries
-- `src/application/service/planning/`: planning feature facade plus `authoring`, `runtime`, `repair`, `worker`, and `shared` sub-boundaries
-- `src/application/port/`: interfaces owned by the application layer
-- `src/adapter/inbound/tui/`: Ratatui/Crossterm screens and event handling
-- `src/adapter/outbound/`: infra-specific adapters grouped under `app_server`, `db`, `filesystem`, and `github`
+- `src/domain/planning/`: planning workspace, direction, task, queue, and validation models
+- `src/domain/parallel_mode/`: supervisor, pool, distributor, runtime event, and readiness models
+- `src/application/service/`: use-case orchestration such as `StartupService`, `SessionService`, `ConversationService`, prompt assembly, GitHub review polling, planning, and parallel mode
+- `src/application/service/planning/`: planning facade plus `admin`, `authoring`, `composition`, `control`, `repair`, `runtime`, `shared`, `task_mutation`, `task_tool`, and `worker` sub-boundaries
+- `src/application/service/parallel_mode/`: supervisor, pool, distributor, session-detail, turn, and orchestration boundaries
+- `src/application/port/outbound/`: interfaces owned by application services, including app-server, startup probes, session catalog, planning workspace, planning authority, task repository, planning worker, interactive turn runtime, GitHub automation/review polling, parallel runtime, parallel agent worker, and Telegram bot ports
+- `src/adapter/inbound/tui/`: Ratatui/Crossterm inline shell, controller/runtime/presentation split, planning overlays, session browser, follow-up overlay, parallel-mode overlay, theme, and terminal testkit
+- `src/adapter/inbound/cli.rs`: non-TUI commands for `doctor`, `reset`, `planning-tool`, `parallel-tick`, `admin`, and `telegram`
+- `src/adapter/inbound/admin_api/`: Axum planning/admin web UI and JSON API backed by Askama templates
+- `src/adapter/inbound/telegram_bot/`: Telegram control-plane runner and message parser
+- `src/adapter/outbound/app_server/`: `codex app-server` process/runtime, protocol parsing, execution policy, and planning worker adapters
+- `src/adapter/outbound/db/`: SQLite planning authority, task repository, active document, runtime event, lease, session detail, and repo-scoped workspace persistence
+- `src/adapter/outbound/filesystem/`: planning workspace file adapter and scaffold/repair support
+- `src/adapter/outbound/git/`: local git/worktree runtime operations for parallel mode
+- `src/adapter/outbound/github/`: GitHub PR, review, and automation boundary
+- `src/adapter/outbound/telegram/`: Telegram HTTP API adapter
 - `schema/`: checked-in protocol snapshot used to pin app-server shapes
-- `docs/`: design notes, state docs, and validation references
+- `templates/admin/` and `assets/admin/`: admin UI templates and packaged visual assets
+- `npm/`: platform wrapper, staged npm package metadata, and runtime tests
+- `scripts/`: PR gates, native release packaging, validation capture, planning-tool wrapper, GitHub identity wrapper, and merged-worktree cleanup
+- `docs/`: current contracts, design notes, plan history, validation records, release notes, and training references
 
 Keep mapping logic in adapters, not domain models.
 
@@ -24,10 +38,12 @@ Keep mapping logic in adapters, not domain models.
 - Dependency flow points inward: `adapter -> application -> domain`.
 - Inbound adapters translate user events into service calls.
 - Application services orchestrate use cases and depend on ports defined in `src/application/port/`.
-- Planning changes should enter through `src/application/service/planning/` and `src/adapter/inbound/tui/app/planning/` before touching lower-level planning internals.
+- Planning changes should enter through `src/application/service/planning/` and the inbound surface that owns the workflow: TUI planning overlays, CLI reports/tools, admin API/forms, or Telegram messages.
 - Outbound adapters implement those ports and own process, stdio, JSON, and filesystem details.
 - `domain/` stays free of TUI types, transport formats, and external I/O.
 - Add a port before a new outbound capability when it improves a real boundary.
+- The SQLite authority store is the runtime source for planning, queue, parallel-mode leases, session detail, and distributor event history; filesystem planning files remain the operator-editable mirror and scaffold.
+- Parallel mode routes from accepted planning tasks through pool allocation, agent session detail, official completion refresh, GitHub delivery, rebase merge into `prerelease`, and slot cleanup.
 
 ## Commands
 
@@ -37,6 +53,13 @@ Keep mapping logic in adapters, not domain models.
 - `. "$HOME/.cargo/env" && cargo fmt`: format source
 - `. "$HOME/.cargo/env" && cargo clippy --all-targets --all-features -D warnings`: run when touching lint-sensitive code
 - `bash scripts/check_native_pr.sh`: run the native PR gate used by GitHub Actions
+- `. "$HOME/.cargo/env" && cargo run -- doctor [workspace_dir]`: inspect planning state from the CLI
+- `. "$HOME/.cargo/env" && cargo run -- reset <queue|directions|all> [workspace_dir]`: reset planning state with shared reset rules
+- `. "$HOME/.cargo/env" && cargo run -- planning-tool contract`: print the compact JSON contract for automation and LLM tool callers
+- `. "$HOME/.cargo/env" && cargo run -- planning-tool run [workspace_dir]`: run a structured planning task request from stdin
+- `. "$HOME/.cargo/env" && cargo run -- parallel-tick [workspace_dir]`: manually drive the parallel-mode distributor queue
+- `. "$HOME/.cargo/env" && cargo run -- admin [--port <port>]`: run the planning/admin web surface
+- `. "$HOME/.cargo/env" && cargo run -- telegram [--token <token>] [--allow-chat-id <chat_id>]...`: run the Telegram control plane
 
 ## Style
 

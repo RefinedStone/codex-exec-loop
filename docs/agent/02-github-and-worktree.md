@@ -24,6 +24,7 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - Once a change reaches a reviewable milestone, the default is `commit -> push -> PR`.
 - Do not stop at a local commit unless the user explicitly says to hold.
 - After a PR merges or closes, start the next task from the latest target base branch on a new feature branch.
+- For this repository's normal integration path, rebase the feature branch onto the latest `prerelease`, fast-forward or rebase-merge the reviewed commits into `prerelease`, push `prerelease`, then close the PR if the branch has already landed.
 - After a PR is integrated into `prerelease`, return to the integration checkout and remove the finished feature worktree instead of leaving it parked indefinitely.
 - Prefer `bash scripts/cleanup_merged_worktrees.sh --apply --branch <finished-branch>` for the lane you just integrated. The helper can also run without `--branch` as a conservative sweep, and it skips dirty or unmerged worktrees automatically.
 - Do not use the cleanup helper for `akra-agent/slot-*` parallel-mode slot branches. Those slots carry runtime leases and must return through the parallel runtime cleanup path so the slot worktree, lease, and session detail stay consistent.

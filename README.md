@@ -5,6 +5,8 @@ The repository name remains `codex-exec-loop`; the operator-facing command is `a
 
 It is built for long-lived solo work: startup diagnostics, session resume, accepted planning,
 the current queue task, proposed tasks, and internal post-turn continuation all stay inside one inline shell.
+The same application layer also drives the non-TUI operator surfaces: planning/admin web UI,
+structured planning-tool calls, parallel-mode distributor ticks, and Telegram control-plane commands.
 
 ## Why this repo exists
 
@@ -19,6 +21,7 @@ the current queue task, proposed tasks, and internal post-turn continuation all 
 
 - Current supersession, planning, and directions contract: [docs/supersession/current-contract.md](docs/supersession/current-contract.md)
 - Remaining supersession and planning follow-through: [docs/supersession/remaining-work.md](docs/supersession/remaining-work.md)
+- Agent entrypoint and repository working rules: [AGENTS.md](AGENTS.md)
 - Architecture and boundary rules: [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md)
 - Product identity and surface map: [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
 - TUI shell flow deep dive: [docs/design/02-tui-shell-flow.md](docs/design/02-tui-shell-flow.md)
@@ -39,6 +42,19 @@ the current queue task, proposed tasks, and internal post-turn continuation all 
 The design baseline lives in [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md).
 Current structural debt, hotspot order, and refactor targets live in [docs/plan/17-structure-and-architecture-debt-map.md](docs/plan/17-structure-and-architecture-debt-map.md).
 The active roadmap for the next cycle lives in [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md) and the terminal-agent bridge research set rooted at [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md).
+
+## Implementation Map
+
+- `src/adapter/inbound/tui/`: Ratatui/Crossterm inline shell, command palette, session browser, diagnostics, planning/directions/queue/task overlays, follow-up flow, parallel-mode overlay, and terminal rendering tests.
+- `src/adapter/inbound/cli.rs`: process command dispatcher for `doctor`, `reset`, `planning-tool`, `parallel-tick`, `admin`, and `telegram`.
+- `src/adapter/inbound/admin_api/`: Axum planning/admin UI plus JSON API. Askama templates live in `templates/admin/`; packaged admin visual assets live in `assets/admin/`.
+- `src/adapter/inbound/telegram_bot/`: Telegram bot config, message parsing, and control-plane runner.
+- `src/application/service/planning/`: planning facade, admin workflows, authoring, runtime validation/intake, repair/reset, task mutation, task tool, and app-server planning worker orchestration.
+- `src/application/service/parallel_mode/`: pool allocation, supervisor/readiness, session detail, distributor, turn orchestration, and GitHub delivery workflow coordination.
+- `src/application/port/outbound/`: application-owned contracts for app-server, startup probes, session catalog, planning workspace/authority/task repository, planning worker, interactive runtime, GitHub, git/worktree runtime, parallel workers, and Telegram.
+- `src/adapter/outbound/`: concrete app-server, SQLite, filesystem, git, GitHub, and Telegram adapters.
+- `schema/`: checked-in `codex app-server` protocol snapshot.
+- `npm/`, `.github/workflows/`, and `scripts/`: native packaging, npm platform wrapper, CI gates, validation capture, release verification, planning-tool wrapper, and worktree cleanup automation.
 
 ## Install
 
@@ -113,10 +129,15 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | Command | Purpose |
 | --- | --- |
 | `:diag` | show startup diagnostics |
+| `:parallel [off]` | enter parallel mode or turn it off |
 | `:sessions` | browse recent sessions |
 | `:queue` | inspect the current queue task, proposed tasks, and skipped work |
 | `:planning` | open planning controls |
+| `:planning doctor` | inspect planning health from the planning command surface |
 | `:directions` | manage direction-side planning artifacts |
+| `:task [prompt]` | preview and stage a runtime planning task |
+| `:turns <number|infinite>` | set the auto follow-up turn budget |
+| `:stop` | stop active app-server sessions |
 | `:doctor` | inspect planning health inside the shell |
 | `:reset <queue|directions|all>` | reset planning state with explicit target semantics |
 | `:new` | start a new draft |
@@ -130,6 +151,11 @@ Supported aliases remain available for common commands such as `:q`, `:diagnosti
 | --- | --- |
 | `akra doctor [workspace_dir]` | read-only planning inspection |
 | `akra reset <queue|directions|all> [workspace_dir]` | rewrite planning state with shared reset rules |
+| `akra planning-tool contract` | print the compact JSON contract for structured planning tool callers |
+| `akra planning-tool run [workspace_dir]` | execute a structured planning tool request from stdin |
+| `akra parallel-tick [workspace_dir]` | manually drive the parallel-mode distributor queue |
+| `akra admin [--port <port>]` | run the planning/admin web UI and JSON API |
+| `akra telegram [--token <token>] [--allow-chat-id <chat_id>]...` | run the Telegram control-plane runner |
 
 ## Planning And Internal Continuation
 

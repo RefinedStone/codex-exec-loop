@@ -8,6 +8,7 @@ most, one supporting deep dive.
 - [supersession/README.md](supersession/README.md): current supersession, planning, and directions hub
 - [supersession/current-contract.md](supersession/current-contract.md): shipped operator-facing contract
 - [supersession/remaining-work.md](supersession/remaining-work.md): unfinished or lightly validated work
+- [agent/README.md](agent/README.md): compact Codex agent reference map
 - [plan/20-context-first-architecture-and-doc-coherence.md](plan/20-context-first-architecture-and-doc-coherence.md): current architecture/docs roadmap
 
 ## Architecture
@@ -25,6 +26,17 @@ most, one supporting deep dive.
 - [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): platform checks
 - [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md): packaging and operator runbook
 - [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): GitHub/worktree workflow rules
+- `scripts/check_native_pr.sh`: local native PR gate for layering, rustfmt check, tests, and clippy
+- `scripts/planning-tool.sh`: wrapper for the structured planning task tool surface
+
+## Implemented Surfaces
+
+- TUI: Ratatui/Crossterm inline shell in `src/adapter/inbound/tui/`, including sessions, diagnostics, planning, directions, queue, task intake, follow-up, and parallel-mode overlays.
+- CLI: `akra doctor`, `akra reset`, `akra planning-tool`, `akra parallel-tick`, `akra admin`, and `akra telegram` dispatch through `src/adapter/inbound/cli.rs`.
+- Admin: Axum/Askama planning admin UI and JSON API in `src/adapter/inbound/admin_api/`, with templates under `templates/admin/` and packaged assets under `assets/admin/`.
+- Planning runtime: services under `src/application/service/planning/`, persisted by SQLite authority adapters and mirrored to planning workspace files.
+- Parallel mode: services under `src/application/service/parallel_mode/` with git worktree, GitHub delivery, lease/session detail, distributor, and runtime event storage boundaries.
+- Packaging: native release scripts, GitHub Actions, and npm wrapper packages under `scripts/`, `.github/workflows/`, and `npm/`.
 
 ## Research And History
 
