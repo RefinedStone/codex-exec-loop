@@ -401,7 +401,7 @@ impl PostTurnEvaluationExecutor {
         };
         let mode = match current_snapshot.workspace_status() {
             PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
-                PlanningQueueRefreshMode::FromLatestReply
+                PlanningQueueRefreshMode::FromLatestMainReply
             }
             PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
                 let prompt_markdown = review_prompt_markdown
@@ -459,7 +459,7 @@ impl PostTurnEvaluationExecutor {
         self.record_planning_worker_running(
             PlanningWorkerStatus::RefreshRunning,
             match mode {
-                PlanningQueueRefreshMode::FromLatestReply => "refresh",
+                PlanningQueueRefreshMode::FromLatestMainReply => "refresh",
                 PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
                     "queue-idle-derive"
                 }
@@ -474,7 +474,7 @@ impl PostTurnEvaluationExecutor {
             Ok(outcome) => outcome,
             Err(error) => {
                 let detail = match mode {
-                    PlanningQueueRefreshMode::FromLatestReply => {
+                    PlanningQueueRefreshMode::FromLatestMainReply => {
                         format!("planning worker refresh failed: {error}")
                     }
                     PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {

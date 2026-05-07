@@ -152,7 +152,7 @@ pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) ->
 
 pub(super) fn planning_refresh_mode_label(mode: &PlanningQueueRefreshMode<'_>) -> &'static str {
     match mode {
-        PlanningQueueRefreshMode::FromLatestReply => "from_latest_reply",
+        PlanningQueueRefreshMode::FromLatestMainReply => "from_latest_main_reply",
         PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
             "derive_queue_head_when_queue_idle"
         }

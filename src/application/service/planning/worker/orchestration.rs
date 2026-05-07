@@ -67,7 +67,7 @@ pub struct PlanningOfficialCompletionRefreshRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningQueueRefreshMode<'a> {
-    FromLatestReply,
+    FromLatestMainReply,
     // queue-idle derivation은 이 service에 hard-code하지 않고 direction authority supporting file의 prompt로 조정한다.
     DeriveQueueHeadWhenQueueIdle { queue_idle_prompt_markdown: &'a str },
 }
@@ -247,7 +247,7 @@ impl PlanningWorkerOrchestrationService {
         // prompt rendering은 항상 가능한 최신 accepted authority snapshot을 포함하지만, rendering 자체는 state를 mutate하지 않는다.
         let authority_context = self.load_worker_authority_context(request.workspace_directory);
         match &request.mode {
-            PlanningQueueRefreshMode::FromLatestReply => build_planning_queue_refresh_prompt(
+            PlanningQueueRefreshMode::FromLatestMainReply => build_planning_queue_refresh_prompt(
                 request.latest_user_message,
                 request.latest_main_reply,
                 request.previous_handoff_task,
