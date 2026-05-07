@@ -38,7 +38,7 @@ fn centered_rect_clamps_percentages_above_hundred() {
 fn transcript_debug_detail_is_rendered_in_gray_only_when_enabled() {
     let message = ConversationMessage::new(
         ConversationMessageKind::User,
-        "다음 queued task 1개를 이어서 진행합니다.",
+        "다음 queued-task 1개를 이어서 진행합니다.",
         None,
         None,
     )

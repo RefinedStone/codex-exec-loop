@@ -501,7 +501,7 @@ fn inline_history_shows_planner_debug_detail_when_visibility_is_debug() {
     conversation.messages.push(
         ConversationMessage::new(
             ConversationMessageKind::User,
-            "다음 queued task 1개를 이어서 진행합니다.",
+            "다음 queued-task 1개를 이어서 진행합니다.",
             None,
             None,
         )

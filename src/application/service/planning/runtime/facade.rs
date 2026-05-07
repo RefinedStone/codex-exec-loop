@@ -197,7 +197,7 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * hidden sub-session은 queued task handoff prompt만 받는다. planning prompt fragment를 의도적으로 생략하는 이유는
+     * hidden sub-session은 queued-task handoff prompt만 받는다. planning prompt fragment를 의도적으로 생략하는 이유는
      * orchestration-specific worker가 worker prompt builder를 통해 자기 authority context를 별도로 렌더링하기 때문이다.
      */
     pub fn build_sub_session_task_handoff(
@@ -235,7 +235,7 @@ impl PlanningRuntimeFacadeService {
             .build_main_session_prompt(MainSessionPromptAssemblyRequest {
                 user_prompt: &task_prompt,
             })
-            .expect("queued task handoff prompt should not be empty");
+            .expect("queued-task handoff prompt should not be empty");
 
         PlanningMainSessionHandoff {
             prompt,
@@ -357,7 +357,7 @@ impl PlanningRuntimeFacadeService {
     }
 }
 
-// queue task field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff identity를 공유한다.
+// queue-task field를 한 번 normalize한 뒤 UI/reconciliation code와 handoff identity를 공유한다.
 fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTaskHandoff {
     PlanningTaskHandoff {
         task_id: task.task_id.trim().to_string(),
@@ -370,7 +370,7 @@ fn planning_task_handoff_from_queue_task(task: &PriorityQueueTask) -> PlanningTa
 }
 
 /*
- * domain queue task를 Codex에게 보낼 instruction document로 렌더링한다. task section은 무엇을 이어갈지와 왜 queue
+ * domain queue-task를 Codex에게 보낼 instruction document로 렌더링한다. task section은 무엇을 이어갈지와 왜 queue
  * 첫 항목인지 설명하고, rules section은 사용자가 명시적으로 planning maintenance를 요청하지 않은 한 worker가 repository
  * work에 집중하게 한다.
  */

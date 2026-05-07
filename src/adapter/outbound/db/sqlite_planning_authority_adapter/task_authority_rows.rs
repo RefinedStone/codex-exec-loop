@@ -302,7 +302,7 @@ fn insert_queue_projection_tasks(
                     task.rank as i64,
                     task.task_id.trim(),
                     serde_json::to_string(task)
-                        .context("failed to serialize planning queue task projection")?,
+                        .context("failed to serialize planning queue-task projection")?,
                 ],
             )
             .with_context(|| {
@@ -320,7 +320,7 @@ queue 계산에서 제외된 task들을 skipped bucket으로 저장한다.
 
 skipped task는 active/proposed task와 다르게 projection 안에 이미 rank가 있는 구조가 아니라, skipped
 목록의 순서 자체가 표시 순서다. 그래서 enumerate index에 1을 더해 rank로 저장한다. item_kind를
-`'skipped'`로 넣어 같은 table 안에서도 일반 queue task와 구분한다.
+`'skipped'`로 넣어 같은 table 안에서도 일반 queue-task와 구분한다.
 */
 fn insert_queue_projection_skipped(
     transaction: &rusqlite::Transaction<'_>,

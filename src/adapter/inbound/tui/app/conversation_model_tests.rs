@@ -189,7 +189,7 @@ fn queue_handoff_prompt_renders_for_auto_follow() {
     assert!(prompt.prompt.contains("Implement shell planning status"));
     assert_eq!(
         prompt.transcript_text,
-        "다음 queued task 1개를 이어서 진행합니다."
+        "다음 queued-task 1개를 이어서 진행합니다."
     );
 }
 
