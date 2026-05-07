@@ -261,7 +261,7 @@ impl NativeFlowHarness {
                 PlanningTaskToolRequest::UpdateTask(PlanningTaskToolUpdateRequest {
                     version: 1,
                     apply: true,
-                    source_turn_id: Some("flow-update".to_string()),
+                    legacy_source_turn_id: Some("flow-update".to_string()),
                     origin_session_kind: None,
                     thread_id: None,
                     turn_id: None,

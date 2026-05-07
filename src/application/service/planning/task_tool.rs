@@ -58,7 +58,8 @@ pub struct PlanningTaskToolCreateRequest {
     // dry planning/list 단계로 model을 유도할 수 있게 하는 안전장치다.
     pub apply: bool,
     // Legacy lookup key accepted only for host-injected payloads; workers should omit it.
-    pub source_turn_id: Option<String>,
+    #[serde(rename = "source_turn_id")]
+    pub legacy_source_turn_id: Option<String>,
     // Provider-neutral audit fields are host-controlled. They stay in the parser for adapter use,
     // but the worker-facing contract intentionally does not ask the model to populate them.
     pub origin_session_kind: Option<OriginSessionKind>,
@@ -77,7 +78,8 @@ pub struct PlanningTaskToolUpdateRequest {
     pub version: u32,
     pub apply: bool,
     // Legacy lookup key accepted only for host-injected payloads; workers should omit it.
-    pub source_turn_id: Option<String>,
+    #[serde(rename = "source_turn_id")]
+    pub legacy_source_turn_id: Option<String>,
     // Provider-neutral audit fields are host-controlled. They stay in the parser for adapter use,
     // but the worker-facing contract intentionally does not ask the model to populate them.
     pub origin_session_kind: Option<OriginSessionKind>,
@@ -248,7 +250,7 @@ impl PlanningTaskToolService {
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
                 source: PlanningTaskMutationSource::Worker,
-                source_turn_id: request.source_turn_id,
+                source_turn_id: request.legacy_source_turn_id,
                 provenance,
                 commands: vec![PlanningTaskMutationCommand::CreateTask(
                     request.input.into(),
@@ -280,7 +282,7 @@ impl PlanningTaskToolService {
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
                 source: PlanningTaskMutationSource::Worker,
-                source_turn_id: request.source_turn_id,
+                source_turn_id: request.legacy_source_turn_id,
                 provenance,
                 commands: vec![PlanningTaskMutationCommand::UpdateTask(
                     request.input.into(),
