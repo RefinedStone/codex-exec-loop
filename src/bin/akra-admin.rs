@@ -5,7 +5,7 @@
  */
 #[tokio::main]
 async fn main() {
-    codex_exec_loop_native::diagnostics::trace_event_log::init_from_env();
+    let _diagnostics_guards = codex_exec_loop_native::diagnostics::init_from_env();
     tracing::info!(
         cwd = ?std::env::current_dir().ok(),
         debug_assertions = cfg!(debug_assertions),

@@ -1,6 +1,4 @@
-use std::fs::OpenOptions;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use serde_json::Value;
 use tracing::Level;
@@ -11,13 +9,20 @@ use tracing_subscriber::prelude::*;
 
 pub(crate) const AKRA_EVENT_TARGET: &str = "codex_exec_loop_native::diagnostics::akra_event";
 
-static TRACE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TraceConfig {
     filter: String,
-    path: PathBuf,
+    destination: TraceDestination,
     span_mode: TraceSpanMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TraceDestination {
+    DailyRolling {
+        directory: PathBuf,
+        file_name: String,
+    },
+    ExactFile(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,19 +48,13 @@ struct TraceSettings {
     span_mode: TraceSpanMode,
 }
 
-pub fn init_from_env() {
-    if TRACE_GUARD.get().is_some() {
-        return;
-    }
-    let Some(config) = trace_config_from_env() else {
-        return;
-    };
+pub(super) fn init_from_env() -> Option<WorkerGuard> {
+    let config = trace_config_from_env()?;
     match build_trace_guard(config) {
-        Ok(guard) => {
-            let _ = TRACE_GUARD.set(guard);
-        }
+        Ok(guard) => Some(guard),
         Err(error) => {
             eprintln!("akra trace initialization failed: {error}");
+            None
         }
     }
 }
@@ -82,33 +81,16 @@ fn trace_config_from_env() -> Option<TraceConfig> {
     Some(TraceConfig {
         filter: settings.filter,
         span_mode: settings.span_mode,
-        path: trace_log_path()?,
+        destination: trace_destination()?,
     })
 }
 
 fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
-    if let Some(parent) = config.path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "failed to create trace log directory `{}`: {error}",
-                parent.display()
-            )
-        })?;
-    }
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config.path)
-        .map_err(|error| {
-            format!(
-                "failed to open trace log file `{}`: {error}",
-                config.path.display()
-            )
-        })?;
-    let (writer, guard) = tracing_appender::non_blocking(file);
+    let (writer, guard) = non_blocking_writer(config.destination)?;
     let env_filter = env_filter_from_filter_value(&config.filter);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
+        .flatten_event(true)
         .with_current_span(true)
         .with_span_list(true)
         .with_span_events(config.span_mode.fmt_span())
@@ -123,10 +105,56 @@ fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
     Ok(guard)
 }
 
+fn non_blocking_writer(
+    destination: TraceDestination,
+) -> Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard), String> {
+    match destination {
+        TraceDestination::DailyRolling {
+            directory,
+            file_name,
+        } => {
+            std::fs::create_dir_all(&directory).map_err(|error| {
+                format!(
+                    "failed to create trace log directory `{}`: {error}",
+                    directory.display()
+                )
+            })?;
+            let appender = tracing_appender::rolling::daily(directory, file_name);
+            Ok(tracing_appender::non_blocking(appender))
+        }
+        TraceDestination::ExactFile(path) => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "failed to create trace log directory `{}`: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .map_err(|error| {
+                    format!(
+                        "failed to open trace log file `{}`: {error}",
+                        path.display()
+                    )
+                })?;
+            Ok(tracing_appender::non_blocking(file))
+        }
+    }
+}
+
 fn trace_settings_from_env() -> Option<TraceSettings> {
     match std::env::var("AKRA_TRACE") {
-        Ok(value) => trace_settings_from_value(&value),
-        Err(_) => default_debug_trace_settings(),
+        Ok(value) => apply_rust_log_override(trace_settings_from_value(&value)?),
+        Err(_) => {
+            if let Some(settings) = trace_settings_from_rust_log() {
+                return Some(settings);
+            }
+            default_debug_trace_settings().and_then(apply_rust_log_override)
+        }
     }
 }
 
@@ -157,6 +185,33 @@ fn trace_value_is_disabled(value: &str) -> bool {
 
 fn trace_value_is_enabled_bool(value: &str) -> bool {
     matches!(value, "1" | "true" | "yes" | "on")
+}
+
+fn trace_settings_from_rust_log() -> Option<TraceSettings> {
+    let filter = std::env::var("RUST_LOG").ok()?;
+    trace_filter_from_rust_log_value(&filter).map(|filter| TraceSettings {
+        filter,
+        span_mode: TraceSpanMode::None,
+    })
+}
+
+fn apply_rust_log_override(mut settings: TraceSettings) -> Option<TraceSettings> {
+    if let Some(filter) = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|filter| trace_filter_from_rust_log_value(&filter))
+    {
+        settings.filter = filter;
+    }
+    Some(settings)
+}
+
+fn trace_filter_from_rust_log_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trace_value_is_disabled(trimmed) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn concise_trace_settings() -> TraceSettings {
@@ -239,29 +294,37 @@ fn trace_span_mode_from_value(value: &str) -> Option<TraceSpanMode> {
     }
 }
 
-fn trace_log_path() -> Option<PathBuf> {
+fn trace_destination() -> Option<TraceDestination> {
     if let Some(path) = std::env::var_os("AKRA_TRACE_FILE") {
         let path = PathBuf::from(path);
         if path.as_os_str().is_empty() {
             return None;
         }
-        return Some(path);
+        return Some(TraceDestination::ExactFile(path));
     }
+    let directory = default_trace_log_directory()?;
+    Some(TraceDestination::DailyRolling {
+        directory,
+        file_name: "akra-trace.jsonl".to_string(),
+    })
+}
+
+fn default_trace_log_directory() -> Option<PathBuf> {
     Some(
         std::env::current_dir()
             .ok()?
             .join(".codex-exec-loop")
             .join("runtime")
-            .join("akra-trace.jsonl"),
+            .join("log"),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AKRA_EVENT_TARGET, TraceSpanMode, concise_trace_filter, full_trace_filter,
-        planning_trace_filter, trace_settings_from_value, trace_span_mode_from_value,
-        valid_filter_or_fallback,
+        AKRA_EVENT_TARGET, TraceDestination, TraceSpanMode, concise_trace_filter,
+        full_trace_filter, planning_trace_filter, trace_filter_from_rust_log_value,
+        trace_settings_from_value, trace_span_mode_from_value, valid_filter_or_fallback,
     };
 
     #[test]
@@ -333,6 +396,33 @@ mod tests {
         assert_eq!(
             valid_filter_or_fallback("not a valid filter["),
             concise_trace_filter()
+        );
+    }
+
+    #[test]
+    fn rust_log_filter_uses_env_filter_semantics_without_enabling_disabled_values() {
+        assert_eq!(
+            trace_filter_from_rust_log_value("codex_exec_loop_native=trace"),
+            Some("codex_exec_loop_native=trace".to_string())
+        );
+        assert_eq!(trace_filter_from_rust_log_value("off"), None);
+    }
+
+    #[test]
+    fn trace_destination_can_represent_rolling_and_exact_file_modes() {
+        assert_eq!(
+            TraceDestination::DailyRolling {
+                directory: "/tmp/log".into(),
+                file_name: "akra-trace.jsonl".to_string(),
+            },
+            TraceDestination::DailyRolling {
+                directory: "/tmp/log".into(),
+                file_name: "akra-trace.jsonl".to_string(),
+            }
+        );
+        assert_eq!(
+            TraceDestination::ExactFile("/tmp/akra-trace.jsonl".into()),
+            TraceDestination::ExactFile("/tmp/akra-trace.jsonl".into())
         );
     }
 }

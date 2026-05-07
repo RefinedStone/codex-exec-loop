@@ -8,3 +8,17 @@ mod executable;
 
 pub mod raw_event_log;
 pub mod trace_event_log;
+
+pub struct DiagnosticsGuards {
+    _trace_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+    _raw_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+}
+
+pub fn init_from_env() -> DiagnosticsGuards {
+    let trace_guard = trace_event_log::init_from_env();
+    let raw_guard = raw_event_log::init_from_env();
+    DiagnosticsGuards {
+        _trace_guard: trace_guard,
+        _raw_guard: raw_guard,
+    }
+}
