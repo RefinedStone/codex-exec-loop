@@ -51,6 +51,48 @@ fn detached_prerelease_slot_counts_as_idle_baseline() {
     assert_eq!(pool.missing_slots, DEFAULT_POOL_SIZE - 1);
 }
 
+// linked worktree git dir에 REBASE_HEAD만 stale하게 남을 수 있다. 실제 rebase 중이면
+// rebase-merge/rebase-apply metadata가 함께 있으므로, clean detached baseline slot은
+// 단독 REBASE_HEAD 때문에 blocked로 오인되면 안 된다.
+#[test]
+fn detached_prerelease_slot_with_stale_rebase_head_counts_as_idle_baseline() {
+    let repo = TempGitRepo::new("stale-rebase-head-slot");
+    let slot_path = repo.create_detached_slot(1);
+    let git_dir = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "--git-dir",
+        ],
+        None,
+    )
+    .expect("slot git dir should resolve");
+    fs::write(
+        Path::new(git_dir.trim()).join("REBASE_HEAD"),
+        repo.head_sha(),
+    )
+    .expect("stale REBASE_HEAD should be written");
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let pool = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&readiness),
+    );
+    let slot = &pool.slots[0];
+
+    assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
+    assert_eq!(slot.branch_name, "prerelease (detached)");
+    assert_eq!(pool.idle_slots, 1);
+    assert_eq!(pool.blocked_slots, 0);
+}
+
 // agent branch가 이미 `prerelease`에 merge된 뒤 lease mirror가 없으면 새 작업을
 // 배정하기 전에 cleanup이 필요한 상태다. board는 이를 blocked가 아니라
 // awaiting cleanup으로 분류해 자동 정리 대상임을 표현한다.
