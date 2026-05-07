@@ -82,7 +82,7 @@ impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
                 blocked_by: Vec::new(),
                 created_by: TaskActor::User,
                 last_updated_by: TaskActor::User,
-                source_turn_id: request.request.active_turn_id.clone(),
+                source_turn_id: request.request.source_turn_id.clone(),
                 provenance: request.request.provenance.clone(),
                 updated_at,
             },

@@ -426,9 +426,9 @@ impl PostTurnEvaluationExecutor {
         };
         let worker_request = PlanningQueueRefreshRequest {
             workspace_directory: &request.workspace_directory,
-            root_thread_id: Some(conversation.thread_id.as_str())
+            parent_thread_id: Some(conversation.thread_id.as_str())
                 .filter(|thread_id| !thread_id.trim().is_empty()),
-            root_turn_id: &request.queued_from_turn_id,
+            parent_turn_id: &request.queued_from_turn_id,
             latest_user_message: conversation.latest_user_message_text(),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff(),

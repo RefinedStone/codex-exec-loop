@@ -43,11 +43,10 @@ use serde_json::json;
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningQueueRefreshRequest<'a> {
-    // root turn id는 synthetic worker turn id를 만드는 데만 쓴다. accepted task authority의 command provenance는
-    // 여전히 mutation service가 기록한다.
+    // parent ids는 hidden worker mutation을 유발한 visible/root turn을 provenance로 남길 때 쓴다.
     pub workspace_directory: &'a str,
-    pub root_thread_id: Option<&'a str>,
-    pub root_turn_id: &'a str,
+    pub parent_thread_id: Option<&'a str>,
+    pub parent_turn_id: &'a str,
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
@@ -59,7 +58,7 @@ pub struct PlanningOfficialCompletionRefreshRequest<'a> {
     // official completion refresh는 monotonic refresh_order를 가진 contract를 싣는다. 여러 client가 같은 완료 turn을
     // 관찰해도 이 order가 중복 queue derivation을 막는 기준이 된다.
     pub workspace_directory: &'a str,
-    pub root_thread_id: Option<&'a str>,
+    pub parent_thread_id: Option<&'a str>,
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
@@ -77,8 +76,8 @@ pub enum PlanningQueueRefreshMode<'a> {
 pub struct PlanningLedgerRepairRequest<'a> {
     // repair attempt도 worker call이지만, prompt는 latest user/main-turn exchange가 아니라 capture된 rejection packet에서 만든다.
     pub workspace_directory: &'a str,
-    pub root_thread_id: Option<&'a str>,
-    pub root_turn_id: &'a str,
+    pub parent_thread_id: Option<&'a str>,
+    pub parent_turn_id: &'a str,
     pub repair_request: &'a PlanningRepairRequest,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
     pub attempt_number: usize,
@@ -184,13 +183,13 @@ impl PlanningWorkerOrchestrationService {
         let previous_handoff = request.previous_handoff_task.cloned();
         self.run_worker_and_reconcile(
             request.workspace_directory,
-            &format!("planner-refresh-{}", request.root_turn_id),
+            &format!("planner-refresh-{}", request.parent_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             previous_handoff.as_ref(),
             WorkerParentProvenance {
-                thread_id: request.root_thread_id,
-                turn_id: Some(request.root_turn_id),
+                thread_id: request.parent_thread_id,
+                turn_id: Some(request.parent_turn_id),
             },
         )
     }
@@ -213,7 +212,7 @@ impl PlanningWorkerOrchestrationService {
             prompt,
             request.previous_handoff_task,
             WorkerParentProvenance {
-                thread_id: request.root_thread_id,
+                thread_id: request.parent_thread_id,
                 turn_id: Some(request.contract.root_turn_id.as_str()),
             },
         )
@@ -229,14 +228,14 @@ impl PlanningWorkerOrchestrationService {
             request.workspace_directory,
             &format!(
                 "planner-repair-{}-{}",
-                request.root_turn_id, request.attempt_number
+                request.parent_turn_id, request.attempt_number
             ),
             PlanningWorkerOperation::RepairTaskAuthority,
             prompt,
             request.previous_handoff_task,
             WorkerParentProvenance {
-                thread_id: request.root_thread_id,
-                turn_id: Some(request.root_turn_id),
+                thread_id: request.parent_thread_id,
+                turn_id: Some(request.parent_turn_id),
             },
         )
     }

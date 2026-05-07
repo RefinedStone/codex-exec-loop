@@ -15,7 +15,7 @@ use serde_json::json;
 pub struct ManualPromptIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
-    pub active_turn_id: Option<String>,
+    pub source_turn_id: Option<String>,
     pub parent_thread_id: Option<String>,
     pub parent_turn_id: Option<String>,
 }
@@ -148,7 +148,7 @@ impl ManualPromptIntakeService {
             .prepare_task_intake(PlanningTaskIntakeRequest {
                 workspace_directory: request.workspace_directory.clone(),
                 raw_prompt: transcript_text.to_string(),
-                active_turn_id: request.active_turn_id.clone(),
+                source_turn_id: request.source_turn_id.clone(),
                 provenance: TaskMutationProvenance::new(OriginSessionKind::ManualIntake)
                     .with_parent(
                         request.parent_thread_id.clone(),

@@ -33,7 +33,7 @@ impl PostTurnEvaluationExecutor {
         // completion, builtin refresh repair가 모두 이 같은 filesystem boundary를 공유한다.
         workspace_directory: &str,
         // Repair가 어느 user/agent turn에서 파생됐는지 ledger와 prompt에 묶는 trace id다.
-        root_turn_id: &str,
+        parent_turn_id: &str,
         // 처음 발견된 planning 오류와 복구 목표다. Retry가 필요하면 worker outcome의 새 request로 좁혀진다.
         repair_request: &PlanningRepairRequest,
         // 이전 handoff task는 repair가 queue-driven 흐름에서 어떤 task context를 보존해야 하는지 알려 준다.
@@ -46,7 +46,7 @@ impl PostTurnEvaluationExecutor {
             .runtime
             .load_runtime_snapshot_or_invalid(workspace_directory);
         let log_context =
-            PostTurnWorkerLogContext::new(thread_id, root_turn_id, workspace_directory);
+            PostTurnWorkerLogContext::new(thread_id, parent_turn_id, workspace_directory);
         // next_request는 retry마다 바뀔 수 있는 repair instruction이다.
         let mut next_request = repair_request.clone();
         // 첫 시도에는 retry reason이 없다. 두 번째부터는 이전 attempt가 왜 충분하지 않았는지 prompt에 싣는다.
@@ -59,8 +59,8 @@ impl PostTurnEvaluationExecutor {
             // reason을 함께 싣는 이유는 worker가 "몇 번째 복구이며 왜 반복되는지" 알아야 하기 때문이다.
             let worker_request = PlanningLedgerRepairRequest {
                 workspace_directory,
-                root_thread_id: Some(thread_id).filter(|thread_id| !thread_id.trim().is_empty()),
-                root_turn_id,
+                parent_thread_id: Some(thread_id).filter(|thread_id| !thread_id.trim().is_empty()),
+                parent_turn_id,
                 // Request는 같은 attempt 안에서 prompt 렌더링과 worker 실행이 공유하는 immutable input이다.
                 repair_request: &next_request,
                 previous_handoff_task,

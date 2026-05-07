@@ -405,7 +405,7 @@ fn run_parallel_dispatch_official_completion(
          * happen in the canonical workspace so parallel workers converge on one ledger.
          */
         workspace_directory: &request.planning_workspace_directory,
-        root_thread_id: None,
+        parent_thread_id: None,
         latest_user_message: None,
         latest_main_reply,
         previous_handoff_task: Some(&request.handoff_task),

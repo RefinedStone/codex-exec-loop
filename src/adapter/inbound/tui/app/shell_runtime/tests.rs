@@ -217,7 +217,7 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
         .prepare_task_intake(PlanningTaskIntakeRequest {
             workspace_directory: workspace_dir.clone(),
             raw_prompt: "verify parallel entry does not auto dispatch".to_string(),
-            active_turn_id: None,
+            source_turn_id: None,
             provenance: Default::default(),
             requested_direction_id: None,
             observed_planning_revision: None,
