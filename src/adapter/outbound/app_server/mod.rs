@@ -48,7 +48,7 @@ use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, emit_codex_app_server_launch_attachment,
     emit_codex_app_server_reattach_attachment,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -187,7 +187,7 @@ impl CodexAppServerAdapter {
         let skill_path = self
             .planning_worker_skill_adapter
             .queue_mutation_skill_path();
-        raw_event_log::emit_lazy("hidden_planning_thread_starting", || {
+        event_log::emit_lazy("hidden_planning_thread_starting", || {
             json!({
                 "workspace_directory": workspace_directory,
                 "operation": "planning_worker_thread",
@@ -228,7 +228,7 @@ impl CodexAppServerAdapter {
             )
         });
         match &result {
-            Ok(()) => raw_event_log::emit_lazy("hidden_planning_thread_completed", || {
+            Ok(()) => event_log::emit_lazy("hidden_planning_thread_completed", || {
                 json!({
                     "workspace_directory": workspace_directory,
                     "operation": "planning_worker_thread",
@@ -237,7 +237,7 @@ impl CodexAppServerAdapter {
                     "service_name": PLANNING_WORKER_SERVICE_NAME,
                 })
             }),
-            Err(error) => raw_event_log::emit_lazy("hidden_planning_thread_failed", || {
+            Err(error) => event_log::emit_lazy("hidden_planning_thread_failed", || {
                 json!({
                     "workspace_directory": workspace_directory,
                     "operation": "planning_worker_thread",

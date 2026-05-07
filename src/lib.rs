@@ -33,7 +33,7 @@ pub fn run() -> anyhow::Result<i32> {
         arg_count = std::env::args_os().count(),
         "akra_process_started"
     );
-    diagnostics::raw_event_log::emit_lazy("akra_process_started", || {
+    diagnostics::event_log::emit_lazy("akra_process_started", || {
         serde_json::json!({
             "cwd": std::env::current_dir()
                 .ok()

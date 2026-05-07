@@ -163,10 +163,10 @@ cargo clippy --all-targets --all-features -D warnings
 
 ## Diagnostics
 
-- `cargo run`: in debug Akra binaries, write the human-readable event ledger to `.codex-exec-loop/runtime/akra-raw.jsonl` and the filtered development trace to daily rolling files under `.codex-exec-loop/runtime/log/`.
-- `tail -f .codex-exec-loop/runtime/akra-raw.jsonl | jq '{event, detail}'`: follow the compact event ledger.
+- `cargo run`: in debug Akra binaries, write filtered development trace JSONL to daily rolling files under `.codex-exec-loop/runtime/log/`.
+- `tail -f .codex-exec-loop/runtime/log/akra-trace.jsonl* | jq 'select(.event)'`: follow Akra diagnostic events in the trace log.
 - `AKRA_TRACE=0 cargo run`: disable the default debug trace file.
-- `AKRA_TRACE=1 cargo run`: enable the concise Akra debug preset; raw diagnostic events are mirrored into the trace under `codex_exec_loop_native::diagnostics::akra_event`.
+- `AKRA_TRACE=1 cargo run`: enable the concise Akra debug preset under `codex_exec_loop_native::diagnostics::akra_event`.
 - `AKRA_TRACE=planning cargo run`: focus trace output on planning, post-turn evaluation, and app-server planning-worker paths.
 - `AKRA_TRACE=full cargo run`: enable the old noisy behavior with global `trace` and full span lifecycle events.
 - `RUST_LOG=codex_exec_loop_native=trace cargo run`: use standard `tracing_subscriber::EnvFilter` syntax for module-level filtering.
@@ -174,10 +174,10 @@ cargo clippy --all-targets --all-features -D warnings
 - `AKRA_TRACE_SPANS=none|close|full`: override span events for any trace preset or custom filter.
 - `AKRA_TRACE=codex_exec_loop_native::application::service::planning=debug cargo run`: trace a selected module filter.
 - `AKRA_TRACE_FILE=/tmp/akra-trace.jsonl`: override the trace JSONL destination with an exact append file instead of daily rolling.
-- `AKRA_RAW_LOG=/tmp/akra-raw.jsonl`: write targeted raw diagnostic events through the same non-blocking appender pattern.
+- `jq -r 'select(.event=="user_prompt_submit_inspected") | .transcript_text' /tmp/akra-trace.jsonl`: inspect the exact operator prompt submitted through the TUI.
 - `akra_event!(tracing::Level::DEBUG, "message", payload = build_debug_payload())`: emit ad hoc structured diagnostics without evaluating payload expressions when the level is disabled.
-- `codex_exec_loop_native::diagnostics::dropped_log_lines()`: read the in-process trace/raw `tracing_appender` dropped-line counters for future doctor or health surfaces.
-- `akra_diagnostics_dropped_log_lines`: emitted as a shutdown warning when the non-blocking queues dropped any trace/raw lines.
+- `codex_exec_loop_native::diagnostics::dropped_log_lines()`: read the in-process trace `tracing_appender` dropped-line counter for future doctor or health surfaces.
+- `akra_diagnostics_dropped_log_lines`: emitted as a shutdown warning when the non-blocking trace queue dropped any lines.
 - `CODEX_EXEC_LOOP_PLANNER_VISIBILITY=debug cargo run`: expose full planner prompt/response details in debug-only TUI surfaces.
 
 ## Docs

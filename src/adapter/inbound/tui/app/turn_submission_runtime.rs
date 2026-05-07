@@ -12,7 +12,7 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT, PlanningTaskHandoff,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 use post_turn_execution::PostTurnEvaluationRequest;
 use stream_execution::PreparedTurnStreamRequest;
@@ -231,7 +231,7 @@ impl NativeTuiApp {
             return false;
         }
 
-        raw_event_log::emit_lazy("user_prompt_submit_inspected", || {
+        event_log::emit_lazy("user_prompt_submit_inspected", || {
             user_prompt_submit_detail(
                 &prompt,
                 &transcript_text,

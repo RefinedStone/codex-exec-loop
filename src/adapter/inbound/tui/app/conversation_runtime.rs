@@ -18,7 +18,7 @@ use crate::adapter::inbound::tui::conversation_text::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningTaskHandoff};
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use serde_json::json;
 #[derive(Debug, Clone)]
@@ -142,7 +142,7 @@ pub(super) fn reduce_conversation_runtime(
             if prompt.is_empty() || !state.can_accept_runtime_prompt() {
                 // Empty prompts and prompts sent while the runtime is not ready
                 // are ignored rather than turned into provider calls.
-                raw_event_log::emit_lazy("prompt_submission_ignored", || {
+                event_log::emit_lazy("prompt_submission_ignored", || {
                     json!({
                         "origin": prompt_origin_label(&origin),
                         "reason": if prompt.is_empty() {
@@ -161,7 +161,7 @@ pub(super) fn reduce_conversation_runtime(
                 // Manual prompts are stricter than internal auto-follow prompts:
                 // startup gates and input state can block the operator even when
                 // an internally queued follow-up is allowed to continue.
-                raw_event_log::emit_lazy("prompt_submission_ignored", || {
+                event_log::emit_lazy("prompt_submission_ignored", || {
                     json!({
                         "origin": "Manual",
                         "reason": "manual_prompt_not_acceptable",
@@ -318,7 +318,7 @@ pub(super) fn reduce_conversation_runtime(
                 // state.
                 let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
                 state.begin_auto_followup_evaluation();
-                raw_event_log::emit_lazy("post_turn_evaluation_queued", || {
+                event_log::emit_lazy("post_turn_evaluation_queued", || {
                     json!({
                         "thread_id": state.thread_id.as_str(),
                         "queued_from_turn_id": turn_id,

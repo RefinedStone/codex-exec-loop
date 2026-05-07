@@ -28,7 +28,7 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, extract_planning_task_commands,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use anyhow::Result;
 use serde_json::json;
@@ -321,7 +321,7 @@ impl PlanningWorkerOrchestrationService {
     ) -> Result<PlanningWorkerRunOutcome> {
         // worker execution 전에 execution snapshot을 capture한다. protected file reconciliation이 worker file change를
         // synthetic planning turn 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
-        raw_event_log::emit_lazy("planning_worker_orchestration_started", || {
+        event_log::emit_lazy("planning_worker_orchestration_started", || {
             orchestration_event_detail(
                 workspace_directory,
                 synthetic_turn_id,
@@ -341,7 +341,7 @@ impl PlanningWorkerOrchestrationService {
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                event_log::emit_lazy("planning_worker_orchestration_failed", || {
                     orchestration_event_detail(
                         workspace_directory,
                         synthetic_turn_id,
@@ -367,7 +367,7 @@ impl PlanningWorkerOrchestrationService {
                 }) {
                 Ok(response) => response,
                 Err(error) => {
-                    raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                    event_log::emit_lazy("planning_worker_orchestration_failed", || {
                         orchestration_event_detail(
                             workspace_directory,
                             synthetic_turn_id,
@@ -453,7 +453,7 @@ impl PlanningWorkerOrchestrationService {
         ) {
             Ok(result) => result,
             Err(error) => {
-                raw_event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                event_log::emit_lazy("planning_worker_orchestration_failed", || {
                     orchestration_event_detail(
                         workspace_directory,
                         synthetic_turn_id,
@@ -501,7 +501,7 @@ impl PlanningWorkerOrchestrationService {
                 worker_summary
             ));
         }
-        raw_event_log::emit_lazy("planning_worker_orchestration_completed", || {
+        event_log::emit_lazy("planning_worker_orchestration_completed", || {
             orchestration_event_detail(
                 workspace_directory,
                 synthetic_turn_id,
