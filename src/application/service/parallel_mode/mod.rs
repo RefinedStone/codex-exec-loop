@@ -21,6 +21,7 @@ mod completion;
 pub(crate) mod distributor;
 mod git_sequence;
 mod orchestration;
+mod orchestrator_loop;
 mod pool;
 mod readiness;
 mod session_detail;
@@ -34,6 +35,10 @@ use self::branch_names::{sanitize_task_slug, short_branch_slug_hash};
 use self::distributor::ParallelModeDistributorService;
 use self::orchestration::{
     inspect_akra_integration_worktree_blocker, parallel_dispatch_excluded_task_ids,
+};
+pub use self::orchestrator_loop::{
+    ParallelModeDispatchOrchestratorTickRequest, ParallelModeDispatchOrchestratorTickResult,
+    ParallelModeOrchestratorLoopEvent,
 };
 #[cfg(test)]
 use self::pool::detect_canonical_repo_root;

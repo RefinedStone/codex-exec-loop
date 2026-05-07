@@ -2,17 +2,441 @@ use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::parallel_agent_persona::{
+    ParallelAgentPersona, load_parallel_agent_persona_config,
+};
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
-    PlanningOfficialCompletionRefreshRequest, PlanningServices, PlanningTaskHandoff,
+    PlanningOfficialCompletionRefreshRequest, PlanningRuntimeSnapshot,
+    PlanningRuntimeWorkspaceStatus, PlanningServices, PlanningTaskHandoff,
 };
 use crate::diagnostics::event_log;
-use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
+use crate::domain::parallel_mode::{
+    ParallelModeAutomationTrigger, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent,
+    ParallelModeSlotLeaseRequest, ParallelModeSupervisorSnapshot,
+};
+use chrono::Utc;
 use std::sync::Arc;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 
-use super::super::BackgroundMessage;
+use super::ParallelModeService;
+
+pub struct ParallelModeDispatchOrchestratorTickRequest {
+    pub workspace_directory: String,
+    pub trigger: ParallelModeAutomationTrigger,
+    pub epoch_id: u64,
+    pub enqueue_trigger: Option<ParallelModeAutomationTrigger>,
+    pub planning: PlanningServices,
+    pub worker_port: Arc<dyn ParallelAgentWorkerPort>,
+    pub turn_service: ParallelModeTurnService,
+    pub event_sender: Sender<ParallelModeOrchestratorLoopEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParallelModeDispatchOrchestratorTickResult {
+    pub workspace_directory: String,
+    pub readiness_snapshot: ParallelModeReadinessSnapshot,
+    pub supervisor_snapshot: ParallelModeSupervisorSnapshot,
+    pub outcome: ParallelModeDispatchOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParallelModeOrchestratorLoopEvent {
+    ConversationRuntimeNotice(String),
+    InvalidateSupervisorSnapshot,
+    RequestParallelModeDispatch {
+        workspace_directory: String,
+        trigger: ParallelModeAutomationTrigger,
+        epoch_id: u64,
+    },
+}
+
+impl ParallelModeService {
+    pub fn run_dispatch_orchestrator_tick(
+        &self,
+        request: ParallelModeDispatchOrchestratorTickRequest,
+    ) -> ParallelModeDispatchOrchestratorTickResult {
+        let workspace_directory = request.workspace_directory;
+        let planning_snapshot = request
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(&workspace_directory);
+        let readiness_snapshot = self.inspect_readiness(&workspace_directory, &planning_snapshot);
+
+        let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
+            if let Some(enqueue_trigger) = request.enqueue_trigger {
+                let runtime_event = parallel_runtime_event_for_dispatch_trigger(enqueue_trigger);
+                if let Err(error) = self.enqueue_dispatch_commands_for_event(
+                    &workspace_directory,
+                    runtime_event,
+                    &planning_snapshot,
+                    Some(request.epoch_id),
+                ) {
+                    event_log::emit_lazy("parallel_dispatch_command_enqueue_failed", || {
+                        serde_json::json!({
+                            "trigger": enqueue_trigger.label(),
+                            "workspace": &workspace_directory,
+                            "epoch_id": request.epoch_id,
+                            "error": error,
+                        })
+                    });
+                }
+            }
+            let outcome = match self.claim_next_dispatch_command(&workspace_directory) {
+                Ok(Some(mut command)) => {
+                    let outcome = dispatch_parallel_queue_pool(
+                        self,
+                        ParallelModeDispatchExecutionContext {
+                            workspace_directory: &workspace_directory,
+                            planning_snapshot: &planning_snapshot,
+                            worker_port: request.worker_port,
+                            turn_service: request.turn_service,
+                            planning: request.planning,
+                            event_sender: request.event_sender.clone(),
+                            trigger: command.trigger,
+                            epoch_id: request.epoch_id,
+                        },
+                    );
+                    persist_dispatch_command_outcome(
+                        self,
+                        &workspace_directory,
+                        &mut command,
+                        &outcome,
+                    );
+                    outcome
+                }
+                Ok(None) => {
+                    let mut outcome = ParallelModeDispatchOutcome::new(
+                        request.trigger,
+                        workspace_directory.clone(),
+                        request.epoch_id,
+                    );
+                    outcome.blocked_reason =
+                        Some("no pending durable dispatch command".to_string());
+                    outcome.status_copy_input = outcome.status_detail();
+                    outcome
+                }
+                Err(error) => {
+                    let mut outcome = ParallelModeDispatchOutcome::new(
+                        request.trigger,
+                        workspace_directory.clone(),
+                        request.epoch_id,
+                    );
+                    outcome.blocked_reason =
+                        Some(format!("dispatch command claim failed: {error}"));
+                    outcome.status_copy_input = outcome.status_detail();
+                    outcome
+                }
+            };
+            let supervisor_snapshot = self.build_supervisor_snapshot(
+                &workspace_directory,
+                true,
+                Some(&readiness_snapshot),
+            );
+            (supervisor_snapshot, outcome)
+        } else {
+            let supervisor_snapshot = self.build_supervisor_snapshot(
+                &workspace_directory,
+                false,
+                Some(&readiness_snapshot),
+            );
+            let cause = readiness_snapshot
+                .top_alert
+                .as_deref()
+                .unwrap_or("inspect the readiness panel before retrying");
+            let mut outcome = ParallelModeDispatchOutcome::new(
+                request.trigger,
+                workspace_directory.clone(),
+                request.epoch_id,
+            );
+            outcome.blocked_reason = Some(format!(
+                "readiness: {} / {cause}",
+                readiness_snapshot.readiness_label()
+            ));
+            outcome.status_copy_input = outcome.blocked_reason.clone().unwrap_or_default();
+            (supervisor_snapshot, outcome)
+        };
+
+        ParallelModeDispatchOrchestratorTickResult {
+            workspace_directory,
+            readiness_snapshot,
+            supervisor_snapshot,
+            outcome,
+        }
+    }
+}
+
+struct ParallelModeDispatchExecutionContext<'a> {
+    workspace_directory: &'a str,
+    planning_snapshot: &'a PlanningRuntimeSnapshot,
+    worker_port: Arc<dyn ParallelAgentWorkerPort>,
+    turn_service: ParallelModeTurnService,
+    planning: PlanningServices,
+    event_sender: Sender<ParallelModeOrchestratorLoopEvent>,
+    trigger: ParallelModeAutomationTrigger,
+    epoch_id: u64,
+}
+
+fn dispatch_parallel_queue_pool(
+    service: &ParallelModeService,
+    context: ParallelModeDispatchExecutionContext<'_>,
+) -> ParallelModeDispatchOutcome {
+    /*
+     * Dispatch is the handoff bridge from planning queue to parallel worker.
+     * The service chooses candidates, leases slots, assembles handoffs, and starts
+     * worker execution through the existing worker port. Inbound adapters only wake
+     * this loop and project its result.
+     */
+    let workspace_directory = context.workspace_directory;
+    let trigger = context.trigger;
+    let epoch_id = context.epoch_id;
+    let mut outcome =
+        ParallelModeDispatchOutcome::new(trigger, workspace_directory.to_string(), epoch_id);
+
+    let dispatch_plan = match service.build_dispatch_plan(
+        workspace_directory,
+        context.planning_snapshot,
+        usize::MAX,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            outcome.blocked_reason = Some(error);
+            outcome.status_copy_input = outcome.status_detail();
+            event_log::emit_lazy("parallel_dispatch_blocked", || {
+                serde_json::json!({
+                    "trigger": trigger.label(),
+                    "workspace": workspace_directory,
+                    "epoch_id": epoch_id,
+                    "blocked_reason": outcome.blocked_reason,
+                })
+            });
+            return outcome;
+        }
+    };
+    outcome.idle_slot_count = dispatch_plan.idle_slot_count;
+    outcome.candidate_task_ids = dispatch_plan
+        .candidates
+        .iter()
+        .map(|task| task.task_id.clone())
+        .collect();
+    event_log::emit_lazy("parallel_dispatch_plan_built", || {
+        serde_json::json!({
+            "trigger": trigger.label(),
+            "workspace": workspace_directory,
+            "epoch_id": epoch_id,
+            "idle_slot_count": dispatch_plan.idle_slot_count,
+            "candidate_task_ids": &outcome.candidate_task_ids,
+            "excluded_task_ids": &dispatch_plan.excluded_task_ids,
+        })
+    });
+    if dispatch_plan.idle_slot_count == 0 {
+        outcome.blocked_reason = Some("no idle slot is available for auto dispatch".to_string());
+        outcome.status_copy_input = outcome.status_detail();
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        return outcome;
+    }
+    if dispatch_plan.candidates.is_empty() {
+        let reason = if dispatch_plan.excluded_task_ids.is_empty() {
+            "no actionable queue task to auto dispatch".to_string()
+        } else {
+            format!(
+                "no undispatched queue task available for auto dispatch / excluded: {}",
+                dispatch_plan.excluded_task_ids.join(", ")
+            )
+        };
+        outcome.blocked_reason = Some(reason);
+        outcome.status_copy_input = outcome.status_detail();
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        return outcome;
+    }
+
+    let mut launched_titles = Vec::new();
+    let mut blocked_details = Vec::new();
+    let persona = load_parallel_agent_persona_config(workspace_directory)
+        .map(|config| config.persona)
+        .unwrap_or(ParallelAgentPersona::None);
+    for task in dispatch_plan.candidates {
+        let handoff = context
+            .planning
+            .runtime
+            .build_sub_session_task_handoff_with_persona(&task, persona);
+        let lease_request = parallel_mode_slot_lease_request(&handoff.task);
+        match service.acquire_slot_lease(workspace_directory, lease_request) {
+            Ok(lease) => {
+                event_log::emit_lazy("parallel_dispatch_slot_lease_acquired", || {
+                    serde_json::json!({
+                        "trigger": trigger.label(),
+                        "workspace": workspace_directory,
+                        "epoch_id": epoch_id,
+                        "slot_id": &lease.slot_id,
+                        "agent_id": &lease.agent_id,
+                        "task_id": &handoff.task.task_id,
+                        "task_title": &handoff.task.task_title,
+                        "worktree": &lease.worktree_path,
+                        "service_name": &handoff.service_name,
+                        "prompt_chars": handoff.prompt.chars().count(),
+                        "developer_instructions_chars": handoff.developer_instructions.chars().count(),
+                    })
+                });
+                let worker_request = ParallelDispatchWorkerRequest {
+                    planning_workspace_directory: workspace_directory.to_string(),
+                    worktree_directory: lease.worktree_path.clone(),
+                    automation_epoch_id: epoch_id,
+                    prompt: handoff.prompt,
+                    developer_instructions: handoff.developer_instructions,
+                    service_name: handoff.service_name,
+                    handoff_task: handoff.task.clone(),
+                };
+                spawn_parallel_dispatch_worker(
+                    worker_request,
+                    context.worker_port.clone(),
+                    context.turn_service.clone(),
+                    context.planning.clone(),
+                    context.event_sender.clone(),
+                );
+                outcome.launched_task_ids.push(handoff.task.task_id.clone());
+                launched_titles.push(handoff.task.task_title);
+            }
+            Err(error) => blocked_details.push(format!("{}: {error}", handoff.task.task_id)),
+        }
+    }
+    let launched_count = launched_titles.len();
+    if launched_count == 0 {
+        outcome.blocked_reason = Some(format!(
+            "worker launch blocked / {}",
+            blocked_details.join(" | ")
+        ));
+        outcome.status_copy_input = outcome.status_detail();
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
+            serde_json::json!({
+                "trigger": trigger.label(),
+                "workspace": workspace_directory,
+                "epoch_id": epoch_id,
+                "idle_slot_count": outcome.idle_slot_count,
+                "task_ids": outcome.candidate_task_ids,
+                "blocked_reason": outcome.blocked_reason,
+            })
+        });
+        return outcome;
+    }
+
+    let mut status = format!(
+        "auto dispatched {launched_count} worker(s) / tasks: {}",
+        launched_titles.join(" | ")
+    );
+    if !blocked_details.is_empty() {
+        status.push_str(&format!(" / blocked: {}", blocked_details.join(" | ")));
+    }
+    outcome.status_copy_input = status;
+    event_log::emit_lazy("parallel_dispatch_launched", || {
+        serde_json::json!({
+            "trigger": trigger.label(),
+            "workspace": workspace_directory,
+            "epoch_id": epoch_id,
+            "idle_slot_count": outcome.idle_slot_count,
+            "task_ids": outcome.candidate_task_ids,
+            "launched_count": outcome.launched_task_ids.len(),
+        })
+    });
+    outcome
+}
+
+fn parallel_mode_slot_lease_request(
+    handoff_task: &PlanningTaskHandoff,
+) -> ParallelModeSlotLeaseRequest {
+    let task_id = handoff_task.task_id.trim();
+    let task_title = handoff_task.task_title.trim();
+    let common_slug = sanitize_parallel_mode_identifier(task_id)
+        .or_else(|| sanitize_parallel_mode_identifier(task_title));
+    let task_slug = common_slug.clone().unwrap_or_else(|| "task".to_string());
+    let agent_slug = common_slug.unwrap_or_else(|| "agent".to_string());
+    ParallelModeSlotLeaseRequest::new(
+        task_id,
+        task_title,
+        format!("agent-{agent_slug}"),
+        task_slug,
+    )
+}
+
+fn sanitize_parallel_mode_identifier(input: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_dash = false;
+    for character in input.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            previous_was_dash = false;
+            continue;
+        }
+        if !previous_was_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_was_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() { None } else { Some(slug) }
+}
+
+fn parallel_runtime_event_for_dispatch_trigger(
+    trigger: ParallelModeAutomationTrigger,
+) -> ParallelModeRuntimeEvent {
+    match trigger {
+        ParallelModeAutomationTrigger::MainTurnPostEvaluation => {
+            ParallelModeRuntimeEvent::AutoFollowQueued
+        }
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion => {
+            ParallelModeRuntimeEvent::ParallelCompletionFinalized
+        }
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch => {
+            ParallelModeRuntimeEvent::TaskIntakeCommitted
+        }
+    }
+}
+
+fn persist_dispatch_command_outcome(
+    service: &ParallelModeService,
+    workspace_directory: &str,
+    command: &mut ParallelModeDispatchCommandSnapshot,
+    outcome: &ParallelModeDispatchOutcome,
+) {
+    let timestamp = Utc::now().to_rfc3339();
+    if outcome.blocked_reason.is_some() && outcome.launched_task_ids.is_empty() {
+        command.mark_blocked(outcome.status_detail(), timestamp);
+    } else {
+        command.mark_completed(outcome.status_detail(), timestamp);
+    }
+    if let Err(error) = service.update_dispatch_command(workspace_directory, command) {
+        event_log::emit_lazy("parallel_dispatch_command_update_failed", || {
+            serde_json::json!({
+                "workspace": workspace_directory,
+                "command_id": &command.command_id,
+                "state": command.state.label(),
+                "error": error,
+            })
+        });
+    }
+}
 
 /* 병렬 슬롯 워커는 TUI 스레드 밖에서 Codex 세션 스트림을 끝까지 소비하고,
  * 그 결과를 다시 슬롯 상태와 planning 권위 파일 갱신으로 접속한다. 이 파일의
@@ -20,20 +444,20 @@ use super::super::BackgroundMessage;
  * supervisor snapshot 무효화를 반드시 보내는 것이 호출 계약이다.
  */
 #[derive(Debug, Clone)]
-pub(super) struct ParallelDispatchWorkerRequest {
+struct ParallelDispatchWorkerRequest {
     // planning workspace는 official completion refresh가 반영될 authoritative root이다.
-    pub(super) planning_workspace_directory: String,
+    planning_workspace_directory: String,
     // worktree는 실제 isolated Codex turn이 실행되는 slot checkout이다.
-    pub(super) worktree_directory: String,
+    worktree_directory: String,
     // automation epoch lets the UI drop delayed completion chaining after :parallel off.
-    pub(super) automation_epoch_id: u64,
+    automation_epoch_id: u64,
     // prompt는 queue head handoff를 worker thread에 전달하는 최종 user-facing 입력이다.
-    pub(super) prompt: String,
+    prompt: String,
     // developer_instructions/service_name은 application prompt assembly가 정한 app-server thread metadata다.
-    pub(super) developer_instructions: String,
-    pub(super) service_name: String,
+    developer_instructions: String,
+    service_name: String,
     // handoff_task는 notice, completion contract, refresh prompt가 같은 task를 가리키게 하는 연결 키이다.
-    pub(super) handoff_task: PlanningTaskHandoff,
+    handoff_task: PlanningTaskHandoff,
 }
 
 // 스트림 이벤트는 순서대로 오지만, 최종 판단에는 "시작 전 실패", "실패 이벤트",
@@ -89,12 +513,12 @@ impl ParallelDispatchOfficialCompletionOutcome {
     }
 }
 
-pub(super) fn spawn_parallel_dispatch_worker(
+fn spawn_parallel_dispatch_worker(
     request: ParallelDispatchWorkerRequest,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
-    outer_tx: std::sync::mpsc::Sender<BackgroundMessage>,
+    outer_tx: Sender<ParallelModeOrchestratorLoopEvent>,
 ) {
     thread::spawn(move || {
         /*
@@ -119,24 +543,27 @@ pub(super) fn spawn_parallel_dispatch_worker(
         let result =
             run_parallel_dispatch_worker(request, worker_port, turn_service, planning.clone());
         for notice in result.notices {
-            let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
+            let _ =
+                outer_tx.send(ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice));
         }
         /*
          * 성공, 실패, panic 어느 경로든 supervisor snapshot을 다시 읽게 해야 slot lease와
          * official completion marker가 화면에 남지 않는다.
          */
-        let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
+        let _ = outer_tx.send(ParallelModeOrchestratorLoopEvent::InvalidateSupervisorSnapshot);
         let planning_snapshot = planning
             .runtime
             .load_runtime_snapshot_or_invalid(&workspace_directory);
         if result.official_completion_refresh_succeeded
             && planning_snapshot.has_actionable_queue_head()
         {
-            let _ = outer_tx.send(BackgroundMessage::RequestParallelModeDispatch {
-                workspace_directory,
-                trigger: ParallelModeAutomationTrigger::ParallelOfficialCompletion,
-                epoch_id: automation_epoch_id,
-            });
+            let _ = outer_tx.send(
+                ParallelModeOrchestratorLoopEvent::RequestParallelModeDispatch {
+                    workspace_directory,
+                    trigger: ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                    epoch_id: automation_epoch_id,
+                },
+            );
         }
     });
 }
@@ -643,8 +1070,7 @@ fn run_parallel_dispatch_official_completion(
 
     if !matches!(
         outcome.runtime_snapshot.workspace_status(),
-        crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            | crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyWithTask
+        PlanningRuntimeWorkspaceStatus::ReadyNoTask | PlanningRuntimeWorkspaceStatus::ReadyWithTask
     ) {
         /*
          * A non-ready snapshot after refresh means the worker may have changed files but
