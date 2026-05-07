@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 
+use super::orchestrator::ParallelModePostTurnQueueDecision;
 use super::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDispatchBlockReason, ParallelModeDispatchOutcome,
     ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
-    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
+    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState,
+    ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
 
@@ -170,6 +172,50 @@ fn dispatch_outcome_carries_trigger_and_structured_status_inputs() {
         outcome.status_detail(),
         "auto dispatch blocked / no idle slot is available for auto dispatch"
     );
+}
+
+#[test]
+fn post_turn_queue_continuation_dispatches_from_all_parallel_queue_signals() {
+    let auto_follow = ParallelModeOrchestratorStateMachine::post_turn_queue_continuation(
+        true,
+        Some(ParallelModePostTurnQueueSignal::AutoFollowQueued),
+        false,
+    );
+    let parallel_completion = ParallelModeOrchestratorStateMachine::post_turn_queue_continuation(
+        true,
+        Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized),
+        true,
+    );
+
+    assert_eq!(
+        auto_follow,
+        ParallelModePostTurnQueueDecision::Dispatch {
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+            consume_auto_follow_prompt: true
+        }
+    );
+    assert_eq!(
+        parallel_completion.dispatch_trigger(),
+        Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion)
+    );
+    assert!(!parallel_completion.should_consume_auto_follow_prompt());
+}
+
+#[test]
+fn post_turn_queue_continuation_ignores_parallel_completion_without_ready_head() {
+    let decision = ParallelModeOrchestratorStateMachine::post_turn_queue_continuation(
+        true,
+        Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized),
+        false,
+    );
+    let disabled = ParallelModeOrchestratorStateMachine::post_turn_queue_continuation(
+        false,
+        Some(ParallelModePostTurnQueueSignal::AutoFollowQueued),
+        true,
+    );
+
+    assert_eq!(decision, ParallelModePostTurnQueueDecision::NoDispatch);
+    assert_eq!(disabled, ParallelModePostTurnQueueDecision::NoDispatch);
 }
 
 #[test]

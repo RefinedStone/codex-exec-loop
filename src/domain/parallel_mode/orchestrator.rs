@@ -49,6 +49,40 @@ impl ParallelModeAutomationTrigger {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModePostTurnQueueSignal {
+    AutoFollowQueued,
+    ParallelCompletionFinalized,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModePostTurnQueueDecision {
+    NoDispatch,
+    Dispatch {
+        trigger: ParallelModeAutomationTrigger,
+        consume_auto_follow_prompt: bool,
+    },
+}
+
+impl ParallelModePostTurnQueueDecision {
+    pub fn dispatch_trigger(self) -> Option<ParallelModeAutomationTrigger> {
+        match self {
+            Self::NoDispatch => None,
+            Self::Dispatch { trigger, .. } => Some(trigger),
+        }
+    }
+
+    pub fn should_consume_auto_follow_prompt(self) -> bool {
+        match self {
+            Self::NoDispatch => false,
+            Self::Dispatch {
+                consume_auto_follow_prompt,
+                ..
+            } => consume_auto_follow_prompt,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModeDispatchOutcome {
     pub trigger: ParallelModeAutomationTrigger,
@@ -224,6 +258,36 @@ impl ParallelModeOrchestratorStateMachine {
         }
 
         ParallelModeDispatchEligibility::dispatchable()
+    }
+
+    pub fn post_turn_queue_continuation(
+        parallel_mode_enabled: bool,
+        signal: Option<ParallelModePostTurnQueueSignal>,
+        has_actionable_queue_head: bool,
+    ) -> ParallelModePostTurnQueueDecision {
+        if !parallel_mode_enabled {
+            return ParallelModePostTurnQueueDecision::NoDispatch;
+        }
+
+        match signal {
+            Some(ParallelModePostTurnQueueSignal::AutoFollowQueued) => {
+                ParallelModePostTurnQueueDecision::Dispatch {
+                    trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                    consume_auto_follow_prompt: true,
+                }
+            }
+            Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized)
+                if has_actionable_queue_head =>
+            {
+                ParallelModePostTurnQueueDecision::Dispatch {
+                    trigger: ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                    consume_auto_follow_prompt: false,
+                }
+            }
+            Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized) | None => {
+                ParallelModePostTurnQueueDecision::NoDispatch
+            }
+        }
     }
 
     pub fn tick_state(integration_worktree_blocked: bool) -> ParallelModeOrchestratorState {

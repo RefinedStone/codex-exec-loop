@@ -17,9 +17,9 @@ use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger, ParallelModeDispatchOutcome,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolBoardSnapshot, ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModePoolBoardSnapshot, ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
+    ParallelModeReadinessSnapshot, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
 /*
@@ -34,8 +34,8 @@ mod dispatch_worker;
 use self::dispatch_worker::{ParallelDispatchWorkerRequest, spawn_parallel_dispatch_worker};
 use super::turn_submission_runtime::parallel_mode_slot_lease_request;
 use super::{
-    BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent,
-    ConversationState, NativeTuiApp,
+    AutoFollowSkipReason, BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect,
+    ConversationRuntimeEvent, ConversationState, NativeTuiApp,
 };
 
 impl NativeTuiApp {
@@ -578,23 +578,54 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn convert_parallel_mode_auto_prompt_effects_to_dispatch(
+    pub(super) fn parallel_mode_post_turn_queue_signal(
+        &self,
+        event: &ConversationRuntimeEvent,
+    ) -> Option<ParallelModePostTurnQueueSignal> {
+        let ConversationRuntimeEvent::PostTurnEvaluated { evaluation } = event else {
+            return None;
+        };
+        match &evaluation.action {
+            super::conversation_runtime::ConversationPostTurnAction::SkipAutoFollow {
+                reason: AutoFollowSkipReason::ParallelSessionCompleted,
+            } => Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized),
+            _ => None,
+        }
+    }
+
+    pub(super) fn apply_parallel_mode_post_turn_queue_continuation(
         &mut self,
         effects: &mut Vec<ConversationRuntimeEffect>,
+        event_signal: Option<ParallelModePostTurnQueueSignal>,
     ) {
-        if !self.parallel_mode_enabled() {
-            return;
-        }
-        if !effects
+        let effect_signal = effects
             .iter()
             .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
-        {
+            .then_some(ParallelModePostTurnQueueSignal::AutoFollowQueued);
+        let signal = effect_signal.or(event_signal);
+        let has_actionable_queue_head = match &self.conversation_state {
+            ConversationState::Ready(conversation) => conversation
+                .planning_runtime_snapshot
+                .has_actionable_queue_head(),
+            ConversationState::Loading | ConversationState::Failed(_) => false,
+        };
+        let decision = ParallelModeOrchestratorStateMachine::post_turn_queue_continuation(
+            self.parallel_mode_enabled(),
+            signal,
+            has_actionable_queue_head,
+        );
+        let Some(trigger) = decision.dispatch_trigger() else {
             return;
-        }
+        };
 
-        effects
-            .retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+        if decision.should_consume_auto_follow_prompt() {
+            effects.retain(|effect| {
+                !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
+            });
+        }
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state
+            && decision.should_consume_auto_follow_prompt()
+        {
             conversation.record_auto_follow_parallel_dispatch();
         }
         let epoch_id = self.open_parallel_mode_automation_epoch();
@@ -604,10 +635,7 @@ impl NativeTuiApp {
                 "parallel mode: automation epoch {epoch_id} opened / dispatching accepted queue"
             ),
         });
-        self.request_parallel_mode_dispatch(
-            workspace_directory,
-            ParallelModeAutomationTrigger::MainTurnPostEvaluation,
-        );
+        self.request_parallel_mode_dispatch(workspace_directory, trigger);
     }
 
     fn open_parallel_mode_automation_epoch(&mut self) -> u64 {

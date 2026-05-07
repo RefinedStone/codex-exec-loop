@@ -293,6 +293,8 @@ impl NativeTuiApp {
             ConversationRuntimeEvent::PostTurnEvaluated { .. }
                 | ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
         );
+        let parallel_mode_post_turn_queue_signal =
+            self.parallel_mode_post_turn_queue_signal(&event);
         let Some(conversation) = self.take_ready_conversation_state() else {
             return false;
         };
@@ -314,7 +316,10 @@ impl NativeTuiApp {
                 !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
             });
         } else if should_flush_pending_task_intake {
-            self.convert_parallel_mode_auto_prompt_effects_to_dispatch(&mut effects);
+            self.apply_parallel_mode_post_turn_queue_continuation(
+                &mut effects,
+                parallel_mode_post_turn_queue_signal,
+            );
         }
         for effect in effects {
             self.execute_conversation_runtime_effect(effect);

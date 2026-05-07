@@ -25,7 +25,8 @@ pub use self::distributor::{
 pub use self::orchestrator::{
     ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason, ParallelModeDispatchOutcome,
     ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetScope, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 pub use self::pool_reset::{
     ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolResetRunId,

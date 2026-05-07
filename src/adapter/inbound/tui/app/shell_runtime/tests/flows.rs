@@ -1,4 +1,5 @@
 use super::*;
+use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
 };
@@ -404,6 +405,43 @@ impl NativeFlowHarness {
                 planning_worker_panel_state: Default::default(),
             })
             .expect("post-turn evaluation should enqueue");
+    }
+
+    fn send_parallel_completion_with_ready_queue_head(&mut self, turn_id: &str) {
+        let planning_snapshot = self
+            .runtime
+            .app()
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(&self.workspace_dir);
+        assert!(
+            planning_snapshot.has_actionable_queue_head(),
+            "test setup should leave a ready queue head"
+        );
+        let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
+        else {
+            panic!("expected ready conversation state");
+        };
+        conversation.thread_id = "thread-1".to_string();
+        conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
+
+        self.runtime
+            .app
+            .tx
+            .send(BackgroundMessage::PostTurnEvaluated {
+                thread_id: "thread-1".to_string(),
+                completed_turn_id: turn_id.to_string(),
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    runtime_snapshot: planning_snapshot,
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: ConversationPostTurnAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::ParallelSessionCompleted,
+                    },
+                }),
+                planning_worker_panel_state: Default::default(),
+            })
+            .expect("parallel completion evaluation should enqueue");
     }
 
     fn send_dispatch_request_for_current_epoch(&self, trigger: ParallelModeAutomationTrigger) {
@@ -1055,6 +1093,31 @@ fn post_turn_dispatch_launches_all_idle_slots_concurrently() {
 
     harness.worker_port.release_all_held_streams();
     harness.poll_until_worker_streams_terminal(FLOW_POOL_SIZE);
+}
+
+#[test]
+fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-parallel-completion-dispatch");
+    harness.committed_ready_task("dispatch after parallel completion leaves ready head");
+    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
+        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
+        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+
+    harness.send_parallel_completion_with_ready_queue_head("parallel-turn-1");
+    harness.poll_until_worker_launches(1);
+
+    let requests = harness.worker_port.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].cwd.contains("slot-"),
+        "ready queue head should dispatch into a pool slot: {requests:?}"
+    );
 }
 
 #[test]
