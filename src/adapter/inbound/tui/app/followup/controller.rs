@@ -1,8 +1,8 @@
 /*
  * Follow-up controller code sits at the terminal-input edge of NativeTuiApp.
  * It deliberately avoids owning policy: conversation-level auto-follow changes
- * are sent to followup_controls, while in-progress editor text is sent to
- * followup_overlay_ui. Keeping those two event streams separate lets the TUI
+ * are sent to `followup_controls`, while in-progress editor text is sent to
+ * `followup_overlay_ui`. Keeping those two event streams separate lets the TUI
  * offer a forgiving inline text editor without letting half-typed values change
  * the runtime continuation budget.
  */

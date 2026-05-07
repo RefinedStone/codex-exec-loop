@@ -1,9 +1,9 @@
 use super::{AutoFollowState, ConversationViewModel};
 
 /*
- * Followup controls는 overlay의 임시 입력 상태가 아니라 ConversationViewModel 안의
+ * Follow-up controls는 overlay의 임시 입력 상태가 아니라 ConversationViewModel 안의
  * 실제 follow-up 정책을 바꾸는 reducer다. app_runtime은 controller에서 올라온 이벤트를
- * 이 함수에 넣고, 반환된 effect를 다시 followup_overlay_ui reducer로 보내 화면 buffer를
+ * 이 함수에 넣고, 반환된 effect를 다시 `followup_overlay_ui` reducer로 보내 화면 buffer를
  * 동기화한다. 이 분리 덕분에 "값을 편집하는 UI"와 "auto-follow 실행 정책"이 서로 섞이지 않는다.
  */
 #[derive(Debug, Clone)]
@@ -125,7 +125,7 @@ mod tests {
     fn draft_workspace_sync_updates_blank_draft_and_emits_ui_sync() {
         /*
          * 새 draft가 workspace를 바꾸면 conversation cwd와 overlay buffer가 함께 따라가야 한다.
-         * OverlayUi effect가 없으면 app_runtime이 followup_overlay_ui의 content reset을 호출하지 않는다.
+         * OverlayUi effect가 없으면 app_runtime이 `followup_overlay_ui`의 content reset을 호출하지 않는다.
          */
         let draft = ConversationViewModel::new_draft("/tmp/root".to_string());
 

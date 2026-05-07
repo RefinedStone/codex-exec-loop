@@ -1,15 +1,15 @@
 /*
  * follow-up overlay UI state는 ConversationViewModel의 auto-follow policy와 의도적으로 분리되어 있다.
  * Planning init SimpleReview는 operator가 max-auto-turns를 raw text로 편집하게 하므로,
- * 이 reducer는 followup_controls가 commit을 승인하기 전까지 진행 중인 buffer가 runtime policy를 바꾸지 못하게 막는다.
+ * 이 reducer는 `followup_controls`가 commit을 승인하기 전까지 진행 중인 buffer가 runtime policy를 바꾸지 못하게 막는다.
  */
 
 #[derive(Debug, Default)]
 // inline max-auto-turns editor가 key stream을 소유하는 동안만 의미가 있는 screen-local state다.
 pub(super) struct MaxAutoTurnsEditorState {
-    // true이면 followup/controller가 Enter, Esc, Backspace, text input을 global shortcut 대신 이 editor로 보낸다.
+    // true이면 `followup/controller`가 Enter, Esc, Backspace, text input을 global shortcut 대신 이 editor로 보낸다.
     pub is_editing: bool,
-    // raw user input은 비어 있거나 임시로 invalid일 수 있다. commit validation은 followup_controls가 맡는다.
+    // raw user input은 비어 있거나 임시로 invalid일 수 있다. commit validation은 `followup_controls`가 맡는다.
     pub buffer: String,
 }
 
@@ -32,7 +32,7 @@ pub(super) enum FollowupOverlayUiEvent {
     MaxAutoTurnsValueSynced { value: String },
     // editor open은 현재 policy label을 raw editing buffer의 기준값으로 복사한다.
     MaxAutoTurnsEditStarted { current_value: String },
-    // commit acknowledgement는 editor를 닫고 followup_controls가 승인한 canonical label을 보여 준다.
+    // commit acknowledgement는 editor를 닫고 `followup_controls`가 승인한 canonical label을 보여 준다.
     MaxAutoTurnsEditCommitted { current_value: String },
     // cancel은 policy 변경 없이 editor를 닫고 caller가 넘긴 현재 label로 되돌린다.
     MaxAutoTurnsEditCanceled { current_value: String },
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn max_auto_turns_editing_updates_buffer_and_backspace() {
-        // typing은 overlay state에만 남는다. followup_controls가 commit하기 전에는 conversation policy를 건드리지 않는다.
+        // typing은 overlay state에만 남는다. `followup_controls`가 commit하기 전에는 conversation policy를 건드리지 않는다.
         let state = FollowupOverlayUiState::default();
 
         let state = reduce_followup_overlay_ui(
