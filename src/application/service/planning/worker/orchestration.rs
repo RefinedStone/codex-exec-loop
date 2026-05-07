@@ -207,7 +207,10 @@ impl PlanningWorkerOrchestrationService {
         )?;
         self.run_worker_and_reconcile(
             request.workspace_directory,
-            &format!("planning-worker-refresh-{}", request.contract.completed_turn_id),
+            &format!(
+                "planning-worker-refresh-{}",
+                request.contract.completed_turn_id
+            ),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
             request.previous_handoff_task,

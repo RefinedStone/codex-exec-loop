@@ -71,7 +71,10 @@ mod tests {
         );
 
         assert_eq!(detail["workspace_directory"], json!("/tmp/workspace"));
-        assert_eq!(detail["orchestration_id"], json!("planning-worker-refresh-turn-1"));
+        assert_eq!(
+            detail["orchestration_id"],
+            json!("planning-worker-refresh-turn-1")
+        );
         assert_eq!(detail["operation"], json!("refresh"));
         assert_eq!(detail["phase"], json!("run_planning_session"));
         assert_eq!(detail["decision"], json!("abort"));

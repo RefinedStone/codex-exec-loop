@@ -1,7 +1,7 @@
 use crate::application::service::prompt_component::PromptDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// `ManualPromptAssemblyRequest`는 사람이 TUI에서 직접 입력한 prompt를 main session용
+// `ManualPromptAssemblyRequest`는 사람이 TUI에서 직접 입력한 prompt를 main-session용
 // 실행 prompt로 감싸기 위한 요청이다. manual 입력도 queue에서 온 작업과 같은 main-session guardrail을 타야 하므로,
 // 별도 타입으로 의미를 드러낸 뒤 내부에서는 `MainSessionPromptAssemblyRequest`로 변환한다.
 pub struct ManualPromptAssemblyRequest<'a> {
@@ -11,17 +11,17 @@ pub struct ManualPromptAssemblyRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `MainSessionPromptAssemblyRequest`는 실제 주 작업 세션에 들어갈 prompt 조립 요청이다.
-// main session은 commit/push/PR/merge 같은 delivery 권한을 가진 흐름이므로, system prompt가 결과 형식과 지시 우선순위를
+// main-session은 commit/push/PR/merge 같은 delivery 권한을 가진 흐름이므로, system prompt가 결과 형식과 지시 우선순위를
 // 분명히 잡아 준다.
 pub struct MainSessionPromptAssemblyRequest<'a> {
-    // 사용자 요청 또는 distributor가 main session에 넘긴 queue handoff 본문이다.
+    // 사용자 요청 또는 distributor가 main-session에 넘긴 queue handoff 본문이다.
     pub user_prompt: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `SubSessionPromptAssemblyRequest`는 parallel mode의 leased worktree에서 실행될 하위 세션 prompt이다.
 // sub-session은 코드를 고치거나 작은 commit을 만들 수 있지만 delivery는 distributor가 담당하므로,
-// main session과 다른 system prompt로 권한 경계를 강하게 제한한다.
+// main-session과 다른 system prompt로 권한 경계를 강하게 제한한다.
 pub struct SubSessionPromptAssemblyRequest<'a> {
     // distributor가 만든 queued-task handoff 원문이다. 이 값이 sub-session의 유일한 작업 범위이다.
     pub handoff_prompt: &'a str,
@@ -44,7 +44,7 @@ pub struct SubSessionPromptAssembly {
 // 시스템 지시와 runtime context를 일관되게 감싸기 위해서이다. prompt 정책이 흩어지면 병렬 세션 권한 경계가 쉽게 깨진다.
 pub struct TurnPromptAssemblyService;
 
-// main session은 사용자의 실제 요청을 완료하고 최종 답변을 돌려주는 주 실행 경로이다.
+// main-session은 사용자의 실제 요청을 완료하고 최종 답변을 돌려주는 주 실행 경로이다.
 // 지시 충돌 해소, 실행 범위, 결과 보고 형식을 서로 다른 section으로 나눠 모델이 계약을 덮어 읽지 않게 한다.
 fn main_session_execution_contract_lines() -> Vec<String> {
     vec![
@@ -108,8 +108,8 @@ impl TurnPromptAssemblyService {
         Self
     }
 
-    // manual prompt는 사람이 직접 입력한 요청을 main session prompt로 승격한다.
-    // 별도 렌더러를 만들지 않고 main session 렌더러를 재사용해, manual 실행과 queue 실행이 같은 guardrail을 공유한다.
+    // manual prompt는 사람이 직접 입력한 요청을 main-session prompt로 승격한다.
+    // 별도 렌더러를 만들지 않고 main-session 렌더러를 재사용해, manual 실행과 queue 실행이 같은 guardrail을 공유한다.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn build_manual_prompt(&self, request: ManualPromptAssemblyRequest<'_>) -> Option<String> {
         /*
@@ -118,12 +118,12 @@ impl TurnPromptAssemblyService {
          * 동시에 operator가 입력한 원문은 마지막 user prompt section으로 보존된다.
          */
         self.build_main_session_prompt(MainSessionPromptAssemblyRequest {
-            // operator prompt는 main session 관점에서는 user prompt이다.
+            // operator prompt는 main-session 관점에서는 user prompt이다.
             user_prompt: request.operator_prompt,
         })
     }
 
-    // main session prompt를 만든다. 반환이 `Option<String>`인 이유는 공백뿐인 user prompt를
+    // main-session prompt를 만든다. 반환이 `Option<String>`인 이유는 공백뿐인 user prompt를
     // app-server로 보내지 않기 위해서이다. 호출자는 `None`을 "실행할 turn 없음"으로 처리할 수 있다.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn build_main_session_prompt(
@@ -171,9 +171,9 @@ impl TurnPromptAssemblyService {
     }
 }
 
-// main session prompt의 실제 문자열 레이아웃을 담당한다.
+// main-session prompt의 실제 문자열 레이아웃을 담당한다.
 // 형식은 실행 계약, 보고 계약, user prompt 순서이다. planning context와 task authority mutation 규칙은
-// hidden intake/planner 계층에서만 소비되고 main session에는 compact handoff만 들어온다.
+// hidden intake/planner 계층에서만 소비되고 main-session에는 compact handoff만 들어온다.
 #[tracing::instrument(level = "trace")]
 fn render_main_session_prompt(
     // 최종 prompt의 `user prompt:` section에 들어갈 실행 요청이다.
@@ -193,7 +193,7 @@ fn render_main_session_prompt(
         .render()
 }
 
-// sub-session prompt의 문자열 레이아웃이다. main session과 달리 runtime context를 따로 받지 않고,
+// sub-session prompt의 문자열 레이아웃이다. main-session과 달리 runtime context를 따로 받지 않고,
 // `queued-task-handoff` 하나만 작업 범위로 전달한다.
 #[tracing::instrument(level = "trace")]
 fn render_sub_session_prompt(handoff_prompt: &str) -> String {
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    // manual prompt는 planning fragment를 main session prompt에 붙이지 않는다.
+    // manual prompt는 planning fragment를 main-session prompt에 붙이지 않는다.
     // task authority context는 hidden intake/planner 쪽에서만 소비되어야 한다.
     fn manual_prompt_appends_planning_fragment_when_present() {
         let service = TurnPromptAssemblyService::new();
@@ -254,8 +254,8 @@ mod tests {
     }
 
     #[test]
-    // queue handoff가 main session으로 들어갈 때도 일반 user prompt section으로 감싸지는지 확인한다.
-    // main session은 delivery 권한이 있으므로 결과 보고 형식 guardrail을 포함해야 한다.
+    // queue handoff가 main-session으로 들어갈 때도 일반 user prompt section으로 감싸지는지 확인한다.
+    // main-session은 delivery 권한이 있으므로 결과 보고 형식 guardrail을 포함해야 한다.
     fn main_session_prompt_wraps_queue_handoff_as_user_prompt() {
         let service = TurnPromptAssemblyService::new();
 

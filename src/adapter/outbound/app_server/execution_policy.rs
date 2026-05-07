@@ -49,7 +49,7 @@ impl Default for AppServerExecutionPolicy {
 impl AppServerExecutionPolicy {
     /*
      * adapter 생성 시점에 process environment를 읽어 실행 정책 snapshot을 만든다.
-     * 이후 같은 adapter instance가 main session, hidden planning worker, parallel worker에 같은 정책을
+     * 이후 같은 adapter instance가 main-session, hidden planning worker, parallel worker에 같은 정책을
      * 적용하므로 한 실행 중에 env var가 바뀌어도 active adapter policy가 흔들리지 않는다.
      */
     pub(super) fn from_environment() -> Self {

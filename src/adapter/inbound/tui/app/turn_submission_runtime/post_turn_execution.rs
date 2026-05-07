@@ -925,7 +925,7 @@ fn post_turn_evaluation_timeout_execution(
             last_prompt: None,
             last_response: None,
             last_host_detail: Some(
-                "host recovered the main session from a stalled post-turn planning worker evaluation"
+                "host recovered the main-session from a stalled post-turn planning worker evaluation"
                     .to_string(),
             ),
         },

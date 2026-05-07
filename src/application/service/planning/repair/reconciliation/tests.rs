@@ -192,7 +192,9 @@ fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
 
     assert_eq!(
         failure.as_deref(),
-        Some("planning worker refresh kept previous handoff `task-1` unchanged as the ready queue head")
+        Some(
+            "planning worker refresh kept previous handoff `task-1` unchanged as the ready queue head"
+        )
     );
 }
 

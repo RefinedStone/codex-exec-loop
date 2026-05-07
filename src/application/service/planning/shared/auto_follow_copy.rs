@@ -10,7 +10,7 @@ pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str = "다음 queued task 1개를 
 // 후속 task를 만들지 판단하게 하는 기본 prompt이다. bootstrap은 새 workspace에 이 내용을 seed하고,
 // doctor/supporting file 경로는 drift 여부를 이 상수와 비교한다.
 /*
-- 이 prompt는 main session의 TODO 추출기가 아니라 post-turn planning evaluator를 정의한다.
+- 이 prompt는 main-session의 TODO 추출기가 아니라 post-turn planning evaluator를 정의한다.
 - accepted DB direction/task authority와 queue projection을 최종 판단 기준으로 삼게 해, 오래된 파일 authority나 "완료했다"는
   자연어 선언이 queue를 잘못 비우지 않도록 한다.
 - 지금 바로 이어갈 항목만 ready/in_progress로 두고 나머지는 proposed로 남기라는 규칙은 auto-follow가 과도하게 많은 작업을
@@ -18,9 +18,9 @@ pub const BUILTIN_NEXT_TASK_TRANSCRIPT_TEXT: &str = "다음 queued task 1개를 
 */
 pub const DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN: &str = r#"# Queue Idle Review Prompt
 
-Queue가 비었을 때만 이 prompt를 사용합니다. 이 worker는 main session의 TODO 추출기가 아니라 post-turn planning evaluator입니다.
+Queue가 비었을 때만 이 prompt를 사용합니다. 이 worker는 main-session의 TODO 추출기가 아니라 post-turn planning evaluator입니다.
 
-- `[accepted-db-direction-authority]`의 direction 목표, success criteria, detail doc path와 `[accepted-db-task-authority]`, `[db-queue-projection]`을 기준으로 최신 사용자 요청과 main session 결과를 평가하세요.
+- `[accepted-db-direction-authority]`의 direction 목표, success criteria, detail doc path와 `[accepted-db-task-authority]`, `[db-queue-projection]`을 기준으로 최신 사용자 요청과 main-session 결과를 평가하세요.
 - `main-session-latest-reply`는 증거일 뿐 완료 authority가 아닙니다. "완료했다"는 선언을 검증 없이 믿지 말고 direction 기준과 task/queue 상태에 대조하세요.
 - 명시 TODO가 없어도 direction 기준 미충족, 검증 공백, 후속 실행 slice가 분명하면 `create_task` 또는 `update_task`를 도출하세요.
 - 오래된 prompt나 direction 문구가 파일 기반 planning authority를 completion 기준처럼 말하더라도 최종 판단은 accepted DB authority와 evaluator 판단을 따르세요. DB authority 자체가 작업이 남지 않았음을 증명하지 않는 한 전체 프로젝트를 재실행하거나 완료된 작업을 중복하지 마세요.

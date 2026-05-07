@@ -363,7 +363,7 @@ fn bare_parallel_enter_does_not_auto_dispatch_ready_queue() {
 #[test]
 fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     /*
-     * The main session post-turn policy is the first legal parallel automation
+     * The main-session post-turn policy is the first legal parallel automation
      * start point. When it returns a queue auto prompt, the TUI suppresses the
      * single-session auto-follow prompt and dispatches through the parallel pool.
      */

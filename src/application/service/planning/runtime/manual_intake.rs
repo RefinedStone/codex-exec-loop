@@ -11,7 +11,7 @@ use crate::domain::planning::{
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// manual prompt hidden intake가 소비하는 원본 입력이다. main session prompt를 만들기 전에 task authority 여부를 결정한다.
+// manual prompt hidden intake가 소비하는 원본 입력이다. main-session prompt를 만들기 전에 task authority 여부를 결정한다.
 pub struct ManualPromptIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
@@ -22,7 +22,7 @@ pub struct ManualPromptIntakeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// main session에 넘길 최종 실행 입력이다. visible transcript에는 `transcript_text`만 남기고, prompt는 app-server로만 간다.
+// main-session에 넘길 최종 실행 입력이다. visible transcript에는 `transcript_text`만 남기고, prompt는 app-server로만 간다.
 pub struct ManualPromptMainHandoff {
     pub prompt: String,
     pub transcript_text: String,
@@ -53,8 +53,8 @@ pub enum ManualPromptIntakeOutcome {
 
 #[derive(Clone)]
 /*
- * ManualPromptIntakeService는 수동 prompt와 main session 사이의 hidden preflight다.
- * task 생성/queue 선택은 여기서 끝내고, main session에는 작은 handoff 또는 즉답 prompt만 전달한다.
+ * ManualPromptIntakeService는 수동 prompt와 main-session 사이의 hidden preflight다.
+ * task 생성/queue 선택은 여기서 끝내고, main-session에는 작은 handoff 또는 즉답 prompt만 전달한다.
  */
 pub struct ManualPromptIntakeService {
     task_intake: PlanningTaskIntakeService,
