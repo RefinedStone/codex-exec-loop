@@ -2,7 +2,7 @@
 use super::super::authoring::directions::PlanningDirectionsService;
 // proposal promotion service는 staged proposal을 accepted planning state로 승격하는 authoring path이다.
 use super::super::authoring::proposal_promotion::PlanningProposalPromotionService;
-// worker orchestration service는 planner worker 실행, authority, runtime facade, task repository를
+// worker orchestration service는 planning worker 실행, authority, runtime facade, task repository를
 // 연결해 background planning workflow를 제어한다.
 use super::super::worker::orchestration::PlanningWorkerOrchestrationService;
 // feature ports는 worker, workspace, authority, task repository 같은 outbound adapters를 담는다.
@@ -16,7 +16,7 @@ use super::shared_services::PlanningSharedServices;
 pub(super) struct PlanningWorkerUseCaseDependencies {
     // directions는 worker 흐름에서도 direction catalog를 확인하거나 보강할 때 쓰는 authoring service이다.
     pub(super) directions: PlanningDirectionsService,
-    // worker_orchestration은 planner worker 실행과 runtime state transition을 조율하는 중심 service이다.
+    // worker_orchestration은 planning worker 실행과 runtime state transition을 조율하는 중심 service이다.
     pub(super) worker_orchestration: PlanningWorkerOrchestrationService,
     // proposal_promotion은 worker 또는 operator가 만든 proposal을 accepted planning artifacts로 옮기는
     // authoring boundary이다.

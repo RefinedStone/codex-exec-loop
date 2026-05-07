@@ -252,7 +252,7 @@ mod tests {
                 ConversationStreamEvent::codex_app_server_launch_attachment(),
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: "thread-1".to_string(),
-                    title: "Planner".to_string(),
+                    title: "Planning Worker".to_string(),
                     cwd: "/tmp/workspace".to_string(),
                 },
                 ConversationStreamEvent::AgentMessageCompleted {

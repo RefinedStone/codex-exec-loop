@@ -80,7 +80,7 @@ impl PlanningWorkerPort for NoopPlanningWorkerPort {
             thread_id: None,
             turn_id: None,
             // 사람이 로그나 test failure에서 비활성 fallback을 알아볼 수 있는 고정 메시지이다.
-            final_agent_message: Some("planner worker disabled".to_string()),
+            final_agent_message: Some("planning worker disabled".to_string()),
             // 실제 worker가 돌지 않았으므로 변경된 planning 파일은 없다.
             changed_planning_file_paths: Vec::new(),
         })
