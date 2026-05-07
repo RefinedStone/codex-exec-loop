@@ -58,7 +58,7 @@ impl PlanningSemanticValidationService {
     ) {
         /*
          * direction catalog 검사는 상위 목표 문서의 최소 품질을 보장한다. queue는 `direction_id`만으로
-         * task를 묶을 수 있지만, operator와 LLM worker가 방향을 이해하려면 title, summary,
+         * task를 묶을 수 있지만, operator와 worker가 방향을 이해하려면 title, summary,
          * success criteria가 비어 있으면 안 된다. 실행 알고리즘에는 직접 필요 없어 보여도 여기서
          * 문서 품질을 검사하는 이유다.
          */
@@ -137,7 +137,7 @@ impl PlanningSemanticValidationService {
         report: &mut PlanningValidationReport,
     ) {
         /*
-         * task authority 검사는 실행 단위의 기본 형식과 감사 가능성을 확인한다. 특히 LLM-authored
+         * task authority 검사는 실행 단위의 기본 형식과 감사 가능성을 확인한다. 특히 worker-authored
          * 작업에는 relation note를 요구해 자동 생성된 일이 어떤 direction을 만족시키려는지 나중에
          * 추적할 수 있게 한다.
          */
@@ -195,7 +195,7 @@ impl PlanningSemanticValidationService {
                 report.push_error(
                     PlanningFileKind::TaskAuthority,
                     "missing_direction_relation_note",
-                    format!("LLM-authored task {task_id} must include direction_relation_note"),
+                    format!("worker-authored task {task_id} must include direction_relation_note"),
                 );
             }
             if task.dynamic_priority_delta != 0 && task.priority_reason.trim().is_empty() {
@@ -300,14 +300,12 @@ impl PlanningSemanticValidationService {
             }
         }
 
-        // Proposed LLM task는 실행 queue에 바로 들어가지 않는 상태라 warning으로 드러내 operator 승격을 유도한다.
-        if matches!(task.status, TaskStatus::Proposed) && task.created_by == TaskActor::Llm {
+        // Proposed worker task는 실행 queue에 바로 들어가지 않는 상태라 warning으로 드러내 operator 승격을 유도한다.
+        if matches!(task.status, TaskStatus::Proposed) && task.created_by == TaskActor::Worker {
             report.push_warning(
                 PlanningFileKind::TaskAuthority,
-                "llm_proposed_task",
-                format!(
-                    "task {task_id} is proposed by the LLM and will stay out of normal execution until promoted"
-                ),
+                "worker_proposed_task",
+                format!("task {task_id} is proposed by a worker and will stay out of normal execution until promoted"),
             );
         }
     }

@@ -168,7 +168,7 @@ fn run_planning_tool(
     workspace_arg: Option<&OsStr>,
     stdout: &mut impl Write,
 ) -> Result<i32> {
-    // planning tool은 의도적으로 script/LLM 지향이다. contract는 schema를 출력하고 run은 stdin payload를 소비한다.
+    // planning tool은 의도적으로 script/worker 지향이다. contract는 schema를 출력하고 run은 stdin payload를 소비한다.
     let planning = build_production_planning_services();
     match subcommand.to_str() {
         Some("contract") => {
@@ -373,7 +373,7 @@ mod tests {
         assert!(!rendered.contains("akra init"));
     }
     #[test]
-    fn planning_tool_contract_is_json_and_llm_oriented() {
+    fn planning_tool_contract_is_json_and_worker_oriented() {
         let mut output = Vec::new();
         let exit_code = run_with_args(["planning-tool", "contract"], &mut output)
             .expect("contract should render")

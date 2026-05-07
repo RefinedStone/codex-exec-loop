@@ -30,7 +30,7 @@ fn valid_result_output_markdown() -> &'static str {
 
 /*
  * semantic validation fixture용 최소 direction catalog다. direction id를 호출부가 명시하게
- * 둔 이유는 각 task-authority JSON이 missing relation, LLM provenance, graph invariant 중
+ * 둔 이유는 각 task-authority JSON이 missing relation, worker provenance, graph invariant 중
  * 무엇을 검증하는지 direction 이름만 봐도 드러나게 하려는 것이다.
  */
 fn test_directions(direction_id: &str) -> DirectionCatalogDocument {
@@ -117,11 +117,11 @@ fn rejects_unknown_direction_references() {
     }));
 }
 
-// LLM-authored work는 나중에 operator가 direction 소속 이유를 감사할 수 있도록 relation note가 필요하다.
+// worker-authored work는 나중에 operator가 direction 소속 이유를 감사할 수 있도록 relation note가 필요하다.
 #[test]
-fn rejects_llm_tasks_without_relation_notes() {
+fn rejects_worker_tasks_without_relation_notes() {
     /*
-     * user-authored task는 다른 경로에서 relation note가 비어 있을 수 있지만, LLM proposal은
+     * user-authored task는 다른 경로에서 relation note가 비어 있을 수 있지만, worker proposal은
      * provenance text가 필요하다. 이 fixture는 단순 non-empty 문자열 규칙이 아니라
      * actor/source semantics에 묶인 stricter policy임을 고정한다.
      */
@@ -137,15 +137,15 @@ fn rejects_llm_tasks_without_relation_notes() {
       "direction_id": "direction-a",
       "direction_relation_note": "",
       "title": "Add a follow-up",
-      "description": "LLM adds a new task.",
+      "description": "Worker adds a new task.",
       "status": "proposed",
       "base_priority": 5,
       "dynamic_priority_delta": 0,
       "priority_reason": "",
       "depends_on": [],
       "blocked_by": [],
-      "created_by": "llm",
-      "last_updated_by": "llm",
+      "created_by": "worker",
+      "last_updated_by": "worker",
       "source_turn_id": "turn-1",
       "updated_at": "2026-04-09T10:00:00Z"
     }

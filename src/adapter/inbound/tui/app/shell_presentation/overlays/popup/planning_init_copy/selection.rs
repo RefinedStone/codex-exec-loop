@@ -35,7 +35,7 @@ pub(super) fn build_mode_selection_overlay_view(
             overlay_option_line(
                 "B",
                 "detail mode",
-                "branch into manual or future llm-assisted authoring",
+                "branch into manual or future worker-assisted authoring",
                 selected_mode == PlanningInitModeSelection::Detail,
                 false,
             ),
@@ -59,7 +59,7 @@ pub(super) fn build_mode_selection_overlay_view(
     }
 }
 
-// Second inspection screen for detail mode. Manual is live; LLM-assisted remains visible as the target UX but disabled.
+// Second inspection screen for detail mode. Manual is live; Worker-assisted remains visible as the target UX but disabled.
 pub(super) fn build_detail_selection_overlay_view(
     selected_detail: PlanningInitDetailSelection,
 ) -> PlanningInitOverlayView {
@@ -71,7 +71,7 @@ pub(super) fn build_detail_selection_overlay_view(
         // Keep disabled future UX visible, but clearly route real work into the embedded manual editor.
         summary_lines: vec![
             Line::from("Manual opens the staged draft editor inside the shell."),
-            Line::from("LLM-assisted remains visible for the target UX but is still disabled."),
+            Line::from("Worker-assisted remains visible for the target UX but is still disabled."),
         ],
         option_lines: vec![
             overlay_option_line(
@@ -83,9 +83,9 @@ pub(super) fn build_detail_selection_overlay_view(
             ),
             overlay_option_line(
                 "B",
-                "llm-assisted",
+                "worker-assisted",
                 "future guided drafting flow (not supported yet)",
-                selected_detail == PlanningInitDetailSelection::LlmAssisted,
+                selected_detail == PlanningInitDetailSelection::WorkerAssisted,
                 true,
             ),
         ],
@@ -95,7 +95,7 @@ pub(super) fn build_detail_selection_overlay_view(
                 "current selection: {}",
                 match selected_detail {
                     PlanningInitDetailSelection::Manual => "manual",
-                    PlanningInitDetailSelection::LlmAssisted => "llm-assisted (disabled)",
+                    PlanningInitDetailSelection::WorkerAssisted => "worker-assisted (disabled)",
                 }
             )),
             Line::from("Enter on manual opens the embedded draft editor."),

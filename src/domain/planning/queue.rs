@@ -128,7 +128,7 @@ impl PriorityQueueService {
          * 직접 수정하지 않고, 다음 네 가지 결과 뷰를 계산한다.
          * - active_tasks: 지금 실행 가능한 작업들, rank가 붙어 있음
          * - next_task: active_tasks의 첫 번째 항목, 자동 handoff가 실제로 집는 작업
-         * - proposed_tasks: LLM이 제안했지만 operator promotion 전이라 실행 큐와 분리된 작업
+         * - proposed_tasks: worker가 제안했지만 operator promotion 전이라 실행 큐와 분리된 작업
          * - skipped_tasks: 왜 실행 후보가 아닌지 사람이 읽을 수 있는 reason이 붙은 작업
          *
          * 이 함수가 domain 계층에 있는 이유는 정렬/skip 규칙이 UI나 DB 형식이 아니라 Akra

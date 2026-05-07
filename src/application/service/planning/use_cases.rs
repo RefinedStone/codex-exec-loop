@@ -286,7 +286,7 @@ impl PlanningRuntimeUseCases {
 }
 #[derive(Clone)]
 pub struct PlanningTaskToolUseCases {
-    // 이 얇은 wrapper는 LLM-facing planning task tool을 다른 runtime planning action과 같은 use-case 묶음으로 노출한다.
+    // 이 얇은 wrapper는 worker-facing planning task tool을 다른 runtime planning action과 같은 use-case 묶음으로 노출한다.
     task_tool: PlanningTaskToolService,
 }
 impl PlanningTaskToolUseCases {

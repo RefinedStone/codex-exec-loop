@@ -114,7 +114,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminTaskDeleteRequest,
     ) -> Result<PlanningAdminCrudOutcome> {
-        // admin delete는 명시적 operator maintenance action이다. LLM/runtime task command는 여전히 task를 삭제할 수
+        // admin delete는 명시적 operator maintenance action이다. worker/runtime task command는 여전히 task를 삭제할 수
         // 없고 `cancelled`로 이동해야 한다. 그래서 delete만 shared mutation service 바깥의 admin-only path로 남긴다.
         let task_id = normalized_required_id(&request.id, "task id")?;
         let mut documents = self.load_operator_planning_documents()?;

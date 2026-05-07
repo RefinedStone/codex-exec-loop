@@ -13,7 +13,7 @@ pub(super) enum PlanningInitOverlayStep {
     ModeSelection,
     // 이미 planning workspace가 감지된 경우의 guard 화면이다. 초기화 대신 queue/directions로 보낸다.
     ExistingWorkspace,
-    // detail mode 안에서 manual editor와 LLM-assisted authoring backend를 고르는 중간 단계다.
+    // detail mode 안에서 manual editor와 worker-assisted authoring backend를 고르는 중간 단계다.
     DetailSelection,
     // simple mode staging이 끝난 뒤 promote/edit/budget 조정을 고르는 confirmation surface다.
     SimpleReview,
@@ -30,7 +30,7 @@ pub(super) enum PlanningInitModeSelection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanningInitDetailSelection {
     Manual,
-    LlmAssisted,
+    WorkerAssisted,
 }
 
 // Simple review는 planning service가 staged draft를 만든 뒤에만 존재한다. 화면은
@@ -195,12 +195,14 @@ impl PlanningInitOverlayUiState {
     }
 
     pub fn move_detail_selection(&mut self, delta: isize) {
-        // LLM-assisted 항목은 아직 실행 불가지만 selector에 남겨 future backend slot과 copy contract를 고정한다.
+        // worker-assisted 항목은 아직 실행 불가지만 selector에 남겨 future backend slot과 copy contract를 고정한다.
         self.detail_selection = match (self.detail_selection, delta.is_negative()) {
             (PlanningInitDetailSelection::Manual, false) => {
-                PlanningInitDetailSelection::LlmAssisted
+                PlanningInitDetailSelection::WorkerAssisted
             }
-            (PlanningInitDetailSelection::LlmAssisted, true) => PlanningInitDetailSelection::Manual,
+            (PlanningInitDetailSelection::WorkerAssisted, true) => {
+                PlanningInitDetailSelection::Manual
+            }
             (selection, _) => selection,
         };
     }

@@ -28,14 +28,14 @@ use self::helpers::{
 };
 
 /*
- * planning task의 write-side gateway다. TUI user flow, runtime intake, worker/LLM command
+ * planning task의 write-side gateway다. TUI user flow, runtime intake, worker command
  * extraction이 모두 같은 authority-document path를 통과하게 만든다. 이 경계를 통일해야
  * optimistic revision, queue projection rebuild, audit attribution이 entry point별로 갈라지지 않는다.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningTaskMutationSource {
     User,
-    Llm,
+    Worker,
     System,
 }
 impl PlanningTaskMutationSource {
@@ -44,14 +44,14 @@ impl PlanningTaskMutationSource {
     fn actor(self) -> TaskActor {
         match self {
             Self::User => TaskActor::User,
-            Self::Llm => TaskActor::Llm,
+            Self::Worker => TaskActor::Worker,
             Self::System => TaskActor::System,
         }
     }
     fn id_slug(self) -> &'static str {
         match self {
             Self::User => "user",
-            Self::Llm => "llm",
+            Self::Worker => "worker",
             Self::System => "system",
         }
     }

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::domain::planning::TaskStatus;
 
 /*
- * worker/LLM output에서 task mutation command만 엄격하게 뽑아내는 JSON extractor다.
+ * worker output에서 task mutation command만 엄격하게 뽑아내는 JSON extractor다.
  * mutation service는 typed create/update command만 소비한다. 자동 응답이 accepted DB authority 전체를
  * 한 번에 교체하지 못하게 하고, 모든 변경을 command 단위 audit/revision 경로에 태우기 위한 경계다.
  */

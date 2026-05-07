@@ -271,14 +271,14 @@ pub struct TaskDefinition {
     /*
      * `TaskDefinition`은 실제 실행 단위의 원본 authority다. queue builder가 `PriorityQueueTask`로
      * 복사하기 전까지는 이 타입이 source of truth이고, validation은 이 구조체의 필드 조합을 검사해
-     * LLM-authored task의 relation note, dependency/blocker reference, status semantics를 보장한다.
+     * worker-authored task의 relation note, dependency/blocker reference, status semantics를 보장한다.
      */
     // task graph node id다.
     pub id: String,
     // parent direction id다.
     pub direction_id: String,
     #[serde(default)]
-    // LLM이 만든 task가 어떤 direction을 어떻게 만족시키는지 설명하는 audit note다.
+    // worker가 만든 task가 어떤 direction을 어떻게 만족시키는지 설명하는 audit note다.
     pub direction_relation_note: String,
     // queue/admin/prompt에 노출되는 task title이다.
     pub title: String,
@@ -300,9 +300,9 @@ pub struct TaskDefinition {
     #[serde(default)]
     // 해소되어야 이 task가 막히지 않는 blocker ids다.
     pub blocked_by: Vec<String>,
-    // 최초 생성 주체다. LLM-authored relation note policy에 쓰인다.
+    // 최초 생성 주체다. worker-authored relation note policy에 쓰인다.
     pub created_by: TaskActor,
-    // 마지막 수정 주체다. LLM이 수정한 task도 relation note를 요구한다.
+    // 마지막 수정 주체다. worker가 수정한 task도 relation note를 요구한다.
     pub last_updated_by: TaskActor,
     #[serde(default)]
     // legacy 조회용 source turn id다. 새 감사 정보는 provider-neutral provenance.turn_id를 우선 사용한다.
@@ -410,7 +410,7 @@ pub enum TaskStatus {
     Cancelled,
     // 자동 worker가 아니라 사용자 응답을 기다리는 상태다.
     AwaitingUser,
-    // LLM이 제안했지만 아직 authority로 승격되지 않은 task다.
+    // worker가 제안했지만 아직 authority로 승격되지 않은 task다.
     Proposed,
 }
 
@@ -419,8 +419,9 @@ pub enum TaskStatus {
 pub enum TaskActor {
     // operator나 explicit user action이 만든 변경이다.
     User,
-    // LLM/worker가 만든 변경이다.
-    Llm,
+    // worker가 만든 변경이다. 기존 task-authority JSON의 "llm" 값도 계속 읽는다.
+    #[serde(alias = "llm")]
+    Worker,
     // system bootstrap/repair가 만든 변경이다.
     System,
 }
@@ -634,7 +635,7 @@ mod tests {
     use super::{
         PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
-        PlanningRefreshContractKind,
+        PlanningRefreshContractKind, TaskActor,
     };
 
     #[test]
@@ -685,12 +686,28 @@ mod tests {
             serde_json::from_str(&legacy_json).expect("legacy contract should deserialize");
         assert_eq!(restored_legacy.completed_turn_id, "turn-42");
     }
+
+    #[test]
+    fn legacy_llm_task_actor_deserializes_as_worker() {
+        /*
+         * 오래된 task-authority JSON은 actor를 "llm"으로 저장했다. 새 code vocabulary는
+         * worker를 쓰지만 기존 authority snapshot은 migration 없이 읽을 수 있어야 한다.
+         */
+        let restored: TaskActor =
+            serde_json::from_str("\"llm\"").expect("legacy actor should deserialize");
+
+        assert_eq!(restored, TaskActor::Worker);
+        assert_eq!(
+            serde_json::to_string(&TaskActor::Worker).expect("actor should serialize"),
+            "\"worker\""
+        );
+    }
 }
 
 impl TaskDefinition {
-    // validation이 LLM-authored relation note policy를 중복하지 않도록 이 domain helper를 쓴다.
+    // validation이 worker-authored relation note policy를 중복하지 않도록 이 domain helper를 쓴다.
     pub fn requires_relation_note(&self) -> bool {
-        self.created_by == TaskActor::Llm || self.last_updated_by == TaskActor::Llm
+        self.created_by == TaskActor::Worker || self.last_updated_by == TaskActor::Worker
     }
 
     // base priority와 runtime/operator adjustment를 합친 queue ordering 점수다.

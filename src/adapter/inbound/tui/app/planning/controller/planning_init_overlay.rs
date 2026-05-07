@@ -112,22 +112,22 @@ impl NativeTuiApp {
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
                     self.planning_init_overlay_ui_state
-                        .select_detail(PlanningInitDetailSelection::LlmAssisted)
+                        .select_detail(PlanningInitDetailSelection::WorkerAssisted)
                 }
                 /*
                  * Manual detail opens the planning draft editor through the
-                 * service/controller path. LLM-assisted mode is visible in the
+                 * service/controller path. Worker-assisted mode is visible in the
                  * selector but still disabled, so it reports status without
                  * leaving the overlay or discarding the selection context.
                  */
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     match self.planning_init_overlay_ui_state.selected_detail() {
                         PlanningInitDetailSelection::Manual => self.open_planning_manual_editor(),
-                        PlanningInitDetailSelection::LlmAssisted => {
+                        PlanningInitDetailSelection::WorkerAssisted => {
                             self.dispatch_conversation_input(
                                 ConversationInputEvent::StatusMessageShown {
                                     status_text:
-                                        "planning llm-assisted detail mode is not supported yet"
+                                        "planning worker-assisted detail mode is not supported yet"
                                             .to_string(),
                                 },
                             );

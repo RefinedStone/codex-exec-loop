@@ -101,7 +101,7 @@ impl PlanningFeatureComposition {
             workspace: PlanningWorkspaceUseCaseBuilder::new(workspace_dependencies).build(),
             // runtime facade는 TUI/app-server snapshot과 queue-driven follow-up 판단을 제공한다.
             runtime: PlanningRuntimeUseCaseBuilder::new(runtime_dependencies).build(),
-            // task-tool facade는 LLM/tool payload를 task repository mutation 경계 안에 가둔다.
+            // task-tool facade는 worker/tool payload를 task repository mutation 경계 안에 가둔다.
             task_tool: task_tool_use_cases,
             // worker facade는 planning-worker prompt, orchestration, proposal promotion을 담당한다.
             worker: PlanningWorkerUseCaseBuilder::new(worker_dependencies).build(),
@@ -193,7 +193,7 @@ struct PlanningTaskToolUseCaseBuilder {
 
 impl PlanningTaskToolUseCaseBuilder {
     /*
-     * task tool은 worker port나 workspace port가 필요 없다. repository와 priority queue만 주입하면 LLM task
+     * task tool은 worker port나 workspace port가 필요 없다. repository와 priority queue만 주입하면 worker task
      * mutation boundary가 file workspace concern이나 worker execution concern으로 확장되는 것을 막을 수 있다.
      */
     fn new(ports: &PlanningFeaturePorts, services: &PlanningSharedServices) -> Self {

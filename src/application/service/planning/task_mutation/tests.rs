@@ -108,9 +108,9 @@ fn seed(
     .unwrap();
 }
 #[test]
-fn user_preview_and_llm_create_share_defaults_and_audit() {
+fn user_preview_and_worker_create_share_defaults_and_audit() {
     /*
-     * user preview와 LLM command commit은 서로 다른 public method로 들어오지만 task default,
+     * user preview와 worker command commit은 서로 다른 public method로 들어오지만 task default,
      * direction fallback, audit attribution은 같아야 한다. TUI preview path와 worker-response
      * command path 사이의 drift를 잡는 회귀다.
      */
@@ -153,13 +153,13 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
     assert_eq!(preview.task.created_by, TaskActor::User);
     assert_eq!(preview.task.last_updated_by, TaskActor::User);
 
-    // LLM path는 apply_commands를 통해 실제 persistence까지 간다. returned commit summary만
+    // worker path는 apply_commands를 통해 실제 persistence까지 간다. returned commit summary만
     // 믿지 않고 repository snapshot을 읽어 audit field가 저장됐는지 확인한다.
     let result = service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
-            source: PlanningTaskMutationSource::Llm,
-            source_turn_id: Some("turn-llm".to_string()),
+            source: PlanningTaskMutationSource::Worker,
+            source_turn_id: Some("turn-worker".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
                 PlanningTaskCreateInput {
@@ -182,17 +182,17 @@ fn user_preview_and_llm_create_share_defaults_and_audit() {
         .load_task_authority_snapshot(&workspace)
         .unwrap()
         .unwrap();
-    let llm_task = snapshot
+    let worker_task = snapshot
         .task_authority
         .tasks
         .iter()
         .find(|task| task.title == "Create from worker command")
         .unwrap();
-    assert_eq!(llm_task.status, TaskStatus::Ready);
-    assert_eq!(llm_task.base_priority, 80);
-    assert_eq!(llm_task.created_by, TaskActor::Llm);
-    assert_eq!(llm_task.last_updated_by, TaskActor::Llm);
-    assert_eq!(llm_task.source_turn_id.as_deref(), Some("turn-llm"));
+    assert_eq!(worker_task.status, TaskStatus::Ready);
+    assert_eq!(worker_task.base_priority, 80);
+    assert_eq!(worker_task.created_by, TaskActor::Worker);
+    assert_eq!(worker_task.last_updated_by, TaskActor::Worker);
+    assert_eq!(worker_task.source_turn_id.as_deref(), Some("turn-worker"));
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn create_records_generic_thread_turn_provenance() {
     service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
-            source: PlanningTaskMutationSource::Llm,
+            source: PlanningTaskMutationSource::Worker,
             source_turn_id: None,
             provenance: provenance.clone(),
             commands: vec![PlanningTaskMutationCommand::CreateTask(
@@ -282,7 +282,7 @@ fn update_preserves_unspecified_fields() {
     service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
-            source: PlanningTaskMutationSource::Llm,
+            source: PlanningTaskMutationSource::Worker,
             source_turn_id: Some("turn-2".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
@@ -312,17 +312,17 @@ fn update_preserves_unspecified_fields() {
     assert_eq!(updated.description, "Existing task");
     assert_eq!(updated.status, TaskStatus::Blocked);
     assert_eq!(updated.created_by, TaskActor::User);
-    assert_eq!(updated.last_updated_by, TaskActor::Llm);
+    assert_eq!(updated.last_updated_by, TaskActor::Worker);
     assert_eq!(updated.source_turn_id.as_deref(), Some("turn-2"));
 }
 #[test]
-fn llm_update_preserves_existing_description_even_when_supplied() {
+fn worker_update_preserves_existing_description_even_when_supplied() {
     /*
      * worker-authored updates can refine scheduling fields, but an existing description is user-facing
-     * task context. Supplying description in an LLM patch must not rewrite it.
+     * task context. Supplying description in a worker patch must not rewrite it.
      */
     let repo = repo();
-    let workspace = workspace("llm-preserve-description");
+    let workspace = workspace("worker-preserve-description");
     seed(
         repo.as_ref(),
         &workspace,
@@ -339,8 +339,8 @@ fn llm_update_preserves_existing_description_even_when_supplied() {
     service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
-            source: PlanningTaskMutationSource::Llm,
-            source_turn_id: Some("turn-llm-description".to_string()),
+            source: PlanningTaskMutationSource::Worker,
+            source_turn_id: Some("turn-worker-description".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
                 PlanningTaskUpdateInput {
@@ -348,7 +348,7 @@ fn llm_update_preserves_existing_description_even_when_supplied() {
                     direction_id: None,
                     direction_relation_note: None,
                     title: None,
-                    description: Some("LLM-generated rewrite".to_string()),
+                    description: Some("Worker-generated rewrite".to_string()),
                     status: Some(TaskStatus::Blocked),
                     base_priority: None,
                     dynamic_priority_delta: None,
@@ -366,16 +366,16 @@ fn llm_update_preserves_existing_description_even_when_supplied() {
     let updated = &snapshot.task_authority.tasks[0];
     assert_eq!(updated.description, "Existing task");
     assert_eq!(updated.status, TaskStatus::Blocked);
-    assert_eq!(updated.last_updated_by, TaskActor::Llm);
+    assert_eq!(updated.last_updated_by, TaskActor::Worker);
     assert_eq!(
         updated.source_turn_id.as_deref(),
-        Some("turn-llm-description")
+        Some("turn-worker-description")
     );
 }
 #[test]
 fn user_update_can_replace_existing_description() {
     /*
-     * Operator-facing edits still own description changes. The LLM guard must not remove the
+     * Operator-facing edits still own description changes. The worker guard must not remove the
      * admin/runtime-user ability to correct task text intentionally.
      */
     let repo = repo();
@@ -431,7 +431,7 @@ fn user_update_can_replace_existing_description() {
 #[test]
 fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
     /*
-     * LLM이 이미 적용된 intent를 반복하면 no-op update가 흔히 나온다. service는 correlation을
+     * worker가 이미 적용된 intent를 반복하면 no-op update가 흔히 나온다. service는 correlation을
      * 위해 addressed task id를 보고하되, 새 planning revision을 만들거나 audit timestamp를
      * 다시 쓰면 안 된다.
      */
@@ -456,7 +456,7 @@ fn no_op_update_does_not_bump_revision_or_touch_audit_fields() {
     let result = service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace.clone(),
-            source: PlanningTaskMutationSource::Llm,
+            source: PlanningTaskMutationSource::Worker,
             source_turn_id: Some("turn-noop".to_string()),
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(
@@ -525,7 +525,7 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
     let error = service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace,
-            source: PlanningTaskMutationSource::Llm,
+            source: PlanningTaskMutationSource::Worker,
             source_turn_id: Some("turn-many".to_string()),
             provenance: provenance(),
             commands,
@@ -613,7 +613,7 @@ fn terminal_status_change_is_rejected() {
     let error = service
         .apply_commands(PlanningTaskMutationRequest {
             workspace_directory: workspace,
-            source: PlanningTaskMutationSource::Llm,
+            source: PlanningTaskMutationSource::Worker,
             source_turn_id: None,
             provenance: provenance(),
             commands: vec![PlanningTaskMutationCommand::UpdateTask(

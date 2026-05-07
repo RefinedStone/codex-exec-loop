@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /*
- * planning task tool은 LLM-facing task authority write API다. full planning admin surface보다
+ * planning task tool은 worker-facing task authority write API다. full planning admin surface보다
  * 의도적으로 좁게 설계되어 worker는 task를 읽고, `PlanningTaskMutationService`를 통해 한 번에
  * 하나의 create/update만 적용할 수 있다. 파일 편집, SQL rewrite, 광범위한 backlog batch는 이
  * tool boundary 밖에 둬서 model output이 accepted DB authority를 우회하지 못하게 한다.
@@ -228,7 +228,7 @@ impl PlanningTaskToolService {
                 "create_task requires apply=true; run list_tasks first if you need context"
             ));
         }
-        // 이 API는 planning worker tool이 호출하므로 source는 항상 Llm이다.
+        // 이 API는 planning worker tool이 호출하므로 source는 항상 Worker이다.
         // generic provenance가 없으면 worker/tool 경계라는 origin만 남긴다.
         let provenance = task_tool_provenance(
             request.origin_session_kind,
@@ -241,7 +241,7 @@ impl PlanningTaskToolService {
             .task_mutation_service
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
-                source: PlanningTaskMutationSource::Llm,
+                source: PlanningTaskMutationSource::Worker,
                 source_turn_id: request.source_turn_id,
                 provenance,
                 commands: vec![PlanningTaskMutationCommand::CreateTask(
@@ -273,7 +273,7 @@ impl PlanningTaskToolService {
             .task_mutation_service
             .apply_commands(PlanningTaskMutationRequest {
                 workspace_directory: workspace_directory.to_string(),
-                source: PlanningTaskMutationSource::Llm,
+                source: PlanningTaskMutationSource::Worker,
                 source_turn_id: request.source_turn_id,
                 provenance,
                 commands: vec![PlanningTaskMutationCommand::UpdateTask(
@@ -384,7 +384,7 @@ mod tests {
         assert!(contract.len() < 1550);
     }
     #[test]
-    fn create_task_request_is_flat_for_llm_use() {
+    fn create_task_request_is_flat_for_worker_use() {
         // flat JSON은 model-facing ergonomics의 일부다. nested task object를 요구하기 시작하면
         // prompt 예시와 실제 요청 작성 난도가 같이 올라간다.
         let request = serde_json::from_str::<PlanningTaskToolRequest>(

@@ -36,10 +36,10 @@ use anyhow::Result;
 use serde_json::json;
 
 /*
- * worker orchestration은 free-form LLM planning output과 accepted planning authority 사이의 bridge다.
+ * worker orchestration은 free-form worker planning output과 accepted planning authority 사이의 bridge다.
  * DB authority context를 넣어 prompt를 만들고, planning worker를 실행한 뒤, structured task command만
  * repository mutation으로 바꾼다. 마지막으로 runtime facade가 protected file과 queue projection side effect를
- * reconcile하게 하여 LLM 출력이 곧바로 authority 전체를 덮어쓰지 못하게 한다.
+ * reconcile하게 하여 worker 출력이 곧바로 authority 전체를 덮어쓰지 못하게 한다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningQueueRefreshRequest<'a> {
@@ -100,7 +100,7 @@ pub struct PlanningWorkerRunOutcome {
 
 #[derive(Clone)]
 pub struct PlanningWorkerOrchestrationService {
-    // port는 trust boundary별로 갈라진다. worker_port는 LLM을 실행하고, authority/task repository는 accepted state를
+    // port는 trust boundary별로 갈라진다. worker_port는 hidden worker를 실행하고, authority/task repository는 accepted state를
     // 저장하며, runtime_facade는 workspace-facing aftermath를 검증한다.
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     runtime_facade: PlanningRuntimeFacadeService,
@@ -425,7 +425,7 @@ impl PlanningWorkerOrchestrationService {
                         .task_mutation_service
                         .apply_commands(PlanningTaskMutationRequest {
                             workspace_directory: workspace_directory.to_string(),
-                            source: PlanningTaskMutationSource::Llm,
+                            source: PlanningTaskMutationSource::Worker,
                             source_turn_id: worker_response.turn_id.clone(),
                             provenance: task_provenance.clone(),
                             commands,
@@ -667,7 +667,7 @@ impl PlanningWorkerOrchestrationService {
 }
 
 fn authority_load_status<T>(result: Result<Option<T>>) -> String {
-    // compact status string은 prompt에 직접 들어간다. LLM은 authority가 loaded/missing/unavailable 중 무엇인지 알아야 한다.
+    // compact status string은 prompt에 직접 들어간다. worker는 authority가 loaded/missing/unavailable 중 무엇인지 알아야 한다.
     match result {
         Ok(Some(_)) => "loaded".to_string(),
         Ok(None) => "missing".to_string(),
