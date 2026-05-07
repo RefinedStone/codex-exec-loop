@@ -1,12 +1,15 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use serde_json::Value;
-use tracing::Level;
+use serde_json::{Map, Value};
+use tracing::{Event, Level, Subscriber, field};
 use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::fmt::format::{FmtSpan, Writer};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::registry::LookupSpan;
 
 pub(crate) const AKRA_EVENT_TARGET: &str = "codex_exec_loop_native::diagnostics::akra_event";
 static TRACE_DROPPED_LINES: OnceLock<ErrorCounter> = OnceLock::new();
@@ -67,11 +70,12 @@ pub(super) fn akra_event_enabled() -> bool {
 }
 
 pub(super) fn emit_akra_event(event: &str, detail: &Value) {
+    let detail_json = detail.to_string();
     tracing::debug!(
         target: AKRA_EVENT_TARGET,
         pid = std::process::id(),
         event = event,
-        detail = %detail,
+        detail = detail_json.as_str(),
         "akra_event"
     );
 }
@@ -95,10 +99,8 @@ fn build_trace_guard(config: TraceConfig) -> Result<WorkerGuard, String> {
     let env_filter = env_filter_from_filter_value(&config.filter);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
-        .flatten_event(true)
-        .with_current_span(true)
-        .with_span_list(true)
         .with_span_events(config.span_mode.fmt_span())
+        .event_format(AkraJsonFormat)
         .with_writer(writer);
 
     install_tracing_subscriber(env_filter, fmt_layer, config.tokio_console)?;
@@ -111,6 +113,129 @@ pub(super) fn dropped_lines() -> usize {
         .get()
         .map(ErrorCounter::dropped_lines)
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AkraJsonFormat;
+
+impl<S, N> FormatEvent<S, N> for AkraJsonFormat
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let meta = event.metadata();
+        let mut visitor = AkraJsonVisitor::default();
+        visitor.insert_value(
+            "timestamp",
+            Value::String(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)),
+        );
+        visitor.insert_value("level", Value::String(meta.level().to_string()));
+        event.record(&mut visitor);
+        visitor.insert_value("target", Value::String(meta.target().to_string()));
+        if let Some(span) = ctx.parent_span() {
+            visitor.insert_value("span", span_to_json::<S, N>(&span));
+        }
+        if let Some(scope) = ctx.event_scope() {
+            let spans = scope
+                .from_root()
+                .map(|span| span_to_json::<S, N>(&span))
+                .collect::<Vec<_>>();
+            if !spans.is_empty() {
+                visitor.insert_value("spans", Value::Array(spans));
+            }
+        }
+
+        let line = Value::Object(visitor.into_map()).to_string();
+        writer.write_str(&line)?;
+        writer.write_char('\n')
+    }
+}
+
+#[derive(Debug, Default)]
+struct AkraJsonVisitor {
+    values: Map<String, Value>,
+}
+
+impl AkraJsonVisitor {
+    fn insert_value(&mut self, field_name: &str, value: Value) {
+        let field_name = field_name.strip_prefix("r#").unwrap_or(field_name);
+        if field_name == "detail" && merge_detail_field(&mut self.values, &value) {
+            return;
+        }
+        self.values.insert(field_name.to_string(), value);
+    }
+
+    fn into_map(self) -> Map<String, Value> {
+        self.values
+    }
+}
+
+impl field::Visit for AkraJsonVisitor {
+    fn record_f64(&mut self, field: &field::Field, value: f64) {
+        self.insert_value(field.name(), Value::from(value));
+    }
+
+    fn record_i64(&mut self, field: &field::Field, value: i64) {
+        self.insert_value(field.name(), Value::from(value));
+    }
+
+    fn record_u64(&mut self, field: &field::Field, value: u64) {
+        self.insert_value(field.name(), Value::from(value));
+    }
+
+    fn record_bool(&mut self, field: &field::Field, value: bool) {
+        self.insert_value(field.name(), Value::from(value));
+    }
+
+    fn record_str(&mut self, field: &field::Field, value: &str) {
+        self.insert_value(field.name(), Value::from(value));
+    }
+
+    fn record_bytes(&mut self, field: &field::Field, value: &[u8]) {
+        self.insert_value(field.name(), Value::from(value));
+    }
+
+    fn record_debug(&mut self, field: &field::Field, value: &dyn fmt::Debug) {
+        self.insert_value(field.name(), Value::String(format!("{value:?}")));
+    }
+}
+
+fn merge_detail_field(values: &mut Map<String, Value>, value: &Value) -> bool {
+    let Value::String(detail) = value else {
+        return false;
+    };
+    let Ok(Value::Object(detail)) = serde_json::from_str::<Value>(detail) else {
+        return false;
+    };
+    values.extend(detail);
+    true
+}
+
+fn span_to_json<S, N>(span: &tracing_subscriber::registry::SpanRef<'_, S>) -> Value
+where
+    S: for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    let mut fields = span
+        .extensions()
+        .get::<FormattedFields<N>>()
+        .and_then(|fields| serde_json::from_str::<Value>(fields).ok())
+        .and_then(|fields| match fields {
+            Value::Object(fields) => Some(fields),
+            _ => None,
+        })
+        .unwrap_or_default();
+    fields.insert(
+        "name".to_string(),
+        Value::String(span.metadata().name().to_string()),
+    );
+    Value::Object(fields)
 }
 
 fn non_blocking_writer(
@@ -417,11 +542,13 @@ fn default_trace_log_directory() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Map, json};
+
     use super::{
         AKRA_EVENT_TARGET, TraceDestination, TraceSpanMode, concise_trace_filter,
-        full_trace_filter, planning_trace_filter, tokio_console_value_is_enabled,
-        trace_filter_from_rust_log_value, trace_settings_from_value, trace_span_mode_from_value,
-        valid_filter_or_fallback,
+        full_trace_filter, merge_detail_field, planning_trace_filter,
+        tokio_console_value_is_enabled, trace_filter_from_rust_log_value,
+        trace_settings_from_value, trace_span_mode_from_value, valid_filter_or_fallback,
     };
 
     #[test]
@@ -513,6 +640,20 @@ mod tests {
         for value in ["", "0", "false", "no", "off", "full"] {
             assert!(!tokio_console_value_is_enabled(value));
         }
+    }
+
+    #[test]
+    fn akra_detail_json_is_flattened_into_event_fields() {
+        let mut fields = Map::new();
+
+        assert!(merge_detail_field(
+            &mut fields,
+            &json!(r#"{"event":"submitted","prompt":"hello","prompt_len":5}"#)
+        ));
+
+        assert_eq!(fields["event"], "submitted");
+        assert_eq!(fields["prompt"], "hello");
+        assert_eq!(fields["prompt_len"], 5);
     }
 
     #[test]

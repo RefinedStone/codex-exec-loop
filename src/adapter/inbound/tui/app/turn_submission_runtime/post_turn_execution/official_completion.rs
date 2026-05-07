@@ -7,7 +7,7 @@ use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeSnapshot,
     PlanningRuntimeWorkspaceStatus,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use serde_json::json;
 
 // The refresh path reads conversation context and reports progress through the same
@@ -70,7 +70,7 @@ impl PostTurnEvaluationExecutor {
                 // Capture failure means the supervisor could not create the
                 // official-completion report; the current planning snapshot is
                 // still the most truthful state for the panel.
-                raw_event_log::emit_lazy("official_completion_capture_failed", || {
+                event_log::emit_lazy("official_completion_capture_failed", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -142,7 +142,7 @@ impl PostTurnEvaluationExecutor {
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot =
                 official_completion_failure_snapshot(&planning_workspace_snapshot, failure_detail);
-            raw_event_log::emit_lazy("official_completion_refresh_blocked", || {
+            event_log::emit_lazy("official_completion_refresh_blocked", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -201,7 +201,7 @@ impl PostTurnEvaluationExecutor {
             .planning
             .worker
             .render_official_completion_refresh_prompt(&worker_request);
-        raw_event_log::emit_lazy("official_completion_refresh_started", || {
+        event_log::emit_lazy("official_completion_refresh_started", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -253,7 +253,7 @@ impl PostTurnEvaluationExecutor {
                     .mark_official_completion_failed(&request.workspace_directory, &detail);
                 let failure_snapshot =
                     official_completion_failure_snapshot(&planning_workspace_snapshot, &detail);
-                raw_event_log::emit_lazy("official_completion_refresh_failed", || {
+                event_log::emit_lazy("official_completion_refresh_failed", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -287,7 +287,7 @@ impl PostTurnEvaluationExecutor {
         // Outcome snapshot may still carry a repair request; keep it mutable so hidden
         // repair and repeated-head checks can refine the final decision snapshot.
         let mut runtime_snapshot = outcome.runtime_snapshot.clone();
-        raw_event_log::emit_lazy("official_completion_refresh_succeeded", || {
+        event_log::emit_lazy("official_completion_refresh_succeeded", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -333,7 +333,7 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
             } else {
-                raw_event_log::emit_lazy("official_completion_repair_unresolved", || {
+                event_log::emit_lazy("official_completion_repair_unresolved", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -372,7 +372,7 @@ impl PostTurnEvaluationExecutor {
             &planning_workspace_snapshot,
             &runtime_snapshot,
         ) {
-            raw_event_log::emit_lazy("official_completion_paused_repeated_queue_head", || {
+            event_log::emit_lazy("official_completion_paused_repeated_queue_head", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -403,7 +403,7 @@ impl PostTurnEvaluationExecutor {
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             let failure_snapshot =
                 official_completion_failure_snapshot(&runtime_snapshot, failure_detail);
-            raw_event_log::emit_lazy("official_completion_refresh_blocked", || {
+            event_log::emit_lazy("official_completion_refresh_blocked", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -446,7 +446,7 @@ impl PostTurnEvaluationExecutor {
                     &authority_refresh_outcome,
                 ),
         );
-        raw_event_log::emit_lazy("official_completion_refresh_finalized", || {
+        event_log::emit_lazy("official_completion_refresh_finalized", || {
             post_turn_event_detail(
                 conversation,
                 request,

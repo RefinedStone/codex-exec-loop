@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use serde_json::json;
 
 /*
@@ -58,7 +58,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse> {
         let (tx, rx) = mpsc::channel();
-        raw_event_log::emit_lazy("planning_worker_session_starting", || {
+        event_log::emit_lazy("planning_worker_session_starting", || {
             json!({
                 "thread_id": serde_json::Value::Null,
                 "operation": operation_label(request.operation),
@@ -84,7 +84,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
          * so the reducer can still consume any earlier context before returning.
          */
         if let Err(error) = stream_result {
-            raw_event_log::emit_lazy("planning_worker_session_launch_failed", || {
+            event_log::emit_lazy("planning_worker_session_launch_failed", || {
                 json!({
                     "thread_id": serde_json::Value::Null,
                     "operation": operation_label(request.operation),
@@ -141,7 +141,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         }
 
         if let Some(message) = failure_message {
-            raw_event_log::emit_lazy("planning_worker_session_stream_failed", || {
+            event_log::emit_lazy("planning_worker_session_stream_failed", || {
                 json!({
                     "thread_id": worker_thread_id.as_deref(),
                     "operation": operation_label(request.operation),
@@ -155,7 +155,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
             return Err(anyhow!("planning worker stream failed: {message}"));
         }
 
-        raw_event_log::emit_lazy("planning_worker_session_reduced", || {
+        event_log::emit_lazy("planning_worker_session_reduced", || {
             json!({
                 "thread_id": worker_thread_id.as_deref(),
                 "operation": operation_label(request.operation),

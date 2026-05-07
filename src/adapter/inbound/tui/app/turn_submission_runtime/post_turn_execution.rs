@@ -22,7 +22,7 @@ use crate::application::service::planning::{
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::planning::QueueIdlePolicy;
 use serde_json::json;
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
@@ -114,7 +114,7 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
     ) -> PostTurnEvaluationExecution {
         let planning_workspace_directory = planning_workspace_directory(conversation, request);
-        raw_event_log::emit_lazy("post_turn_evaluation_started", || {
+        event_log::emit_lazy("post_turn_evaluation_started", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -200,7 +200,7 @@ impl PostTurnEvaluationExecutor {
                 &planning_runtime_snapshot,
             )
         };
-        raw_event_log::emit_lazy("post_turn_evaluation_completed", || {
+        event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -316,7 +316,7 @@ impl PostTurnEvaluationExecutor {
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
                 | PlanningRuntimeWorkspaceStatus::ReadyWithTask
         ) {
-            raw_event_log::emit_lazy("planner_refresh_skipped", || {
+            event_log::emit_lazy("planner_refresh_skipped", || {
                 planner_refresh_skipped_detail(
                     conversation,
                     request,
@@ -333,7 +333,7 @@ impl PostTurnEvaluationExecutor {
             .map(str::trim)
             .filter(|message: &&str| !message.is_empty())
         else {
-            raw_event_log::emit_lazy("planner_refresh_skipped", || {
+            event_log::emit_lazy("planner_refresh_skipped", || {
                 planner_refresh_skipped_detail(
                     conversation,
                     request,
@@ -355,7 +355,7 @@ impl PostTurnEvaluationExecutor {
                 {
                     Ok(context) => context,
                     Err(_) => {
-                        raw_event_log::emit_lazy("planner_refresh_skipped", || {
+                        event_log::emit_lazy("planner_refresh_skipped", || {
                             planner_refresh_skipped_detail(
                                 conversation,
                                 request,
@@ -370,7 +370,7 @@ impl PostTurnEvaluationExecutor {
                 };
                 match review_context.policy {
                     QueueIdlePolicy::Stop => {
-                        raw_event_log::emit_lazy("planner_refresh_skipped", || {
+                        event_log::emit_lazy("planner_refresh_skipped", || {
                             planner_refresh_skipped_detail(
                                 conversation,
                                 request,
@@ -384,7 +384,7 @@ impl PostTurnEvaluationExecutor {
                     }
                     QueueIdlePolicy::ReviewAndEnqueue => {
                         let Some(prompt_markdown) = review_context.prompt_markdown else {
-                            raw_event_log::emit_lazy("planner_refresh_skipped", || {
+                            event_log::emit_lazy("planner_refresh_skipped", || {
                                 planner_refresh_skipped_detail(
                                     conversation,
                                     request,
@@ -436,7 +436,7 @@ impl PostTurnEvaluationExecutor {
             .planning
             .worker
             .render_refresh_queue_prompt(&worker_request);
-        raw_event_log::emit_lazy("planner_refresh_started", || {
+        event_log::emit_lazy("planner_refresh_started", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -487,7 +487,7 @@ impl PostTurnEvaluationExecutor {
                 };
                 let invalid_snapshot =
                     PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
-                raw_event_log::emit_lazy("planner_refresh_failed", || {
+                event_log::emit_lazy("planner_refresh_failed", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -517,7 +517,7 @@ impl PostTurnEvaluationExecutor {
         };
 
         self.record_planner_worker_outcome(PlannerWorkerStatus::RefreshSucceeded, &outcome);
-        raw_event_log::emit_lazy("planner_refresh_succeeded", || {
+        event_log::emit_lazy("planner_refresh_succeeded", || {
             post_turn_event_detail(
                 conversation,
                 request,
@@ -556,7 +556,7 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = if repair_outcome.resolved {
                 repair_outcome.runtime_snapshot
             } else {
-                raw_event_log::emit_lazy("planner_refresh_repair_unresolved", || {
+                event_log::emit_lazy("planner_refresh_repair_unresolved", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -592,7 +592,7 @@ impl PostTurnEvaluationExecutor {
             match promotion_outcome {
                 Ok(promotion_outcome) => {
                     runtime_snapshot = promotion_outcome.runtime_snapshot;
-                    raw_event_log::emit_lazy("planner_proposal_promotion_completed", || {
+                    event_log::emit_lazy("planner_proposal_promotion_completed", || {
                         post_turn_event_detail(
                             conversation,
                             request,
@@ -623,7 +623,7 @@ impl PostTurnEvaluationExecutor {
                     let detail = format!("host proposal promotion failed: {error}");
                     let invalid_snapshot =
                         PlanningRuntimeSnapshot::invalid(PLANNER_REFRESH_FAILURE_BLOCK_REASON);
-                    raw_event_log::emit_lazy("planner_proposal_promotion_failed", || {
+                    event_log::emit_lazy("planner_proposal_promotion_failed", || {
                         post_turn_event_detail(
                             conversation,
                             request,
@@ -670,7 +670,7 @@ impl PostTurnEvaluationExecutor {
         ) {
             self.planner_worker_panel_state.status = PlannerWorkerStatus::RefreshFailed;
             self.planner_worker_panel_state.last_host_detail = Some(detail.clone());
-            raw_event_log::emit_lazy("planner_refresh_paused_repeated_queue_head", || {
+            event_log::emit_lazy("planner_refresh_paused_repeated_queue_head", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -701,7 +701,7 @@ impl PostTurnEvaluationExecutor {
             .auto_follow_state
             .post_turn_continuation_paused()
         {
-            raw_event_log::emit_lazy("auto_follow_decision", || {
+            event_log::emit_lazy("auto_follow_decision", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -720,7 +720,7 @@ impl PostTurnEvaluationExecutor {
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
         {
-            raw_event_log::emit_lazy("auto_follow_decision", || {
+            event_log::emit_lazy("auto_follow_decision", || {
                 post_turn_event_detail(
                     conversation,
                     request,
@@ -739,7 +739,7 @@ impl PostTurnEvaluationExecutor {
             .decide_auto_followup_with_snapshot(&self.planning.runtime, planning_runtime_snapshot)
         {
             AutoFollowupDecision::QueuePrompt(queued_prompt) => {
-                raw_event_log::emit_lazy("auto_follow_decision", || {
+                event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
                         conversation,
                         request,
@@ -778,7 +778,7 @@ impl PostTurnEvaluationExecutor {
                 }))
             }
             AutoFollowupDecision::Skip(reason) => {
-                raw_event_log::emit_lazy("auto_follow_decision", || {
+                event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
                         conversation,
                         request,

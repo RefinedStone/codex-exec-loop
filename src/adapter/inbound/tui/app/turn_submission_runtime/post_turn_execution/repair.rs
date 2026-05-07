@@ -5,7 +5,7 @@ use crate::application::service::planning::{
     PlanningLedgerRepairRequest, PlanningRepairRequest, PlanningRepairRetryReason,
     PlanningTaskHandoff,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use serde_json::json;
 
 // Repair 진행 상태는 TUI의 planner worker panel에 남는다. 사용자는 hidden prompt를
@@ -75,7 +75,7 @@ impl PostTurnEvaluationExecutor {
                 .planning
                 .worker
                 .render_repair_task_authority_prompt(&worker_request);
-            raw_event_log::emit_lazy("planner_repair_attempt_started", || {
+            event_log::emit_lazy("planner_repair_attempt_started", || {
                 post_turn_worker_event_detail(
                     log_context,
                     "repair",
@@ -122,7 +122,7 @@ impl PostTurnEvaluationExecutor {
                         &detail,
                         &runtime_snapshot,
                     );
-                    raw_event_log::emit_lazy("planner_repair_attempt_failed", || {
+                    event_log::emit_lazy("planner_repair_attempt_failed", || {
                         post_turn_worker_event_detail(
                             log_context,
                             "repair",
@@ -147,7 +147,7 @@ impl PostTurnEvaluationExecutor {
             // Worker가 정상 종료되면 panel에는 성공 outcome을 기록하고 이후 판단은 outcome snapshot 기준으로 한다.
             self.record_planner_worker_outcome(PlannerWorkerStatus::RepairSucceeded, &outcome);
             runtime_snapshot = outcome.runtime_snapshot.clone();
-            raw_event_log::emit_lazy("planner_repair_attempt_succeeded", || {
+            event_log::emit_lazy("planner_repair_attempt_succeeded", || {
                 post_turn_worker_event_detail(
                     log_context,
                     "repair",
@@ -180,7 +180,7 @@ impl PostTurnEvaluationExecutor {
 
             // repair_request가 None이면 service 재검증 결과 더 고칠 task authority가 없다는 뜻이다.
             let Some(repair_request) = outcome.repair_request else {
-                raw_event_log::emit_lazy("planner_repair_completed", || {
+                event_log::emit_lazy("planner_repair_completed", || {
                     post_turn_worker_event_detail(
                         log_context,
                         "repair",
@@ -207,7 +207,7 @@ impl PostTurnEvaluationExecutor {
                     &detail,
                     &runtime_snapshot,
                 );
-                raw_event_log::emit_lazy("planner_repair_exhausted", || {
+                event_log::emit_lazy("planner_repair_exhausted", || {
                     post_turn_worker_event_detail(
                         log_context,
                         "repair",
@@ -238,7 +238,7 @@ impl PostTurnEvaluationExecutor {
             } else {
                 PlanningRepairRetryReason::TaskAuthorityUnchanged
             });
-            raw_event_log::emit_lazy("planner_repair_retrying", || {
+            event_log::emit_lazy("planner_repair_retrying", || {
                 post_turn_worker_event_detail(
                     log_context,
                     "repair",

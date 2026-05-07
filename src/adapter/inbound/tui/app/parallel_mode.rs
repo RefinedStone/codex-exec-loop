@@ -10,7 +10,7 @@ use crate::application::service::parallel_mode::{
     ParallelModeOrchestratorTrigger, ParallelModeService,
 };
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger, ParallelModeDispatchOutcome,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStateMachine,
@@ -277,7 +277,7 @@ impl NativeTuiApp {
 
         self.parallel_mode_supervisor_refresh_in_flight = true;
         thread::spawn(move || {
-            raw_event_log::emit_lazy("parallel_supervisor_refresh_started", || {
+            event_log::emit_lazy("parallel_supervisor_refresh_started", || {
                 serde_json::json!({
                     "workspace_directory": &workspace_directory,
                     "mode_enabled": mode_enabled,
@@ -288,7 +288,7 @@ impl NativeTuiApp {
                 mode_enabled,
                 Some(&readiness_snapshot),
             );
-            raw_event_log::emit_lazy("parallel_supervisor_refresh_completed", || {
+            event_log::emit_lazy("parallel_supervisor_refresh_completed", || {
                 serde_json::json!({
                     "workspace_directory": &workspace_directory,
                     "mode_enabled": mode_enabled,
@@ -350,7 +350,7 @@ impl NativeTuiApp {
         let tx = self.tx.clone();
 
         thread::spawn(move || {
-            raw_event_log::emit_lazy("parallel_orchestrator_retry_started", || {
+            event_log::emit_lazy("parallel_orchestrator_retry_started", || {
                 serde_json::json!({
                     "workspace": &workspace_directory,
                     "signature": &signature,
@@ -367,7 +367,7 @@ impl NativeTuiApp {
                     vec![format!("orchestrator retry tick failed: {error}")],
                 ),
             };
-            raw_event_log::emit_lazy("parallel_orchestrator_retry_completed", || {
+            event_log::emit_lazy("parallel_orchestrator_retry_completed", || {
                 serde_json::json!({
                     "workspace": &workspace_directory,
                     "signature": &signature,
@@ -402,7 +402,7 @@ impl NativeTuiApp {
                 !reset_pool_on_off_to_on_entry,
                 readiness_snapshot.allows_parallel_mode(),
             );
-            raw_event_log::emit_lazy("parallel_action_planned", || {
+            event_log::emit_lazy("parallel_action_planned", || {
                 serde_json::json!({
                     "workspace": &workspace_directory,
                     "state": entry_plan.state.label(),
@@ -428,7 +428,7 @@ impl NativeTuiApp {
                 let reset_result = if entry_plan.reset_scope
                     == Some(ParallelModePoolResetScope::PoolOnly)
                 {
-                    raw_event_log::emit_lazy("parallel_pool_reset_started", || {
+                    event_log::emit_lazy("parallel_pool_reset_started", || {
                         serde_json::json!({
                             "workspace": &workspace_directory,
                             "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
@@ -438,7 +438,7 @@ impl NativeTuiApp {
                         .reset_pool_on_parallel_enable_report(&workspace_directory)
                         .and_then(|report| {
                             if report.has_live_blockers() {
-                                raw_event_log::emit_lazy("parallel_pool_reset_blocked", || {
+                                event_log::emit_lazy("parallel_pool_reset_blocked", || {
                                     serde_json::json!({
                                         "workspace": &workspace_directory,
                                         "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
@@ -458,7 +458,7 @@ impl NativeTuiApp {
                                 ));
                             }
                             let count = report.succeeded_reset_slot_count();
-                            raw_event_log::emit_lazy("parallel_pool_reset_completed", || {
+                            event_log::emit_lazy("parallel_pool_reset_completed", || {
                                 serde_json::json!({
                                     "workspace": &workspace_directory,
                                     "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
@@ -616,7 +616,7 @@ impl NativeTuiApp {
             .saturating_add(1);
         self.parallel_mode_automation_epoch_id = Some(epoch_id);
         self.last_parallel_mode_dispatch_withheld_reason = None;
-        raw_event_log::emit_lazy("parallel_automation_epoch_opened", || {
+        event_log::emit_lazy("parallel_automation_epoch_opened", || {
             serde_json::json!({
                 "workspace": self.planning_workspace_directory(),
                 "epoch_id": epoch_id,
@@ -630,7 +630,7 @@ impl NativeTuiApp {
         self.pending_parallel_mode_dispatch_trigger = None;
         self.last_parallel_mode_dispatch_withheld_reason = None;
         if let Some(epoch_id) = epoch_id {
-            raw_event_log::emit_lazy("parallel_automation_epoch_closed", || {
+            event_log::emit_lazy("parallel_automation_epoch_closed", || {
                 serde_json::json!({
                     "workspace": self.planning_workspace_directory(),
                     "epoch_id": epoch_id,
@@ -678,7 +678,7 @@ impl NativeTuiApp {
         self.parallel_mode_dispatch_refresh_in_flight = true;
         self.last_parallel_mode_automation_trigger = Some(trigger);
         self.last_parallel_mode_dispatch_withheld_reason = None;
-        raw_event_log::emit_lazy("parallel_dispatch_requested", || {
+        event_log::emit_lazy("parallel_dispatch_requested", || {
             serde_json::json!({
                 "trigger": trigger.label(),
                 "workspace": &workspace_directory,
@@ -695,7 +695,7 @@ impl NativeTuiApp {
         epoch_id: u64,
     ) {
         if self.parallel_mode_automation_epoch_id != Some(epoch_id) {
-            raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+            event_log::emit_lazy("parallel_dispatch_blocked", || {
                 serde_json::json!({
                     "trigger": trigger.label(),
                     "workspace": workspace_directory,
@@ -726,7 +726,7 @@ impl NativeTuiApp {
     ) {
         self.last_parallel_mode_automation_trigger = trigger;
         self.last_parallel_mode_dispatch_withheld_reason = Some(reason.to_string());
-        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
             serde_json::json!({
                 "trigger": trigger.map(|value| value.label()),
                 "workspace": self.planning_workspace_directory(),
@@ -910,7 +910,7 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
-        raw_event_log::emit_lazy("parallel_dispatch_completed", || {
+        event_log::emit_lazy("parallel_dispatch_completed", || {
             serde_json::json!({
                 "trigger": outcome.trigger.label(),
                 "workspace": workspace_directory,
@@ -1036,7 +1036,7 @@ fn dispatch_parallel_queue_pool(
         Err(error) => {
             outcome.blocked_reason = Some(error);
             outcome.status_copy_input = outcome.status_detail();
-            raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+            event_log::emit_lazy("parallel_dispatch_blocked", || {
                 serde_json::json!({
                     "trigger": trigger.label(),
                     "workspace": workspace_directory,
@@ -1058,7 +1058,7 @@ fn dispatch_parallel_queue_pool(
     if dispatch_plan.idle_slot_count == 0 {
         outcome.blocked_reason = Some("no idle slot is available for auto dispatch".to_string());
         outcome.status_copy_input = outcome.status_detail();
-        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
             serde_json::json!({
                 "trigger": trigger.label(),
                 "workspace": workspace_directory,
@@ -1081,7 +1081,7 @@ fn dispatch_parallel_queue_pool(
         };
         outcome.blocked_reason = Some(reason);
         outcome.status_copy_input = outcome.status_detail();
-        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
             serde_json::json!({
                 "trigger": trigger.label(),
                 "workspace": workspace_directory,
@@ -1141,7 +1141,7 @@ fn dispatch_parallel_queue_pool(
             blocked_details.join(" | ")
         ));
         outcome.status_copy_input = outcome.status_detail();
-        raw_event_log::emit_lazy("parallel_dispatch_blocked", || {
+        event_log::emit_lazy("parallel_dispatch_blocked", || {
             serde_json::json!({
                 "trigger": trigger.label(),
                 "workspace": workspace_directory,
@@ -1162,7 +1162,7 @@ fn dispatch_parallel_queue_pool(
         status.push_str(&format!(" / blocked: {}", blocked_details.join(" | ")));
     }
     outcome.status_copy_input = status;
-    raw_event_log::emit_lazy("parallel_dispatch_launched", || {
+    event_log::emit_lazy("parallel_dispatch_launched", || {
         serde_json::json!({
             "trigger": trigger.label(),
             "workspace": workspace_directory,

@@ -8,7 +8,7 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
     PlanningAuthorityRuntimeEventRecord, PlanningAuthorityRuntimeProjectionSnapshot,
 };
-use crate::diagnostics::raw_event_log;
+use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
     ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolResetRunId,
@@ -289,7 +289,7 @@ pub(super) fn reset_pool_for_parallel_enable(
     }
 
     if report.has_live_blockers() {
-        raw_event_log::emit_lazy("parallel_pool_reset_blocked", || {
+        event_log::emit_lazy("parallel_pool_reset_blocked", || {
             serde_json::json!({
                 "workspace": workspace_dir,
                 "repo_root": repo_root,
@@ -313,7 +313,7 @@ pub(super) fn reset_pool_for_parallel_enable(
             continue;
         }
 
-        raw_event_log::emit_lazy("parallel_pool_slot_reset_started", || {
+        event_log::emit_lazy("parallel_pool_slot_reset_started", || {
             serde_json::json!({
                 "workspace": workspace_dir,
                 "repo_root": repo_root,
@@ -334,7 +334,7 @@ pub(super) fn reset_pool_for_parallel_enable(
                     ParallelModePoolResetSlotOutcome::Succeeded,
                     "slot worktree reset to baseline",
                 ));
-            raw_event_log::emit_lazy("parallel_pool_slot_reset_completed", || {
+            event_log::emit_lazy("parallel_pool_slot_reset_completed", || {
                 serde_json::json!({
                     "workspace": workspace_dir,
                     "repo_root": repo_root,
@@ -359,7 +359,7 @@ pub(super) fn reset_pool_for_parallel_enable(
                 ParallelModePoolResetSlotOutcome::Failed,
                 failure_summary.clone(),
             ));
-        raw_event_log::emit_lazy("parallel_pool_slot_reset_failed", || {
+        event_log::emit_lazy("parallel_pool_slot_reset_failed", || {
             serde_json::json!({
                 "workspace": workspace_dir,
                 "repo_root": repo_root,
