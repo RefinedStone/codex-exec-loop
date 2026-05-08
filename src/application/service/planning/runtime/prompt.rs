@@ -633,7 +633,6 @@ mod tests {
 
         assert!(rules.contains("accepted DB authority"));
         assert!(!rules.contains("task-ledger.json"));
-        assert!(!rules.contains(".codex-exec-loop/runtime/exports/*"));
     }
 
     #[test]

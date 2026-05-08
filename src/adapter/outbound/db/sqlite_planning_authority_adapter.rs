@@ -836,28 +836,10 @@ fn open_authority_connection(location: &PlanningAuthorityLocation) -> Result<Con
 }
 
 /*
-이미 존재하는 authority DB에서 schema version metadata를 읽는다.
-
-새 DB는 아직 `authority_metadata` table이 없을 수 있으므로 이 함수는 table 존재 확인이 끝난 뒤에만
-호출된다. version은 문자열로 저장되지만, schema gate에서는 i64로 parse해 비교한다.
-*/
-fn load_schema_version(connection: &Connection) -> Result<Option<String>> {
-    connection
-        .query_row(
-            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .context("failed to read authority-store schema version")
-}
-
-/*
 기존 authority DB가 현재 binary가 지원하는 schema인지 검사한다.
 
-metadata table이 없으면 새 DB 또는 아주 초기 DB로 보고 schema 생성 단계로 넘긴다. metadata가 있으면
-`schema_version`을 읽어 현재 버전 또는 명시적으로 호환 허용한 이전 버전만 통과시킨다. 여기서는 4와
-현재 `AUTHORITY_STORE_SCHEMA_VERSION`을 허용한다.
+metadata table이 없으면 새 DB로 보고 schema 생성 단계로 넘긴다. metadata가 있으면
+`schema_version`을 읽어 현재 버전만 통과시킨다.
 
 이 guard가 없으면 미래 버전의 DB를 구버전 binary가 열어 schema를 덮거나 잘못 해석할 수 있다.
 */
@@ -867,11 +849,15 @@ fn validate_authority_store_schema(connection: &Connection) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(schema_version) = load_schema_version(connection)?
-        && !matches!(
-            schema_version.parse::<i64>().ok(),
-            Some(4) | Some(AUTHORITY_STORE_SCHEMA_VERSION)
+    if let Some(schema_version) = connection
+        .query_row(
+            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
         )
+        .optional()
+        .context("failed to read authority-store schema version")?
+        && schema_version.parse::<i64>().ok() != Some(AUTHORITY_STORE_SCHEMA_VERSION)
     {
         return Err(anyhow!(
             "unsupported authority-store schema version: {schema_version}"
