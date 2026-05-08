@@ -186,9 +186,7 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
         let action = if handled_parallel_completion {
-            ConversationPostTurnAction::SkipAutoFollow {
-                reason: AutoFollowSkipReason::ParallelSessionCompleted,
-            }
+            parallel_completion_action_from_snapshot(&runtime_snapshot)
         } else {
             self.auto_follow_action_from_snapshot(conversation, request, &runtime_snapshot)
         };
@@ -805,6 +803,18 @@ impl PostTurnEvaluationExecutor {
         }
     }
 }
+
+fn parallel_completion_action_from_snapshot(
+    runtime_snapshot: &PlanningRuntimeSnapshot,
+) -> ConversationPostTurnAction {
+    let reason = if runtime_snapshot.queue_is_drained() {
+        AutoFollowSkipReason::PlanningQueueDrained
+    } else {
+        AutoFollowSkipReason::ParallelSessionCompleted
+    };
+    ConversationPostTurnAction::SkipAutoFollow { reason }
+}
+
 impl NativeTuiApp {
     // Production isolates post-turn planning work behind a timeout so a stalled
     // planning worker cannot strand the TUI. Tests execute synchronously to keep
@@ -953,5 +963,54 @@ fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResul
         notices: vec![message.clone()],
         auto_follow_block_reason: Some(message),
         ..PlanningReconciliationResult::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::planning::{PriorityQueueProjection, PriorityQueueSkippedTask, TaskStatus};
+
+    #[test]
+    fn parallel_completion_reports_drained_queue_when_official_refresh_finishes_all_work() {
+        let runtime_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+            "Planning Context".to_string(),
+            "queue idle: no executable planning task".to_string(),
+            None,
+            None,
+            PriorityQueueProjection {
+                next_task: None,
+                active_tasks: Vec::new(),
+                proposed_tasks: Vec::new(),
+                skipped_tasks: vec![PriorityQueueSkippedTask {
+                    task_id: "done-task".to_string(),
+                    task_title: "Finished parallel task".to_string(),
+                    direction_id: "general-workstream".to_string(),
+                    status: TaskStatus::Done,
+                    reason: "status done is not executable".to_string(),
+                }],
+            },
+        );
+
+        let ConversationPostTurnAction::SkipAutoFollow { reason } =
+            parallel_completion_action_from_snapshot(&runtime_snapshot)
+        else {
+            panic!("parallel completion should skip auto-follow");
+        };
+
+        assert_eq!(reason, AutoFollowSkipReason::PlanningQueueDrained);
+    }
+
+    #[test]
+    fn parallel_completion_keeps_supervisor_handoff_when_queue_still_has_work() {
+        let runtime_snapshot = PlanningRuntimeSnapshot::invalid("planning still blocked");
+
+        let ConversationPostTurnAction::SkipAutoFollow { reason } =
+            parallel_completion_action_from_snapshot(&runtime_snapshot)
+        else {
+            panic!("parallel completion should skip auto-follow");
+        };
+
+        assert_eq!(reason, AutoFollowSkipReason::ParallelSessionCompleted);
     }
 }
