@@ -57,7 +57,7 @@ user-visible contract와 fan-in 지점을 고정해, 이후 `PLAN-01`과 `PLAN-0
 2. runtime snapshot, admin overview, control status가 같은 projection source를 읽는
    compatibility mapper를 만든다. 완료: control status/queue `PLAN-01C`
 3. TUI/admin/CLI/Telegram 호출부를 한 번에 바꾸지 않고, 먼저 read-only status/queue
-   command부터 facade 뒤로 보낸다. 진행: TUI status projection `PLAN-01B`, control
+   command부터 facade 뒤로 보낸다. 완료: TUI status projection `PLAN-01B`, control
    surface status/queue `PLAN-01C`, CLI status/queue command `PLAN-01D`,
    Telegram control facade `PLAN-01E`, admin dashboard projection `PLAN-01F`,
    TUI queue overlay projection `PLAN-01G`, Akra admin dashboard facade projection
@@ -73,6 +73,21 @@ user-visible contract와 fan-in 지점을 고정해, 이후 `PLAN-01`과 `PLAN-0
   facts를 보게 된다.
 - adapter는 projection rendering만 검증하고 queue/proposal policy를 직접 호출하지 않는다.
 - 기존 `PLAN-00` regression test가 그대로 통과한다.
+
+### PLAN-01 완료 감사
+
+| 완료 조건 | 반영 위치 | 감사 결과 |
+| --- | --- | --- |
+| `/status`, `/queue`, Telegram control이 같은 queue facts를 읽는다 | `PlanningControlFacadeService`, `PlanningControlStatusSnapshot` | control facade가 `PlanningApplicationProjection::from_runtime_snapshot`을 사용하고, source signature를 status DTO로 전달한다. |
+| admin overview와 Akra dashboard가 application projection을 읽는다 | `PlanningAdminFacadeService::load_runtime_application_projection`, `map_application_projection`, `build_akra_dashboard_view` | admin runtime summary와 Akra dashboard가 runtime snapshot/queue internals 대신 admin facade projection을 사용한다. |
+| TUI status/queue 표시가 projection rendering에 머문다 | `status_projection.rs`, queue overlay, plan indicator, planning worker panel, existing-workspace popup | TUI 표시 경로는 `PlanningApplicationProjection`을 표시 DTO로 낮추며, queue/proposal 정책을 다시 계산하지 않는다. |
+| inbound adapter가 queue/proposal policy를 직접 호출하지 않는다 | `src/adapter/inbound/*` | read-only status/queue 표시 경로에서 `PriorityQueueService`와 `.queue_projection()` 직접 호출을 제거했다. |
+| 기존 regression이 유지된다 | `PLAN-00` 검증 명령 | `PLAN-01` 완료 PR은 planning projection/control/admin/TUI/Telegram 범위 테스트와 clippy를 통과한 뒤 병합한다. |
+
+`PLAN-01`의 범위는 read-only status/queue facade 표준화다. task mutation legality,
+proposal promotion 가능 여부, queue-idle/repeated-head decision, repair eligibility는
+아직 application helper와 runtime orchestration에 남아 있으므로 `PLAN-02`에서 domain
+decision으로 이동한다.
 
 ## PLAN-02 작업 단위
 
