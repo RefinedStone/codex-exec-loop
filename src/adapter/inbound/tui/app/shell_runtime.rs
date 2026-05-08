@@ -191,21 +191,27 @@ impl ShellRuntime {
                 }
                 BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
                     workspace_directory,
+                    epoch_id,
+                    effect_id,
                     supervisor_snapshot,
                 } => {
                     self.app.apply_parallel_mode_supervisor_snapshot_refreshed(
                         &workspace_directory,
+                        epoch_id,
+                        effect_id,
                         *supervisor_snapshot,
                     );
                 }
                 BackgroundMessage::ParallelModeOrchestratorWakeCompleted {
                     workspace_directory,
+                    effect_id,
                     readiness_snapshot,
                     supervisor_snapshot,
                     outcome,
                 } => {
                     self.app.apply_parallel_mode_orchestrator_wake_completed(
                         &workspace_directory,
+                        effect_id,
                         readiness_snapshot,
                         *supervisor_snapshot,
                         outcome,
@@ -216,11 +222,15 @@ impl ShellRuntime {
                 }
                 BackgroundMessage::ParallelModeOrchestratorTickCompleted {
                     workspace_directory,
+                    epoch_id,
+                    effect_id,
                     blocked,
                     notices,
                 } => {
                     self.app.apply_parallel_mode_orchestrator_tick_completed(
                         &workspace_directory,
+                        epoch_id,
+                        effect_id,
                         blocked,
                         notices,
                     );
@@ -283,10 +293,7 @@ impl ShellRuntime {
     }
 
     fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
-        if self.app.parallel_mode_supervisor_refresh_in_flight
-            || self.app.parallel_mode_orchestrator_wake_in_flight
-            || self.app.parallel_mode_orchestrator_tick_in_flight
-        {
+        if self.app.parallel_mode_control_effect_in_flight() {
             return false;
         }
         if !self.app.parallel_mode_activity_pulse_visible() {
@@ -298,9 +305,7 @@ impl ShellRuntime {
     }
 
     fn parallel_orchestrator_wake_poll_due(&self, now: Instant) -> bool {
-        if self.app.parallel_mode_orchestrator_wake_in_flight
-            || self.app.parallel_mode_supervisor_refresh_in_flight
-        {
+        if self.app.parallel_mode_control_effect_in_flight() {
             return false;
         }
 

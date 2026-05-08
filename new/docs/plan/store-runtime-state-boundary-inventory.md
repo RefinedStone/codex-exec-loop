@@ -58,10 +58,10 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 
 | State | 현재 위치 | 목표 소유자 | 위험 | 다음 작업 |
 | --- | --- | --- | --- | --- |
-| parallel supervisor refresh in-flight bit | TUI `NativeTuiApp` | application control-plane runtime 또는 thin inbound bridge | TUI가 runtime concurrency guard를 직접 소유 | `STORE-00D` 또는 TUI 후속에서 runtime store로 이동 |
-| orchestrator wake in-flight bit | TUI `NativeTuiApp` | application control-plane runtime | wake coalescing이 UI state와 섞임 | `STORE-00D`에서 command/event boundary 정리 |
-| orchestrator tick in-flight bit | TUI `NativeTuiApp` | application control-plane runtime | single-writer loop와 inbound guard가 중복 | `STORE-00D`에서 control-plane effect state로 이동 |
-| automation epoch id | TUI `NativeTuiApp`, domain event reducer 일부 | application runtime state + domain stale decision | stale event gate가 UI lifetime에 묶임 | `STORE-00D`에서 epoch owner를 application으로 고정 |
+| parallel supervisor refresh in-flight bit | `ParallelModeControlPlaneRuntime` | application control-plane runtime | TUI가 helper로만 조회해야 함 | `STORE-00D` 완료. effect id/epoch completion으로 stale drop |
+| orchestrator wake in-flight bit | `ParallelModeControlPlaneRuntime` | application control-plane runtime | durable dispatch command와 in-memory wake coalescing을 혼동하면 안 됨 | `STORE-00D` 완료. TUI는 command/effect bridge만 실행 |
+| orchestrator tick in-flight bit | `ParallelModeControlPlaneRuntime` | application control-plane runtime | distributor retry tick이 wake와 겹치면 중복 dispatch 가능 | `STORE-00D` 완료. tick effect state와 last signature를 runtime store가 소유 |
+| automation epoch id | `ParallelModeControlPlaneRuntime`, worker event reducer input | application runtime state + domain stale decision | stale event gate가 UI lifetime에 묶이면 late completion이 UI를 되살림 | `STORE-00D` 완료. epoch allocator는 TUI field가 아님 |
 | next effect sequence | `ParallelModeControlPlaneEffectId` producer | application runtime state | durable projection처럼 저장하면 안 됨 | 유지. reset/restart 시 새 sequence 가능해야 함 |
 | wake poll timestamp | TUI shell runtime | inbound scheduler UI/runtime bridge | poll timer는 durable state가 아님 | 유지하되 repository로 내리지 않음 |
 | GitHub poll in-flight / next poll | TUI GitHub polling controller | inbound controller | external poll scheduler state | `TEST-00`에서 UI/runtime test taxonomy로 분류 |
@@ -80,7 +80,7 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 | Planning workspace port | path normalization, file read/write, draft staging | workspace validation, promotion 가능 여부 | 적절. repo-scoped artifact와 accepted authority 용어를 테스트에 더 드러내야 함 |
 | Parallel runtime port | git/fs/gh command primitive, path probe, timestamp | cleanup/retry/distributor 순서, capacity decision | 적절 |
 | Application parallel mirror helpers | 현재 fs mirror write/read를 직접 수행 | mirror write primitive는 outbound로 내려야 함 | 구조 위험. `STORE-00C`에서 이동 대상 |
-| TUI parallel controller | operator intent, UI-only display, thin command dispatch | in-flight effect ownership, epoch/wake coalescing | 구조 위험. `STORE-00D`에서 application runtime으로 이동 |
+| TUI parallel controller | operator intent, UI-only display, thin command/effect dispatch | effect runner와 projection cache | `STORE-00D` 이후 in-flight effect ownership, epoch/wake coalescing은 application runtime에 있음 |
 | Admin/CLI/Telegram inbound | request parsing, response rendering | store classification, reset policy | 현재 `INBOUND-00` 후속과 연결 |
 
 ## 테스트 Anchor 현황
@@ -121,14 +121,12 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 - `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime boundary로 이동한다.
   authority-first write order와 mirror-loss recovery 테스트를 유지한다. 완료.
 - `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application control-plane runtime
-  state로 이동하는 최소 slice를 설계/구현한다. `PAR-03`, `PAR-04`, `TUI-01` regression을 같이 확인해야 하므로
-  `STORE-00B/C` 이후 진행한다. ready.
+  state로 이동했다. supervisor refresh, wake, tick completion은 effect id와 epoch id를 runtime에 반환한다. 완료.
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact, repo-scoped
   active documents, shadow documents, accepted DB authority가 서로 다른 reset boundary를 갖는지 고정한다. 완료.
 
 ## 다음 Worker 시작 기준
 
-다음 worker는 새 repository trait를 만들지 말고 `STORE-00D`를 잡는다. `STORE-00D`는
-TUI/application runtime migration이므로 durable mirror I/O처럼 filesystem primitive를 옮기는
-작업이 아니라, process-lifetime wake/epoch/in-flight state가 application control-plane runtime
-event로만 흐르는지 고정하는 slice다.
+다음 worker는 새 repository trait를 만들기 전에 `INBOUND-00` parent closure와 `TEST-00`
+taxonomy를 먼저 정리한다. `STORE-00D` 이후 TUI는 process-lifetime wake/epoch/in-flight
+state를 직접 들지 않고 application control-plane runtime event/effect bridge만 실행한다.

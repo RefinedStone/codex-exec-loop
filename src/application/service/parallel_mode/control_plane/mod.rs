@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum ParallelModeControlPlaneEffectKind {
     RefreshSupervisor,
     RunOrchestrator,
+    RunOrchestratorTick,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +172,9 @@ impl ParallelModeControlPlaneWorkerEventOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ParallelModeControlPlaneCommand {
+    OpenEpoch {
+        workspace_directory: String,
+    },
     Enable {
         workspace_directory: String,
     },
@@ -181,6 +185,10 @@ pub enum ParallelModeControlPlaneCommand {
         workspace_directory: String,
     },
     WakeOrchestrator(ParallelModeControlPlaneWake),
+    RunOrchestratorTick {
+        workspace_directory: String,
+        signature: String,
+    },
     WorkerCompleted {
         workspace_directory: String,
         epoch_id: u64,
@@ -253,6 +261,12 @@ pub enum ParallelModeControlPlaneEffect {
         effect_id: ParallelModeControlPlaneEffectId,
         wake: ParallelModeControlPlaneWake,
     },
+    RunOrchestratorTick {
+        effect_id: ParallelModeControlPlaneEffectId,
+        workspace_directory: String,
+        epoch_id: u64,
+        signature: String,
+    },
     CancelDispatchCommands {
         workspace_directory: String,
         reason: String,
@@ -262,9 +276,9 @@ pub enum ParallelModeControlPlaneEffect {
 impl ParallelModeControlPlaneEffect {
     pub fn effect_id(&self) -> Option<ParallelModeControlPlaneEffectId> {
         match self {
-            Self::RefreshSupervisor { effect_id, .. } | Self::RunOrchestrator { effect_id, .. } => {
-                Some(*effect_id)
-            }
+            Self::RefreshSupervisor { effect_id, .. }
+            | Self::RunOrchestrator { effect_id, .. }
+            | Self::RunOrchestratorTick { effect_id, .. } => Some(*effect_id),
             Self::CancelDispatchCommands { .. } => None,
         }
     }
@@ -292,8 +306,10 @@ pub struct ParallelModeControlPlaneRuntimeStore {
     pub next_epoch_id: u64,
     pub supervisor_refresh_in_flight: Option<ParallelModeControlPlaneEffectId>,
     pub orchestrator_wake_in_flight: Option<ParallelModeControlPlaneEffectId>,
+    pub orchestrator_tick_in_flight: Option<ParallelModeControlPlaneEffectId>,
     pub pending_supervisor_refresh: bool,
     pub pending_orchestrator_wake: Option<ParallelModeControlPlaneWake>,
+    pub last_orchestrator_tick_signature: Option<String>,
     next_effect_sequence: u64,
 }
 
@@ -305,8 +321,10 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
             next_epoch_id: 1,
             supervisor_refresh_in_flight: None,
             orchestrator_wake_in_flight: None,
+            orchestrator_tick_in_flight: None,
             pending_supervisor_refresh: false,
             pending_orchestrator_wake: None,
+            last_orchestrator_tick_signature: None,
             next_effect_sequence: 1,
         }
     }
@@ -326,12 +344,38 @@ impl ParallelModeControlPlaneRuntime {
         &self.store
     }
 
+    pub fn reset_orchestrator_tick_signature(&mut self) {
+        self.store.last_orchestrator_tick_signature = None;
+    }
+
+    #[cfg(test)]
+    pub fn force_epoch_for_test(&mut self, workspace_directory: impl Into<String>, epoch_id: u64) {
+        self.store.workspace_directory = Some(workspace_directory.into());
+        self.store.current_epoch_id = Some(epoch_id);
+        self.store.next_epoch_id = self.store.next_epoch_id.max(epoch_id.saturating_add(1));
+    }
+
+    #[cfg(test)]
+    pub fn force_supervisor_refresh_in_flight_for_test(
+        &mut self,
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+    ) -> ParallelModeControlPlaneEffectId {
+        self.force_epoch_for_test(workspace_directory, epoch_id);
+        let effect_id = self.next_effect_id(ParallelModeControlPlaneEffectKind::RefreshSupervisor);
+        self.store.supervisor_refresh_in_flight = Some(effect_id);
+        effect_id
+    }
+
     pub fn handle(
         &mut self,
         command: ParallelModeControlPlaneCommand,
     ) -> ParallelModeControlPlaneRuntimeOutcome {
         let mut outcome = ParallelModeControlPlaneRuntimeOutcome::new();
         match command {
+            ParallelModeControlPlaneCommand::OpenEpoch {
+                workspace_directory,
+            } => self.open_epoch(workspace_directory, &mut outcome),
             ParallelModeControlPlaneCommand::Enable {
                 workspace_directory,
             } => self.enable(workspace_directory, &mut outcome),
@@ -344,6 +388,10 @@ impl ParallelModeControlPlaneRuntime {
             ParallelModeControlPlaneCommand::WakeOrchestrator(wake) => {
                 self.wake_orchestrator(wake, &mut outcome)
             }
+            ParallelModeControlPlaneCommand::RunOrchestratorTick {
+                workspace_directory,
+                signature,
+            } => self.run_orchestrator_tick(workspace_directory, signature, &mut outcome),
             ParallelModeControlPlaneCommand::WorkerCompleted {
                 workspace_directory,
                 epoch_id,
@@ -361,34 +409,20 @@ impl ParallelModeControlPlaneRuntime {
         outcome
     }
 
+    fn open_epoch(
+        &mut self,
+        workspace_directory: String,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        self.ensure_epoch(workspace_directory, outcome);
+    }
+
     fn enable(
         &mut self,
         workspace_directory: String,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        let epoch_id = match (
-            self.store.workspace_directory.as_deref(),
-            self.store.current_epoch_id,
-        ) {
-            (Some(current_workspace), Some(epoch_id))
-                if current_workspace == workspace_directory =>
-            {
-                epoch_id
-            }
-            _ => {
-                let epoch_id = self.store.next_epoch_id;
-                self.store.next_epoch_id = self.store.next_epoch_id.saturating_add(1);
-                self.store.workspace_directory = Some(workspace_directory.clone());
-                self.store.current_epoch_id = Some(epoch_id);
-                outcome
-                    .events
-                    .push(ParallelModeControlPlaneEvent::EpochOpened {
-                        workspace_directory: workspace_directory.clone(),
-                        epoch_id,
-                    });
-                epoch_id
-            }
-        };
+        let epoch_id = self.ensure_epoch(workspace_directory.clone(), outcome);
         self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
     }
 
@@ -397,7 +431,9 @@ impl ParallelModeControlPlaneRuntime {
         workspace_directory: String,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if self.store.workspace_directory.as_deref() != Some(workspace_directory.as_str()) {
+        if let Some(current_workspace) = self.store.workspace_directory.as_deref()
+            && current_workspace != workspace_directory
+        {
             outcome
                 .events
                 .push(ParallelModeControlPlaneEvent::StaleCommandDropped {
@@ -415,10 +451,8 @@ impl ParallelModeControlPlaneRuntime {
                     epoch_id,
                 });
         }
-        self.store.supervisor_refresh_in_flight = None;
-        self.store.orchestrator_wake_in_flight = None;
-        self.store.pending_supervisor_refresh = false;
-        self.store.pending_orchestrator_wake = None;
+        self.store.workspace_directory = None;
+        self.clear_process_effect_state();
         outcome
             .effects
             .push(ParallelModeControlPlaneEffect::CancelDispatchCommands {
@@ -446,9 +480,7 @@ impl ParallelModeControlPlaneRuntime {
         if !self.command_epoch_is_current(&wake.workspace_directory, wake.epoch_id, outcome) {
             return;
         }
-        if self.store.supervisor_refresh_in_flight.is_some()
-            || self.store.orchestrator_wake_in_flight.is_some()
-        {
+        if self.has_in_flight_effect() {
             self.store.pending_orchestrator_wake = Some(wake.clone());
             outcome
                 .events
@@ -507,6 +539,32 @@ impl ParallelModeControlPlaneRuntime {
                 outcome
                     .events
                     .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
+                if self.store.pending_supervisor_refresh {
+                    self.store.pending_supervisor_refresh = false;
+                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+                    return;
+                }
+                self.drain_pending_orchestrator_wake(outcome);
+            }
+            ParallelModeControlPlaneEffectKind::RunOrchestratorTick => {
+                if self.store.orchestrator_tick_in_flight != Some(effect_id) {
+                    self.stale_command(
+                        workspace_directory,
+                        epoch_id,
+                        "unknown orchestrator tick",
+                        outcome,
+                    );
+                    return;
+                }
+                self.store.orchestrator_tick_in_flight = None;
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
+                if self.store.pending_supervisor_refresh {
+                    self.store.pending_supervisor_refresh = false;
+                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+                    return;
+                }
                 self.drain_pending_orchestrator_wake(outcome);
             }
         }
@@ -518,7 +576,7 @@ impl ParallelModeControlPlaneRuntime {
         epoch_id: u64,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if self.store.supervisor_refresh_in_flight.is_some() {
+        if self.has_in_flight_effect() {
             self.store.pending_supervisor_refresh = true;
             outcome
                 .events
@@ -563,13 +621,44 @@ impl ParallelModeControlPlaneRuntime {
             .push(ParallelModeControlPlaneEffect::RunOrchestrator { effect_id, wake });
     }
 
+    fn run_orchestrator_tick(
+        &mut self,
+        workspace_directory: String,
+        signature: String,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let Some(epoch_id) = self.current_epoch_for_workspace(&workspace_directory, outcome) else {
+            return;
+        };
+        if self.has_in_flight_effect() {
+            return;
+        }
+        if self.store.last_orchestrator_tick_signature.as_deref() == Some(signature.as_str()) {
+            return;
+        }
+
+        let effect_id =
+            self.next_effect_id(ParallelModeControlPlaneEffectKind::RunOrchestratorTick);
+        self.store.orchestrator_tick_in_flight = Some(effect_id);
+        self.store.last_orchestrator_tick_signature = Some(signature.clone());
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::EffectStarted { effect_id });
+        outcome
+            .effects
+            .push(ParallelModeControlPlaneEffect::RunOrchestratorTick {
+                effect_id,
+                workspace_directory,
+                epoch_id,
+                signature,
+            });
+    }
+
     fn drain_pending_orchestrator_wake(
         &mut self,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if self.store.supervisor_refresh_in_flight.is_some()
-            || self.store.orchestrator_wake_in_flight.is_some()
-        {
+        if self.has_in_flight_effect() {
             return;
         }
         let Some(wake) = self.store.pending_orchestrator_wake.take() else {
@@ -592,6 +681,52 @@ impl ParallelModeControlPlaneRuntime {
                 epoch_id: wake.epoch_id,
             });
         self.start_orchestrator_wake(wake, outcome);
+    }
+
+    fn ensure_epoch(
+        &mut self,
+        workspace_directory: String,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) -> u64 {
+        match (
+            self.store.workspace_directory.as_deref(),
+            self.store.current_epoch_id,
+        ) {
+            (Some(current_workspace), Some(epoch_id))
+                if current_workspace == workspace_directory =>
+            {
+                epoch_id
+            }
+            _ => {
+                let epoch_id = self.store.next_epoch_id;
+                self.store.next_epoch_id = self.store.next_epoch_id.saturating_add(1);
+                self.clear_process_effect_state();
+                self.store.workspace_directory = Some(workspace_directory.clone());
+                self.store.current_epoch_id = Some(epoch_id);
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::EpochOpened {
+                        workspace_directory,
+                        epoch_id,
+                    });
+                epoch_id
+            }
+        }
+    }
+
+    fn has_in_flight_effect(&self) -> bool {
+        self.store.supervisor_refresh_in_flight.is_some()
+            || self.store.orchestrator_wake_in_flight.is_some()
+            || self.store.orchestrator_tick_in_flight.is_some()
+    }
+
+    fn clear_process_effect_state(&mut self) {
+        self.store.supervisor_refresh_in_flight = None;
+        self.store.orchestrator_wake_in_flight = None;
+        self.store.orchestrator_tick_in_flight = None;
+        self.store.pending_supervisor_refresh = false;
+        self.store.pending_orchestrator_wake = None;
+        self.store.last_orchestrator_tick_signature = None;
     }
 
     fn next_effect_id(
@@ -691,6 +826,13 @@ mod tests {
         ))
     }
 
+    fn tick(workspace_directory: &str, signature: &str) -> ParallelModeControlPlaneCommand {
+        ParallelModeControlPlaneCommand::RunOrchestratorTick {
+            workspace_directory: workspace_directory.to_string(),
+            signature: signature.to_string(),
+        }
+    }
+
     fn completed(
         workspace_directory: &str,
         epoch_id: u64,
@@ -718,6 +860,55 @@ mod tests {
             serde_json::from_str(&json).expect("command should deserialize");
 
         assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn open_epoch_does_not_start_refresh_effect() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+
+        let opened = runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo".to_string(),
+        });
+
+        assert_eq!(
+            opened.events,
+            vec![ParallelModeControlPlaneEvent::EpochOpened {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 1,
+            }]
+        );
+        assert!(opened.effects.is_empty());
+        assert_eq!(runtime.store().current_epoch_id, Some(1));
+        assert!(runtime.store().supervisor_refresh_in_flight.is_none());
+    }
+
+    #[test]
+    fn opening_different_workspace_clears_previous_process_effect_state() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        let enabled = runtime.handle(enable("/repo"));
+        let refresh_id = only_effect(&enabled)
+            .effect_id()
+            .expect("refresh effect should have id");
+
+        let opened = runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/other".to_string(),
+        });
+
+        assert!(matches!(
+            opened.events.as_slice(),
+            [ParallelModeControlPlaneEvent::EpochOpened {
+                workspace_directory,
+                epoch_id: 2,
+            }] if workspace_directory == "/other"
+        ));
+        assert!(runtime.store().supervisor_refresh_in_flight.is_none());
+        assert_eq!(runtime.store().current_epoch_id, Some(2));
+
+        let stale = runtime.handle(completed("/repo", 1, refresh_id));
+        assert!(matches!(
+            stale.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { epoch_id: 1, .. }]
+        ));
     }
 
     #[test]
@@ -788,6 +979,51 @@ mod tests {
             .count();
         assert_eq!(run_effects, 1);
         assert!(runtime.store().pending_orchestrator_wake.is_none());
+    }
+
+    #[test]
+    fn orchestrator_tick_tracks_signature_and_drains_queued_wake() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo".to_string(),
+        });
+
+        let tick_started = runtime.handle(tick("/repo", "sig-1"));
+        let tick_id = only_effect(&tick_started)
+            .effect_id()
+            .expect("tick effect should have id");
+        assert!(matches!(
+            tick_started.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::RunOrchestratorTick { .. }]
+        ));
+
+        let duplicate = runtime.handle(tick("/repo", "sig-1"));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+
+        let queued_wake = runtime.handle(wake("/repo", 1));
+        assert_eq!(
+            queued_wake.events,
+            vec![ParallelModeControlPlaneEvent::OrchestratorWakeQueued {
+                trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                epoch_id: 1,
+            }]
+        );
+        assert!(queued_wake.effects.is_empty());
+
+        let completed = runtime.handle(completed("/repo", 1, tick_id));
+        assert!(matches!(
+            completed.events.as_slice(),
+            [
+                ParallelModeControlPlaneEvent::EffectCompleted { .. },
+                ParallelModeControlPlaneEvent::OrchestratorWakeDequeued { .. },
+                ParallelModeControlPlaneEvent::EffectStarted { .. }
+            ]
+        ));
+        assert!(matches!(
+            completed.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::RunOrchestrator { .. }]
+        ));
     }
 
     #[test]

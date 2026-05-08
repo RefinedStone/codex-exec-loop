@@ -6,7 +6,12 @@ use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay}
 use crate::application::service::parallel_mode::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
     ParallelModeOrchestratorTrigger, ParallelModeService,
-    control_plane::ParallelModeControlPlaneWorkerEvent,
+    control_plane::{
+        ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffect,
+        ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEvent,
+        ParallelModeControlPlaneRuntimeOutcome, ParallelModeControlPlaneWake,
+        ParallelModeControlPlaneWorkerEvent,
+    },
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
@@ -40,6 +45,51 @@ impl NativeTuiApp {
     }
     pub(crate) fn parallel_mode_service(&self) -> &ParallelModeService {
         &self.parallel_mode_service
+    }
+    pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
+        self.parallel_mode_control_plane_runtime
+            .store()
+            .current_epoch_id
+    }
+    pub(crate) fn parallel_mode_supervisor_refresh_in_flight(&self) -> bool {
+        self.parallel_mode_control_plane_runtime
+            .store()
+            .supervisor_refresh_in_flight
+            .is_some()
+    }
+    pub(crate) fn parallel_mode_orchestrator_wake_in_flight(&self) -> bool {
+        self.parallel_mode_control_plane_runtime
+            .store()
+            .orchestrator_wake_in_flight
+            .is_some()
+    }
+    pub(crate) fn parallel_mode_orchestrator_tick_in_flight(&self) -> bool {
+        self.parallel_mode_control_plane_runtime
+            .store()
+            .orchestrator_tick_in_flight
+            .is_some()
+    }
+    pub(crate) fn parallel_mode_control_effect_in_flight(&self) -> bool {
+        self.parallel_mode_supervisor_refresh_in_flight()
+            || self.parallel_mode_orchestrator_wake_in_flight()
+            || self.parallel_mode_orchestrator_tick_in_flight()
+    }
+    #[cfg(test)]
+    pub(crate) fn set_parallel_mode_automation_epoch_for_test(&mut self, epoch_id: u64) {
+        let workspace_directory = self.planning_workspace_directory();
+        self.parallel_mode_control_plane_runtime
+            .force_epoch_for_test(workspace_directory, epoch_id);
+    }
+    #[cfg(test)]
+    pub(crate) fn mark_parallel_mode_supervisor_refresh_in_flight_for_test(
+        &mut self,
+    ) -> (u64, ParallelModeControlPlaneEffectId) {
+        let workspace_directory = self.planning_workspace_directory();
+        let epoch_id = self.parallel_mode_automation_epoch_id().unwrap_or(1);
+        let effect_id = self
+            .parallel_mode_control_plane_runtime
+            .force_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id);
+        (epoch_id, effect_id)
     }
     pub(crate) fn last_parallel_mode_automation_trigger(
         &self,
@@ -127,13 +177,12 @@ impl NativeTuiApp {
                     ParallelModeLoadingStage::RefreshingBoard,
                 ));
         }
-        if self.parallel_mode_supervisor_refresh_in_flight {
-            return;
-        }
-        self.spawn_parallel_mode_supervisor_snapshot_refresh(
-            workspace_directory,
-            readiness_snapshot,
+        let outcome = self.parallel_mode_control_plane_runtime.handle(
+            ParallelModeControlPlaneCommand::RefreshSupervisor {
+                workspace_directory,
+            },
         );
+        self.apply_parallel_mode_control_plane_outcome(outcome);
     }
 
     pub(crate) fn refresh_parallel_mode_readiness_snapshot(
@@ -175,6 +224,140 @@ impl NativeTuiApp {
         snapshot
     }
 
+    fn apply_parallel_mode_control_plane_outcome(
+        &mut self,
+        outcome: ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        for event in outcome.events {
+            match event {
+                ParallelModeControlPlaneEvent::StaleCommandDropped {
+                    workspace_directory,
+                    epoch_id,
+                    reason,
+                } => {
+                    event_log::emit_lazy("parallel_control_plane_stale_command_dropped", || {
+                        serde_json::json!({
+                            "workspace": workspace_directory,
+                            "epoch_id": epoch_id,
+                            "reason": reason,
+                        })
+                    });
+                }
+                ParallelModeControlPlaneEvent::EffectStarted { effect_id } => {
+                    event_log::emit_lazy("parallel_control_plane_effect_started", || {
+                        serde_json::json!({
+                            "sequence": effect_id.sequence,
+                            "kind": effect_id.kind,
+                        })
+                    });
+                }
+                ParallelModeControlPlaneEvent::EffectCompleted { effect_id } => {
+                    event_log::emit_lazy("parallel_control_plane_effect_completed", || {
+                        serde_json::json!({
+                            "sequence": effect_id.sequence,
+                            "kind": effect_id.kind,
+                        })
+                    });
+                }
+                _ => {}
+            }
+        }
+        for effect in outcome.effects {
+            self.apply_parallel_mode_control_plane_effect(effect);
+        }
+    }
+
+    fn apply_parallel_mode_control_plane_effect(&mut self, effect: ParallelModeControlPlaneEffect) {
+        match effect {
+            ParallelModeControlPlaneEffect::RefreshSupervisor {
+                effect_id,
+                workspace_directory,
+                epoch_id,
+            } => {
+                let Some(readiness_snapshot) = self.parallel_mode_readiness_snapshot.clone() else {
+                    let completion = self.parallel_mode_control_plane_runtime.handle(
+                        ParallelModeControlPlaneCommand::EffectCompleted {
+                            workspace_directory,
+                            epoch_id,
+                            effect_id,
+                        },
+                    );
+                    self.apply_parallel_mode_control_plane_outcome(completion);
+                    return;
+                };
+                self.spawn_parallel_mode_supervisor_snapshot_refresh(
+                    workspace_directory,
+                    readiness_snapshot,
+                    epoch_id,
+                    effect_id,
+                );
+            }
+            ParallelModeControlPlaneEffect::RunOrchestrator { effect_id, wake } => {
+                self.last_parallel_mode_automation_trigger = Some(wake.trigger);
+                self.last_parallel_mode_dispatch_withheld_reason = None;
+                event_log::emit_lazy("parallel_dispatch_requested", || {
+                    serde_json::json!({
+                        "trigger": wake.trigger.label(),
+                        "workspace": &wake.workspace_directory,
+                        "epoch_id": wake.epoch_id,
+                        "effect_sequence": effect_id.sequence,
+                    })
+                });
+                self.spawn_parallel_mode_orchestrator_wake_worker(
+                    wake.workspace_directory,
+                    wake.trigger,
+                    wake.epoch_id,
+                    wake.enqueue_trigger,
+                    effect_id,
+                );
+            }
+            ParallelModeControlPlaneEffect::RunOrchestratorTick {
+                effect_id,
+                workspace_directory,
+                epoch_id,
+                signature,
+            } => {
+                self.spawn_parallel_mode_orchestrator_tick_worker(
+                    workspace_directory,
+                    signature,
+                    epoch_id,
+                    effect_id,
+                );
+            }
+            ParallelModeControlPlaneEffect::CancelDispatchCommands {
+                workspace_directory,
+                reason,
+            } => {
+                let _ = self
+                    .parallel_mode_service
+                    .cancel_dispatch_commands(&workspace_directory, &reason);
+            }
+        }
+    }
+
+    fn complete_parallel_mode_control_plane_effect(
+        &mut self,
+        workspace_directory: &str,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+    ) -> (bool, ParallelModeControlPlaneRuntimeOutcome) {
+        let outcome = self.parallel_mode_control_plane_runtime.handle(
+            ParallelModeControlPlaneCommand::EffectCompleted {
+                workspace_directory: workspace_directory.to_string(),
+                epoch_id,
+                effect_id,
+            },
+        );
+        let accepted = outcome.events.iter().any(|event| {
+            matches!(
+                event,
+                ParallelModeControlPlaneEvent::EffectCompleted { effect_id: completed }
+                    if *completed == effect_id
+            )
+        });
+        (accepted, outcome)
+    }
+
     pub(super) fn show_supersession_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::SupersessionOverlayShown);
     }
@@ -205,10 +388,6 @@ impl NativeTuiApp {
                 // resumes immediately.
                 self.close_parallel_mode_automation_epoch();
                 self.parallel_mode_enabled = false;
-                self.parallel_mode_supervisor_refresh_in_flight = false;
-                self.parallel_mode_orchestrator_wake_in_flight = false;
-                self.parallel_mode_orchestrator_tick_in_flight = false;
-                self.last_parallel_mode_orchestrator_tick_signature = None;
                 self.sync_parallel_mode_supervisor_snapshot(false);
                 if self.shell_overlay == ShellOverlay::Supersession {
                     self.close_shell_overlay();
@@ -240,8 +419,8 @@ impl NativeTuiApp {
                 let reset_pool_on_off_to_on_entry = !self.parallel_mode_enabled;
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
-                self.parallel_mode_supervisor_refresh_in_flight = false;
-                self.last_parallel_mode_orchestrator_tick_signature = None;
+                self.parallel_mode_control_plane_runtime
+                    .reset_orchestrator_tick_signature();
                 self.parallel_mode_supervisor_snapshot =
                     Some(pending_parallel_mode_supervisor_snapshot(
                         &workspace_directory,
@@ -264,15 +443,16 @@ impl NativeTuiApp {
     }
 
     fn spawn_parallel_mode_supervisor_snapshot_refresh(
-        &mut self,
+        &self,
         workspace_directory: String,
         readiness_snapshot: ParallelModeReadinessSnapshot,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let mode_enabled = self.parallel_mode_enabled();
         let tx = self.tx.clone();
 
-        self.parallel_mode_supervisor_refresh_in_flight = true;
         thread::spawn(move || {
             event_log::emit_lazy("parallel_supervisor_refresh_started", || {
                 serde_json::json!({
@@ -295,6 +475,8 @@ impl NativeTuiApp {
             });
             let _ = tx.send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
                 workspace_directory,
+                epoch_id,
+                effect_id,
                 supervisor_snapshot: Box::new(supervisor_snapshot),
             });
         });
@@ -303,9 +485,7 @@ impl NativeTuiApp {
     fn maybe_spawn_parallel_mode_orchestrator_tick(&mut self, workspace_directory: &str) {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
-            || self.parallel_mode_orchestrator_tick_in_flight
-            || self.parallel_mode_supervisor_refresh_in_flight
-            || self.parallel_mode_orchestrator_wake_in_flight
+            || self.parallel_mode_control_effect_in_flight()
         {
             return;
         }
@@ -322,26 +502,21 @@ impl NativeTuiApp {
         let Some(signature) = parallel_mode_distributor_tick_signature(snapshot) else {
             return;
         };
-        if self
-            .last_parallel_mode_orchestrator_tick_signature
-            .as_deref()
-            == Some(signature.as_str())
-        {
-            return;
-        }
-
-        self.last_parallel_mode_orchestrator_tick_signature = Some(signature.clone());
-        self.parallel_mode_orchestrator_tick_in_flight = true;
-        self.spawn_parallel_mode_orchestrator_tick_worker(
-            workspace_directory.to_string(),
-            signature,
+        let outcome = self.parallel_mode_control_plane_runtime.handle(
+            ParallelModeControlPlaneCommand::RunOrchestratorTick {
+                workspace_directory: workspace_directory.to_string(),
+                signature,
+            },
         );
+        self.apply_parallel_mode_control_plane_outcome(outcome);
     }
 
     fn spawn_parallel_mode_orchestrator_tick_worker(
         &self,
         workspace_directory: String,
         signature: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let tx = self.tx.clone();
@@ -374,6 +549,8 @@ impl NativeTuiApp {
             });
             let _ = tx.send(BackgroundMessage::ParallelModeOrchestratorTickCompleted {
                 workspace_directory,
+                epoch_id,
+                effect_id,
                 blocked,
                 notices,
             });
@@ -539,7 +716,7 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.parallel_mode_automation_epoch_id.is_none() {
+        if self.parallel_mode_automation_epoch_id().is_none() {
             let reason = format!(
                 "task update `{task_id}` accepted before a parallel automation epoch opened"
             );
@@ -627,19 +804,24 @@ impl NativeTuiApp {
     }
 
     fn open_parallel_mode_automation_epoch(&mut self) -> u64 {
-        if let Some(epoch_id) = self.parallel_mode_automation_epoch_id {
+        if let Some(epoch_id) = self.parallel_mode_automation_epoch_id() {
             return epoch_id;
         }
 
-        let epoch_id = self.next_parallel_mode_automation_epoch_id;
-        self.next_parallel_mode_automation_epoch_id = self
-            .next_parallel_mode_automation_epoch_id
-            .saturating_add(1);
-        self.parallel_mode_automation_epoch_id = Some(epoch_id);
+        let workspace_directory = self.planning_workspace_directory();
+        let outcome = self.parallel_mode_control_plane_runtime.handle(
+            ParallelModeControlPlaneCommand::OpenEpoch {
+                workspace_directory: workspace_directory.clone(),
+            },
+        );
+        let epoch_id = self
+            .parallel_mode_automation_epoch_id()
+            .expect("open epoch command should create a current epoch");
         self.last_parallel_mode_dispatch_withheld_reason = None;
+        self.apply_parallel_mode_control_plane_outcome(outcome);
         event_log::emit_lazy("parallel_automation_epoch_opened", || {
             serde_json::json!({
-                "workspace": self.planning_workspace_directory(),
+                "workspace": workspace_directory,
                 "epoch_id": epoch_id,
             })
         });
@@ -647,7 +829,7 @@ impl NativeTuiApp {
     }
 
     fn open_parallel_mode_automation_epoch_for_entry(&mut self) -> (u64, bool) {
-        if let Some(epoch_id) = self.parallel_mode_automation_epoch_id {
+        if let Some(epoch_id) = self.parallel_mode_automation_epoch_id() {
             return (epoch_id, false);
         }
 
@@ -656,15 +838,18 @@ impl NativeTuiApp {
 
     fn close_parallel_mode_automation_epoch(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        let _ = self
-            .parallel_mode_service
-            .cancel_dispatch_commands(&workspace_directory, "parallel mode disabled");
-        let epoch_id = self.parallel_mode_automation_epoch_id.take();
+        let epoch_id = self.parallel_mode_automation_epoch_id();
+        let outcome = self.parallel_mode_control_plane_runtime.handle(
+            ParallelModeControlPlaneCommand::Disable {
+                workspace_directory: workspace_directory.clone(),
+            },
+        );
+        self.apply_parallel_mode_control_plane_outcome(outcome);
         self.last_parallel_mode_dispatch_withheld_reason = None;
         if let Some(epoch_id) = epoch_id {
             event_log::emit_lazy("parallel_automation_epoch_closed", || {
                 serde_json::json!({
-                    "workspace": self.planning_workspace_directory(),
+                    "workspace": workspace_directory,
                     "epoch_id": epoch_id,
                 })
             });
@@ -676,7 +861,7 @@ impl NativeTuiApp {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
     ) {
-        let Some(epoch_id) = self.parallel_mode_automation_epoch_id else {
+        let Some(epoch_id) = self.parallel_mode_automation_epoch_id() else {
             self.record_parallel_mode_dispatch_withheld(
                 Some(trigger),
                 "automation epoch is not open",
@@ -707,7 +892,7 @@ impl NativeTuiApp {
             return;
         }
 
-        if self.parallel_mode_orchestrator_wake_in_flight {
+        if self.parallel_mode_orchestrator_wake_in_flight() {
             let queue_detail = match self.enqueue_parallel_mode_orchestrator_command(
                 &workspace_directory,
                 trigger,
@@ -722,22 +907,15 @@ impl NativeTuiApp {
             return;
         }
 
-        self.parallel_mode_orchestrator_wake_in_flight = true;
-        self.last_parallel_mode_automation_trigger = Some(trigger);
-        self.last_parallel_mode_dispatch_withheld_reason = None;
-        event_log::emit_lazy("parallel_dispatch_requested", || {
-            serde_json::json!({
-                "trigger": trigger.label(),
-                "workspace": &workspace_directory,
-                "epoch_id": epoch_id,
-            })
-        });
-        self.spawn_parallel_mode_orchestrator_wake_worker(
-            workspace_directory,
-            trigger,
-            epoch_id,
-            Some(trigger),
+        let outcome = self.parallel_mode_control_plane_runtime.handle(
+            ParallelModeControlPlaneCommand::WakeOrchestrator(ParallelModeControlPlaneWake::new(
+                workspace_directory,
+                trigger,
+                epoch_id,
+                Some(trigger),
+            )),
         );
+        self.apply_parallel_mode_control_plane_outcome(outcome);
     }
 
     fn maybe_start_parallel_mode_entry_dispatch(&mut self, workspace_directory: &str) -> bool {
@@ -749,7 +927,7 @@ impl NativeTuiApp {
             return false;
         }
 
-        let Some(epoch_id) = self.parallel_mode_automation_epoch_id else {
+        let Some(epoch_id) = self.parallel_mode_automation_epoch_id() else {
             return false;
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -770,7 +948,7 @@ impl NativeTuiApp {
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
     ) {
-        if self.parallel_mode_automation_epoch_id != Some(epoch_id) {
+        if self.parallel_mode_automation_epoch_id() != Some(epoch_id) {
             event_log::emit_lazy("parallel_dispatch_blocked", || {
                 serde_json::json!({
                     "trigger": trigger.label(),
@@ -820,7 +998,7 @@ impl NativeTuiApp {
         &mut self,
         workspace_directory: &str,
     ) -> Result<usize, String> {
-        let Some(epoch_id) = self.parallel_mode_automation_epoch_id else {
+        let Some(epoch_id) = self.parallel_mode_automation_epoch_id() else {
             return Ok(0);
         };
         let planning_snapshot = self
@@ -837,17 +1015,17 @@ impl NativeTuiApp {
     }
 
     pub(super) fn maybe_wake_parallel_mode_orchestrator_for_pending_command(&mut self) -> bool {
-        if !self.parallel_mode_enabled() || self.parallel_mode_automation_epoch_id.is_none() {
+        if !self.parallel_mode_enabled() || self.parallel_mode_automation_epoch_id().is_none() {
             return false;
         }
         if self.parallel_mode_orchestrator_wake_should_defer()
-            || self.parallel_mode_orchestrator_wake_in_flight
+            || self.parallel_mode_control_effect_in_flight()
         {
             return false;
         }
         let workspace_directory = self.planning_workspace_directory();
         let epoch_id = self
-            .parallel_mode_automation_epoch_id
+            .parallel_mode_automation_epoch_id()
             .expect("checked automation epoch should exist");
         match self
             .parallel_mode_service
@@ -855,15 +1033,10 @@ impl NativeTuiApp {
         {
             Ok(None) => false,
             Ok(Some(wake)) => {
-                self.parallel_mode_orchestrator_wake_in_flight = true;
-                self.last_parallel_mode_automation_trigger = Some(wake.trigger);
-                self.last_parallel_mode_dispatch_withheld_reason = None;
-                self.spawn_parallel_mode_orchestrator_wake_worker(
-                    wake.workspace_directory,
-                    wake.trigger,
-                    wake.epoch_id,
-                    wake.enqueue_trigger,
-                );
+                let outcome = self
+                    .parallel_mode_control_plane_runtime
+                    .handle(ParallelModeControlPlaneCommand::WakeOrchestrator(wake));
+                self.apply_parallel_mode_control_plane_outcome(outcome);
                 true
             }
             Err(error) => {
@@ -887,7 +1060,7 @@ impl NativeTuiApp {
             serde_json::json!({
                 "trigger": trigger.map(|value| value.label()),
                 "workspace": self.planning_workspace_directory(),
-                "epoch_id": self.parallel_mode_automation_epoch_id,
+                "epoch_id": self.parallel_mode_automation_epoch_id(),
                 "blocked_reason": reason,
             })
         });
@@ -899,6 +1072,7 @@ impl NativeTuiApp {
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
         enqueue_trigger: Option<ParallelModeAutomationTrigger>,
+        effect_id: ParallelModeControlPlaneEffectId,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let parallel_agent_worker_port = self.parallel_agent_worker_port.clone();
@@ -929,6 +1103,7 @@ impl NativeTuiApp {
 
             let _ = tx.send(BackgroundMessage::ParallelModeOrchestratorWakeCompleted {
                 workspace_directory: result.workspace_directory,
+                effect_id,
                 readiness_snapshot: result.readiness_snapshot,
                 supervisor_snapshot: Box::new(result.supervisor_snapshot),
                 outcome: result.outcome,
@@ -946,7 +1121,6 @@ impl NativeTuiApp {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
-            self.parallel_mode_supervisor_refresh_in_flight = false;
             return;
         }
 
@@ -971,11 +1145,9 @@ impl NativeTuiApp {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
-            self.parallel_mode_supervisor_refresh_in_flight = false;
             return;
         }
 
-        self.parallel_mode_supervisor_refresh_in_flight = false;
         self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
         self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
@@ -999,16 +1171,34 @@ impl NativeTuiApp {
     pub(super) fn apply_parallel_mode_supervisor_snapshot_refreshed(
         &mut self,
         workspace_directory: &str,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         supervisor_snapshot: ParallelModeSupervisorSnapshot,
     ) {
-        self.parallel_mode_supervisor_refresh_in_flight = false;
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
+            let outcome = self.parallel_mode_control_plane_runtime.handle(
+                ParallelModeControlPlaneCommand::Disable {
+                    workspace_directory: workspace_directory.to_string(),
+                },
+            );
+            self.apply_parallel_mode_control_plane_outcome(outcome);
+            return;
+        }
+
+        let (effect_completed, outcome) = self.complete_parallel_mode_control_plane_effect(
+            workspace_directory,
+            epoch_id,
+            effect_id,
+        );
+        if !effect_completed {
+            self.apply_parallel_mode_control_plane_outcome(outcome);
             return;
         }
 
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        self.apply_parallel_mode_control_plane_outcome(outcome);
         self.maybe_wake_parallel_mode_orchestrator_for_pending_command();
         self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
     }
@@ -1016,19 +1206,33 @@ impl NativeTuiApp {
     pub(super) fn apply_parallel_mode_orchestrator_wake_completed(
         &mut self,
         workspace_directory: &str,
+        effect_id: ParallelModeControlPlaneEffectId,
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: ParallelModeSupervisorSnapshot,
         outcome: ParallelModeDispatchOutcome,
     ) {
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
-            || self.parallel_mode_automation_epoch_id != Some(outcome.epoch_id)
         {
-            self.parallel_mode_orchestrator_wake_in_flight = false;
+            let runtime_outcome = self.parallel_mode_control_plane_runtime.handle(
+                ParallelModeControlPlaneCommand::Disable {
+                    workspace_directory: workspace_directory.to_string(),
+                },
+            );
+            self.apply_parallel_mode_control_plane_outcome(runtime_outcome);
             return;
         }
 
-        self.parallel_mode_orchestrator_wake_in_flight = false;
+        let (effect_completed, runtime_outcome) = self.complete_parallel_mode_control_plane_effect(
+            workspace_directory,
+            outcome.epoch_id,
+            effect_id,
+        );
+        if self.parallel_mode_automation_epoch_id() != Some(outcome.epoch_id) || !effect_completed {
+            self.apply_parallel_mode_control_plane_outcome(runtime_outcome);
+            return;
+        }
+
         self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
         self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
@@ -1056,6 +1260,7 @@ impl NativeTuiApp {
                 "blocked_reason": outcome.blocked_reason,
             })
         });
+        self.apply_parallel_mode_control_plane_outcome(runtime_outcome);
         self.maybe_wake_parallel_mode_orchestrator_for_pending_command();
         self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
     }
@@ -1076,14 +1281,14 @@ impl NativeTuiApp {
         };
         let outcome = event.reduce(
             &current_workspace_directory,
-            self.parallel_mode_automation_epoch_id,
+            self.parallel_mode_automation_epoch_id(),
             has_actionable_queue_head,
         );
         if let Some(reason) = outcome.stale_drop_reason {
             event_log::emit_lazy("parallel_worker_event_dropped", || {
                 serde_json::json!({
                     "workspace": current_workspace_directory,
-                    "epoch_id": self.parallel_mode_automation_epoch_id,
+                    "epoch_id": self.parallel_mode_automation_epoch_id(),
                     "reason": reason,
                 })
             });
@@ -1110,13 +1315,30 @@ impl NativeTuiApp {
     pub(super) fn apply_parallel_mode_orchestrator_tick_completed(
         &mut self,
         workspace_directory: &str,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         blocked: bool,
         notices: Vec<String>,
     ) {
-        self.parallel_mode_orchestrator_tick_in_flight = false;
         if !self.parallel_mode_enabled()
             || self.planning_workspace_directory() != workspace_directory
         {
+            let outcome = self.parallel_mode_control_plane_runtime.handle(
+                ParallelModeControlPlaneCommand::Disable {
+                    workspace_directory: workspace_directory.to_string(),
+                },
+            );
+            self.apply_parallel_mode_control_plane_outcome(outcome);
+            return;
+        }
+
+        let (effect_completed, outcome) = self.complete_parallel_mode_control_plane_effect(
+            workspace_directory,
+            epoch_id,
+            effect_id,
+        );
+        if !effect_completed {
+            self.apply_parallel_mode_control_plane_outcome(outcome);
             return;
         }
 
@@ -1154,6 +1376,7 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
+        self.apply_parallel_mode_control_plane_outcome(outcome);
     }
 }
 

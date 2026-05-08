@@ -6,7 +6,9 @@ use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::{
+    ParallelModeService, control_plane::ParallelModeControlPlaneRuntime,
+};
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::planning::PlanningTaskHandoff;
@@ -300,12 +302,7 @@ struct NativeTuiApp {
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     supersession_mud_ui_state: SupersessionMudUiState,
-    parallel_mode_supervisor_refresh_in_flight: bool,
-    parallel_mode_orchestrator_wake_in_flight: bool,
-    parallel_mode_orchestrator_tick_in_flight: bool,
-    last_parallel_mode_orchestrator_tick_signature: Option<String>,
-    parallel_mode_automation_epoch_id: Option<u64>,
-    next_parallel_mode_automation_epoch_id: u64,
+    parallel_mode_control_plane_runtime: ParallelModeControlPlaneRuntime,
     last_parallel_mode_automation_trigger: Option<ParallelModeAutomationTrigger>,
     last_parallel_mode_dispatch_withheld_reason: Option<String>,
     conversation_state: ConversationState,
