@@ -1,6 +1,7 @@
 use super::super::{ConversationViewModel, NativeTuiApp};
 use crate::application::service::planning::{
-    PlanningRuntimeRepairAttempt, PlanningRuntimeSnapshot, PlanningRuntimeSummaryLineRequest,
+    PlanningApplicationProjection, PlanningRuntimeRepairAttempt, PlanningRuntimeSnapshot,
+    PlanningRuntimeSummaryLineRequest,
 };
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
@@ -226,20 +227,27 @@ fn merge_queue_framing_details(
     }
 }
 
-// Prefer the structured queue projection when it exists: it can distinguish the
-// active task from remaining active work and skipped tasks. Older snapshots only
-// have free-form summaries, so the fallback parser merges any available fields
-// with queue-head and proposal data.
+// Prefer the structured application projection when it exists: it can distinguish
+// the active task from remaining active work and skipped tasks. Older snapshots
+// only have free-form summaries, so the fallback parser merges any available
+// fields with queue-head and proposal data.
 fn build_queue_framing_details_from_snapshot(
     snapshot: &PlanningRuntimeSnapshot,
     max_detail_len: usize,
 ) -> Option<QueueFramingDetails> {
-    let queue_projection = snapshot.queue_projection();
-    let has_queue_context = snapshot.workspace_present()
-        || snapshot.queue_head().is_some()
-        || snapshot.queue_summary().is_some()
-        || snapshot.proposal_summary().is_some()
-        || queue_projection.is_some();
+    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+    build_queue_framing_details_from_application_projection(&projection, max_detail_len)
+}
+
+fn build_queue_framing_details_from_application_projection(
+    projection: &PlanningApplicationProjection,
+    max_detail_len: usize,
+) -> Option<QueueFramingDetails> {
+    let has_queue_context = projection.workspace_present
+        || projection.queue_head.is_some()
+        || projection.queue_summary.is_some()
+        || projection.proposal_summary.is_some()
+        || projection.has_structured_queue_projection;
     if !has_queue_context {
         return None;
     }
@@ -249,24 +257,23 @@ fn build_queue_framing_details_from_snapshot(
         proposed_detail: "none".to_string(),
         blocked_detail: "none".to_string(),
     };
-    if let Some(queue_projection) = queue_projection {
-        let current_task = queue_projection
-            .next_task
+    if projection.has_structured_queue_projection {
+        let current_task = projection
+            .queue_head
             .as_ref()
-            .or_else(|| queue_projection.active_tasks.first())
-            .or_else(|| snapshot.queue_head());
+            .or_else(|| projection.visible_tasks.first());
         let now_detail = current_task
             .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
             .unwrap_or_else(|| "none".to_string());
         let remaining_tasks = current_task
             .map(|current| {
-                queue_projection
-                    .active_tasks
+                projection
+                    .visible_tasks
                     .iter()
                     .filter(|task| task.task_id != current.task_id)
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_else(|| queue_projection.active_tasks.iter().collect::<Vec<_>>());
+            .unwrap_or_else(|| projection.visible_tasks.iter().collect::<Vec<_>>());
         let next_detail = remaining_tasks
             .first()
             .map(|task| {
@@ -278,31 +285,32 @@ fn build_queue_framing_details_from_snapshot(
                 )
             })
             .unwrap_or_else(|| "none".to_string());
-        let proposed_detail = queue_projection
+        let proposed_detail = projection
             .proposed_tasks
             .first()
             .map(|task| {
                 compact_queue_task_summary(
                     task.task_title.as_str(),
-                    queue_projection.proposed_tasks.len(),
+                    projection.proposed_tasks.len(),
                     1,
                     max_detail_len,
                 )
             })
             .or_else(|| {
-                snapshot
-                    .proposal_summary()
+                projection
+                    .proposal_summary
+                    .as_deref()
                     .map(|summary| compact_proposal_summary_detail(summary, max_detail_len))
             })
             .unwrap_or_else(|| "none".to_string());
-        let blocked_detail = queue_projection
+        let blocked_detail = projection
             .skipped_tasks
             .first()
             .map(|task| {
                 let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
                 let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
                 let mut summary = format!("{title} ({reason})");
-                let hidden_count = queue_projection.skipped_tasks.len().saturating_sub(1);
+                let hidden_count = projection.skipped_tasks.len().saturating_sub(1);
                 if hidden_count > 0 {
                     summary.push_str(&format!(" (+{hidden_count} more)"));
                 }
@@ -316,16 +324,16 @@ fn build_queue_framing_details_from_snapshot(
             blocked_detail,
         });
     }
-    if let Some(queue_head) = snapshot.queue_head() {
+    if let Some(queue_head) = projection.queue_head.as_ref() {
         details.now_detail =
             compact_queue_task_summary(queue_head.task_title.as_str(), 1, 1, max_detail_len);
     }
-    if let Some(queue_summary) = snapshot.queue_summary()
+    if let Some(queue_summary) = projection.queue_summary.as_deref()
         && let Some(parsed_details) = parse_queue_framing_details(queue_summary, max_detail_len)
     {
         merge_queue_framing_details(&mut details, parsed_details);
     }
-    if let Some(proposal_summary) = snapshot.proposal_summary() {
+    if let Some(proposal_summary) = projection.proposal_summary.as_deref() {
         details.proposed_detail = compact_proposal_summary_detail(proposal_summary, max_detail_len);
     }
 

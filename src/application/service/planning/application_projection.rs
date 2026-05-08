@@ -17,6 +17,7 @@ pub struct PlanningApplicationProjection {
     pub proposal_summary: Option<String>,
     pub queue_idle_policy: QueueIdlePolicy,
     pub queue_idle_prompt_path: Option<String>,
+    pub has_structured_queue_projection: bool,
     pub queue_head: Option<PlanningApplicationQueueTask>,
     pub visible_tasks: Vec<PlanningApplicationQueueTask>,
     pub proposed_tasks: Vec<PlanningApplicationQueueTask>,
@@ -93,6 +94,7 @@ impl PlanningApplicationProjection {
             proposal_summary: snapshot.proposal_summary().map(str::to_string),
             queue_idle_policy: snapshot.queue_idle_policy(),
             queue_idle_prompt_path: snapshot.queue_idle_prompt_path().map(str::to_string),
+            has_structured_queue_projection: queue_projection.is_some(),
             queue_head,
             visible_tasks,
             proposed_tasks,
@@ -184,6 +186,7 @@ mod tests {
             projection.queue_idle_policy,
             QueueIdlePolicy::ReviewAndEnqueue
         );
+        assert!(projection.has_structured_queue_projection);
         assert_eq!(
             projection
                 .queue_head
@@ -217,6 +220,7 @@ mod tests {
             Some("planning validation failed: task authority is unavailable")
         );
         assert!(projection.queue_head.is_none());
+        assert!(!projection.has_structured_queue_projection);
         assert!(projection.visible_tasks.is_empty());
         assert!(projection.proposed_tasks.is_empty());
         assert!(projection.skipped_tasks.is_empty());
