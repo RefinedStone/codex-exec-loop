@@ -477,13 +477,22 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 
 - `src/adapter/inbound/tui/app/shell_runtime/tests/*`
 - `src/adapter/inbound/tui/app/shell_rendering*_tests.rs`
-- 필요한 경우 TUI state inventory 문서
+- `new/docs/plan/tui-shell-state-inventory.md`
 
 산출물:
 
 - UI-only state inventory
 - Application Projection cache inventory
 - shell input/rendering regression tests
+
+작업 단위:
+
+- `TUI-00A`: `NativeTuiApp` field별 UI-only, Application Projection Cache,
+  Runtime Bridge, Service Wiring ownership inventory를 작성한다. 완료.
+- `TUI-00B`: `BackgroundMessage`별 target boundary inventory를 작성하고, background
+  message가 reducer/application event로만 들어가는 최소 shell runtime regression을 추가한다.
+- `TUI-00C`: prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는
+  shell input/rendering regression을 추가한다.
 
 금지:
 
