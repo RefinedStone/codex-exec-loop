@@ -14,7 +14,7 @@ use crate::application::port::outbound::telegram_bot_port::{
     TelegramUpdate,
 };
 use crate::application::service::planning::{
-    PlanningAdminFacadeService, PlanningControlCommand, PlanningControlService, PlanningServices,
+    PlanningControlCommand, PlanningControlFacadeService, PlanningControlService, PlanningServices,
 };
 
 /*
@@ -56,8 +56,9 @@ where
         .canonicalize()
         .context("failed to canonicalize current directory for telegram bot")?;
     let workspace_dir = workspace_dir.display().to_string();
-    let control_service =
-        PlanningControlService::new(Arc::new(build_planning_admin_facade(workspace_dir.clone())));
+    let control_service = PlanningControlService::new(Arc::new(build_planning_control_facade(
+        workspace_dir.clone(),
+    )));
 
     // Production wiring: Telegram HTTP adapter + planning control service + local allowlist policy.
     let runner = TelegramBotRunner::new(
@@ -72,10 +73,11 @@ where
     runner.run()
 }
 
-fn build_planning_admin_facade(workspace_dir: String) -> PlanningAdminFacadeService {
+fn build_planning_control_facade(workspace_dir: String) -> PlanningControlFacadeService {
     /*
-    Telegram commands use the same application facade as admin-style planning control.
-    This keeps reset/status/queue behavior identical across CLI, admin API, and chat entrypoints.
+    Telegram commands use the same application control facade as the CLI status/queue commands.
+    This keeps reset/status/queue behavior behind PlanningControlService instead of coupling chat
+    control to the admin management facade.
     */
     let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
         "codex-exec-loop-native",
@@ -91,13 +93,7 @@ fn build_planning_admin_facade(workspace_dir: String) -> PlanningAdminFacadeServ
         planning_authority.clone(),
         Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
     );
-    PlanningAdminFacadeService::from_planning_with_authority(
-        workspace_dir,
-        planning,
-        planning_workspace_port,
-        planning_authority.clone(),
-        planning_authority,
-    )
+    PlanningControlFacadeService::new(workspace_dir, planning)
 }
 
 #[derive(Debug, Clone)]
