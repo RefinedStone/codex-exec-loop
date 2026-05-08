@@ -52,8 +52,8 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P0 | `PAR-04` | done | parallel worker event path |
 | P1 | `DOC-PLAN-00` | done | planning control-plane architecture 작성 |
 | P1 | `PLAN-00` | done | planning regression/audit contract |
-| P1 | `PLAN-01` | ready | planning application facade 표준화 |
-| P1 | `PLAN-02` | blocked | planning domain decision/projection 정리 |
+| P1 | `PLAN-01` | done | planning application facade 표준화 |
+| P1 | `PLAN-02` | ready | planning domain decision/projection 정리 |
 | P2 | `DOC-TUI-00` | ready | TUI/application boundary architecture 작성 |
 | P2 | `TUI-00` | blocked | TUI shell state inventory와 regression |
 | P2 | `TUI-01` | blocked | conversation lifecycle와 automation lifecycle 분리 |
@@ -314,7 +314,7 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 
 ### PLAN-01. Planning Application Facade Standardization
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -347,9 +347,16 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 - planning facade tests
 - TUI/admin/CLI behavior regression
 
+완료 근거:
+
+- `PlanningApplicationProjection`이 queue lane, runtime status, source signature의 공통 read model이 되었다.
+- `/status`, `/queue`, Telegram, admin overview, Akra dashboard, TUI status/queue 표시 경로가 projection 또는 planning control facade를 통과한다.
+- inbound adapter의 read-only status/queue 경로에서 `PriorityQueueService`와 `queue_projection()` 직접 호출을 제거했다.
+- mutation, worker orchestration, repair eligibility 판단은 정책 변경 없이 `PLAN-02`로 넘긴다.
+
 ### PLAN-02. Planning Domain Decision And Projection
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 
