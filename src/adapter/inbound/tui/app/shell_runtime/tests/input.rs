@@ -334,11 +334,16 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     )));
 
     let refreshed_snapshot = build_snapshot("running / refreshed");
+    let (epoch_id, effect_id) = runtime
+        .app_mut()
+        .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
     runtime
         .app
         .tx
         .send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
             workspace_directory,
+            epoch_id,
+            effect_id,
             supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
         })
         .expect("supervisor refresh should enqueue");
@@ -387,7 +392,7 @@ fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
         .refresh_parallel_mode_dispatch_after_task_update("task-added");
 
     assert!(
-        runtime.app().parallel_mode_automation_epoch_id.is_none(),
+        runtime.app().parallel_mode_automation_epoch_id().is_none(),
         "task update must not open the first automation epoch"
     );
     assert_eq!(
@@ -510,7 +515,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         thread::sleep(Duration::from_millis(20));
     }
 
-    assert!(runtime.app().parallel_mode_automation_epoch_id.is_some());
+    assert!(runtime.app().parallel_mode_automation_epoch_id().is_some());
     assert_eq!(
         runtime.app().last_parallel_mode_automation_trigger,
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)

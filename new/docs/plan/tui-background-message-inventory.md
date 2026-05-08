@@ -31,10 +31,10 @@ handler가 DB, filesystem planning authority, parallel dispatch queue, task auth
 | `WakeParallelModeOrchestrator` | post-turn/parallel scheduling effect | parallel application wake request | application control-plane wake, TUI epoch/correlation update only |
 | `ParallelModeEnterProgress` | parallel enable effect | parallel panel projection cache | readiness/supervisor projection cache and status copy |
 | `ParallelModeEntered` | parallel enable effect | parallel panel projection cache | enabled flag, readiness/supervisor projection cache and status copy |
-| `ParallelModeSupervisorSnapshotRefreshed` | parallel refresh effect | parallel panel projection cache | supervisor projection cache only |
-| `ParallelModeOrchestratorWakeCompleted` | parallel control-plane effect | parallel application result mapping | readiness/supervisor projection cache, dispatch outcome notice |
+| `ParallelModeSupervisorSnapshotRefreshed` | parallel refresh effect | application control-plane effect completion, then parallel panel projection cache | effect id/epoch completion must be accepted before supervisor cache update |
+| `ParallelModeOrchestratorWakeCompleted` | parallel control-plane effect | application control-plane effect completion, then parallel application result mapping | effect id/epoch completion must be accepted before readiness/supervisor cache and dispatch outcome notice |
 | `ParallelModeWorkerEvent` | worker completion channel | parallel application control-plane worker event | application service handles worker completion; TUI only routes |
-| `ParallelModeOrchestratorTickCompleted` | parallel tick effect | parallel panel projection cache/application wake state | blocked status and notices; no durable queue mutation |
+| `ParallelModeOrchestratorTickCompleted` | parallel tick effect | application control-plane effect completion, then parallel panel projection cache/application wake state | effect id/epoch completion must be accepted; blocked status and notices do not mutate durable queue directly |
 | `PostTurnEvaluated` | post-turn execution effect | stale guard, then `ConversationRuntimeEvent::PostTurnAutomationEvaluated` reducer | planning worker panel projection, runtime snapshot projection, `PostTurnAutomationProvenance` consumption, queued auto prompt effect |
 | `GithubReviewPollLoaded` | GitHub polling effect | GitHub polling controller/projection cache | polling projection cache only |
 

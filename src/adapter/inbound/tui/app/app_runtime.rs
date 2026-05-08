@@ -6,7 +6,11 @@ use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgen
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneWorkerEvent,
+    ParallelModeService,
+    control_plane::{
+        ParallelModeControlPlaneEffectId, ParallelModeControlPlaneRuntime,
+        ParallelModeControlPlaneWorkerEvent,
+    },
 };
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
@@ -69,10 +73,13 @@ pub(super) enum BackgroundMessage {
     },
     ParallelModeSupervisorSnapshotRefreshed {
         workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
     },
     ParallelModeOrchestratorWakeCompleted {
         workspace_directory: String,
+        effect_id: ParallelModeControlPlaneEffectId,
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         outcome: ParallelModeDispatchOutcome,
@@ -80,6 +87,8 @@ pub(super) enum BackgroundMessage {
     ParallelModeWorkerEvent(ParallelModeControlPlaneWorkerEvent),
     ParallelModeOrchestratorTickCompleted {
         workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         blocked: bool,
         notices: Vec<String>,
     },
@@ -127,12 +136,7 @@ impl NativeTuiApp {
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
-            parallel_mode_supervisor_refresh_in_flight: false,
-            parallel_mode_orchestrator_wake_in_flight: false,
-            parallel_mode_orchestrator_tick_in_flight: false,
-            last_parallel_mode_orchestrator_tick_signature: None,
-            parallel_mode_automation_epoch_id: None,
-            next_parallel_mode_automation_epoch_id: 1,
+            parallel_mode_control_plane_runtime: ParallelModeControlPlaneRuntime::new(),
             last_parallel_mode_automation_trigger: None,
             last_parallel_mode_dispatch_withheld_reason: None,
             conversation_state: ConversationState::ready(initial_conversation),

@@ -497,7 +497,7 @@ impl NativeFlowHarness {
         let epoch_id = self
             .runtime
             .app()
-            .parallel_mode_automation_epoch_id
+            .parallel_mode_automation_epoch_id()
             .expect("automation epoch should be open");
         self.runtime
             .app
@@ -582,7 +582,11 @@ impl NativeFlowHarness {
     fn poll_until_dispatch_idle(&mut self) {
         for _ in 0..750 {
             self.runtime.poll_background_messages();
-            if !self.runtime.app().parallel_mode_orchestrator_wake_in_flight {
+            if !self
+                .runtime
+                .app()
+                .parallel_mode_orchestrator_wake_in_flight()
+            {
                 return;
             }
             thread::sleep(Duration::from_millis(20));
@@ -836,7 +840,7 @@ fn parallel_entry_dispatches_ready_queue_without_main_turn() {
         harness
             .runtime
             .app()
-            .parallel_mode_automation_epoch_id
+            .parallel_mode_automation_epoch_id()
             .is_some()
     );
 }
@@ -1016,7 +1020,10 @@ fn parallel_reentry_while_enabled_refreshes_without_reset_or_dispatch() {
         )
         .expect("existing slot lease should be acquired");
     harness.runtime.app_mut().parallel_mode_enabled = true;
-    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_automation_epoch_for_test(1);
 
     harness.enter_parallel();
     harness.poll_until_status_contains("control tower ready");
@@ -1050,7 +1057,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
         harness
             .runtime
             .app()
-            .parallel_mode_automation_epoch_id
+            .parallel_mode_automation_epoch_id()
             .is_some()
     );
     assert_eq!(
@@ -1194,7 +1201,10 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
     harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
         ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
     );
-    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_automation_epoch_for_test(1);
 
     harness.send_parallel_completion_with_ready_queue_head("parallel-turn-1");
     harness.poll_until_worker_launches(1);
@@ -1224,7 +1234,10 @@ fn parallel_completion_with_drained_queue_alerts_without_dispatching() {
     harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
         ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
     );
-    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_automation_epoch_for_test(1);
 
     harness.send_parallel_completion_with_drained_queue("parallel-turn-drained");
     harness.runtime.poll_background_messages();
@@ -1270,7 +1283,10 @@ fn pending_durable_dispatch_command_polls_without_visible_activity_pulse() {
     harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
         ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
     );
-    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_automation_epoch_for_test(1);
     assert!(!harness.runtime.app().parallel_mode_activity_pulse_visible());
 
     let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
@@ -1482,7 +1498,10 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
     harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
         ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
     );
-    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(2);
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_automation_epoch_for_test(2);
 
     harness
         .runtime
@@ -1513,13 +1532,13 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
         !harness
             .runtime
             .app()
-            .parallel_mode_supervisor_refresh_in_flight
+            .parallel_mode_supervisor_refresh_in_flight()
     );
     assert!(
         !harness
             .runtime
             .app()
-            .parallel_mode_orchestrator_wake_in_flight
+            .parallel_mode_orchestrator_wake_in_flight()
     );
 }
 

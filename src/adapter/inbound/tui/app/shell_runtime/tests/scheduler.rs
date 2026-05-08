@@ -222,7 +222,9 @@ fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().parallel_mode_enabled = true;
-    runtime.app_mut().parallel_mode_supervisor_refresh_in_flight = true;
+    runtime
+        .app_mut()
+        .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,

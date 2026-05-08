@@ -82,16 +82,16 @@ TUI/Admin/CLI가 읽는 이름은 하나로 유지한다.
 | parallel mode enabled 여부 | TUI app state | application runtime store | 자동 dispatch에 영향을 주므로 UI-only가 아니다. TUI는 projection만 가진다. |
 | readiness snapshot | TUI refresh path/application service | Application Projection | 계산은 service/effect, 표시 모델은 projection으로 제공한다. |
 | supervisor snapshot | TUI cache/application service | Application Projection | durable repository/read model에서 조립하되 TUI cache는 마지막 렌더링 값이어야 한다. |
-| in-flight refresh/tick flags | TUI app state | application runtime store | 중복 worker spawn 방지는 single-writer loop가 판단한다. |
-| last tick signature | TUI app state | application runtime store | wake coalescing과 같은 orchestration state다. |
+| in-flight refresh/wake/tick flags | `ParallelModeControlPlaneRuntime` | application runtime store | `STORE-00D`에서 이동 완료. 중복 worker spawn 방지는 runtime effect state가 판단한다. |
+| last tick signature | `ParallelModeControlPlaneRuntime` | application runtime store | `STORE-00D`에서 이동 완료. wake coalescing과 같은 orchestration state다. |
 | overlay open/close | TUI app state | TUI controller | 순수 presentation state다. |
 | board selection/cursor | TUI app state | TUI controller | domain/application으로 올리지 않는다. |
 | prompt lock 표시 | TUI app state | TUI controller | lock 원인은 Application Projection에서 읽되, 표시 상태는 TUI가 가진다. |
 | dispatch command | SQLite authority runtime projection | durable repository/store | 기존 `PlanningAuthorityPort` 경로를 유지한다. |
 | slot lease | lease file + SQLite projection | durable repository/store | load/save 경로는 single-writer loop에서만 호출한다. |
 | session detail | runtime projection | durable repository/store | worker stream event가 직접 UI를 고치지 않게 한다. |
-| wake coalescing | TUI poll/timer | application runtime store | process-lifetime state이므로 DB에 저장하지 않는다. |
-| effect id/epoch | TUI/app mixed | application runtime store | stale completion drop의 기준이다. |
+| wake coalescing | `ParallelModeControlPlaneRuntime`, durable dispatch command poll bridge | application runtime store | process-lifetime state이므로 DB에 저장하지 않는다. durable dispatch command는 별도 authority projection이다. |
+| effect id/epoch | `ParallelModeControlPlaneRuntime` | application runtime store | `STORE-00D`에서 TUI field owner를 제거했다. stale completion drop의 기준이다. |
 
 ## 경계 규칙
 

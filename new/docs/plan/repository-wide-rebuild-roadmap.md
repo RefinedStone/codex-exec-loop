@@ -751,7 +751,7 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime
   boundary로 이동한다. authority-first write order와 mirror-loss recovery 테스트를 유지한다. 완료.
 - `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application
-  control-plane runtime state로 이동한다. `STORE-00B/C` 이후 진행한다. ready.
+  control-plane runtime state로 이동한다. 완료.
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact,
   repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. 완료.
 
@@ -769,6 +769,8 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 
 `STORE-00C` 완료 근거:
 
+- `STORE-00C`에서 pool-local `.leases`, `.agent-sessions`, `.distributor-queue` mirror read/write/remove를
+  `ParallelModeRuntimePort` 경계로 이동했다.
 - `.leases`, `.agent-sessions`, `.distributor-queue` mirror read/write/remove 경로가
   application service helper의 직접 `std::fs` 호출 대신 `ParallelModeRuntimePort` filesystem
   primitive를 사용한다.
@@ -776,6 +778,15 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - `acquire_slot_lease_rolls_back_authority_when_mirror_write_fails`,
   `build_supervisor_snapshot_reads_store_backed_runtime_projections_after_mirror_loss`,
   distributor recovery tests로 mirror failure/loss contract를 검증한다.
+
+`STORE-00D` 완료 근거:
+
+- `NativeTuiApp`에서 supervisor refresh, orchestrator wake, orchestrator tick in-flight flag와
+  automation epoch allocator를 제거하고 `ParallelModeControlPlaneRuntime`가 소유하게 했다.
+- supervisor refresh, dispatch wake, distributor retry tick background completion은 effect id와 epoch id를
+  application runtime에 되돌려 stale completion을 drop한다.
+- TUI scheduler는 runtime helper로 in-flight 여부만 조회하며 poll timestamp와 overlay projection만 inbound
+  bridge state로 남긴다.
 
 `STORE-00E` 완료 근거:
 
@@ -831,17 +842,17 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 현재 바로 시작 가능한 조합:
 
 - `INBOUND-00`
-- `STORE-00D`
+- `TEST-00` (`INBOUND-00` 병합 이후 우선)
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- `INBOUND-00`과 `STORE-00D`
+- 현재는 병렬 조합보다 `INBOUND-00` parent closure와 `TEST-00` taxonomy 순서화가 우선이다.
 
 동시에 진행하면 안 되는 조합:
 
 - `PLAN-01`과 `INBOUND-00`
 - `PAR-04`와 `TUI-01`
-- `STORE-00D`와 parallel control-plane/TUI runtime migration slice
+- 완료된 `STORE-00D` production file을 다시 여는 작업과 별도 TUI runtime migration slice
 
 ## Worker 완료 보고 형식
 

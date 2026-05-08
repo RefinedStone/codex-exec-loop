@@ -32,12 +32,7 @@
 | `parallel_mode_readiness_snapshot` | Application Projection Cache | parallel readiness projection 표시 | TUI가 재계산하지 않고 cache만 유지 |
 | `parallel_mode_supervisor_snapshot` | Application Projection Cache | supervisor/slot/queue projection 표시 | TUI가 dispatch 가능 여부를 재판단하지 않음 |
 | `supersession_mud_ui_state` | UI-only | supersession overlay selection/navigation | TUI presentation state로 유지 |
-| `parallel_mode_supervisor_refresh_in_flight` | Runtime Bridge | refresh effect 중복 실행 방지와 spinner 성격 | command correlation은 application runtime store로 이동 검토 |
-| `parallel_mode_orchestrator_wake_in_flight` | Runtime Bridge | wake effect 중복 실행 방지 | application control-plane wake coalescing으로 이동 검토 |
-| `parallel_mode_orchestrator_tick_in_flight` | Runtime Bridge | tick effect 중복 실행 방지 | application runtime event/correlation으로 이동 검토 |
-| `last_parallel_mode_orchestrator_tick_signature` | Runtime Bridge | repeated tick/result 표시와 중복 guard | application event id 또는 projection으로 이동 검토 |
-| `parallel_mode_automation_epoch_id` | Runtime Bridge | stale automation completion gate | application control-plane epoch로 이동 검토 |
-| `next_parallel_mode_automation_epoch_id` | Runtime Bridge | TUI-local epoch allocation | application runtime allocator로 이동 검토 |
+| `parallel_mode_control_plane_runtime` | Application Runtime Bridge | refresh/wake/tick effect id, epoch, wake coalescing, tick signature를 process-lifetime runtime state로 관리 | `STORE-00D`에서 application control-plane runtime owner로 이동 완료. TUI는 helper 조회와 effect runner만 담당 |
 | `last_parallel_mode_automation_trigger` | Runtime Bridge | 마지막 automation trigger 표시/guard | application projection notice로 낮추기 |
 | `last_parallel_mode_dispatch_withheld_reason` | Application Projection Cache | dispatch withheld reason 표시 | domain/application decision result를 표시만 함 |
 | `conversation_state` | Audited Aggregate | `ConversationState` wrapper와 `ConversationViewModel` 하위 field가 transcript, prompt readiness, stream projection, planning snapshot, automation correlation을 함께 보유 | 아래 `Conversation State 하위 소유권 감사 결과`를 authority로 삼고, 새 field는 하위 표에 먼저 추가 |
