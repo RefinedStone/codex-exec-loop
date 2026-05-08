@@ -119,6 +119,10 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "role-events",
         "data-focus-target=\"pipeline\"",
         "data-event-drawer",
+        "data-detail-drawer",
+        "data-refresh-dashboard",
+        "openDetailDrawer",
+        "openRefreshDetail",
         "data-event-feed-status",
         "akra-office-background.png",
         "akra-object-sprites.png",
@@ -187,6 +191,12 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "--office-bg-image",
         "--object-sprite-sheet",
         "var(--office-bg-image)",
+        "data-detail-type=\"slot\"",
+        "data-detail-type=\"agent\"",
+        "data-detail-type=\"distributor\"",
+        "data-detail-type=\"queueItem\"",
+        "class=\"admin-detail-drawer\"",
+        "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)
@@ -202,6 +212,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "admin-character-sprites.svg",
         "ADMIN_GRAPHIC_CAPTURE",
         "akra-admin",
+        "/admin/akra",
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
         "/api/admin/akra/dashboard",

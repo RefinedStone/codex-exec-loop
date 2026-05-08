@@ -103,9 +103,10 @@ cargo run --quiet --bin akra-admin -- --port "${port}" >"${server_log}" 2>&1 &
 server_pid="$!"
 
 base_url="http://127.0.0.1:${port}"
-wait_for_server "${base_url}/admin"
+graphic_url="${base_url}/admin/akra"
+wait_for_server "${graphic_url}"
 
-curl -fsS "${base_url}/admin" >"${admin_html}"
+curl -fsS "${graphic_url}" >"${admin_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
@@ -137,6 +138,10 @@ for token in \
   'data-poll-interval-ms' \
   'data-focus-target="pipeline"' \
   'data-event-drawer' \
+  'data-detail-drawer' \
+  'data-refresh-dashboard' \
+  'openDetailDrawer' \
+  'openRefreshDetail' \
   'data-event-feed-status' \
   '/assets/admin/admin-character-sprites.svg' \
   'background-image: var(--object-sprite-sheet)' \
@@ -211,7 +216,7 @@ fi
 
 browser_path="$(find_browser || true)"
 if [[ -n "${browser_path}" ]]; then
-  if capture_with_browser "${browser_path}" "${base_url}/admin"; then
+  if capture_with_browser "${browser_path}" "${graphic_url}"; then
     sha256sum "${screenshot_path}" >"${output_dir}/admin-graphic.sha256"
     echo "admin graphic screenshot captured: ${screenshot_path}"
   elif [[ "${capture_mode}" == "always" ]]; then

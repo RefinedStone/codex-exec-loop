@@ -32,7 +32,7 @@
   }
   .akra-topbar {
     display: grid;
-    grid-template-columns: minmax(260px, 1fr) repeat(3, auto) minmax(180px, auto);
+    grid-template-columns: minmax(260px, 1fr) repeat(4, auto) minmax(180px, auto);
     gap: 18px;
     align-items: center;
     padding: 0 2px 16px;
@@ -118,6 +118,35 @@
   .admin-user strong,
   .admin-user small {
     display: block;
+  }
+  .graphic-action-btn,
+  .drawer-close {
+    appearance: none;
+    color: var(--game-ink);
+    font: inherit;
+    cursor: pointer;
+    border-radius: 0;
+    border: 2px solid rgba(93, 169, 255, 0.38);
+    background: rgba(93, 169, 255, 0.12);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.08);
+  }
+  .graphic-action-btn {
+    min-height: 40px;
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+  .graphic-action-btn:hover,
+  .drawer-close:hover {
+    border-color: rgba(53, 208, 127, 0.55);
+    background: rgba(53, 208, 127, 0.13);
+  }
+  .graphic-action-btn:active,
+  .drawer-close:active,
+  .slot-card:active,
+  .scene-object:active,
+  .event-row:active,
+  .queue-row[data-detail-type]:active {
+    transform: translate(2px, 2px);
   }
   .kpi-grid {
     display: grid;
@@ -266,7 +295,8 @@
   }
   .slot-card.is-selected,
   .scene-object.is-selected,
-  .event-row.is-selected {
+  .event-row.is-selected,
+  .queue-row.is-selected {
     border-color: rgba(245, 200, 75, 0.72);
     box-shadow: 0 0 0 3px rgba(245, 200, 75, 0.12);
   }
@@ -577,6 +607,16 @@
     grid-template-columns: 40px minmax(0, 1fr) auto;
     align-items: center;
   }
+  .queue-row[data-detail-type] {
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    border-left: 0;
+    border-right: 0;
+    border-top: 0;
+    background: transparent;
+    cursor: pointer;
+  }
   .queue-row .agent-token {
     display: grid;
     place-items: center;
@@ -652,6 +692,98 @@
     overflow-wrap: anywhere;
     color: var(--game-muted);
   }
+  .admin-detail-drawer {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 40;
+    width: 430px;
+    max-width: calc(100vw - 48px);
+    border: 2px solid rgba(154, 180, 220, 0.36);
+    border-radius: 0;
+    background: rgba(8, 18, 32, 0.97);
+    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.42), 7px 7px 0 rgba(0,0,0,0.55);
+    transform: translateY(16px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+  .admin-detail-drawer.is-open {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .drawer-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 12px;
+    padding: 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .drawer-head h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+  .drawer-head small {
+    display: block;
+    margin-top: 4px;
+    color: var(--game-muted);
+    overflow-wrap: anywhere;
+  }
+  .drawer-close {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+  }
+  .drawer-body {
+    display: grid;
+    gap: 8px;
+    padding: 14px;
+  }
+  .drawer-row {
+    display: grid;
+    grid-template-columns: 94px minmax(0, 1fr);
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .drawer-row:last-child {
+    border-bottom: 0;
+  }
+  .drawer-key {
+    color: var(--game-muted);
+    font-size: 12px;
+  }
+  .drawer-value {
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    font-weight: 800;
+  }
+  .detail-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 8px;
+    border: 2px solid rgba(93,169,255,0.4);
+    color: var(--game-blue);
+    background: rgba(93,169,255,0.12);
+  }
+  .detail-chip.severity-normal,
+  .detail-chip.severity-success {
+    border-color: rgba(53, 208, 127, 0.42);
+    color: var(--game-green);
+    background: rgba(53, 208, 127, 0.1);
+  }
+  .detail-chip.severity-warning {
+    border-color: rgba(245, 200, 75, 0.42);
+    color: var(--game-yellow);
+    background: rgba(245, 200, 75, 0.1);
+  }
+  .detail-chip.severity-danger {
+    border-color: rgba(255, 107, 107, 0.48);
+    color: var(--game-red);
+    background: rgba(255, 107, 107, 0.12);
+  }
   .poll-status {
     color: var(--game-muted);
   }
@@ -705,6 +837,11 @@
     }
     .speech { position: static; display: inline-block; margin-bottom: 8px; }
     .ops-status { grid-template-columns: 1fr; }
+    .admin-detail-drawer {
+      right: 14px;
+      bottom: 14px;
+      max-width: calc(100vw - 28px);
+    }
   }
 </style>
 
@@ -737,6 +874,7 @@
       <small>Last Updated</small>
       <strong data-last-updated>{{ dashboard.generated_time_label }}</strong>
     </div>
+    <button type="button" class="graphic-action-btn" data-refresh-dashboard>Refresh</button>
     <div class="admin-user">
       <span class="pixel-avatar" aria-hidden="true"></span>
       <div>
@@ -787,6 +925,16 @@
           data-slot-id="{{ slot.slot_id }}"
           data-agent-id="{{ slot.owner_agent_id.as_deref().unwrap_or("") }}"
           data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
+          data-detail-type="slot"
+          data-detail-title="풀 슬롯 · {{ slot.slot_id }}"
+          data-detail-subtitle="{{ slot.label }} / {{ slot.note }}"
+          data-detail-state="{{ slot.label }}"
+          data-detail-severity="{{ slot.severity }}"
+          data-detail-owner="{{ slot.owner_label }}"
+          data-detail-task="{{ slot.task_id.as_deref().unwrap_or("-") }}"
+          data-detail-branch="{{ slot.branch_name }}"
+          data-detail-worktree="{{ slot.worktree_label }}"
+          data-detail-note="{{ slot.note }}"
           title="{{ slot.branch_name }} / {{ slot.worktree_label }} / {{ slot.note }}"
         >
           <div>
@@ -806,6 +954,17 @@
         data-agent-id="{{ agent.agent_id }}"
         data-slot-id="{{ agent.slot_id }}"
         data-task-id=""
+        data-detail-type="agent"
+        data-detail-title="요원 · {{ agent.display_name }}"
+        data-detail-subtitle="{{ agent.agent_id }} / {{ agent.class_label }}"
+        data-detail-state="{{ agent.lifecycle_state }}"
+        data-detail-severity="{% if agent.status == "blocked" %}danger{% else if agent.status == "cleanup" %}warning{% else %}normal{% endif %}"
+        data-detail-slot="{{ agent.slot_id }}"
+        data-detail-task="{{ agent.task_title }}"
+        data-detail-branch="{{ agent.branch_name }}"
+        data-detail-runtime="{{ agent.duration_label }}"
+        data-detail-progress="{{ agent.progress_label }}"
+        data-detail-summary="{{ agent.latest_summary }}"
         title="{{ agent.branch_name }} / {{ agent.task_title }} / {{ agent.latest_summary }}"
       >
         <span class="speech">{{ agent.bubble_label }}</span>
@@ -822,6 +981,16 @@
         type="button"
         class="scene-object distributor-desk"
         data-focus-target="pipeline"
+        data-detail-type="distributor"
+        data-detail-title="분배관 · Distributor"
+        data-detail-subtitle="{{ dashboard.distributor.role_label }}"
+        data-detail-state="{{ dashboard.distributor.barrier_state }}"
+        data-detail-severity="{% if dashboard.distributor.blocked_reason.is_some() %}danger{% else %}normal{% endif %}"
+        data-detail-head="{{ dashboard.distributor.head_summary }}"
+        data-detail-depth="{{ dashboard.distributor.queue_depth }}"
+        data-detail-barrier="{{ dashboard.distributor.barrier_state }}"
+        data-detail-worktree="{{ dashboard.distributor.integration_worktree_readiness }}"
+        data-detail-note="{{ dashboard.distributor.note }}"
         title="{{ dashboard.distributor.role_label }} / {{ dashboard.distributor.integration_worktree_readiness }}"
       >
         <span class="speech">배포 파이프라인</span>
@@ -833,7 +1002,20 @@
         </div>
       </button>
 
-      <button type="button" class="scene-object event-board" data-focus-target="events" title="Runtime event feed / total {{ dashboard.event_feed.total_event_count }}">
+      <button
+        type="button"
+        class="scene-object event-board"
+        data-focus-target="events"
+        data-detail-type="eventFeed"
+        data-detail-title="실시간 이벤트"
+        data-detail-subtitle="Runtime event feed"
+        data-detail-state="LIVE"
+        data-detail-severity="normal"
+        data-detail-visible="{{ dashboard.event_feed.visible_event_count }}"
+        data-detail-total="{{ dashboard.event_feed.total_event_count }}"
+        data-detail-newest="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
+        title="Runtime event feed / total {{ dashboard.event_feed.total_event_count }}"
+      >
         <span class="speech">이벤트 로그</span>
         <span class="agent-sprite role-events" aria-hidden="true"><span class="sprite-label">E</span></span>
         <div class="object-label">
@@ -858,6 +1040,14 @@
           data-event-kind="{{ event.event_kind }}"
           data-event-sequence="{{ event.sequence }}"
           data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
+          data-detail-type="event"
+          data-detail-title="이벤트 #{{ event.sequence }}"
+          data-detail-subtitle="{{ event.event_kind }} / rev {{ event.observed_planning_revision }}"
+          data-detail-state="{{ event.severity }}"
+          data-detail-severity="{{ event.severity }}"
+          data-detail-time="{{ event.recorded_at }}"
+          data-detail-projection="{{ event.projection_kind }}:{{ event.projection_key }}"
+          data-detail-summary="{{ event.summary }}"
           title="{{ event.recorded_at }} / {{ event.summary }}"
         >
           <span class="event-icon">{{ event.icon }}</span>
@@ -925,14 +1115,27 @@
       <p>{{ dashboard.distributor.head_summary }}</p>
       {% else %}
       {% for item in dashboard.distributor.queue_items %}
-      <div class="queue-row">
+      <button
+        type="button"
+        class="queue-row"
+        data-detail-type="queueItem"
+        data-detail-title="큐 작업 · {{ item.source_agent }}"
+        data-detail-subtitle="{{ item.queue_state }} / {{ item.commit_short_sha }}"
+        data-detail-state="{{ item.queue_state }}"
+        data-detail-severity="info"
+        data-detail-task="{{ item.task_title }}"
+        data-detail-agent="{{ item.source_agent }}"
+        data-detail-branch="{{ item.branch_name }}"
+        data-detail-commit="{{ item.commit_short_sha }}"
+        data-detail-note="{{ item.integration_note }}"
+      >
         <span class="agent-token">{{ item.source_agent }}</span>
         <div>
           <strong>{{ item.task_title }}</strong>
           <small>{{ item.branch_name }} · {{ item.commit_short_sha }}</small>
         </div>
         <span class="queue-state">{{ item.queue_state }}</span>
-      </div>
+      </button>
       {% endfor %}
       {% endif %}
     </section>
@@ -952,6 +1155,17 @@
       </div>
     </section>
   </div>
+
+  <aside class="admin-detail-drawer" data-detail-drawer hidden aria-live="polite">
+    <div class="drawer-head">
+      <div>
+        <h3 data-detail-drawer-title>상세</h3>
+        <small data-detail-drawer-subtitle>선택한 항목</small>
+      </div>
+      <button type="button" class="drawer-close" data-detail-close aria-label="Close detail">×</button>
+    </div>
+    <div class="drawer-body" data-detail-drawer-body></div>
+  </aside>
 </section>
 <script>
 // ── PixiJS Isometric Diorama ──
@@ -1156,6 +1370,64 @@
   const eventDrawer = root.querySelector("[data-event-drawer]");
   const eventFeedStatus = root.querySelector("[data-event-feed-status]");
   const eventLimit = 50;
+  const detailDrawer = root.querySelector("[data-detail-drawer]");
+  const detailDrawerTitle = root.querySelector("[data-detail-drawer-title]");
+  const detailDrawerSubtitle = root.querySelector("[data-detail-drawer-subtitle]");
+  const detailDrawerBody = root.querySelector("[data-detail-drawer-body]");
+
+  const detailRowsByType = {
+    slot: [
+      ["상태", "detailState", "chip"],
+      ["소유자", "detailOwner"],
+      ["작업", "detailTask"],
+      ["브랜치", "detailBranch"],
+      ["Worktree", "detailWorktree"],
+      ["운영 메모", "detailNote"]
+    ],
+    agent: [
+      ["상태", "detailState", "chip"],
+      ["슬롯", "detailSlot"],
+      ["작업", "detailTask"],
+      ["브랜치", "detailBranch"],
+      ["런타임", "detailRuntime"],
+      ["진행률", "detailProgress"],
+      ["최근 신호", "detailSummary"]
+    ],
+    distributor: [
+      ["상태", "detailState", "chip"],
+      ["Head", "detailHead"],
+      ["Queue Depth", "detailDepth"],
+      ["Barrier", "detailBarrier"],
+      ["Integration", "detailWorktree"],
+      ["운영 메모", "detailNote"]
+    ],
+    eventFeed: [
+      ["상태", "detailState", "chip"],
+      ["Visible", "detailVisible"],
+      ["Total", "detailTotal"],
+      ["Newest", "detailNewest"]
+    ],
+    event: [
+      ["상태", "detailState", "chip"],
+      ["시간", "detailTime"],
+      ["Projection", "detailProjection"],
+      ["요약", "detailSummary"]
+    ],
+    queueItem: [
+      ["상태", "detailState", "chip"],
+      ["작업", "detailTask"],
+      ["요원", "detailAgent"],
+      ["브랜치", "detailBranch"],
+      ["Commit", "detailCommit"],
+      ["운영 메모", "detailNote"]
+    ],
+    refresh: [
+      ["상태", "detailState", "chip"],
+      ["Snapshot", "detailSnapshot"],
+      ["Events", "detailEvents"],
+      ["주의", "detailNote"]
+    ]
+  };
 
   const setEventStatus = () => {
     if (!eventFeedStatus) return;
@@ -1166,6 +1438,78 @@
 
   const severityClass = (severity) => `severity-${severity || "normal"}`;
 
+  const selectedDetailSelector = [
+    "[data-detail-type].is-selected",
+    ".slot-card.is-selected",
+    ".scene-object.is-selected",
+    ".event-row.is-selected",
+    ".queue-row.is-selected"
+  ].join(",");
+
+  const setSelectedDetail = (source) => {
+    for (const node of root.querySelectorAll(selectedDetailSelector)) {
+      if (node !== source) node.classList.remove("is-selected");
+    }
+    source?.classList.add("is-selected");
+  };
+
+  const renderDetailRow = (label, value, style, severity) => {
+    const row = document.createElement("div");
+    row.className = "drawer-row";
+    const key = document.createElement("span");
+    key.className = "drawer-key";
+    key.textContent = label;
+    const body = document.createElement("span");
+    body.className = "drawer-value";
+    if (style === "chip") {
+      const chip = document.createElement("span");
+      chip.className = `detail-chip ${severityClass(severity)}`;
+      chip.textContent = value || "-";
+      body.appendChild(chip);
+    } else {
+      body.textContent = value || "-";
+    }
+    row.append(key, body);
+    return row;
+  };
+
+  const openDetailDrawer = (source) => {
+    if (!source || !detailDrawer || !detailDrawerBody) return;
+    const type = source.dataset.detailType;
+    const rows = detailRowsByType[type] || [];
+    detailDrawerTitle.textContent = source.dataset.detailTitle || "상세";
+    detailDrawerSubtitle.textContent = source.dataset.detailSubtitle || "선택한 항목";
+    detailDrawerBody.replaceChildren(
+      ...rows.map(([label, key, style]) =>
+        renderDetailRow(label, source.dataset[key], style, source.dataset.detailSeverity)
+      )
+    );
+    detailDrawer.hidden = false;
+    window.requestAnimationFrame(() => detailDrawer.classList.add("is-open"));
+    setSelectedDetail(source);
+  };
+
+  const closeDetailDrawer = () => {
+    if (!detailDrawer) return;
+    detailDrawer.classList.remove("is-open");
+    window.setTimeout(() => {
+      if (!detailDrawer.classList.contains("is-open")) detailDrawer.hidden = true;
+    }, 180);
+  };
+
+  const openRefreshDetail = (snapshotState, eventsState) => {
+    const source = document.createElement("span");
+    source.dataset.detailType = "refresh";
+    source.dataset.detailTitle = "Refresh";
+    source.dataset.detailSubtitle = "read-only admin snapshot refresh";
+    source.dataset.detailState = snapshotState === "ok" && eventsState === "ok" ? "완료" : "부분 실패";
+    source.dataset.detailSeverity = snapshotState === "ok" && eventsState === "ok" ? "normal" : "warning";
+    source.dataset.detailSnapshot = snapshotState;
+    source.dataset.detailEvents = eventsState;
+    source.dataset.detailNote = "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.";
+    openDetailDrawer(source);
+  };
+
   const createEventRow = (event) => {
     const row = document.createElement("button");
     row.type = "button";
@@ -1174,6 +1518,14 @@
     row.dataset.eventKind = event.eventKind || "";
     row.dataset.eventSequence = String(event.sequence || "");
     row.dataset.eventTarget = `${event.projectionKind || ""}:${event.projectionKey || ""}`;
+    row.dataset.detailType = "event";
+    row.dataset.detailTitle = `이벤트 #${event.sequence || "-"}`;
+    row.dataset.detailSubtitle = `${event.eventKind || "runtime_event"} / rev ${event.observedPlanningRevision ?? "-"}`;
+    row.dataset.detailState = event.severity || "normal";
+    row.dataset.detailSeverity = event.severity || "normal";
+    row.dataset.detailTime = event.recordedAt || "-";
+    row.dataset.detailProjection = `${event.projectionKind || ""}:${event.projectionKey || ""}`;
+    row.dataset.detailSummary = event.summary || "";
     row.title = `${event.recordedAt || ""} / ${event.summary || ""}`;
 
     const icon = document.createElement("span");
@@ -1263,6 +1615,23 @@
   };
 
   root.addEventListener("click", (event) => {
+    if (event.target.closest("[data-detail-close]")) {
+      closeDetailDrawer();
+      return;
+    }
+
+    if (event.target.closest("[data-refresh-dashboard]")) {
+      Promise.allSettled([pollDashboard(), pollEvents()]).then(([snapshot, events]) => {
+        const snapshotOk = snapshot.status === "fulfilled" && snapshot.value === true;
+        const eventsOk = events.status === "fulfilled" && events.value === true;
+        openRefreshDetail(
+          snapshotOk ? "ok" : "error",
+          eventsOk ? "ok" : "error"
+        );
+      });
+      return;
+    }
+
     const focus = event.target.closest("[data-focus-target]");
     if (focus) {
       const panel = document.getElementById(focus.dataset.focusTarget);
@@ -1288,6 +1657,9 @@
         drawer.querySelector("[data-event-drawer-body]").textContent = eventRow.dataset.eventDetail || "";
       }
     }
+
+    const detailSource = event.target.closest("[data-detail-type]");
+    if (detailSource) openDetailDrawer(detailSource);
   });
 
   const pollStatus = document.createElement("small");
@@ -1306,10 +1678,12 @@
       updateDashboard(dashboard);
       setKpiState("success");
       pollStatus.textContent = "live snapshot";
+      return true;
     } catch (error) {
       setKpiState("error");
       pollStatus.textContent = `stale snapshot: ${error.message}`;
       pollStatus.classList.add("is-stale", "is-error");
+      return false;
     }
   };
 
@@ -1333,9 +1707,11 @@
         root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
       }
       setEventStatus();
+      return true;
     } catch (_error) {
       pollStatus.textContent = "stale events";
       pollStatus.classList.add("is-stale");
+      return false;
     }
   };
 
