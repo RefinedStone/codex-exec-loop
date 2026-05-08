@@ -242,7 +242,7 @@ Renderer가 domain rule을 재판단하면 안 된다.
 | TUI parallel panel | `ParallelModeService`, domain state machine, panel controller | projection 표시와 application wake request 분리 | shell command entry와 admin/CLI tick command vocabulary 정렬 |
 | CLI status/queue/reset | `PlanningControlCommand`, `PlanningControlService` | compact command surface 공유 | reset은 workspace reset path와 control reset path의 response shape 정렬 검토 |
 | CLI planning-tool | `PlanningTaskToolRequest`, `PlanningTaskToolResponse` | stdin JSON contract와 JSON line response | tool command도 command context와 error taxonomy를 공유 |
-| CLI parallel-tick | `ParallelModeService::process_distributor_queue` | manual/cron driver로 제한 | control-plane runtime command/event vocabulary로 승격 |
+| CLI parallel-tick | `ParallelModeService::run_orchestrator_tick(..., ManualDispatch)` | manual/cron driver로 제한하고 application tick result를 렌더링 | 남은 TUI/admin parallel command vocabulary와 정렬 |
 | Admin HTML/JSON | `PlanningAdminFacadeService`, `PlanningAdmin*Request` DTO | HTML/JSON route가 같은 facade를 공유 | duplicate form/JSON mapping helper를 request mapper로 모으기 |
 | Admin Akra dashboard | `PlanningAdminFacadeService`, `ParallelModeService` projection | read-only dashboard projection | dashboard view가 domain type을 직접 읽는 곳은 application projection으로 낮추기 |
 | Telegram bot | `PlanningControlCommand`, `PlanningControlService` | chat parser와 allowlist를 adapter에 유지 | shared compact response renderer 또는 typed reply DTO 검토 |
