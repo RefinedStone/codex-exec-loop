@@ -9,7 +9,7 @@ use super::{
 };
 use crate::application::service::planning::{
     DirectionsMaintenanceSummary, PlanningApplicationProjection, PlanningApplicationQueueTask,
-    PlanningDoctorReport, PlanningRuntimeSnapshot,
+    PlanningDoctorReport,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningFileKind, PlanningValidationReport,
@@ -93,12 +93,11 @@ pub(super) fn map_doctor_report(report: &PlanningDoctorReport) -> PlanningAdminD
     }
 }
 
-pub(super) fn map_runtime_snapshot(
-    snapshot: &PlanningRuntimeSnapshot,
+pub(super) fn map_application_projection(
+    projection: PlanningApplicationProjection,
 ) -> PlanningAdminRuntimeSummary {
-    // admin runtime view는 application projection을 source로 삼는다. 아직 runtime snapshot을 받는
-    // compatibility boundary지만, queue/proposal facts는 여기서부터 surface별로 다시 계산하지 않는다.
-    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+    // projection source가 admin summary와 control surface 사이에서 공유된다. 이 함수는 admin 화면이 필요한
+    // 표시 제한과 DTO shape만 책임지고, queue/proposal lane 판단은 이미 application projection에 고정되어 있다.
     PlanningAdminRuntimeSummary {
         workspace_present: projection.workspace_present,
         preview_status_label: projection.status_label,
@@ -273,8 +272,10 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_queue_preview, map_runtime_snapshot};
-    use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use super::{map_application_projection, map_queue_preview};
+    use crate::application::service::planning::{
+        PlanningApplicationProjection, PlanningRuntimeSnapshot,
+    };
     use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
 
     #[test]
@@ -362,7 +363,9 @@ mod tests {
             },
         );
 
-        let summary = map_runtime_snapshot(&snapshot);
+        let summary = map_application_projection(
+            PlanningApplicationProjection::from_runtime_snapshot(&snapshot),
+        );
 
         assert!(summary.workspace_present);
         assert_eq!(summary.preview_status_label, "ready");

@@ -1,6 +1,6 @@
-use super::{PlanningAdminFacadeService, PlanningAdminOverview, PlanningResetTarget};
-use crate::application::service::planning::admin::{
-    PlanningAdminQueueHeadView, PlanningAdminQueueTaskView,
+use super::{PlanningAdminFacadeService, PlanningResetTarget};
+use crate::application::service::planning::{
+    PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
 };
 use anyhow::Result;
 use std::sync::Arc;
@@ -80,8 +80,13 @@ pub trait PlanningControlSurface: Send + Sync {
 }
 impl PlanningControlSurface for PlanningAdminFacadeService {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
-        let overview = self.load_overview()?;
-        Ok(map_overview(overview))
+        let doctor = self.load_doctor_report();
+        let projection = self.load_runtime_application_projection()?;
+        Ok(map_control_status_snapshot(
+            self.workspace_dir().to_string(),
+            doctor,
+            projection,
+        ))
     }
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
         // admin reset은 file change와 doctor summary를 함께 돌려준다. reset 자체가 성공해도 operator가 봐야 할
@@ -127,53 +132,47 @@ impl PlanningControlService {
         CONTROL_HELP_TEXT
     }
 }
-fn map_overview(overview: PlanningAdminOverview) -> PlanningControlStatusSnapshot {
+fn map_control_status_snapshot(
+    workspace_dir: String,
+    doctor: PlanningDoctorReport,
+    projection: PlanningApplicationProjection,
+) -> PlanningControlStatusSnapshot {
     /*
-     * admin overview는 management screen에 맞춰진 projection이다.
      * control snapshot은 짧은 operator response에 들어갈 health, preview, queue 사실만 추려 낸다.
+     * queue/proposal lane은 admin DTO가 아니라 PlanningApplicationProjection에서 직접 받기 때문에
+     * /status, /queue와 admin overview가 같은 application read model을 공유한다.
      */
     PlanningControlStatusSnapshot {
-        workspace_dir: overview.workspace_dir,
-        planning_state: overview.doctor.planning_state,
-        queue_summary: overview.doctor.queue_summary,
-        proposal_summary: overview.doctor.proposal_summary,
-        health: overview.doctor.health,
-        issue: overview.doctor.issue,
-        note: overview.doctor.note,
-        preview_status_label: overview.runtime.preview_status_label,
-        preview_detail: overview.runtime.preview_detail,
-        queue_head: overview.runtime.queue_head.map(map_queue_head),
-        visible_tasks: overview
-            .runtime
+        workspace_dir,
+        planning_state: doctor.planning_state().label().to_string(),
+        queue_summary: doctor.queue_summary().map(str::to_string),
+        proposal_summary: doctor.proposal_summary().map(str::to_string),
+        health: doctor.health().map(str::to_string),
+        issue: doctor.issue().map(str::to_string),
+        note: doctor.note().map(str::to_string),
+        preview_status_label: projection.status_label,
+        preview_detail: projection.status_detail,
+        queue_head: projection.queue_head.map(map_application_queue_task),
+        visible_tasks: projection
             .visible_tasks
             .into_iter()
-            .map(map_queue_task)
+            .map(map_application_queue_task)
             .collect(),
-        proposed_tasks: overview
-            .runtime
+        proposed_tasks: projection
             .proposed_tasks
             .into_iter()
-            .map(map_queue_task)
+            .map(map_application_queue_task)
             .collect(),
     }
 }
-fn map_queue_head(view: PlanningAdminQueueHeadView) -> PlanningControlQueueEntry {
-    // queue_head와 visible/proposed task는 서로 다른 admin view struct에서 오지만, control renderer는 같은 compact line으로 다룬다.
+fn map_application_queue_task(task: PlanningApplicationQueueTask) -> PlanningControlQueueEntry {
+    // application queue task에는 rank/update metadata도 있지만 compact control reply는 operator line에 필요한 값만 남긴다.
     PlanningControlQueueEntry {
-        task_id: view.task_id,
-        task_title: view.task_title,
-        direction_id: view.direction_id,
-        status: view.status,
-        combined_priority: view.combined_priority,
-    }
-}
-fn map_queue_task(view: PlanningAdminQueueTaskView) -> PlanningControlQueueEntry {
-    PlanningControlQueueEntry {
-        task_id: view.task_id,
-        task_title: view.task_title,
-        direction_id: view.direction_id,
-        status: view.status,
-        combined_priority: view.combined_priority,
+        task_id: task.task_id,
+        task_title: task.task_title,
+        direction_id: task.direction_id,
+        status: task.status_label,
+        combined_priority: task.combined_priority,
     }
 }
 fn format_status(snapshot: &PlanningControlStatusSnapshot) -> String {
@@ -285,8 +284,13 @@ mod tests {
     use super::{
         PlanningControlCommand, PlanningControlQueueEntry, PlanningControlResetOutcome,
         PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
+        map_control_status_snapshot,
     };
-    use crate::application::service::planning::PlanningResetTarget;
+    use crate::application::service::planning::{
+        PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
+        PlanningResetTarget,
+    };
+    use crate::domain::planning::{QueueIdlePolicy, TaskStatus};
     use anyhow::Result;
     use std::sync::Arc;
 
@@ -388,5 +392,81 @@ mod tests {
 
         assert!(reply.text.contains("reset queue 완료"));
         assert!(reply.text.contains("DB task authority"));
+    }
+
+    #[test]
+    fn control_status_maps_queue_lanes_from_application_projection() {
+        /*
+         * control snapshot은 admin queue DTO를 거치지 않고 application projection lane을 직접 낮춘다.
+         * doctor가 invalid issue를 갖고 있어도 runtime projection의 queue facts는 같은 관측 결과로 보존되어야 한다.
+         */
+        let projection = PlanningApplicationProjection {
+            workspace_present: true,
+            status_label: "ready".to_string(),
+            status_detail: Some("queue head ready".to_string()),
+            queue_summary: Some("projection queue summary".to_string()),
+            proposal_summary: Some("projection proposal summary".to_string()),
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: Some(
+                ".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string(),
+            ),
+            has_structured_queue_projection: true,
+            queue_head: Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
+            visible_tasks: vec![
+                queue_task(1, "task-1", "Current task", TaskStatus::Ready),
+                queue_task(2, "task-2", "Next task", TaskStatus::Ready),
+            ],
+            proposed_tasks: vec![queue_task(
+                1,
+                "proposal-1",
+                "Candidate task",
+                TaskStatus::Proposed,
+            )],
+            skipped_tasks: Vec::new(),
+        };
+
+        let snapshot = map_control_status_snapshot(
+            "/tmp/repo".to_string(),
+            PlanningDoctorReport::path_issue("planning invalid".to_string()),
+            projection,
+        );
+
+        assert_eq!(snapshot.preview_status_label, "ready");
+        assert_eq!(
+            snapshot
+                .queue_head
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-1")
+        );
+        assert_eq!(
+            snapshot
+                .visible_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-1", "task-2"]
+        );
+        assert_eq!(snapshot.proposed_tasks[0].status, "proposed");
+    }
+
+    fn queue_task(
+        rank: usize,
+        task_id: &str,
+        task_title: &str,
+        status: TaskStatus,
+    ) -> PlanningApplicationQueueTask {
+        PlanningApplicationQueueTask {
+            rank,
+            task_id: task_id.to_string(),
+            task_title: task_title.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_title: "Direction A".to_string(),
+            status,
+            status_label: status.label().to_string(),
+            combined_priority: 100 - rank as i32,
+            updated_at: "2026-05-08T00:00:00Z".to_string(),
+            rank_reasons: vec![format!("domain-rank={rank}")],
+        }
     }
 }
