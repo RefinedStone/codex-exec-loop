@@ -100,6 +100,8 @@ mod planning;
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
+#[path = "app/planning_reset_shell_command.rs"]
+mod planning_reset_shell_command;
 #[path = "app/planning_worker_debug_preview.rs"]
 mod planning_worker_debug_preview;
 #[path = "app/post_turn_automation.rs"]

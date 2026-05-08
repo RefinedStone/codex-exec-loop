@@ -333,6 +333,8 @@ fn reset_command_hint_is_argument_aware() {
     let directions_confirm =
         InlineShellCommandInput::parse(":reset directions confirm").expect("command should parse");
     let invalid = InlineShellCommandInput::parse(":reset wrong").expect("command should parse");
+    let invalid_extra =
+        InlineShellCommandInput::parse(":reset queue now").expect("command should parse");
 
     assert_eq!(plain.buffered_hint(), RESET_USAGE);
     assert_eq!(
@@ -350,6 +352,10 @@ fn reset_command_hint_is_argument_aware() {
     assert_eq!(
         invalid.buffered_hint(),
         "Press Enter to apply `:reset wrong`. Supported arguments: queue, directions, all."
+    );
+    assert_eq!(
+        invalid_extra.buffered_hint(),
+        "Press Enter to apply `:reset queue now`. Supported arguments: queue, directions, all."
     );
 }
 
