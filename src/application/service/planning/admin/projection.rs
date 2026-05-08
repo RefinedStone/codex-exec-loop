@@ -8,7 +8,8 @@ use super::{
     PlanningAdminValidationView,
 };
 use crate::application::service::planning::{
-    DirectionsMaintenanceSummary, PlanningDoctorReport, PlanningRuntimeSnapshot,
+    DirectionsMaintenanceSummary, PlanningApplicationProjection, PlanningApplicationQueueTask,
+    PlanningDoctorReport, PlanningRuntimeSnapshot,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningFileKind, PlanningValidationReport,
@@ -95,24 +96,26 @@ pub(super) fn map_doctor_report(report: &PlanningDoctorReport) -> PlanningAdminD
 pub(super) fn map_runtime_snapshot(
     snapshot: &PlanningRuntimeSnapshot,
 ) -> PlanningAdminRuntimeSummary {
-    // queue projection은 startup 중이거나 workspace가 깨진 상태에서는 없을 수 있다. 그래도 admin overview는
-    // runtime status label/detail을 표시해야 하므로 queue 영역만 empty list로 낮추고 snapshot 자체는 유지한다.
-    let queue_preview = snapshot.queue_projection().map(map_queue_preview);
+    // admin runtime view는 application projection을 source로 삼는다. 아직 runtime snapshot을 받는
+    // compatibility boundary지만, queue/proposal facts는 여기서부터 surface별로 다시 계산하지 않는다.
+    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
     PlanningAdminRuntimeSummary {
-        workspace_present: snapshot.workspace_present(),
-        preview_status_label: snapshot.preview_status_label().to_string(),
-        preview_detail: snapshot.preview_detail().map(str::to_string),
-        queue_head: queue_preview
-            .as_ref()
-            .and_then(|preview| preview.queue_head.clone()),
-        visible_tasks: queue_preview
-            .as_ref()
-            .map(|preview| preview.visible_tasks.clone())
-            .unwrap_or_default(),
-        proposed_tasks: queue_preview
-            .as_ref()
-            .map(|preview| preview.proposed_tasks.clone())
-            .unwrap_or_default(),
+        workspace_present: projection.workspace_present,
+        preview_status_label: projection.status_label,
+        preview_detail: projection.status_detail,
+        queue_head: projection.queue_head.map(map_application_queue_head),
+        visible_tasks: projection
+            .visible_tasks
+            .into_iter()
+            .take(5)
+            .map(map_application_queue_task)
+            .collect(),
+        proposed_tasks: projection
+            .proposed_tasks
+            .into_iter()
+            .take(5)
+            .map(map_application_queue_task)
+            .collect(),
     }
 }
 
@@ -236,6 +239,29 @@ pub(super) fn map_queue_preview(snapshot: &PriorityQueueProjection) -> PlanningA
     }
 }
 
+fn map_application_queue_head(task: PlanningApplicationQueueTask) -> PlanningAdminQueueHeadView {
+    PlanningAdminQueueHeadView {
+        task_id: task.task_id,
+        task_title: task.task_title,
+        direction_id: task.direction_id,
+        status: task.status_label,
+        combined_priority: task.combined_priority,
+        updated_at: task.updated_at,
+        rank_reasons: task.rank_reasons,
+    }
+}
+
+fn map_application_queue_task(task: PlanningApplicationQueueTask) -> PlanningAdminQueueTaskView {
+    PlanningAdminQueueTaskView {
+        task_id: task.task_id,
+        task_title: task.task_title,
+        direction_id: task.direction_id,
+        status: task.status_label,
+        combined_priority: task.combined_priority,
+        updated_at: task.updated_at,
+    }
+}
+
 fn direction_state_label(state: DirectionState) -> &'static str {
     // The admin form accepts these lower-case labels when mutating directions.
     match state {
@@ -247,7 +273,8 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::map_queue_preview;
+    use super::{map_queue_preview, map_runtime_snapshot};
+    use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
 
     #[test]
@@ -310,6 +337,49 @@ mod tests {
                 "proposal-5"
             ]
         );
+    }
+
+    #[test]
+    fn admin_runtime_summary_uses_application_projection_queue_lanes() {
+        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+            "Planning Context".to_string(),
+            "queue ready".to_string(),
+            Some("proposal ready".to_string()),
+            Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
+            PriorityQueueProjection {
+                next_task: Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
+                active_tasks: vec![
+                    queue_task(1, "task-1", "Current task", TaskStatus::Ready),
+                    queue_task(2, "task-2", "Next task", TaskStatus::Ready),
+                ],
+                proposed_tasks: vec![queue_task(
+                    1,
+                    "proposal-1",
+                    "Candidate task",
+                    TaskStatus::Proposed,
+                )],
+                skipped_tasks: Vec::new(),
+            },
+        );
+
+        let summary = map_runtime_snapshot(&snapshot);
+
+        assert!(summary.workspace_present);
+        assert_eq!(summary.preview_status_label, "ready");
+        assert_eq!(summary.preview_detail.as_deref(), Some("queue ready"));
+        assert_eq!(
+            summary.queue_head.expect("queue head").task_id,
+            "task-1".to_string()
+        );
+        assert_eq!(
+            summary
+                .visible_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-1", "task-2"]
+        );
+        assert_eq!(summary.proposed_tasks[0].status, "proposed");
     }
 
     fn queue_task(
