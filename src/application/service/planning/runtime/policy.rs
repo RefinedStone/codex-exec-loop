@@ -7,11 +7,16 @@
 use crate::application::service::planning::runtime::prompt::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
-use crate::domain::planning::PlanningWorkspaceState;
+use crate::domain::planning::{
+    PlanningQueueFollowBlockReason, PlanningQueueFollowDecision, PlanningQueueFollowFacts,
+    PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode, PlanningWorkspaceState,
+};
 use crate::domain::text::compact_whitespace_detail;
 
 #[derive(Debug, Clone, Default)]
-pub struct PlanningRuntimePolicyService;
+pub struct PlanningRuntimePolicyService {
+    queue_follow_policy: PlanningQueueFollowPolicy,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningAutoFollowBlockReason {
@@ -97,7 +102,9 @@ pub struct PlanningRuntimeStatusProjection {
 
 impl PlanningRuntimePolicyService {
     pub fn new() -> Self {
-        Self
+        Self {
+            queue_follow_policy: PlanningQueueFollowPolicy::new(),
+        }
     }
 
     pub fn decide_auto_follow(
@@ -109,36 +116,10 @@ impl PlanningRuntimePolicyService {
          * actionable queue head가 있어야 하며, pause guard가 같은 head를 이미 handoff하지 않았음을 확인해야 한다.
          * 이렇게 해야 proposal refresh나 empty planning state가 무한한 assistant turn을 만들지 않는다.
          */
-        if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
-            return PlanningAutoFollowPolicyDecision::Blocked(
-                PlanningAutoFollowBlockReason::InvalidWorkspace,
-            );
-        }
-        if snapshot.auto_follow_pause_reason().is_some() {
-            return PlanningAutoFollowPolicyDecision::Blocked(
-                PlanningAutoFollowBlockReason::RepeatedQueueHead,
-            );
-        }
-        match snapshot.workspace_status() {
-            PlanningRuntimeWorkspaceStatus::Uninitialized => {
-                PlanningAutoFollowPolicyDecision::Blocked(
-                    PlanningAutoFollowBlockReason::ActionableQueueRequired,
-                )
-            }
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
-                PlanningAutoFollowPolicyDecision::Blocked(
-                    PlanningAutoFollowBlockReason::ActionableQueueRequired,
-                )
-            }
-            PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
-                PlanningAutoFollowPolicyDecision::QueuePrompt(
-                    PlanningAutoFollowPromptMode::ContinueQueuedTask,
-                )
-            }
-            PlanningRuntimeWorkspaceStatus::Invalid => PlanningAutoFollowPolicyDecision::Blocked(
-                PlanningAutoFollowBlockReason::InvalidWorkspace,
-            ),
-        }
+        map_queue_follow_decision(
+            self.queue_follow_policy
+                .decide(queue_follow_facts(snapshot)),
+        )
     }
 
     pub fn build_summary_view(
@@ -360,6 +341,45 @@ impl PlanningRuntimePolicyService {
                     compact_projection_detail(failure_summary, request.max_detail_len)
                 )
             }),
+        }
+    }
+}
+
+fn queue_follow_facts(snapshot: &PlanningRuntimeSnapshot) -> PlanningQueueFollowFacts {
+    PlanningQueueFollowFacts {
+        workspace_valid: snapshot.workspace_status() != PlanningRuntimeWorkspaceStatus::Invalid,
+        has_actionable_queue_head: snapshot.queue_head().is_some(),
+        repeated_queue_head: snapshot.auto_follow_pause_reason().is_some(),
+    }
+}
+
+fn map_queue_follow_decision(
+    decision: PlanningQueueFollowDecision,
+) -> PlanningAutoFollowPolicyDecision {
+    match decision {
+        PlanningQueueFollowDecision::Blocked(reason) => {
+            PlanningAutoFollowPolicyDecision::Blocked(map_queue_follow_block_reason(reason))
+        }
+        PlanningQueueFollowDecision::QueuePrompt(
+            PlanningQueueFollowPromptMode::ContinueQueuedTask,
+        ) => PlanningAutoFollowPolicyDecision::QueuePrompt(
+            PlanningAutoFollowPromptMode::ContinueQueuedTask,
+        ),
+    }
+}
+
+fn map_queue_follow_block_reason(
+    reason: PlanningQueueFollowBlockReason,
+) -> PlanningAutoFollowBlockReason {
+    match reason {
+        PlanningQueueFollowBlockReason::InvalidWorkspace => {
+            PlanningAutoFollowBlockReason::InvalidWorkspace
+        }
+        PlanningQueueFollowBlockReason::ActionableQueueRequired => {
+            PlanningAutoFollowBlockReason::ActionableQueueRequired
+        }
+        PlanningQueueFollowBlockReason::RepeatedQueueHead => {
+            PlanningAutoFollowBlockReason::RepeatedQueueHead
         }
     }
 }

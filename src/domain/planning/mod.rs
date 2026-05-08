@@ -16,11 +16,16 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod mutation;
 pub(crate) mod promotion;
 mod queue;
+pub(crate) mod queue_follow;
 mod validation;
 
 pub(crate) use mutation::{PlanningTaskMutationPolicy, TaskDescriptionUpdateDecision};
 pub(crate) use promotion::{PlanningProposalPromotionDecision, PlanningProposalPromotionPolicy};
 pub use queue::PriorityQueueService;
+pub(crate) use queue_follow::{
+    PlanningQueueFollowBlockReason, PlanningQueueFollowDecision, PlanningQueueFollowFacts,
+    PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode,
+};
 pub use validation::PlanningSemanticValidationService;
 
 // planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.
