@@ -52,6 +52,8 @@ pub struct PlanningControlStatusSnapshot {
     // facade를 반복 호출하지 않고, 같은 관측 시점의 health/queue/proposal 상태를 함께 보여 주기 위해서다.
     pub workspace_dir: String,
     pub planning_state: String,
+    pub task_authority_signature: Option<u64>,
+    pub queue_head_task_signature: Option<u64>,
     pub queue_summary: Option<String>,
     pub proposal_summary: Option<String>,
     pub health: Option<String>,
@@ -183,6 +185,8 @@ fn map_control_status_snapshot(
     PlanningControlStatusSnapshot {
         workspace_dir,
         planning_state: doctor.planning_state().label().to_string(),
+        task_authority_signature: projection.task_authority_signature,
+        queue_head_task_signature: projection.queue_head_task_signature,
         queue_summary: doctor.queue_summary().map(str::to_string),
         proposal_summary: doctor.proposal_summary().map(str::to_string),
         health: doctor.health().map(str::to_string),
@@ -358,6 +362,8 @@ mod tests {
             status: PlanningControlStatusSnapshot {
                 workspace_dir: "/tmp/repo".to_string(),
                 planning_state: "ready".to_string(),
+                task_authority_signature: Some(42),
+                queue_head_task_signature: Some(7),
                 queue_summary: Some("queue head ready".to_string()),
                 proposal_summary: Some("1 proposal".to_string()),
                 health: Some("planning workspace ready".to_string()),
@@ -442,6 +448,8 @@ mod tests {
             workspace_present: true,
             workspace_status:
                 crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyWithTask,
+            task_authority_signature: Some(42),
+            queue_head_task_signature: Some(7),
             auto_follow_paused: false,
             status_label: "ready".to_string(),
             status_detail: Some("queue head ready".to_string()),
@@ -473,6 +481,8 @@ mod tests {
         );
 
         assert_eq!(snapshot.preview_status_label, "ready");
+        assert_eq!(snapshot.task_authority_signature, Some(42));
+        assert_eq!(snapshot.queue_head_task_signature, Some(7));
         assert_eq!(
             snapshot
                 .queue_head

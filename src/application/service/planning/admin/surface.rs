@@ -364,6 +364,8 @@ pub struct PlanningAdminDoctorSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminRuntimeSummary {
     pub workspace_present: bool,
+    pub task_authority_signature: Option<u64>,
+    pub queue_head_task_signature: Option<u64>,
     pub preview_status_label: String,
     pub preview_detail: Option<String>,
     pub queue_head: Option<PlanningAdminQueueHeadView>,

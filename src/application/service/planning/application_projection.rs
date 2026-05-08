@@ -14,6 +14,8 @@ use crate::domain::planning::{
 pub struct PlanningApplicationProjection {
     pub workspace_present: bool,
     pub workspace_status: PlanningRuntimeWorkspaceStatus,
+    pub task_authority_signature: Option<u64>,
+    pub queue_head_task_signature: Option<u64>,
     pub auto_follow_paused: bool,
     pub status_label: String,
     pub status_detail: Option<String>,
@@ -93,6 +95,8 @@ impl PlanningApplicationProjection {
         Self {
             workspace_present: snapshot.workspace_present(),
             workspace_status: snapshot.workspace_status(),
+            task_authority_signature: snapshot.task_authority_signature(),
+            queue_head_task_signature: snapshot.queue_head_task_signature(),
             auto_follow_paused: snapshot.auto_follow_pause_reason().is_some(),
             status_label: snapshot.preview_status_label().to_string(),
             status_detail: snapshot.preview_detail().map(str::to_string),
@@ -178,11 +182,14 @@ mod tests {
         .with_queue_idle_policy(
             QueueIdlePolicy::ReviewAndEnqueue,
             Some(".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string()),
-        );
+        )
+        .with_test_signatures(Some(42), Some(7));
 
         let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
 
         assert!(projection.workspace_present);
+        assert_eq!(projection.task_authority_signature, Some(42));
+        assert_eq!(projection.queue_head_task_signature, Some(7));
         assert_eq!(projection.status_label, "ready");
         assert_eq!(
             projection.status_detail.as_deref(),
@@ -226,6 +233,8 @@ mod tests {
             projection.status_detail.as_deref(),
             Some("planning validation failed: task authority is unavailable")
         );
+        assert_eq!(projection.task_authority_signature, None);
+        assert_eq!(projection.queue_head_task_signature, None);
         assert!(!projection.auto_follow_paused);
         assert!(projection.queue_head.is_none());
         assert!(!projection.has_structured_queue_projection);

@@ -100,6 +100,8 @@ pub(super) fn map_application_projection(
     // 표시 제한과 DTO shape만 책임지고, queue/proposal lane 판단은 이미 application projection에 고정되어 있다.
     PlanningAdminRuntimeSummary {
         workspace_present: projection.workspace_present,
+        task_authority_signature: projection.task_authority_signature,
+        queue_head_task_signature: projection.queue_head_task_signature,
         preview_status_label: projection.status_label,
         preview_detail: projection.status_detail,
         queue_head: projection.queue_head.map(map_application_queue_head),
@@ -361,13 +363,16 @@ mod tests {
                 )],
                 skipped_tasks: Vec::new(),
             },
-        );
+        )
+        .with_test_signatures(Some(42), Some(7));
 
         let summary = map_application_projection(
             PlanningApplicationProjection::from_runtime_snapshot(&snapshot),
         );
 
         assert!(summary.workspace_present);
+        assert_eq!(summary.task_authority_signature, Some(42));
+        assert_eq!(summary.queue_head_task_signature, Some(7));
         assert_eq!(summary.preview_status_label, "ready");
         assert_eq!(summary.preview_detail.as_deref(), Some("queue ready"));
         assert_eq!(
