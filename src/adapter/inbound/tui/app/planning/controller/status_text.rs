@@ -198,3 +198,32 @@ pub(super) fn planning_reset_status_text(result: &PlanningWorkspaceResetResult) 
         result.removed_paths.len(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_shell_argument_maps_to_shared_application_targets() {
+        /*
+         * TUI shell spelling is an inbound grammar detail. The parser must emit
+         * PlanningResetTarget so CLI, admin, Telegram, and TUI stay on the same
+         * destructive reset vocabulary.
+         */
+        for (raw, expected, confirmed) in [
+            ("queue", PlanningResetTarget::Queue, false),
+            ("directions", PlanningResetTarget::Directions, false),
+            ("directions confirm", PlanningResetTarget::Directions, true),
+            ("all", PlanningResetTarget::All, false),
+            ("all confirm", PlanningResetTarget::All, true),
+        ] {
+            let parsed = parse_reset_shell_argument(Some(raw)).expect("reset target should parse");
+            assert_eq!(parsed.target, expected);
+            assert_eq!(parsed.confirmed, confirmed);
+        }
+
+        assert!(parse_reset_shell_argument(Some("tasks")).is_err());
+        assert!(parse_reset_shell_argument(Some("queue now")).is_err());
+        assert!(parse_reset_shell_argument(None).is_err());
+    }
+}
