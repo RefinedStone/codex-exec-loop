@@ -59,8 +59,8 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P2 | `TUI-01` | done | conversation lifecycle와 automation lifecycle 분리 |
 | P3 | `DOC-INBOUND-00` | done | inbound surface unification architecture 작성 |
 | P3 | `INBOUND-00` | ready | CLI/admin/Telegram command surface 통일 |
-| P4 | `DOC-STORE-00` | ready | store/runtime-state architecture 작성 |
-| P4 | `STORE-00` | blocked | durable store와 runtime store 경계 정리 |
+| P4 | `DOC-STORE-00` | done | store/runtime-state architecture 작성 |
+| P4 | `STORE-00` | ready | durable store와 runtime store 경계 정리 |
 | P5 | `TEST-00` | blocked | test/doc contract taxonomy 정리 |
 
 ## P0. Parallel Control-Plane Slices
@@ -674,7 +674,7 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 
 ### DOC-STORE-00. Store And Runtime State Architecture
 
-상태: `ready`
+상태: `done`
 
 목적:
 
@@ -695,9 +695,18 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 
 - parallel architecture의 state table과 모순이 없어야 한다.
 
+완료 근거:
+
+- [store-and-runtime-state-architecture.md](../architecture/store-and-runtime-state-architecture.md)를
+  추가해 durable authority, durable runtime projection, workspace artifact,
+  process-lifetime runtime state, UI-only state, Application Projection의 기준을 정의했다.
+- SQLite planning authority, filesystem planning workspace, git worktree/branch artifact,
+  in-memory store 허용 조건, recovery와 test reset 기준을 분류했다.
+- `STORE-00`이 바로 inventory 작업에 들어갈 수 있도록 구현 분할 기준과 완료 조건을 추가했다.
+
 ### STORE-00. Durable Store Boundary Audit
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 
