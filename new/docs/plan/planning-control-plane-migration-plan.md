@@ -101,7 +101,9 @@ decision으로 이동한다.
 - proposal promotion 가능 여부: 실행 가능한 queue head가 있으면 no-op, 없고 promotable
   proposal이 있으면 top proposal만 승격하는 판단은 `PlanningProposalPromotionPolicy`의
   projection 기반 domain decision으로 이동했다. 완료: `PLAN-02C`
-- queue-idle / repeated-head decision
+- queue-idle / repeated-head decision: workspace validity, actionable queue head 존재,
+  repeated queue head flag를 `PlanningQueueFollowPolicy`의 I/O 없는 domain facts로 내려
+  auto-follow 허용/차단을 결정한다. 완료: `PLAN-02D`
 - repair eligibility
 
 완료 조건:
@@ -110,9 +112,9 @@ decision으로 이동한다.
 - application service는 load/save/effect ordering만 테스트한다.
 - worker output은 accepted authority가 아니라 untrusted candidate로만 들어온다.
 
-`PLAN-02C` 이후 남은 task mutation 범위는 create/defaulting과 worker command candidate
+`PLAN-02D` 이후 남은 task mutation 범위는 create/defaulting과 worker command candidate
 handling 중 domain으로 이동 가능한 순수 판단을 추가 감사하는 것이다. runtime 쪽은
-queue-idle/repeated-head decision과 repair eligibility가 남아 있다.
+repair eligibility가 남아 있다.
 
 ## 금지 패턴
 

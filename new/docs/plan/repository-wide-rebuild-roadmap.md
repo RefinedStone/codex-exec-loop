@@ -387,6 +387,8 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
   일원화하고, task mutation application validation의 중복 helper를 제거한다. 완료.
 - `PLAN-02C`: proposal promotion 가능 여부를 queue projection 기반 domain
   `PlanningProposalPromotionPolicy`로 이동하고, application은 authority load/commit만 맡는다. 완료.
+- `PLAN-02D`: queue-idle/repeated-head auto-follow gate를 domain
+  `PlanningQueueFollowPolicy`로 이동하고, runtime policy service는 snapshot fact mapping만 맡는다. 완료.
 
 금지:
 
