@@ -14,10 +14,12 @@
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod mutation;
+pub(crate) mod promotion;
 mod queue;
 mod validation;
 
 pub(crate) use mutation::{PlanningTaskMutationPolicy, TaskDescriptionUpdateDecision};
+pub(crate) use promotion::{PlanningProposalPromotionDecision, PlanningProposalPromotionPolicy};
 pub use queue::PriorityQueueService;
 pub use validation::PlanningSemanticValidationService;
 
