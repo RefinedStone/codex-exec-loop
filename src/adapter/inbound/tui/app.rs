@@ -132,6 +132,8 @@ mod shell_rendering;
 mod shell_runtime;
 #[path = "app/task_intake_overlay_ui.rs"]
 mod task_intake_overlay_ui;
+#[path = "app/task_shell_command.rs"]
+mod task_shell_command;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;

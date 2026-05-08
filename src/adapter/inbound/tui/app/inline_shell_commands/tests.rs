@@ -297,6 +297,22 @@ fn directions_command_hint_is_argument_aware() {
 }
 
 #[test]
+fn task_command_hint_is_prompt_aware() {
+    let plain = InlineShellCommandInput::parse(":task").expect("command should parse");
+    let prompted = InlineShellCommandInput::parse(":task add a release checklist")
+        .expect("command should parse");
+
+    assert_eq!(
+        plain.buffered_hint(),
+        "Press Enter to draft a runtime planning task."
+    );
+    assert_eq!(
+        prompted.buffered_hint(),
+        "Press Enter to preview a runtime task for `add a release checklist`."
+    );
+}
+
+#[test]
 fn queue_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":queue").expect("command should parse");
     let invalid = InlineShellCommandInput::parse(":queue later").expect("command should parse");
