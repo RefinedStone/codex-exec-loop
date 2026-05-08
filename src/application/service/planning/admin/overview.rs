@@ -4,10 +4,11 @@ use anyhow::Result;
 
 // projection 함수들은 service/domain 결과를 admin 화면 DTO로 바꾸는 adapter 성격의 매핑이다. overview service가
 // 원본 service 구조를 화면에 직접 노출하지 않도록 이 파일에서는 매핑 함수만 호출한다.
-use super::projection::{map_directions_summary, map_doctor_report, map_runtime_snapshot};
+use super::projection::{map_application_projection, map_directions_summary, map_doctor_report};
 // PlanningAdminFacadeService는 admin 기능의 현재 workspace_dir과 PlanningFeature handle을 가진 상위 facade다.
 // PlanningAdminOverview/RuntimeSummary는 admin API와 UI가 소비하는 읽기 모델이다.
 use super::{PlanningAdminFacadeService, PlanningAdminOverview, PlanningAdminRuntimeSummary};
+use crate::application::service::planning::{PlanningApplicationProjection, PlanningDoctorReport};
 
 // 이 impl 블록은 admin facade의 overview 조회 책임을 담는다. 쓰기 작업 없이 여러 하위 use case를 읽어 하나의
 // 관리 화면 모델로 조립하는 경로라서, reset/crud 같은 mutation 파일과 분리되어 있다.
@@ -17,14 +18,7 @@ impl PlanningAdminFacadeService {
     pub fn load_overview(&self) -> Result<PlanningAdminOverview> {
         // doctor는 파일 존재 여부, 구조 이상, authority 상태 같은 workspace 건강 상태를 검사한다. inspect_workspace는
         // 실패를 report 안의 issue/note로 낮추는 진단 경로라 overview가 열리지 않는 hard error로 취급하지 않는다.
-        let doctor = self
-            // planning facade 안에서 workspace use case 묶음을 선택한다. admin facade는 내부 service가 아니라 공개
-            // use case 표면을 통해 진단을 수행한다.
-            .planning
-            .workspace
-            // workspace_dir은 이 admin facade 인스턴스가 관리하는 루트다. as_str()로 빌려 넘겨 경로 문자열 소유권을
-            // 유지하면서 읽기 작업만 수행한다.
-            .inspect_workspace(self.workspace_dir.as_str());
+        let doctor = self.load_doctor_report();
         // directions summary는 active planning 문서와 방향별 supporting file 상태를 요약한다. 아직 초기화가 덜 된
         // workspace에서는 load_summary가 실패할 수 있으므로 overview 전체 실패가 아니라 directions 없음으로 표현한다.
         // 이때 doctor가 이미 상단에 원인을 설명하므로 directions panel은 보조 패널로 남을 수 있다.
@@ -58,20 +52,35 @@ impl PlanningAdminFacadeService {
         })
     }
 
-    // load_runtime_summary는 overview의 일부이면서 runtime 상태만 새로고침하는 API에서도 재사용할 수 있는 작은 읽기
-    // 경로다. invalid workspace도 에러 대신 invalid snapshot으로 표현해 UI가 상태 패널을 안정적으로 그리게 한다.
-    pub fn load_runtime_summary(&self) -> Result<PlanningAdminRuntimeSummary> {
-        // runtime snapshot은 현재 planning workspace가 실행 가능/대기/무효/작업 보유 상태인지 판단하는 원천이다.
-        // admin facade는 PlanningFeature의 runtime use case를 통해 읽어 내부 runtime service 결합을 피하고, overview와
-        // runtime-only refresh endpoint가 같은 snapshot/projection 정책을 공유하게 한다.
+    // load_doctor_report는 workspace 건강 상태를 application facade 경유로 읽는다. overview와 compact control
+    // surface가 같은 doctor source를 쓰게 해 adapter별로 health/issue 판단을 복제하지 않게 한다.
+    pub fn load_doctor_report(&self) -> PlanningDoctorReport {
+        self.planning
+            .workspace
+            .inspect_workspace(self.workspace_dir.as_str())
+    }
+
+    // load_runtime_application_projection은 planning runtime facts의 공통 read model을 돌려주는 compatibility
+    // boundary다. admin overview, compact control surface, 이후 CLI/Telegram status path가 같은 projection source를
+    // 공유할 수 있게 runtime snapshot 세부 구조를 여기서 한 번 감춘다.
+    pub fn load_runtime_application_projection(&self) -> Result<PlanningApplicationProjection> {
         let runtime = self
             .planning
             .runtime
             // `_or_invalid` 변형은 파일이 없거나 읽기 실패가 있어도 UI가 다룰 수 있는 invalid snapshot으로 정규화한다.
             .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
-        // projection을 거치면 runtime 내부 snapshot의 세부 필드가 admin summary 계약으로 축약된다. 이 함수가 Result를
-        // 유지하는 것은 호출자와 load_overview의 반환형을 일관되게 맞추고, future runtime read error를 같은 API
-        // shape로 전파할 여지를 남기기 위한 선택이다.
-        Ok(map_runtime_snapshot(&runtime))
+        Ok(PlanningApplicationProjection::from_runtime_snapshot(
+            &runtime,
+        ))
+    }
+
+    // load_runtime_summary는 overview의 일부이면서 runtime 상태만 새로고침하는 API에서도 재사용할 수 있는 작은 읽기
+    // 경로다. invalid workspace도 에러 대신 invalid snapshot으로 표현해 UI가 상태 패널을 안정적으로 그리게 한다.
+    pub fn load_runtime_summary(&self) -> Result<PlanningAdminRuntimeSummary> {
+        // admin summary는 application projection을 표시용 admin DTO로 낮춘 값이다. queue/proposal facts를 surface마다
+        // 다시 해석하지 않도록 projection source를 명시적으로 공유한다.
+        Ok(map_application_projection(
+            self.load_runtime_application_projection()?,
+        ))
     }
 }

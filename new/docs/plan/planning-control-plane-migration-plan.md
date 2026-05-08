@@ -55,9 +55,10 @@ user-visible contract와 fan-in 지점을 고정해, 이후 `PLAN-01`과 `PLAN-0
 
 1. `PlanningApplicationProjection` 최소 타입을 추가한다. 완료: `PLAN-01A`
 2. runtime snapshot, admin overview, control status가 같은 projection source를 읽는
-   compatibility mapper를 만든다.
+   compatibility mapper를 만든다. 완료: control status/queue `PLAN-01C`
 3. TUI/admin/CLI/Telegram 호출부를 한 번에 바꾸지 않고, 먼저 read-only status/queue
-   command부터 facade 뒤로 보낸다. 진행: TUI status projection `PLAN-01B`
+   command부터 facade 뒤로 보낸다. 진행: TUI status projection `PLAN-01B`, control
+   surface status/queue `PLAN-01C`
 4. mutation이나 worker orchestration은 `PLAN-01`에서 정책을 바꾸지 않는다. 필요한
    경우 `PLAN-02`로 미룬다.
 
