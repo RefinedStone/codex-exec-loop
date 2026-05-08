@@ -630,6 +630,29 @@ fn invalid_command_extraction_preserves_rejected_payload_for_repair() {
     ));
 }
 #[test]
+fn extractor_prefers_later_valid_candidate_over_earlier_invalid_payload() {
+    /*
+     * worker output은 untrusted text라서 모델이 self-correction을 한 응답을 보낼 수 있다.
+     * invalid command document는 repair 증거로만 보존하고, 뒤에 valid command candidate가 있으면
+     * 그 candidate를 mutation service로 넘겨야 한다.
+     */
+    let message = r#"First draft:
+{"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Bad shape"}}]}}
+
+Corrected command:
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Accepted candidate"}]}}"#;
+    let extraction = extract_planning_task_commands(message);
+
+    assert!(matches!(
+        extraction,
+        PlanningTaskCommandExtraction::Commands(commands) if matches!(
+            commands.as_slice(),
+            [PlanningTaskMutationCommand::CreateTask(input)]
+                if input.title == "Accepted candidate"
+        )
+    ));
+}
+#[test]
 fn extractor_accepts_balanced_json_embedded_in_markdown_text() {
     /*
      * worker response는 JSON 주변에 prose를 포함하는 경우가 많다. extractor는 fenced block을

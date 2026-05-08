@@ -119,6 +119,11 @@ decision으로 이동한다.
   trim, blank 제거, dedup, sort 규칙을 `PlanningTaskReferencePolicy`의 domain decision으로
   이동했다. application은 input field를 domain canonical set으로 낮춘 뒤 validation/save만
   진행한다. 완료: `PLAN-02H`
+- worker command candidate handling: worker text에서 balanced/fenced JSON 후보를 찾고,
+  command envelope schema/version 오류를 repair 증거로 보존하는 처리는 untrusted worker
+  output을 typed application command로 낮추는 boundary라서 domain으로 이동하지 않는다.
+  대신 invalid 후보 뒤에 valid command 후보가 오면 valid 후보가 mutation path로 들어가는
+  regression으로 application candidate handling을 고정했다. 완료: `PLAN-02I`
 
 완료 조건:
 
@@ -126,9 +131,10 @@ decision으로 이동한다.
 - application service는 load/save/effect ordering만 테스트한다.
 - worker output은 accepted authority가 아니라 untrusted candidate로만 들어온다.
 
-`PLAN-02H` 이후 남은 task mutation 범위는 worker command candidate handling 중 domain으로
-이동 가능한 순수 판단을 추가 감사하는 것이다. runtime 쪽은 현재 `PLAN-02` 문서상 남은
-explicit decision은 없다.
+`PLAN-02I` 기준으로 `PLAN-02`의 explicit domain-decision 감사 범위는 닫혔다. worker output은
+여전히 accepted authority가 아니라 untrusted command candidate이며, extraction 이후 mutation은
+domain validation과 optimistic commit path를 통과한다. 다음 구조 작업은 P2 `DOC-TUI-00`에서
+TUI/application boundary를 문서화하는 것이다.
 
 ## 금지 패턴
 
