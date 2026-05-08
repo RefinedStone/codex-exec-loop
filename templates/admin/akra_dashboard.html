@@ -151,6 +151,12 @@
   .queue-row[data-detail-type]:active {
     transform: translate(2px, 2px);
   }
+  .graphic-action-btn:focus-visible,
+  .drawer-close:focus-visible,
+  [data-detail-type]:focus-visible {
+    outline: 3px solid rgba(93, 169, 255, 0.78);
+    outline-offset: 3px;
+  }
   .kpi-grid {
     display: grid;
     grid-template-columns: repeat(8, minmax(116px, 1fr));
@@ -456,14 +462,16 @@
     box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2);
     cursor: pointer;
   }
-  .slot-card.is-linked,
-  .scene-object.is-linked,
+  [data-detail-type].is-linked,
   .game-panel.is-focused {
     outline: 2px solid rgba(93, 169, 255, 0.72);
     outline-offset: 3px;
   }
   .slot-card.is-selected,
   .scene-object.is-selected,
+  .campaign-lane.is-selected,
+  .attempt-row.is-selected,
+  .intel-card.is-selected,
   .event-row.is-selected,
   .queue-row.is-selected {
     border-color: rgba(245, 200, 75, 0.72);
@@ -1417,6 +1425,8 @@
           data-event-kind="{{ event.event_kind }}"
           data-event-sequence="{{ event.sequence }}"
           data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
+          data-projection-kind="{{ event.projection_kind }}"
+          data-projection-key="{{ event.projection_key }}"
           data-detail-type="event"
           data-detail-title="이벤트 #{{ event.sequence }}"
           data-detail-subtitle="{{ event.event_kind }} / rev {{ event.observed_planning_revision }}"
@@ -1495,6 +1505,7 @@
       <button
         type="button"
         class="queue-row"
+        data-agent-id="{{ item.source_agent }}"
         data-detail-type="queueItem"
         data-detail-title="큐 작업 · {{ item.source_agent }}"
         data-detail-subtitle="{{ item.queue_state }} / {{ item.commit_short_sha }}"
@@ -1533,7 +1544,7 @@
     </section>
   </div>
 
-  <aside class="admin-detail-drawer" data-detail-drawer hidden aria-live="polite">
+  <aside class="admin-detail-drawer" id="akra-detail-drawer" data-detail-drawer hidden aria-live="polite" aria-hidden="true">
     <div class="drawer-head">
       <div>
         <h3 data-detail-drawer-title>상세</h3>
@@ -1905,19 +1916,131 @@
 
   const severityClass = (severity) => `severity-${severity || "normal"}`;
 
-  const selectedDetailSelector = [
-    "[data-detail-type].is-selected",
-    ".slot-card.is-selected",
-    ".scene-object.is-selected",
-    ".event-row.is-selected",
-    ".queue-row.is-selected"
-  ].join(",");
+  const detailSourceSelector = "[data-detail-type]";
+  const linkedSourceSelector = "[data-slot-id], [data-agent-id], [data-task-id], [data-projection-kind], [data-projection-key]";
+  const selectedDetailSelector = `${detailSourceSelector}.is-selected`;
+
+  const detailSourceKey = (source) => {
+    if (!source) return "";
+    const type = source.dataset.detailType || "detail";
+    const stableId = source.dataset.eventSequence
+      || source.dataset.slotId
+      || source.dataset.agentId
+      || source.dataset.taskId
+      || source.dataset.projectionKey
+      || source.dataset.detailTitle
+      || source.dataset.detailSubtitle
+      || "";
+    return `${type}:${stableId}`;
+  };
+
+  const initializeDetailControl = (source) => {
+    if (!source) return;
+    source.setAttribute("aria-controls", "akra-detail-drawer");
+    if (!source.hasAttribute("aria-expanded")) source.setAttribute("aria-expanded", "false");
+    if (!source.hasAttribute("aria-pressed")) source.setAttribute("aria-pressed", "false");
+  };
+
+  const initializeDetailControls = () => {
+    for (const source of root.querySelectorAll(detailSourceSelector)) {
+      initializeDetailControl(source);
+    }
+  };
 
   const setSelectedDetail = (source) => {
-    for (const node of root.querySelectorAll(selectedDetailSelector)) {
-      if (node !== source) node.classList.remove("is-selected");
+    const nextKey = detailSourceKey(source);
+    for (const node of root.querySelectorAll(detailSourceSelector)) {
+      const selected = Boolean(source) && node === source;
+      node.classList.toggle("is-selected", selected);
+      node.setAttribute("aria-pressed", selected ? "true" : "false");
+      node.setAttribute("aria-expanded", selected && detailDrawer && !detailDrawer.hidden ? "true" : "false");
     }
-    source?.classList.add("is-selected");
+    if (nextKey) {
+      root.dataset.selectedDetailKey = nextKey;
+    } else {
+      delete root.dataset.selectedDetailKey;
+    }
+  };
+
+  const clearRelated = () => {
+    for (const node of root.querySelectorAll(".is-linked")) {
+      node.classList.remove("is-linked");
+      node.removeAttribute("aria-current");
+    }
+    root.dataset.relatedSelectionCount = "0";
+  };
+
+  const slotFromSessionKey = (key) => {
+    const [slot] = String(key || "").split("@");
+    return slot && slot.startsWith("slot-") ? slot : "";
+  };
+
+  const selectionTokens = (source) => {
+    const tokens = { slot: "", agent: "", task: "" };
+    if (!source) return tokens;
+    tokens.slot = source.dataset.slotId || source.dataset.detailSlot || "";
+    tokens.agent = source.dataset.agentId || source.dataset.detailAgent || "";
+    tokens.task = source.dataset.taskId || "";
+
+    const projectionKind = source.dataset.projectionKind || "";
+    const projectionKey = source.dataset.projectionKey || "";
+    if (projectionKind === "slot_lease") {
+      tokens.slot = projectionKey;
+    } else if (projectionKind === "session_detail" || projectionKind === "distributor_queue") {
+      tokens.slot = slotFromSessionKey(projectionKey);
+    } else if (projectionKind.includes("agent")) {
+      tokens.agent = projectionKey;
+    } else if (projectionKind.includes("task")) {
+      tokens.task = projectionKey;
+    }
+    return tokens;
+  };
+
+  const projectionSlotToken = (source) => {
+    const projectionKind = source?.dataset?.projectionKind || "";
+    const projectionKey = source?.dataset?.projectionKey || "";
+    if (projectionKind === "slot_lease") return projectionKey;
+    if (projectionKind === "session_detail" || projectionKind === "distributor_queue") {
+      return slotFromSessionKey(projectionKey);
+    }
+    return "";
+  };
+
+  const markRelated = (source) => {
+    clearRelated();
+    const tokens = selectionTokens(source);
+    let linkedCount = 0;
+    for (const node of root.querySelectorAll(linkedSourceSelector)) {
+      const projectionSlot = projectionSlotToken(node);
+      const linked = Boolean(
+        (tokens.slot && node.dataset.slotId === tokens.slot)
+        || (tokens.agent && node.dataset.agentId === tokens.agent)
+        || (tokens.task && node.dataset.taskId === tokens.task)
+        || (tokens.slot && projectionSlot === tokens.slot)
+      );
+      node.classList.toggle("is-linked", linked);
+      if (linked) {
+        node.setAttribute("aria-current", "true");
+        linkedCount += 1;
+      } else {
+        node.removeAttribute("aria-current");
+      }
+    }
+    root.dataset.relatedSelectionCount = String(linkedCount);
+  };
+
+  const syncSelectedDetail = () => {
+    const selectedKey = root.dataset.selectedDetailKey || "";
+    if (!selectedKey) return;
+    const source = [...root.querySelectorAll(detailSourceSelector)]
+      .find((node) => detailSourceKey(node) === selectedKey);
+    if (source) {
+      setSelectedDetail(source);
+      markRelated(source);
+    } else if (selectedKey.startsWith("event:")) {
+      setSelectedDetail(null);
+      clearRelated();
+    }
   };
 
   const renderDetailRow = (label, value, style, severity) => {
@@ -1952,16 +2075,36 @@
       )
     );
     detailDrawer.hidden = false;
+    detailDrawer.setAttribute("aria-hidden", "false");
     window.requestAnimationFrame(() => detailDrawer.classList.add("is-open"));
     setSelectedDetail(source);
+    markRelated(source);
+    if (type === "event") openEventPanelDrawer(source);
   };
 
   const closeDetailDrawer = () => {
     if (!detailDrawer) return;
+    const selected = root.querySelector(selectedDetailSelector);
     detailDrawer.classList.remove("is-open");
+    detailDrawer.setAttribute("aria-hidden", "true");
+    setSelectedDetail(null);
+    clearRelated();
     window.setTimeout(() => {
       if (!detailDrawer.classList.contains("is-open")) detailDrawer.hidden = true;
     }, 180);
+    selected?.focus({ preventScroll: true });
+  };
+
+  const openEventPanelDrawer = (eventRow) => {
+    if (!eventRow) return;
+    for (const row of root.querySelectorAll("[data-event-detail]")) row.classList.remove("is-selected");
+    eventRow.classList.add("is-selected");
+    const drawer = root.querySelector("[data-event-drawer]");
+    if (!drawer) return;
+    drawer.hidden = false;
+    drawer.querySelector("[data-event-drawer-title]").textContent =
+      `#${eventRow.dataset.eventSequence} ${eventRow.dataset.eventKind} · ${eventRow.dataset.eventTarget}`;
+    drawer.querySelector("[data-event-drawer-body]").textContent = eventRow.dataset.eventDetail || "";
   };
 
   const openRefreshDetail = (snapshotState, eventsState) => {
@@ -1985,6 +2128,8 @@
     row.dataset.eventKind = event.eventKind || "";
     row.dataset.eventSequence = String(event.sequence || "");
     row.dataset.eventTarget = `${event.projectionKind || ""}:${event.projectionKey || ""}`;
+    row.dataset.projectionKind = event.projectionKind || "";
+    row.dataset.projectionKey = event.projectionKey || "";
     row.dataset.detailType = "event";
     row.dataset.detailTitle = `이벤트 #${event.sequence || "-"}`;
     row.dataset.detailSubtitle = `${event.eventKind || "runtime_event"} / rev ${event.observedPlanningRevision ?? "-"}`;
@@ -2009,6 +2154,7 @@
     summary.textContent = event.summary || "";
     body.append(kind, meta, summary);
     row.appendChild(body);
+    initializeDetailControl(row);
     return row;
   };
 
@@ -2028,6 +2174,7 @@
     for (const event of events) eventPanel.insertBefore(createEventRow(event), eventDrawer);
     trimEventRows();
     setEventStatus();
+    syncSelectedDetail();
   };
 
   const prependEventRows = (events) => {
@@ -2046,6 +2193,7 @@
     }
     trimEventRows();
     setEventStatus();
+    syncSelectedDetail();
     if (insertedCount > 0) pulseStage(insertedCount);
   };
 
@@ -2077,18 +2225,20 @@
     setEventStatus();
   };
 
-  const markRelated = (source) => {
-    const slotId = source.dataset.slotId || "";
-    const agentId = source.dataset.agentId || "";
-    const taskId = source.dataset.taskId || "";
-    for (const node of root.querySelectorAll("[data-slot-id], [data-agent-id], [data-task-id]")) {
-      const linked = (slotId && node.dataset.slotId === slotId)
-        || (agentId && node.dataset.agentId === agentId)
-        || (taskId && node.dataset.taskId === taskId);
-      node.classList.toggle("is-linked", linked);
-      node.classList.toggle("is-selected", node === source);
-    }
+  const selectableSources = () => [...root.querySelectorAll(detailSourceSelector)]
+    .filter((source) => !source.disabled && !source.closest("[hidden]"));
+
+  const navigateDetailSelection = (source, direction) => {
+    const sources = selectableSources();
+    const index = sources.indexOf(source);
+    if (index < 0 || sources.length === 0) return;
+    const next = sources[(index + direction + sources.length) % sources.length];
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    openDetailDrawer(next);
   };
+
+  initializeDetailControls();
 
   root.addEventListener("click", (event) => {
     if (event.target.closest("[data-detail-close]")) {
@@ -2118,24 +2268,26 @@
       }
     }
 
-    const linked = event.target.closest("[data-slot-id], [data-agent-id], [data-task-id]");
-    if (linked) markRelated(linked);
-
-    const eventRow = event.target.closest("[data-event-detail]");
-    if (eventRow) {
-      for (const row of root.querySelectorAll("[data-event-detail]")) row.classList.remove("is-selected");
-      eventRow.classList.add("is-selected");
-      const drawer = root.querySelector("[data-event-drawer]");
-      if (drawer) {
-        drawer.hidden = false;
-        drawer.querySelector("[data-event-drawer-title]").textContent =
-          `#${eventRow.dataset.eventSequence} ${eventRow.dataset.eventKind} · ${eventRow.dataset.eventTarget}`;
-        drawer.querySelector("[data-event-drawer-body]").textContent = eventRow.dataset.eventDetail || "";
-      }
-    }
-
     const detailSource = event.target.closest("[data-detail-type]");
     if (detailSource) openDetailDrawer(detailSource);
+  });
+
+  root.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && detailDrawer?.classList.contains("is-open")) {
+      event.preventDefault();
+      closeDetailDrawer();
+      return;
+    }
+
+    const detailSource = event.target.closest(detailSourceSelector);
+    if (!detailSource) return;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      navigateDetailSelection(detailSource, 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      navigateDetailSelection(detailSource, -1);
+    }
   });
 
   const pollStatus = document.createElement("small");
