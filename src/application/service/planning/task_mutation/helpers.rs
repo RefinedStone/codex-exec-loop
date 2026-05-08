@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 
@@ -11,8 +9,8 @@ use crate::domain::planning::{
 /*
  * task mutation의 preview path와 commit path가 함께 쓰는 helper 모음이다. service layer는
  * create/update 중 어떤 operation을 적용할지 결정하고, 이 파일은 operation 종류와 무관하게
- * 필요한 application-side normalization을 한곳에 둔다. active direction과 stable task id
- * policy는 domain으로 내려가고, user input normalization은 semantic validation 전 경계에 남는다.
+ * 필요한 application-side normalization을 한곳에 둔다. active direction, stable task id,
+ * task reference policy는 domain으로 내려가고, free-form text guard는 service boundary에 남는다.
  */
 pub(super) fn find_direction<'a>(
     direction_id: &str,
@@ -88,19 +86,6 @@ pub(super) fn required_text<'a>(value: &'a str, label: &str) -> Result<&'a str> 
         bail!("{label} is required");
     }
     Ok(value)
-}
-
-pub(super) fn normalize_references(values: &[String]) -> Vec<String> {
-    // reference array는 user-visible ordered list가 아니라 semantic set이다. trim, blank 제거,
-    // 중복 제거, 정렬을 적용해 반복 preview가 안정적인 authority JSON과 읽기 쉬운 diff를 만든다.
-    values
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 pub(super) fn format_timestamp(timestamp: DateTime<Utc>) -> String {

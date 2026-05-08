@@ -115,6 +115,10 @@ decision으로 이동한다.
   actor/timestamp/content-hash 기반 id shape와 collision suffix 전진 규칙을
   `PlanningTaskIdPolicy`의 domain decision으로 이동했다. 실제 authority 충돌 판정과
   bounded retry는 repository snapshot을 보는 application 경계에 남긴다. 완료: `PLAN-02G`
+- reference normalization: task mutation create/update가 공유하는 `depends_on`/`blocked_by`
+  trim, blank 제거, dedup, sort 규칙을 `PlanningTaskReferencePolicy`의 domain decision으로
+  이동했다. application은 input field를 domain canonical set으로 낮춘 뒤 validation/save만
+  진행한다. 완료: `PLAN-02H`
 
 완료 조건:
 
@@ -122,9 +126,9 @@ decision으로 이동한다.
 - application service는 load/save/effect ordering만 테스트한다.
 - worker output은 accepted authority가 아니라 untrusted candidate로만 들어온다.
 
-`PLAN-02G` 이후 남은 task mutation 범위는 reference normalization, worker command
-candidate handling 중 domain으로 이동 가능한 순수 판단을 추가 감사하는 것이다. runtime 쪽은
-현재 `PLAN-02` 문서상 남은 explicit decision은 없다.
+`PLAN-02H` 이후 남은 task mutation 범위는 worker command candidate handling 중 domain으로
+이동 가능한 순수 판단을 추가 감사하는 것이다. runtime 쪽은 현재 `PLAN-02` 문서상 남은
+explicit decision은 없다.
 
 ## 금지 패턴
 
