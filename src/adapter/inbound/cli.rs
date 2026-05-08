@@ -5,8 +5,9 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::{
-    PlanningControlCommand, PlanningControlFacadeService, PlanningControlService,
-    PlanningResetTarget, PlanningServices, PlanningTaskToolRequest, PlanningTaskToolResponse,
+    PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
+    PlanningControlService, PlanningResetTarget, PlanningServices, PlanningTaskToolRequest,
+    PlanningTaskToolResponse,
 };
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, OsString};
@@ -214,8 +215,8 @@ fn run_planning_control_command(
         workspace_label,
         build_production_planning_services(),
     )));
-    let reply = control.execute(command)?;
-    writeln!(stdout, "{}", reply.text)?;
+    let response = control.execute_request(PlanningControlRequest::new(command))?;
+    writeln!(stdout, "{}", response.reply.text)?;
     Ok(0)
 }
 

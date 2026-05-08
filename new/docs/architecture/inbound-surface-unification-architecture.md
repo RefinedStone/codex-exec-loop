@@ -294,7 +294,8 @@ long-running loop나 background worker는 effect completion을 application event
 1. Surface command inventory와 regression을 먼저 고정한다. 완료 문서는
    [../plan/inbound-surface-command-inventory.md](../plan/inbound-surface-command-inventory.md)이다.
 2. planning control command의 workspace/context/request mapping을 CLI와 Telegram에서 같은
-   contract로 정렬한다.
+   contract로 정렬한다. `PlanningControlRequest`/`PlanningControlResponse`가 shared
+   request/result vocabulary다.
 3. admin HTML/JSON의 같은 mutation이 같은 request DTO와 facade method를 통과하는지 고정한다.
 4. TUI planning shell command와 admin/CLI reset/status/queue vocabulary의 차이를 문서화하고,
    공통 application command로 내릴 수 있는 부분부터 이동한다.

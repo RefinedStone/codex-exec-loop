@@ -239,6 +239,10 @@ fn normalize_command(raw_command: &str) -> String {
 struct NoopPlanningControlSurface;
 
 impl PlanningControlSurface for NoopPlanningControlSurface {
+    fn workspace_dir(&self) -> &str {
+        ""
+    }
+
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         bail!("noop control surface should not execute");
     }

@@ -72,7 +72,7 @@ pub use self::authoring::proposal_promotion::{
 // command/reply 단위로 호출할 수 있다.
 pub use self::control::{
     PlanningControlCommand, PlanningControlFacadeService, PlanningControlReply,
-    PlanningControlService,
+    PlanningControlRequest, PlanningControlResponse, PlanningControlService,
 };
 // PlanningFeature는 adapter가 가장 많이 받는 planning facade다. 내부 feature 모듈은 숨기고 타입 이름만 공개한다.
 pub use self::feature::PlanningFeature;

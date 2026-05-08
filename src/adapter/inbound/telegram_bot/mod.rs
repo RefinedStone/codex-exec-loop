@@ -14,7 +14,8 @@ use crate::application::port::outbound::telegram_bot_port::{
     TelegramUpdate,
 };
 use crate::application::service::planning::{
-    PlanningControlCommand, PlanningControlFacadeService, PlanningControlService, PlanningServices,
+    PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
+    PlanningControlService, PlanningServices,
 };
 
 /*
@@ -274,8 +275,10 @@ impl TelegramBotRunner {
                 }
 
                 // From this point on, Telegram is just another adapter calling the planning control service.
-                let reply = self.control_service.execute(command)?;
-                Ok(Some(reply.text))
+                let response = self
+                    .control_service
+                    .execute_request(PlanningControlRequest::new(command))?;
+                Ok(Some(response.reply.text))
             }
         }
     }
