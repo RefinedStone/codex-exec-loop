@@ -6,9 +6,10 @@ use crossterm::style::Print;
 
 use crate::domain::operator_alert::OperatorAlert;
 
+use super::post_turn_automation::PostTurnAutomationBackgroundResult;
 use super::{
     AutoFollowOverlayUiEvent, BackgroundMessage, ConversationLifecycleEvent,
-    ConversationRuntimeEvent, ConversationState, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
+    ConversationRuntimeEvent, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
 };
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -230,22 +231,13 @@ impl ShellRuntime {
                     evaluation,
                     planning_worker_panel_state,
                 } => {
-                    // Post-turn workers can finish after the operator has moved to another turn.
-                    // The stale guard keeps delayed planning output out of the current thread.
-                    if !self
-                        .app
-                        .should_apply_post_turn_evaluation(&thread_id, &completed_turn_id)
-                    {
-                        continue;
-                    }
-                    if let ConversationState::Ready(conversation) = &mut self.app.conversation_state
-                    {
-                        conversation.record_post_turn_evaluation_applied(&completed_turn_id);
-                    }
-                    self.app.planning_worker_panel_state = planning_worker_panel_state;
-                    self.app.invalidate_parallel_mode_supervisor_snapshot();
-                    self.app.dispatch_conversation_runtime(
-                        ConversationRuntimeEvent::PostTurnEvaluated { evaluation },
+                    self.app.route_post_turn_automation_result(
+                        PostTurnAutomationBackgroundResult {
+                            thread_id,
+                            completed_turn_id,
+                            evaluation,
+                            planning_worker_panel_state,
+                        },
                     );
                 }
                 BackgroundMessage::GithubReviewPollLoaded(result) => {

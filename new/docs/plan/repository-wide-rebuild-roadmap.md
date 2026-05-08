@@ -551,10 +551,10 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 - `TUI-01B`: `shell_runtime.rs`와 `app_runtime.rs`에 흩어진 post-turn automation routing을
   TUI-side automation router/controller로 추출한다. behavior 변경 없이 stale guard,
   planning worker panel projection assignment, supervisor invalidation, reducer dispatch
-  ordering을 유지한다. 준비됨.
+  ordering을 유지한다. 완료.
 - `TUI-01C`: conversation reducer vocabulary에서 stream lifecycle과 automation result를
   분리한다. `EvaluateAutoFollow`는 더 넓은 post-turn automation effect로 낮추고,
-  auto-follow는 automation result action으로만 남긴다.
+  auto-follow는 automation result action으로만 남긴다. 준비됨.
 - `TUI-01D`: queued auto prompt metadata, planning handoff, parallel handoff signal을
   automation provenance로 묶고 pending task-intake flush와 parallel continuation의
   ordering contract를 테스트로 고정한다.
