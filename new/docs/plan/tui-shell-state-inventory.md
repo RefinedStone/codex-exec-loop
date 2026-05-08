@@ -92,5 +92,7 @@
 ## 다음 Slice
 
 - `TUI-00B`: `BackgroundMessage`별 target boundary inventory와 최소 shell runtime regression. 완료.
-- `TUI-00C`: prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는 input/rendering regression.
+- `TUI-00C`: prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는
+  input/rendering regression. 완료 문서는
+  [tui-shell-regression-anchors.md](./tui-shell-regression-anchors.md)이다.
 - `TUI-01`: `TUI-00` regression 이후 conversation lifecycle과 automation lifecycle 분리.

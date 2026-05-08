@@ -54,4 +54,5 @@ Existing and new tests that protect this boundary:
 ## 다음 Slice
 
 `TUI-00C`는 prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는
-input/rendering regression을 추가한다. 그 전에는 conversation/automation split을 시작하지 않는다.
+input/rendering regression을 추가했다. 완료 문서는
+[tui-shell-regression-anchors.md](./tui-shell-regression-anchors.md)이다.
