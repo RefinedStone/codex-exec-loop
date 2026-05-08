@@ -534,6 +534,67 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
 
     assert!(error.to_string().contains("at most 16 command"));
 }
+
+#[test]
+fn invalid_priority_is_rejected_by_domain_validation() {
+    /*
+     * priority bounds are semantic task-authority rules. The mutation service should surface the
+     * domain validation error and avoid writing a candidate authority document.
+     */
+    let repo = repo();
+    let workspace = workspace("domain-priority-validation");
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: Vec::new(),
+        },
+    );
+    let before = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap();
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+    let error = service
+        .apply_commands(PlanningTaskMutationRequest {
+            workspace_directory: workspace.clone(),
+            source: PlanningTaskMutationSource::Worker,
+            legacy_source_turn_id: Some("turn-invalid-priority".to_string()),
+            provenance: provenance(),
+            commands: vec![PlanningTaskMutationCommand::CreateTask(
+                PlanningTaskCreateInput {
+                    direction_id: None,
+                    direction_relation_note: None,
+                    title: "Invalid priority".to_string(),
+                    description: None,
+                    status: None,
+                    base_priority: Some(101),
+                    dynamic_priority_delta: None,
+                    priority_reason: None,
+                    depends_on: Vec::new(),
+                    blocked_by: Vec::new(),
+                },
+            )],
+        })
+        .unwrap_err();
+    let after = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        error
+            .to_string()
+            .contains("base_priority must be within 0..100")
+    );
+    assert_eq!(after.planning_revision, before.planning_revision);
+    assert_eq!(after.task_authority, before.task_authority);
+}
+
 #[test]
 fn unknown_command_fields_and_delete_ops_are_invalid() {
     /*

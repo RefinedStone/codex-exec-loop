@@ -95,6 +95,9 @@ decision으로 이동한다.
 
 - task mutation legality: terminal status 재분류 금지와 description update ownership은
   `PlanningTaskMutationPolicy`의 I/O 없는 domain decision으로 이동했다. 완료: `PLAN-02A`
+- task authority validation: dependency/blocker reference와 priority bound는 domain
+  semantic validation report로 일원화하고, mutation service는 report rejection과 queue
+  rebuild만 맡는다. 완료: `PLAN-02B`
 - proposal promotion 가능 여부
 - queue-idle / repeated-head decision
 - repair eligibility
@@ -105,8 +108,8 @@ decision으로 이동한다.
 - application service는 load/save/effect ordering만 테스트한다.
 - worker output은 accepted authority가 아니라 untrusted candidate로만 들어온다.
 
-`PLAN-02A` 이후 남은 task mutation 범위는 create/defaulting, link/priority validation,
-worker command candidate handling 중 domain으로 이동 가능한 순수 판단을 추가 감사하는 것이다.
+`PLAN-02B` 이후 남은 task mutation 범위는 create/defaulting과 worker command candidate
+handling 중 domain으로 이동 가능한 순수 판단을 추가 감사하는 것이다.
 
 ## 금지 패턴
 

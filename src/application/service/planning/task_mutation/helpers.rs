@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -12,9 +12,8 @@ use crate::domain::planning::{
 /*
  * task mutation의 preview path와 commit path가 함께 쓰는 helper 모음이다. service layer는
  * create/update 중 어떤 operation을 적용할지 결정하고, 이 파일은 operation 종류와 무관하게
- * 항상 지켜야 하는 cross-cutting invariant를 한곳에 둔다. active direction 선택, reference
- * integrity, priority bound, stable task id, user input normalization이 여기서 먼저 정리된 뒤
- * task authority document가 persistence 경계로 넘어간다.
+ * 필요한 application-side normalization을 한곳에 둔다. active direction 선택, stable task id,
+ * user input normalization이 여기서 정리된 뒤 domain semantic validation으로 넘어간다.
  */
 pub(super) fn select_direction<'a>(
     requested_direction_id: Option<&str>,
@@ -92,54 +91,6 @@ pub(super) fn default_relation_note(
                 direction.summary.trim()
             )
         })
-}
-
-pub(super) fn validate_task_reference(
-    link_kind: &'static str,
-    task_id: &str,
-    target_task_id: &str,
-    task_ids: &HashSet<String>,
-) -> Result<()> {
-    let normalized = target_task_id.trim();
-    // dependency/blocker link는 같은 authority document 안의 graph edge다. blank/self/unknown
-    // edge가 있으면 queue projection이 runnable 여부를 추측하게 되므로, validation 재실행 전에
-    // mutation layer에서 먼저 거부한다.
-    if normalized.is_empty() {
-        bail!("task `{task_id}` contains a blank {link_kind}");
-    }
-    if normalized == task_id {
-        bail!("task `{task_id}` cannot reference itself as a {link_kind}");
-    }
-    if !task_ids.contains(normalized) {
-        bail!("task `{task_id}` references unknown {link_kind} `{normalized}`");
-    }
-    Ok(())
-}
-
-pub(super) fn validate_priorities(task_authority: &TaskAuthorityDocument) -> Result<()> {
-    // domain은 base priority와 dynamic delta를 합쳐 combined priority를 계산한다. 입력값과
-    // 최종 projection이 모두 UI/ranking 범위 안에 있어야 queue ordering이 음수/초과값에 흔들리지 않는다.
-    for task in &task_authority.tasks {
-        if !(0..=100).contains(&task.base_priority) {
-            bail!(
-                "task `{}` base_priority must be within 0..100",
-                task.id.trim()
-            );
-        }
-        if !(-100..=100).contains(&task.dynamic_priority_delta) {
-            bail!(
-                "task `{}` dynamic_priority_delta must be within -100..100",
-                task.id.trim()
-            );
-        }
-        if !(0..=100).contains(&task.combined_priority()) {
-            bail!(
-                "task `{}` combined priority must stay within 0..100",
-                task.id.trim()
-            );
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn reject_task_validation_errors(report: &PlanningValidationReport) -> Result<()> {
