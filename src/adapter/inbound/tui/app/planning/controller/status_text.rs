@@ -7,13 +7,6 @@
 use super::*;
 
 /*
- * reset 명령 usage는 parse 실패, 잘못된 confirm token, 초과 인자 모두에서 같은 회복 경로로 나가야 한다.
- * 한 상수로 묶어 `handle_reset_shell_command`가 실패 종류별로 다른 문법을 암시하지 않게 한다.
- */
-const RESET_USAGE_TEXT: &str =
-    "usage: :reset <queue|directions|all>  |  add `confirm` for directions or all";
-
-/*
  * planning draft editor는 overlay 위의 in-memory buffer와 이미 staged 된 draft를 동시에 다룬다.
  * close warning은 "저장하지 않은 buffer 손실"과 "검증 실패 draft가 디스크에 남음"을 분리해서 알려야,
  * 사용자가 Esc/Enter를 한 번 더 누를 때 어떤 상태가 사라지고 어떤 상태가 남는지 판단할 수 있다.
@@ -120,55 +113,6 @@ pub(super) fn planning_doctor_status_text(report: &PlanningDoctorReport) -> Stri
     parts.join(" / ")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/*
- * `:reset` shell command는 target마다 destructive 정도가 다르다. controller가 parse, preview,
- * confirm, execute 결정을 분리할 수 있도록 target과 confirm 여부를 함께 넘기는 작은 command DTO를 둔다.
- */
-pub(super) struct ParsedResetShellCommand {
-    // queue/directions/all 중 실제 workspace reset service에 전달할 대상이다.
-    pub(super) target: PlanningResetTarget,
-    // directions/all처럼 authority를 크게 바꾸는 reset은 preview 후 confirm token을 요구한다.
-    pub(super) confirmed: bool,
-}
-
-/*
- * parse_reset_shell_argument는 TUI shell 문자열을 application의 `PlanningResetTarget`으로 바꾸는
- * adapter boundary다. 여기서 허용 문법을 좁게 유지해야 `reset_workspace` service가 UI 전용 문자열
- * 해석을 알 필요가 없고, controller는 preview/confirm/execute 흐름만 조립하면 된다.
- */
-pub(super) fn parse_reset_shell_argument(
-    argument: Option<&str>,
-) -> Result<ParsedResetShellCommand, String> {
-    let Some(argument) = argument.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Err(RESET_USAGE_TEXT.to_string());
-    };
-    let mut parts = argument.split_whitespace();
-    let Some(target) = parts.next() else {
-        return Err(RESET_USAGE_TEXT.to_string());
-    };
-    let confirmation = parts.next();
-    let confirmed = match confirmation {
-        None => false,
-        Some(value) if value.eq_ignore_ascii_case("confirm") => true,
-        Some(_) => {
-            return Err(RESET_USAGE_TEXT.to_string());
-        }
-    };
-    if parts.next().is_some() {
-        return Err(RESET_USAGE_TEXT.to_string());
-    }
-    let target = match target.to_ascii_lowercase().as_str() {
-        "queue" => PlanningResetTarget::Queue,
-        "directions" => PlanningResetTarget::Directions,
-        "all" => PlanningResetTarget::All,
-        _ => {
-            return Err(RESET_USAGE_TEXT.to_string());
-        }
-    };
-    Ok(ParsedResetShellCommand { target, confirmed })
-}
-
 /*
  * reset preview text는 destructive action을 바로 실행하지 않는 안전 장치다. queue reset은 derived
  * state 정리라 즉시 실행할 수 있지만, directions/all은 authority 문서와 prompt artifacts를 바꾸므로
@@ -197,33 +141,4 @@ pub(super) fn planning_reset_status_text(result: &PlanningWorkspaceResetResult) 
         result.rewritten_paths.len(),
         result.removed_paths.len(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reset_shell_argument_maps_to_shared_application_targets() {
-        /*
-         * TUI shell spelling is an inbound grammar detail. The parser must emit
-         * PlanningResetTarget so CLI, admin, Telegram, and TUI stay on the same
-         * destructive reset vocabulary.
-         */
-        for (raw, expected, confirmed) in [
-            ("queue", PlanningResetTarget::Queue, false),
-            ("directions", PlanningResetTarget::Directions, false),
-            ("directions confirm", PlanningResetTarget::Directions, true),
-            ("all", PlanningResetTarget::All, false),
-            ("all confirm", PlanningResetTarget::All, true),
-        ] {
-            let parsed = parse_reset_shell_argument(Some(raw)).expect("reset target should parse");
-            assert_eq!(parsed.target, expected);
-            assert_eq!(parsed.confirmed, confirmed);
-        }
-
-        assert!(parse_reset_shell_argument(Some("tasks")).is_err());
-        assert!(parse_reset_shell_argument(Some("queue now")).is_err());
-        assert!(parse_reset_shell_argument(None).is_err());
-    }
 }

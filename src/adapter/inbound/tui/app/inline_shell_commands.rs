@@ -1,3 +1,8 @@
+use super::planning_reset_shell_command::{
+    ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
+};
+use crate::application::service::planning::PlanningResetTarget;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
     Diagnostics,
@@ -228,25 +233,8 @@ impl InlineShellCommandInput {
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::Reset => match parse_reset_argument(self.argument()) {
-                ResetArgument::None => RESET_USAGE.to_string(),
-                ResetArgument::Queue { .. } => {
-                    "Press Enter to reset queue-side planning state.".to_string()
-                }
-                ResetArgument::Directions { confirmed: true } => {
-                    "Press Enter to confirm the directions reset.".to_string()
-                }
-                ResetArgument::Directions { confirmed: false } => {
-                    "Review `:reset directions confirm` before rewriting directions-side planning files.".to_string()
-                }
-                ResetArgument::All { confirmed: true } => {
-                    "Press Enter to confirm the full planning reset.".to_string()
-                }
-                ResetArgument::All { confirmed: false } => {
-                    "Review `:reset all confirm` before replacing the full planning scaffold.".to_string()
-                }
-                ResetArgument::Invalid(value) => format!(
-                    "Press Enter to apply `:reset {value}`. Supported arguments: queue, directions, all."
-                ),
+                Some(parsed) => reset_argument_hint(parsed),
+                None => reset_argument_recovery_hint(self.argument()),
             },
             _ => self.command.spec().buffered_hint.to_string(),
         }
@@ -450,42 +438,38 @@ fn suggestion_prefix_token(input: &str) -> Option<String> {
 
     Some(trimmed_start[..command_token_end].to_ascii_lowercase())
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ResetArgument<'a> {
-    None,
-    Queue { confirmed: bool },
-    Directions { confirmed: bool },
-    All { confirmed: bool },
-    Invalid(&'a str),
+fn parse_reset_argument(argument: Option<&str>) -> Option<ParsedPlanningResetShellCommand> {
+    parse_planning_reset_shell_argument(argument).ok()
 }
 
-fn parse_reset_argument(argument: Option<&str>) -> ResetArgument<'_> {
-    // Destructive reset modes use an explicit trailing `confirm` token, while
-    // queue reset is allowed without confirmation.
+fn reset_argument_hint(parsed: ParsedPlanningResetShellCommand) -> String {
+    match (parsed.target, parsed.confirmed) {
+        (PlanningResetTarget::Queue, _) => {
+            "Press Enter to reset queue-side planning state.".to_string()
+        }
+        (PlanningResetTarget::Directions, true) => {
+            "Press Enter to confirm the directions reset.".to_string()
+        }
+        (PlanningResetTarget::Directions, false) => {
+            "Review `:reset directions confirm` before rewriting directions-side planning files."
+                .to_string()
+        }
+        (PlanningResetTarget::All, true) => {
+            "Press Enter to confirm the full planning reset.".to_string()
+        }
+        (PlanningResetTarget::All, false) => {
+            "Review `:reset all confirm` before replacing the full planning scaffold.".to_string()
+        }
+    }
+}
+
+fn reset_argument_recovery_hint(argument: Option<&str>) -> String {
     let Some(argument) = argument.map(str::trim).filter(|value| !value.is_empty()) else {
-        return ResetArgument::None;
+        return RESET_USAGE.to_string();
     };
-    let mut parts = argument.split_whitespace();
-    let Some(target) = parts.next() else {
-        return ResetArgument::None;
-    };
-    let confirmation = parts.next();
-    if parts.next().is_some() {
-        return ResetArgument::Invalid(target);
-    }
-    let confirmed = matches!(
-        confirmation,
-        Some(value) if value.eq_ignore_ascii_case("confirm")
-    );
-    if confirmation.is_some() && !confirmed {
-        return ResetArgument::Invalid(target);
-    }
-    match target.to_ascii_lowercase().as_str() {
-        "queue" => ResetArgument::Queue { confirmed },
-        "directions" => ResetArgument::Directions { confirmed },
-        "all" => ResetArgument::All { confirmed },
-        _ => ResetArgument::Invalid(target),
-    }
+    format!(
+        "Press Enter to apply `:reset {argument}`. Supported arguments: queue, directions, all."
+    )
 }
 #[cfg(test)]
 #[path = "inline_shell_commands/tests.rs"]

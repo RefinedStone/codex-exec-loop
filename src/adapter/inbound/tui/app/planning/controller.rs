@@ -18,9 +18,11 @@ mod planning_init_overlay;
 mod status_text;
 use self::status_text::{
     directions_manual_editor_close_warning_status, directions_manual_editor_closed_status,
-    parse_reset_shell_argument, planning_doctor_status_text,
-    planning_manual_editor_close_warning_status, planning_manual_editor_closed_status,
-    planning_reset_preview_text, planning_reset_status_text,
+    planning_doctor_status_text, planning_manual_editor_close_warning_status,
+    planning_manual_editor_closed_status, planning_reset_preview_text, planning_reset_status_text,
+};
+use super::super::planning_reset_shell_command::{
+    PLANNING_RESET_USAGE_TEXT, parse_planning_reset_shell_argument,
 };
 
 // Planning control is the TUI adapter layer for workspace mutations: it keeps
@@ -264,11 +266,11 @@ impl NativeTuiApp {
         &mut self,
         argument: Option<&str>,
     ) {
-        let parsed = match parse_reset_shell_argument(argument) {
+        let parsed = match parse_planning_reset_shell_argument(argument) {
             Ok(parsed) => parsed,
-            Err(usage) => {
+            Err(_) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: usage,
+                    status_text: PLANNING_RESET_USAGE_TEXT.to_string(),
                 });
                 return;
             }
