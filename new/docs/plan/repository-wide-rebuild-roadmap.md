@@ -722,6 +722,7 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - `src/adapter/outbound/db/*`
 - `src/adapter/outbound/filesystem/*`
 - `src/adapter/outbound/git/*`
+- `new/docs/plan/store-runtime-state-boundary-inventory.md`
 
 산출물:
 
@@ -739,6 +740,25 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - SQLite runtime projection tests
 - filesystem adapter tests
 - affected planning/parallel recovery tests
+
+작업 단위:
+
+- `STORE-00A`: durable state, process-lifetime runtime state, adapter policy audit inventory를
+  [store-runtime-state-boundary-inventory.md](./store-runtime-state-boundary-inventory.md)에
+  고정한다. 완료.
+- `STORE-00B`: SQLite runtime projection regression matrix를 보강한다. dispatch command,
+  runtime event feed, claim/recovery, task cleanup projection을 같은 DB read boundary로 검증한다. ready.
+- `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime
+  boundary로 이동한다. authority-first write order와 mirror-loss recovery 테스트를 유지한다. ready.
+- `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application
+  control-plane runtime state로 이동한다. `STORE-00B/C` 이후 진행한다. blocked.
+- `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact,
+  repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. ready.
+
+`STORE-00A` 완료 근거:
+
+- `STORE-00A`에서 durable/process runtime state inventory와 adapter mapping versus application
+  policy audit를 작성했다.
 
 ## P5. Test And Docs Slices
 
@@ -787,17 +807,23 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 현재 바로 시작 가능한 조합:
 
 - `INBOUND-00`
-- `DOC-STORE-00`
+- `STORE-00B`
+- `STORE-00C`
+- `STORE-00E`
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- `INBOUND-00`과 `DOC-STORE-00`
+- `INBOUND-00`과 `STORE-00B`
+- `INBOUND-00`과 `STORE-00E`
+- `STORE-00B`와 `STORE-00E`
 
 동시에 진행하면 안 되는 조합:
 
 - `PLAN-01`과 `INBOUND-00`
 - `PAR-04`와 `TUI-01`
-- `STORE-00`과 parallel/planning repository 구현 slice
+- `STORE-00B`와 `STORE-00C`
+- `STORE-00C`와 parallel pool/distributor 구현 slice
+- `STORE-00D`와 `PAR-03`/`PAR-04`/`TUI-01` 계열 runtime migration
 
 ## Worker 완료 보고 형식
 
