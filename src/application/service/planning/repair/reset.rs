@@ -27,9 +27,6 @@ use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, T
  * 단일 source of truth에서 다시 읽힌다.
  */
 
-// 레거시 runtime export는 생성 cache/output 산출물이므로 full reset에서만 제거한다.
-const LEGACY_RUNTIME_EXPORTS_DIRECTORY: &str = ".codex-exec-loop/runtime/exports";
-
 // directions reset은 기존 task를 보존하면서 direction authority와 prompt/detail 산출물을 교체한다.
 const RESET_DIRECTIONS_REMOVED_PATHS: &[&str] = &[
     PLANNING_DIRECTION_DOCS_DIRECTORY,
@@ -37,11 +34,8 @@ const RESET_DIRECTIONS_REMOVED_PATHS: &[&str] = &[
 ];
 
 // full reset은 generated draft/rejection도 지워 오래된 planning 상태가 bootstrap 뒤에 남지 않게 한다.
-const RESET_ALL_GENERATED_ARTIFACT_PATHS: &[&str] = &[
-    PLANNING_DRAFTS_DIRECTORY,
-    PLANNING_REJECTED_DIRECTORY,
-    LEGACY_RUNTIME_EXPORTS_DIRECTORY,
-];
+const RESET_ALL_GENERATED_ARTIFACT_PATHS: &[&str] =
+    &[PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // CLI, admin API, Telegram, TUI, control command adapter가 공유하는 공개 reset 대상이다.
