@@ -11,6 +11,8 @@ pub mod admin;
 // authoring은 draft 작성, bootstrap, 방향 문서 생성처럼 planning 자료를 만드는 내부 application 계층이다. crate 안의
 // 다른 service/test는 보되 외부 crate API로는 노출하지 않기 위해 pub(crate)다.
 pub(crate) mod authoring;
+// application_projection은 inbound surface가 공통으로 읽을 planning read model이다.
+mod application_projection;
 // composition은 포트와 서비스를 엮어 PlanningFeature를 만드는 내부 조립 계층이다. 생성자는 feature.rs로만 열고,
 // 조립 세부 타입은 이 모듈 밖으로 새지 않게 private으로 둔다.
 mod composition;
@@ -44,6 +46,9 @@ pub use self::admin::{
     PlanningAdminFileKey, PlanningAdminFileSyncOutcome, PlanningAdminManagementView,
     PlanningAdminOverview, PlanningAdminResetOutcome, PlanningAdminSessionView,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
+};
+pub use self::application_projection::{
+    PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
 };
 // bootstrap 타입은 새 planning workspace를 세팅할 때 필요한 산출물과 실행 모드를 외부 초기화 흐름에 제공한다.
 pub use self::authoring::bootstrap::{

@@ -53,7 +53,7 @@ user-visible contract와 fan-in 지점을 고정해, 이후 `PLAN-01`과 `PLAN-0
 
 `PLAN-01`은 바로 대규모 교체를 하지 않는다. 아래 순서로 PR을 더 잘게 나눈다.
 
-1. `PlanningApplicationProjection` 최소 타입을 추가한다.
+1. `PlanningApplicationProjection` 최소 타입을 추가한다. 완료: `PLAN-01A`
 2. runtime snapshot, admin overview, control status가 같은 projection source를 읽는
    compatibility mapper를 만든다.
 3. TUI/admin/CLI/Telegram 호출부를 한 번에 바꾸지 않고, 먼저 read-only status/queue
