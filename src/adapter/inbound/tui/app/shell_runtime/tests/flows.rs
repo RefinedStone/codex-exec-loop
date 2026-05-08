@@ -811,22 +811,30 @@ fn loading_parallel_mode_supervisor_snapshot(
 }
 
 #[test]
-fn parallel_entry_reaches_ready_without_dispatching_ready_queue() {
+fn parallel_entry_dispatches_ready_queue_without_main_turn() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-parallel-entry");
-    harness.committed_ready_task("verify parallel entry does not auto dispatch");
+    harness.committed_ready_task("verify parallel entry dispatches ready queue");
 
     harness.enter_parallel();
 
-    let final_status = harness.poll_until_status_contains("control tower ready");
+    harness.poll_until_worker_launches(1);
+    let final_status = harness.poll_until_status_contains("auto dispatched 1 worker(s)");
     assert!(
-        final_status.contains("parallel mode: on"),
-        "parallel entry should finish successfully, got `{final_status}`"
+        final_status.contains("dispatch refreshed"),
+        "parallel entry should report dispatch refresh, got `{final_status}`"
     );
     assert_eq!(
         harness.worker_port.launch_count(),
-        0,
-        "bare :parallel entry must not launch isolated workers"
+        1,
+        "bare :parallel entry should launch one isolated worker for the ready queue"
+    );
+    assert!(
+        harness
+            .runtime
+            .app()
+            .parallel_mode_automation_epoch_id
+            .is_some()
     );
 }
 
@@ -923,14 +931,15 @@ fn parallel_entry_leaves_idle_slots_detached_at_pool_baseline_head() {
 }
 
 #[test]
-fn parallel_entry_without_prompt_does_not_advance_ready_tasks() {
+fn parallel_entry_without_prompt_dispatches_ready_tasks_but_keeps_authority_statuses() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-no-prompt-task-status");
     let first = harness.committed_ready_task("ready task should remain ready after bare parallel");
     let second = harness.committed_ready_task("second ready task should also remain ready");
+    let _release_guard = harness.worker_port.hold_worker_streams();
 
     harness.enter_parallel();
-    harness.poll_until_status_contains("control tower ready");
+    harness.poll_until_worker_streams_active(2);
 
     let task_authority = harness.runtime_task_authority();
     let task_statuses = task_authority
@@ -953,7 +962,9 @@ fn parallel_entry_without_prompt_does_not_advance_ready_tasks() {
             .expect("committed task should remain in authority");
         assert_eq!(task.status, TaskStatus::Ready);
     }
-    assert_eq!(harness.worker_port.launch_count(), 0);
+    assert_eq!(harness.worker_port.launch_count(), 2);
+    drop(_release_guard);
+    harness.poll_until_worker_streams_terminal(2);
 }
 
 #[test]
@@ -976,6 +987,7 @@ fn parallel_reentry_while_enabled_refreshes_without_reset_or_dispatch() {
         )
         .expect("existing slot lease should be acquired");
     harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
 
     harness.enter_parallel();
     harness.poll_until_status_contains("control tower ready");

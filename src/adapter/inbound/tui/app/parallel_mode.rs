@@ -536,7 +536,7 @@ impl NativeTuiApp {
 
         if self.parallel_mode_automation_epoch_id.is_none() {
             let reason = format!(
-                "task update `{task_id}` accepted before the first main-session post-turn epoch"
+                "task update `{task_id}` accepted before a parallel automation epoch opened"
             );
             self.record_parallel_mode_dispatch_withheld(
                 Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
@@ -641,6 +641,14 @@ impl NativeTuiApp {
         epoch_id
     }
 
+    fn open_parallel_mode_automation_epoch_for_entry(&mut self) -> (u64, bool) {
+        if let Some(epoch_id) = self.parallel_mode_automation_epoch_id {
+            return (epoch_id, false);
+        }
+
+        (self.open_parallel_mode_automation_epoch(), true)
+    }
+
     fn close_parallel_mode_automation_epoch(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
         let _ = self
@@ -725,6 +733,30 @@ impl NativeTuiApp {
             epoch_id,
             Some(trigger),
         );
+    }
+
+    fn maybe_start_parallel_mode_entry_dispatch(&mut self, workspace_directory: &str) -> bool {
+        let planning_snapshot = self
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(workspace_directory);
+        if !planning_snapshot.has_actionable_queue_head() {
+            return false;
+        }
+
+        let Some(epoch_id) = self.parallel_mode_automation_epoch_id else {
+            return false;
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: format!(
+                "parallel mode: automation epoch {epoch_id} opened / dispatching ready queue"
+            ),
+        });
+        self.wake_parallel_mode_orchestrator(
+            workspace_directory.to_string(),
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        );
+        true
     }
 
     pub(super) fn apply_parallel_mode_orchestrator_wake_request(
@@ -930,7 +962,12 @@ impl NativeTuiApp {
             status_text,
         });
         if self.parallel_mode_enabled {
-            self.maybe_wake_parallel_mode_orchestrator_for_pending_command();
+            let (_, opened_epoch) = self.open_parallel_mode_automation_epoch_for_entry();
+            let entry_dispatch_started =
+                opened_epoch && self.maybe_start_parallel_mode_entry_dispatch(workspace_directory);
+            if !entry_dispatch_started {
+                self.maybe_wake_parallel_mode_orchestrator_for_pending_command();
+            }
             self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
         }
     }

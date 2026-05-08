@@ -276,9 +276,9 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
 #[test]
 fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
     /*
-     * Task intake before the first main-session post-turn epoch is data-plane
-     * intake only. It can populate the accepted queue, but it must not start the
-     * first parallel automation epoch or queue a worker dispatch.
+     * Task intake before a successful :parallel entry is data-plane intake only.
+     * It can populate the accepted queue, but it must not start the first
+     * parallel automation epoch or queue a worker dispatch.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
@@ -314,18 +314,17 @@ fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
             .app()
             .last_parallel_mode_dispatch_withheld_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("before the first main-session post-turn epoch"))
+            .is_some_and(|reason| reason.contains("before a parallel automation epoch opened"))
     );
 }
 
 #[test]
-fn bare_parallel_enter_does_not_auto_dispatch_ready_queue() {
+fn bare_parallel_enter_dispatches_ready_queue() {
     /*
-     * :parallel entry is a control-plane action: readiness, disposable pool reset,
-     * and supervisor hydration. A ready queue item must not lease a slot or launch
-     * an isolated worker until a later task-update dispatch path asks for it.
+     * :parallel entry opens the automation epoch after readiness and pool
+     * reconcile, then dispatches an already-ready accepted queue head.
      */
-    let fixture = make_dispatch_ready_parallel_runtime("parallel-enter-no-dispatch");
+    let fixture = make_dispatch_ready_parallel_runtime("parallel-enter-dispatch");
     let mut runtime = fixture.runtime;
     for character in ":parallel".chars() {
         runtime.app_mut().push_input_character(character);
@@ -342,7 +341,9 @@ fn bare_parallel_enter_does_not_auto_dispatch_ready_queue() {
         runtime.poll_background_messages();
         if let ConversationState::Ready(conversation) = &runtime.app().conversation_state {
             final_status = conversation.status_text.clone();
-            if final_status.contains("control tower ready") || final_status.contains("blocked /") {
+            if final_status.contains("auto dispatched 1 worker(s)")
+                || final_status.contains("blocked /")
+            {
                 break;
             }
         }
@@ -350,13 +351,13 @@ fn bare_parallel_enter_does_not_auto_dispatch_ready_queue() {
     }
 
     assert!(
-        final_status.contains("control tower ready"),
-        "parallel entry should finish successfully, got `{final_status}`"
+        final_status.contains("auto dispatched 1 worker(s)"),
+        "parallel entry should dispatch ready queue, got `{final_status}`"
     );
     assert_eq!(
         fixture.launch_count.load(Ordering::SeqCst),
-        0,
-        "bare :parallel entry must not launch isolated workers"
+        1,
+        "bare :parallel entry should launch one isolated worker"
     );
 }
 
