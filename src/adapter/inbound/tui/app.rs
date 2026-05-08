@@ -92,6 +92,8 @@ mod inline_shell_commands;
 mod inline_terminal_adapter;
 #[path = "app/parallel_mode.rs"]
 mod parallel_mode;
+#[path = "app/parallel_mode_shell_command.rs"]
+mod parallel_mode_shell_command;
 #[path = "app/parallel_mode/panel_controller.rs"]
 mod parallel_panel_controller;
 #[path = "app/planning/mod.rs"]

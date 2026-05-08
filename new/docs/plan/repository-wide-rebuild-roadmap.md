@@ -660,8 +660,10 @@ application command/use case를 공유해야 한다.
   CLI/admin control vocabulary의 차이를 줄인다. 보류.
 - `INBOUND-00E-A`: CLI `parallel-tick`을 application orchestrator tick result vocabulary로
   정렬한다. 완료.
+- `INBOUND-00E-B`: TUI `:parallel` execution path와 inline buffered hint path가 같은
+  parser를 공유하게 해 enable/disable vocabulary drift를 막는다. 완료.
 - `INBOUND-00E`: parallel TUI/admin/CLI entrypoint를 control-plane runtime command/event
-  vocabulary로 정렬한다. 남은 TUI/admin 정렬은 보류.
+  vocabulary로 정렬한다. 남은 admin tick/snapshot vocabulary 정렬은 보류.
 
 금지:
 

@@ -1,3 +1,6 @@
+use super::parallel_mode_shell_command::{
+    ParsedParallelModeShellCommand, parse_parallel_mode_shell_argument,
+};
 use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
@@ -192,15 +195,7 @@ impl InlineShellCommandInput {
     // spec-driven because several commands have operator-sensitive arguments.
     pub(super) fn buffered_hint(&self) -> String {
         match self.command {
-            InlineShellCommand::Parallel => match self.argument() {
-                Some(value) if value.eq_ignore_ascii_case("off") => {
-                    "Press Enter to turn parallel mode off.".to_string()
-                }
-                Some(value) => format!(
-                    "Press Enter to apply `:parallel {value}`. Supported command forms: :parallel, :parallel off."
-                ),
-                None => self.command.spec().buffered_hint.to_string(),
-            },
+            InlineShellCommand::Parallel => parallel_argument_hint(self.argument()),
             InlineShellCommand::PlanningInit => match self.argument() {
                 Some(value) if value.eq_ignore_ascii_case("doctor") => {
                     "Press Enter to inspect planning health.".to_string()
@@ -437,6 +432,21 @@ fn suggestion_prefix_token(input: &str) -> Option<String> {
     }
 
     Some(trimmed_start[..command_token_end].to_ascii_lowercase())
+}
+fn parallel_argument_hint(argument: Option<&str>) -> String {
+    match parse_parallel_mode_shell_argument(argument) {
+        Ok(ParsedParallelModeShellCommand::Enable) => InlineShellCommand::Parallel
+            .spec()
+            .buffered_hint
+            .to_string(),
+        Ok(ParsedParallelModeShellCommand::Disable) => {
+            "Press Enter to turn parallel mode off.".to_string()
+        }
+        Err(error) => format!(
+            "Press Enter to apply `:parallel {}`. Supported command forms: :parallel, :parallel off.",
+            error.argument()
+        ),
+    }
 }
 fn parse_reset_argument(argument: Option<&str>) -> Option<ParsedPlanningResetShellCommand> {
     parse_planning_reset_shell_argument(argument).ok()

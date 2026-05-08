@@ -298,7 +298,10 @@ fn queue_command_hint_is_argument_aware() {
 fn parallel_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":parallel").expect("command should parse");
     let off = InlineShellCommandInput::parse(":parallel off").expect("command should parse");
+    let off_upper = InlineShellCommandInput::parse(":parallel OFF").expect("command should parse");
     let invalid = InlineShellCommandInput::parse(":parallel later").expect("command should parse");
+    let invalid_extra =
+        InlineShellCommandInput::parse(":parallel off now").expect("command should parse");
 
     assert_eq!(plain.buffered_hint(), "Press Enter to enter parallel mode.");
     assert_eq!(
@@ -306,8 +309,16 @@ fn parallel_command_hint_is_argument_aware() {
         "Press Enter to turn parallel mode off."
     );
     assert_eq!(
+        off_upper.buffered_hint(),
+        "Press Enter to turn parallel mode off."
+    );
+    assert_eq!(
         invalid.buffered_hint(),
         "Press Enter to apply `:parallel later`. Supported command forms: :parallel, :parallel off."
+    );
+    assert_eq!(
+        invalid_extra.buffered_hint(),
+        "Press Enter to apply `:parallel off now`. Supported command forms: :parallel, :parallel off."
     );
 }
 
