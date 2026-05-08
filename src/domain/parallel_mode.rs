@@ -22,6 +22,7 @@ pub use self::distributor::{
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorSnapshot,
 };
+pub(crate) use self::orchestrator::ParallelModeDispatchTaskCandidate;
 pub use self::orchestrator::{
     ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
