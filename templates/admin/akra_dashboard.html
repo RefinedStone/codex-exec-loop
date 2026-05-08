@@ -176,6 +176,9 @@
   .kpi.is-loading { opacity: 0.72; }
   .kpi.is-success { border-color: rgba(53, 208, 127, 0.44); }
   .kpi.is-error { border-color: rgba(255, 107, 107, 0.58); background: rgba(255, 107, 107, 0.09); }
+  .kpi.has-changed {
+    animation: akraKpiFlash 520ms ease-out;
+  }
   .kpi .kpi-head {
     display: flex;
     gap: 8px;
@@ -328,7 +331,17 @@
     position: relative;
     min-height: 540px;
     overflow: hidden;
-    background: linear-gradient(180deg, #0a1628, #0e1c30);
+    isolation: isolate;
+    background:
+      linear-gradient(90deg, rgba(5, 12, 23, 0.42), rgba(5, 12, 23, 0.08) 32%, rgba(5, 12, 23, 0.36)),
+      var(--office-bg-image) center / cover no-repeat,
+      linear-gradient(180deg, #0a1628, #0e1c30);
+  }
+  .office-board #pixi-diorama {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
   }
   .office-board canvas {
     position: absolute;
@@ -346,8 +359,50 @@
       linear-gradient(90deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 100%),
       linear-gradient(rgba(255,255,255,0.04) 0 1px, transparent 1px 100%);
     background-size: 34px 34px;
-    opacity: 0.35;
+    opacity: 0.2;
+    mix-blend-mode: screen;
     pointer-events: none;
+  }
+  .office-board::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    background:
+      linear-gradient(115deg, transparent 0 38%, rgba(93,169,255,0.11) 44%, transparent 50% 100%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 6px);
+    opacity: 0.22;
+    mix-blend-mode: screen;
+    transform: translateX(-42%);
+    animation: akraStageScan 8s linear infinite;
+  }
+  .office-board.is-bursting::after {
+    opacity: 0.4;
+    animation-duration: 1.8s;
+  }
+  .stage-hud {
+    position: absolute;
+    right: 18px;
+    top: 16px;
+    z-index: 6;
+    display: grid;
+    gap: 3px;
+    min-width: 150px;
+    padding: 10px 12px;
+    border: 2px solid rgba(53, 208, 127, 0.36);
+    background: rgba(5, 15, 28, 0.78);
+    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.08), inset -2px -2px 0 rgba(0,0,0,0.38), 4px 4px 0 rgba(0,0,0,0.38);
+  }
+  .stage-hud span {
+    color: var(--game-muted);
+    font-size: 11px;
+    font-weight: 900;
+  }
+  .stage-hud strong {
+    color: var(--game-green);
+    font-size: 20px;
+    line-height: 1;
   }
   .room {
     position: absolute;
@@ -434,6 +489,7 @@
       radial-gradient(circle at 34px 25px, var(--game-blue) 0 3px, transparent 4px),
       linear-gradient(90deg, #263d5d 0 48%, #0f1b2d 48% 100%);
     box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.1);
+    animation: akraServerBlink 1.7s step-end infinite;
   }
   .scene-object {
     appearance: none;
@@ -449,11 +505,42 @@
     backdrop-filter: blur(4px);
     border-radius: 6px;
     padding: 10px;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
   }
   .scene-object:hover {
     border-color: rgba(93, 169, 255, 0.55);
     background: rgba(15, 30, 55, 0.85);
   }
+  .scene-object::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -10px;
+    width: 56px;
+    height: 16px;
+    transform: translateX(-50%);
+    border: 1px solid rgba(93, 169, 255, 0.36);
+    border-radius: 999px;
+    background: radial-gradient(ellipse at center, rgba(93,169,255,0.28) 0 32%, transparent 66%);
+    opacity: 0.7;
+    pointer-events: none;
+    animation: akraStatusRing 1.9s ease-in-out infinite;
+  }
+  .scene-object.severity-danger::after {
+    border-color: rgba(255, 107, 107, 0.46);
+    background: radial-gradient(ellipse at center, rgba(255,107,107,0.28) 0 32%, transparent 66%);
+  }
+  .scene-object.severity-warning::after {
+    border-color: rgba(245, 200, 75, 0.48);
+    background: radial-gradient(ellipse at center, rgba(245,200,75,0.28) 0 32%, transparent 66%);
+  }
+  .desk {
+    animation: akraAgentBob 3.4s ease-in-out infinite;
+  }
+  .desk.agent-2 { animation-delay: -0.5s; }
+  .desk.agent-3 { animation-delay: -1s; }
+  .desk.agent-4 { animation-delay: -1.5s; }
+  .desk.agent-5 { animation-delay: -2s; }
   .object-sprite {
     display: none;
     background-image: var(--object-sprite-sheet);
@@ -582,6 +669,12 @@
     align-items: start;
     cursor: pointer;
   }
+  .event-row:first-of-type {
+    animation: akraEventPulse 2.4s ease-in-out infinite;
+  }
+  .event-row.is-new {
+    animation: akraNewEvent 1.2s ease-out;
+  }
   .event-row strong,
   .event-row small,
   .queue-row strong,
@@ -639,10 +732,20 @@
     box-shadow: inset 2px 2px 0 rgba(0,0,0,0.4);
   }
   .progress-fill {
+    position: relative;
+    overflow: hidden;
     height: 100%;
     border-radius: 0;
     background: var(--game-green);
     box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2), inset 2px 2px 0 rgba(255,255,255,0.3);
+  }
+  .progress-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+    transform: translateX(-120%);
+    animation: akraStepSweep 1.8s linear infinite;
   }
   .timeline {
     display: grid;
@@ -682,6 +785,7 @@
   }
   .step {
     position: relative;
+    overflow: hidden;
     min-height: 60px;
     padding: 10px 8px;
     border: 2px solid rgba(255,255,255,0.12);
@@ -709,6 +813,14 @@
   }
   .step.done::before,
   .step.active::before { background: var(--game-green); }
+  .step.active::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    background: linear-gradient(90deg, transparent, rgba(53, 208, 127, 0.3), transparent);
+    transform: translateX(-120%);
+    animation: akraStepSweep 1.4s linear infinite;
+  }
   .step.blocked,
   .step.failed {
     color: var(--game-ink);
@@ -916,6 +1028,39 @@
     from { background-position: 220% 0; }
     to { background-position: -220% 0; }
   }
+  @keyframes akraKpiFlash {
+    from { box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 0 0 0 0 rgba(53,208,127,0.55); }
+    to { box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 0 0 0 16px rgba(53,208,127,0); }
+  }
+  @keyframes akraStageScan {
+    from { transform: translateX(-42%); }
+    to { transform: translateX(42%); }
+  }
+  @keyframes akraAgentBob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+  @keyframes akraStatusRing {
+    0%, 100% { transform: translateX(-50%) scale(0.92); opacity: 0.45; }
+    50% { transform: translateX(-50%) scale(1.08); opacity: 0.9; }
+  }
+  @keyframes akraServerBlink {
+    0%, 48% { filter: brightness(1); }
+    50%, 54% { filter: brightness(1.45); }
+    56%, 100% { filter: brightness(1); }
+  }
+  @keyframes akraEventPulse {
+    0%, 100% { background: transparent; }
+    50% { background: rgba(93, 169, 255, 0.08); }
+  }
+  @keyframes akraNewEvent {
+    from { transform: translateY(-8px); background: rgba(53, 208, 127, 0.16); }
+    to { transform: translateY(0); background: transparent; }
+  }
+  @keyframes akraStepSweep {
+    from { transform: translateX(-120%); }
+    to { transform: translateX(120%); }
+  }
   @media (max-width: 1320px) {
     .kpi-grid { grid-template-columns: repeat(4, minmax(128px, 1fr)); }
     .campaign-grid,
@@ -942,6 +1087,7 @@
     .whiteboard,
     .couch { display: none; }
     .pool-overlay,
+    .stage-hud,
     .desk,
     .distributor-desk,
     .event-board {
@@ -959,6 +1105,16 @@
       right: 14px;
       bottom: 14px;
       max-width: calc(100vw - 28px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .akra-game *,
+    .akra-game *::before,
+    .akra-game *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
     }
   }
 </style>
@@ -1122,7 +1278,12 @@
 
   <div class="board-row">
     <div class="office-board" id="agents" aria-label="AKRA isometric office board">
-      <div id="pixi-diorama" style="position:absolute;inset:0;z-index:0;"></div>
+      <div id="pixi-diorama" aria-hidden="true"></div>
+      <div class="stage-hud" aria-hidden="true">
+        <span>MISSION FLOW</span>
+        <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>
+        <small>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
+      </div>
       <div class="scene-object object-sprite server-rack" aria-hidden="true"></div>
       <div class="scene-object object-sprite whiteboard" aria-hidden="true"></div>
       <div class="scene-object object-sprite couch" aria-hidden="true"></div>
@@ -1179,6 +1340,8 @@
         data-detail-runtime="{{ agent.duration_label }}"
         data-detail-progress="{{ agent.progress_label }}"
         data-detail-summary="{{ agent.latest_summary }}"
+        data-agent-status="{{ agent.status }}"
+        data-agent-progress="{{ agent.progress_label }}"
         title="{{ agent.branch_name }} / {{ agent.task_title }} / {{ agent.latest_summary }}"
       >
         <span class="speech">{{ agent.bubble_label }}</span>
@@ -1426,125 +1589,189 @@
     }
   }
 
-  // ── Isometric floor grid ──
-  const floorLayer = new PIXI.Container();
-  floorLayer.alpha = 0.5;
-  app.stage.addChild(floorLayer);
+  // ── Mission control layer: animated status rings and packet routes ──
+  const root = boardEl.closest("[data-admin-graphic]");
+  const pathLayer = new PIXI.Graphics();
+  const packetLayer = new PIXI.Container();
+  const agentLayer = new PIXI.Container();
+  app.stage.addChild(pathLayer, packetLayer, agentLayer);
 
-  if (textures.floor) {
-    const TILE_SIZE = 64;
-    const cols = 10;
-    const rows = 8;
-    const offsetX = W * 0.48;
-    const offsetY = 30;
-
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const isoX = (c - r) * (TILE_SIZE / 2);
-        const isoY = (c + r) * (TILE_SIZE / 4);
-        const tile = new PIXI.Sprite(textures.floor);
-        tile.width = TILE_SIZE;
-        tile.height = TILE_SIZE / 2;
-        tile.x = offsetX + isoX;
-        tile.y = offsetY + isoY;
-        tile.alpha = 0.6;
-        floorLayer.addChild(tile);
-      }
-    }
-  }
-
-  // ── Furniture and props layer ──
-  const furnitureLayer = new PIXI.Container();
-  app.stage.addChild(furnitureLayer);
-
-  const placeSprite = (key, x, y, scale, opts = {}) => {
-    if (!textures[key]) return null;
-    const sprite = new PIXI.Sprite(textures[key]);
-    sprite.anchor.set(0.5, 1);
-    sprite.x = x;
-    sprite.y = y;
-    sprite.scale.set(scale);
-    sprite.eventMode = "static";
-    sprite.cursor = "pointer";
-
-    // Floating animation
-    const baseY = y;
-    const floatOffset = opts.floatOffset || (Math.random() * Math.PI * 2);
-    const floatAmplitude = opts.floatAmplitude || 2;
-    sprite._floatData = { baseY, offset: floatOffset, amp: floatAmplitude };
-
-    // Hover glow
-    sprite.on("pointerover", () => {
-      sprite.tint = 0xccddff;
-      sprite.scale.set(scale * 1.06);
-    });
-    sprite.on("pointerout", () => {
-      sprite.tint = 0xffffff;
-      sprite.scale.set(scale);
-    });
-
-    furnitureLayer.addChild(sprite);
-    return sprite;
+  const statusPalette = {
+    normal: 0x35d07f,
+    success: 0x35d07f,
+    warning: 0xf5c84b,
+    danger: 0xff6b6b,
+    info: 0x5da9ff,
+    muted: 0x98abc4,
+  };
+  const fallbackPoints = [
+    { x: W * 0.35, y: H * 0.50 },
+    { x: W * 0.50, y: H * 0.65 },
+    { x: W * 0.28, y: H * 0.72 },
+    { x: W * 0.60, y: H * 0.52 },
+    { x: W * 0.43, y: H * 0.82 },
+  ];
+  const targets = {
+    distributor: { x: W * 0.80, y: H * 0.52 },
+    events: { x: W * 0.82, y: H * 0.76 },
   };
 
-  // Place furniture - positions tuned for ~900x540 board
-  placeSprite("server",     W * 0.12,  H * 0.55, 0.15);
-  placeSprite("server",     W * 0.18,  H * 0.50, 0.13);
+  const parseSeverity = (node) => {
+    if (node?.dataset?.detailSeverity) return node.dataset.detailSeverity;
+    if (node?.classList?.contains("severity-danger")) return "danger";
+    if (node?.classList?.contains("severity-warning")) return "warning";
+    if (node?.classList?.contains("severity-info")) return "info";
+    return "normal";
+  };
+  const colorFor = (severity) => statusPalette[severity] || statusPalette.normal;
+  const boardSize = () => ({
+    width: boardEl.offsetWidth || W,
+    height: boardEl.offsetHeight || H,
+  });
+  const resolvePoint = (node, fallback, xBias = 0.5, yBias = 0.76) => {
+    if (!node) return fallback;
+    const boardRect = boardEl.getBoundingClientRect();
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 && rect.height <= 0) return fallback;
+    return {
+      x: rect.left - boardRect.left + rect.width * xBias,
+      y: rect.top - boardRect.top + rect.height * yBias,
+    };
+  };
+  const makePacket = (color) => {
+    const packet = new PIXI.Graphics();
+    packet.beginFill(color, 0.92);
+    packet.lineStyle(1, 0xffffff, 0.42);
+    packet.drawPolygon([0, -6, 6, 0, 0, 6, -6, 0]);
+    packet.endFill();
+    packet.alpha = 0.84;
+    packetLayer.addChild(packet);
+    return packet;
+  };
+  const makeAgentUnit = (node, index) => {
+    const severity = parseSeverity(node);
+    const color = colorFor(severity);
+    const group = new PIXI.Container();
+    const shadow = new PIXI.Graphics();
+    shadow.beginFill(0x000000, 0.26);
+    shadow.drawEllipse(0, 0, 30, 8);
+    shadow.endFill();
+    const ring = new PIXI.Graphics();
+    const texture = index % 3 === 2 ? textures.agentStand : textures.agentSit;
+    const sprite = texture ? new PIXI.Sprite(texture) : null;
+    if (sprite) {
+      sprite.anchor.set(0.5, 1);
+      sprite.scale.set(0.062);
+      sprite.tint = severity === "danger" ? 0xffc4c4 : severity === "warning" ? 0xffe8a3 : 0xffffff;
+      group.addChild(shadow, ring, sprite);
+    } else {
+      group.addChild(shadow, ring);
+    }
+    group.alpha = severity === "muted" ? 0.58 : 0.95;
+    agentLayer.addChild(group);
+    const packet = makePacket(color);
+    node.addEventListener("pointerenter", () => {
+      group.scale.set(1.08);
+      packet.scale.set(1.2);
+    });
+    node.addEventListener("pointerleave", () => {
+      group.scale.set(1);
+      packet.scale.set(1);
+    });
+    node.addEventListener("click", () => {
+      stageBurst = Math.min(stageBurst + 0.55, 1.4);
+    });
+    return {
+      node,
+      index,
+      color,
+      group,
+      ring,
+      sprite,
+      packet,
+      point: fallbackPoints[index % fallbackPoints.length],
+      phase: index * 0.23,
+      speed: 0.16 + index * 0.025,
+      targetKind: index % 2 === 0 ? "distributor" : "events",
+    };
+  };
 
-  placeSprite("desk",       W * 0.35,  H * 0.50, 0.14);
-  placeSprite("desk",       W * 0.50,  H * 0.65, 0.14);
-  placeSprite("desk",       W * 0.28,  H * 0.72, 0.14);
-  placeSprite("desk",       W * 0.60,  H * 0.52, 0.14);
-  placeSprite("desk",       W * 0.43,  H * 0.82, 0.14);
+  const agentUnits = root
+    ? [...root.querySelectorAll(".desk[data-agent-id]")].map(makeAgentUnit)
+    : [];
 
-  placeSprite("whiteboard", W * 0.78,  H * 0.38, 0.16);
-  placeSprite("sofa",       W * 0.82,  H * 0.70, 0.12);
-  placeSprite("plant",      W * 0.08,  H * 0.35, 0.08);
-  placeSprite("plant",      W * 0.70,  H * 0.85, 0.07);
-  placeSprite("plant",      W * 0.90,  H * 0.55, 0.06);
+  let stageBurst = 0;
+  window.addEventListener("akra:mission-pulse", (event) => {
+    const count = Number(event.detail?.count || 1);
+    stageBurst = Math.min(stageBurst + 0.45 + count * 0.06, 1.6);
+  });
 
-  // ── Agent characters ──
-  const agentLayer = new PIXI.Container();
-  app.stage.addChild(agentLayer);
+  const syncLayout = () => {
+    const { width, height } = boardSize();
+    if (width > 0 && height > 0) app.renderer.resize(width, height);
+    targets.distributor = resolvePoint(
+      root?.querySelector(".distributor-desk"),
+      { x: width * 0.80, y: height * 0.52 },
+      0.5,
+      0.6
+    );
+    targets.events = resolvePoint(
+      root?.querySelector(".event-board"),
+      { x: width * 0.82, y: height * 0.76 },
+      0.5,
+      0.58
+    );
+    for (const unit of agentUnits) {
+      unit.point = resolvePoint(
+        unit.node,
+        fallbackPoints[unit.index % fallbackPoints.length],
+        0.5,
+        0.78
+      );
+      unit.group.x = unit.point.x;
+      unit.group.y = unit.point.y;
+    }
+  };
 
-  // Place agents next to desks
-  const agentPositions = [
-    { x: W * 0.37, y: H * 0.47, sitting: true },
-    { x: W * 0.52, y: H * 0.62, sitting: true },
-    { x: W * 0.30, y: H * 0.69, sitting: false },
-    { x: W * 0.62, y: H * 0.49, sitting: true },
-    { x: W * 0.45, y: H * 0.79, sitting: true },
-  ];
-
-  for (const pos of agentPositions) {
-    const key = pos.sitting ? "agentSit" : "agentStand";
-    placeSprite(key, pos.x, pos.y, 0.10, { floatAmplitude: 1.5 });
-  }
-
-  // ── Distributor character ──
-  placeSprite("agentStand", W * 0.80, H * 0.52, 0.09, { floatAmplitude: 1 });
-
-  // ── Ambient floating animation tick ──
+  const lerp = (a, b, t) => a + (b - a) * t;
   let elapsed = 0;
   app.ticker.add((delta) => {
-    elapsed += delta * 0.02;
-    for (const child of furnitureLayer.children.concat(agentLayer.children)) {
-      if (child._floatData) {
-        const { baseY, offset, amp } = child._floatData;
-        child.y = baseY + Math.sin(elapsed + offset) * amp;
-      }
+    elapsed += delta / 60;
+    stageBurst = Math.max(0, stageBurst - delta * 0.018);
+    pathLayer.clear();
+    for (const unit of agentUnits) {
+      const target = targets[unit.targetKind] || targets.distributor;
+      const start = { x: unit.point.x, y: unit.point.y - 24 };
+      const end = { x: target.x, y: target.y - 18 };
+      const alpha = 0.22 + stageBurst * 0.16;
+      pathLayer.lineStyle(2, unit.color, alpha);
+      pathLayer.moveTo(start.x, start.y);
+      pathLayer.lineTo(end.x, end.y);
+
+      const travel = (elapsed * unit.speed + unit.phase) % 1;
+      const arc = Math.sin(travel * Math.PI) * (24 + stageBurst * 10);
+      unit.packet.x = lerp(start.x, end.x, travel);
+      unit.packet.y = lerp(start.y, end.y, travel) - arc;
+      unit.packet.rotation += delta * 0.08;
+      unit.packet.alpha = 0.42 + Math.sin(travel * Math.PI) * 0.42 + stageBurst * 0.12;
+      unit.packet.scale.set(0.92 + stageBurst * 0.18);
+
+      const bob = Math.sin(elapsed * 3.4 + unit.phase * 8) * 2.2;
+      unit.group.y = unit.point.y + bob - stageBurst * 1.5;
+      unit.ring.clear();
+      unit.ring.lineStyle(2, unit.color, 0.58 + stageBurst * 0.2);
+      const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * 0.12 + stageBurst * 0.12;
+      unit.ring.drawEllipse(0, 0, 25 * ringPulse, 7 * ringPulse);
     }
   });
 
-  // ── Handle resize ──
-  const onResize = () => {
-    const newW = boardEl.offsetWidth;
-    const newH = boardEl.offsetHeight;
-    if (newW > 0 && newH > 0) {
-      app.renderer.resize(newW, newH);
-    }
-  };
+  syncLayout();
+  const onResize = () => syncLayout();
   window.addEventListener("resize", onResize);
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(syncLayout);
+    observer.observe(boardEl);
+  }
 })();
 </script>
 <script>
@@ -1588,6 +1815,13 @@
   const detailDrawerTitle = root.querySelector("[data-detail-drawer-title]");
   const detailDrawerSubtitle = root.querySelector("[data-detail-drawer-subtitle]");
   const detailDrawerBody = root.querySelector("[data-detail-drawer-body]");
+  const stageBoard = root.querySelector(".office-board");
+
+  const pulseStage = (count = 1) => {
+    stageBoard?.classList.add("is-bursting");
+    window.dispatchEvent(new CustomEvent("akra:mission-pulse", { detail: { count } }));
+    window.setTimeout(() => stageBoard?.classList.remove("is-bursting"), 900);
+  };
 
   const detailRowsByType = {
     slot: [
@@ -1800,14 +2034,19 @@
     if (!eventPanel || !eventDrawer || events.length === 0) return;
     removeEmptyEventCopy();
     const existing = new Set([...eventPanel.querySelectorAll("[data-event-sequence]")].map((row) => row.dataset.eventSequence));
+    let insertedCount = 0;
     for (const event of [...events].reverse()) {
       const sequence = String(event.sequence || "");
       if (!sequence || existing.has(sequence)) continue;
-      eventPanel.insertBefore(createEventRow(event), eventPanel.querySelector("[data-event-sequence]") || eventDrawer);
+      const row = createEventRow(event);
+      row.classList.add("is-new");
+      eventPanel.insertBefore(row, eventPanel.querySelector("[data-event-sequence]") || eventDrawer);
       existing.add(sequence);
+      insertedCount += 1;
     }
     trimEventRows();
     setEventStatus();
+    if (insertedCount > 0) pulseStage(insertedCount);
   };
 
   const updateDashboard = (dashboard) => {
@@ -1824,7 +2063,11 @@
     };
     for (const [key, valueKey] of Object.entries(kpiMap)) {
       const node = root.querySelector(`[data-kpi="${key}"] [data-value]`);
-      if (node) node.textContent = values[valueKey];
+      if (node && node.textContent !== values[valueKey]) {
+        node.textContent = values[valueKey];
+        node.closest("[data-kpi]")?.classList.add("has-changed");
+        window.setTimeout(() => node.closest("[data-kpi]")?.classList.remove("has-changed"), 520);
+      }
     }
     const latest = dashboard.eventFeed?.newestSequence;
     if (Number.isFinite(latest)) root.dataset.latestEventSequence = String(latest);

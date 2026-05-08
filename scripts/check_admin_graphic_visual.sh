@@ -136,6 +136,7 @@ for token in \
   '최근 시도 로그' \
   '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
+  'MISSION FLOW' \
   'Automation Epoch' \
   'Last Updated' \
   'akra_admin' \
@@ -146,11 +147,16 @@ for token in \
   'data-event-drawer' \
   'data-detail-drawer' \
   'data-refresh-dashboard' \
+  'data-agent-progress' \
   'openDetailDrawer' \
   'openRefreshDetail' \
+  'akra:mission-pulse' \
+  'pulseStage' \
+  'is-bursting' \
   'data-event-feed-status' \
   '/assets/admin/admin-character-sprites.svg' \
   'background-image: var(--object-sprite-sheet)' \
+  'var(--office-bg-image) center / cover no-repeat' \
   'akra-office-background.png' \
   'akra-object-sprites.png' \
   'background-size: 528px 96px' \

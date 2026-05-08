@@ -132,6 +132,12 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "data-event-feed-status",
         "akra-office-background.png",
         "akra-object-sprites.png",
+        "MISSION FLOW",
+        "data-agent-progress",
+        "is-bursting",
+        "akra:mission-pulse",
+        "pulseStage",
+        "has-changed",
         "prependEventRows",
         "stale snapshot",
         "pollEvents",
@@ -211,6 +217,10 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "data-detail-type=\"queueItem\"",
         "class=\"admin-detail-drawer\"",
         "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.",
+        "var(--office-bg-image) center / cover no-repeat",
+        "akraStageScan",
+        "makePacket",
+        "statusPalette",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)
