@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use super::{PlanningTaskMutationSource, TASK_ID_HASH_CHARS};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, PlanningFileKind, PlanningValidationReport,
     TaskAuthorityDocument,
@@ -12,8 +11,8 @@ use crate::domain::planning::{
 /*
  * task mutation의 preview path와 commit path가 함께 쓰는 helper 모음이다. service layer는
  * create/update 중 어떤 operation을 적용할지 결정하고, 이 파일은 operation 종류와 무관하게
- * 필요한 application-side normalization을 한곳에 둔다. active direction 선택, stable task id,
- * user input normalization이 여기서 정리된 뒤 domain semantic validation으로 넘어간다.
+ * 필요한 application-side normalization을 한곳에 둔다. active direction과 stable task id
+ * policy는 domain으로 내려가고, user input normalization은 semantic validation 전 경계에 남는다.
  */
 pub(super) fn find_direction<'a>(
     direction_id: &str,
@@ -57,47 +56,6 @@ pub(super) fn reject_task_validation_errors(report: &PlanningValidationReport) -
         "planning task mutation failed validation: {}",
         errors.join("; ")
     )
-}
-
-pub(super) fn build_task_id(
-    source: PlanningTaskMutationSource,
-    generated_at: DateTime<Utc>,
-    title: &str,
-    collision_suffix: Option<u32>,
-) -> String {
-    let timestamp = generated_at.format("%Y%m%dT%H%M%SZ");
-    // task id는 ledger에서 사람이 읽을 수 있어야 하지만 preview/retry flow에서는 충분히
-    // deterministic해야 한다. source + timestamp + title hash가 base이고, collision suffix는
-    // repository가 실제 충돌을 보고한 뒤에만 붙는다.
-    let base = format!(
-        "task-{}-{timestamp}-{}",
-        source.id_slug(),
-        stable_short_hash(title)
-    );
-    match collision_suffix {
-        Some(suffix) => format!("{base}-{suffix}"),
-        None => base,
-    }
-}
-
-fn stable_short_hash(value: &str) -> String {
-    // ID suffix 가독성을 위한 deterministic FNV 축약값이다. 보안용 digest가 아니며, 충돌은
-    // 상위 id allocation retry가 numeric suffix로 해결한다.
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let mut hash = FNV_OFFSET;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    format!("{hash:016x}")[..TASK_ID_HASH_CHARS].to_string()
-}
-
-pub(super) fn increment_suffix(suffix: Option<u32>) -> Option<u32> {
-    // collision retry는 suffix 없음 -> 1 -> 2 순서로 이동한다. preview와 commit path가 같은
-    // helper를 써야 충돌 처리 로그와 최종 id가 같은 규칙을 따른다.
-    Some(suffix.unwrap_or(0) + 1)
 }
 
 pub(super) fn task_id_exists(task_authority: &TaskAuthorityDocument, task_id: &str) -> bool {
