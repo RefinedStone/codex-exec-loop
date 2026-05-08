@@ -17,6 +17,8 @@ pub(crate) mod mutation;
 pub(crate) mod promotion;
 mod queue;
 pub(crate) mod queue_follow;
+#[cfg(test)]
+pub(crate) mod repair_candidate;
 mod validation;
 
 pub(crate) use mutation::{PlanningTaskMutationPolicy, TaskDescriptionUpdateDecision};
