@@ -1,4 +1,6 @@
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningWorkerRunOutcome};
+use crate::application::service::planning::{
+    PlanningApplicationProjection, PlanningRuntimeSnapshot, PlanningWorkerRunOutcome,
+};
 
 use super::super::super::PlanningWorkerStatus;
 use super::PostTurnEvaluationExecutor;
@@ -83,12 +85,20 @@ impl PostTurnEvaluationExecutor {
 
 // Compact queue state used by both the planning worker panel and post-turn host diagnostics.
 pub(super) fn planning_worker_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
-    snapshot
+    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+    planning_worker_queue_summary_from_projection(&projection)
+}
+
+fn planning_worker_queue_summary_from_projection(
+    projection: &PlanningApplicationProjection,
+) -> Option<String> {
+    projection
         // The executable queue head is more actionable than aggregate queue text, so it wins when present.
-        .queue_head()
+        .queue_head
+        .as_ref()
         .map(|queue_head| format!("queue head: {}", queue_head.task_title.trim()))
-        // If there is no executable head, fall back to the snapshot's own idle/invalid summary.
-        .or_else(|| snapshot.queue_summary().map(str::to_string))
+        // If there is no executable head, fall back to the projection's own idle/invalid summary.
+        .or_else(|| projection.queue_summary.clone())
 }
 
 // Collapse non-summary worker notices into the secondary diagnostic lane.
@@ -105,4 +115,58 @@ fn planning_worker_notice_detail(notices: &[String]) -> Option<String> {
         .join(" | ");
 
     (!detail.is_empty()).then_some(detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::planning::{PriorityQueueTask, TaskStatus};
+
+    #[test]
+    fn planning_worker_queue_summary_projects_queue_head_from_application_projection() {
+        let snapshot = PlanningRuntimeSnapshot::ready(
+            "Planning Context".to_string(),
+            "queue has 2 ready tasks".to_string(),
+            Some(queue_task("task-1", "Implement projection")),
+        );
+        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+
+        assert_eq!(
+            planning_worker_queue_summary_from_projection(&projection).as_deref(),
+            Some("queue head: Implement projection")
+        );
+        assert_eq!(
+            planning_worker_queue_summary(&snapshot).as_deref(),
+            Some("queue head: Implement projection")
+        );
+    }
+
+    #[test]
+    fn planning_worker_queue_summary_projection_falls_back_to_queue_summary() {
+        let snapshot = PlanningRuntimeSnapshot::ready(
+            "Planning Context".to_string(),
+            "no executable tasks; proposals available".to_string(),
+            None,
+        );
+        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+
+        assert_eq!(
+            planning_worker_queue_summary_from_projection(&projection).as_deref(),
+            Some("no executable tasks; proposals available")
+        );
+    }
+
+    fn queue_task(task_id: &str, task_title: &str) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank: 1,
+            task_id: task_id.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_title: "Direction A".to_string(),
+            task_title: task_title.to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 90,
+            updated_at: "2026-05-08T00:00:00Z".to_string(),
+            rank_reasons: vec!["priority".to_string()],
+        }
+    }
 }
