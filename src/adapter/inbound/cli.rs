@@ -5,6 +5,7 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::planning::{
+    PlanningControlCommand, PlanningControlFacadeService, PlanningControlService,
     PlanningResetTarget, PlanningServices, PlanningTaskToolRequest, PlanningTaskToolResponse,
 };
 use anyhow::{Context, Result, bail};
@@ -29,6 +30,8 @@ use self::reports::{
 const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
 const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
 const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
+const STATUS_USAGE: &str = "Usage: akra status [workspace_dir]";
+const QUEUE_USAGE: &str = "Usage: akra queue [workspace_dir]";
 const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
 const PLANNING_TOOL_USAGE: &str = "Usage: akra planning-tool <contract|run> [workspace_dir]";
 const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";
@@ -54,6 +57,8 @@ where
             writeln!(stdout, "{TELEGRAM_BOT_USAGE}")?;
             writeln!(stdout, "{TELEGRAM_BOT_ALIAS_USAGE}")?;
             writeln!(stdout, "{DOCTOR_USAGE}")?;
+            writeln!(stdout, "{STATUS_USAGE}")?;
+            writeln!(stdout, "{QUEUE_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
             writeln!(stdout, "{PLANNING_TOOL_USAGE}")?;
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
@@ -67,6 +72,30 @@ where
         [command] if command == OsStr::new("doctor") => Ok(Some(run_doctor(None, stdout)?)),
         [command, workspace] if command == OsStr::new("doctor") => {
             Ok(Some(run_doctor(Some(workspace.as_os_str()), stdout)?))
+        }
+        [command] if command == OsStr::new("status") => Ok(Some(run_planning_control_command(
+            PlanningControlCommand::Status,
+            None,
+            stdout,
+        )?)),
+        [command, workspace] if command == OsStr::new("status") => {
+            Ok(Some(run_planning_control_command(
+                PlanningControlCommand::Status,
+                Some(workspace.as_os_str()),
+                stdout,
+            )?))
+        }
+        [command] if command == OsStr::new("queue") => Ok(Some(run_planning_control_command(
+            PlanningControlCommand::Queue,
+            None,
+            stdout,
+        )?)),
+        [command, workspace] if command == OsStr::new("queue") => {
+            Ok(Some(run_planning_control_command(
+                PlanningControlCommand::Queue,
+                Some(workspace.as_os_str()),
+                stdout,
+            )?))
         }
         // planning maintenance command는 optional workspace를 받고, 없으면 cwd를 사용한다.
         [command, target] if command == OsStr::new("reset") => {
@@ -94,6 +123,12 @@ where
         // arity-specific branch를 먼저 두어 unsupported-command error가 정말 unknown command에만 쓰이게 한다.
         [command, _, ..] if command == OsStr::new("doctor") => {
             bail!("{DOCTOR_USAGE}");
+        }
+        [command, _, ..] if command == OsStr::new("status") => {
+            bail!("{STATUS_USAGE}");
+        }
+        [command, _, ..] if command == OsStr::new("queue") => {
+            bail!("{QUEUE_USAGE}");
         }
         [command, _, _, ..] if command == OsStr::new("reset") => {
             bail!("{RESET_USAGE}");
@@ -161,6 +196,27 @@ fn run_reset(
     let report = reset_workspace(&workspace_path, target);
     render_reset_report(stdout, &report)?;
     Ok(report.exit_code())
+}
+
+fn run_planning_control_command(
+    command: PlanningControlCommand,
+    workspace_arg: Option<&OsStr>,
+    stdout: &mut impl Write,
+) -> Result<i32> {
+    let workspace_path = resolve_workspace_path(workspace_arg)?;
+    let workspace_label = workspace_path.display().to_string();
+    if let Err(issue) = validate_workspace_path(&workspace_path) {
+        writeln!(stdout, "workspace: {workspace_label}")?;
+        writeln!(stdout, "issue: {issue}")?;
+        return Ok(1);
+    }
+    let control = PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
+        workspace_label,
+        build_production_planning_services(),
+    )));
+    let reply = control.execute(command)?;
+    writeln!(stdout, "{}", reply.text)?;
+    Ok(0)
 }
 
 fn run_planning_tool(
@@ -359,6 +415,21 @@ fn parse_reset_target(target: &OsStr) -> Result<PlanningResetTarget> {
 #[cfg(test)]
 mod tests {
     use super::run_with_args;
+
+    fn create_temp_workspace(label: &str) -> String {
+        let unique = format!(
+            "{}-{}",
+            label,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&path).expect("temp workspace should be created");
+        path.to_string_lossy().into_owned()
+    }
+
     #[test]
     fn help_lists_planning_tool_command() {
         let mut output = Vec::new();
@@ -368,6 +439,8 @@ mod tests {
         let rendered = String::from_utf8(output).expect("help should be utf8");
 
         assert_eq!(exit_code, 0);
+        assert!(rendered.contains("akra status [workspace_dir]"));
+        assert!(rendered.contains("akra queue [workspace_dir]"));
         assert!(rendered.contains("akra planning-tool <contract|run>"));
         assert!(rendered.contains("akra parallel-tick [workspace_dir]"));
         assert!(!rendered.contains("akra init"));
@@ -387,5 +460,35 @@ mod tests {
         assert!(rendered.contains("akra planning-tool run ."));
         assert!(rendered.contains("do not use payload.worktree_path"));
         assert!(rendered.contains("list_tasks|create_task|update_task"));
+    }
+
+    #[test]
+    fn status_and_queue_commands_use_planning_control_surface() {
+        let workspace = create_temp_workspace("cli-planning-control");
+        let mut status_output = Vec::new();
+        let status_exit = run_with_args(
+            vec!["status".to_string(), workspace.clone()],
+            &mut status_output,
+        )
+        .expect("status should render")
+        .expect("status should exit");
+        let status_rendered = String::from_utf8(status_output).expect("status should be utf8");
+
+        let mut queue_output = Vec::new();
+        let queue_exit = run_with_args(
+            vec!["queue".to_string(), workspace.clone()],
+            &mut queue_output,
+        )
+        .expect("queue should render")
+        .expect("queue should exit");
+        let queue_rendered = String::from_utf8(queue_output).expect("queue should be utf8");
+
+        assert_eq!(status_exit, 0);
+        assert!(status_rendered.contains("상태 요약"));
+        assert!(status_rendered.contains("planning_state:"));
+        assert_eq!(queue_exit, 0);
+        assert!(queue_rendered.contains("큐 요약"));
+
+        std::fs::remove_dir_all(workspace).expect("temp workspace should be removed");
     }
 }
