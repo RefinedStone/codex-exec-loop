@@ -51,7 +51,7 @@ application command enum으로 내려가는 최소 regression을 추가한다.
 - `INBOUND-00B`: CLI와 Telegram의 planning control command context와 response contract를
   같은 request/result vocabulary로 정렬한다. 완료.
 - `INBOUND-00C`: admin HTML/JSON route pair가 같은 mutation request DTO와 facade method를
-  통과하는지 route pair별 regression을 보강한다.
+  통과하는지 route pair별 regression을 보강한다. 완료.
 - `INBOUND-00D`: TUI planning shell command와 CLI/admin control vocabulary의 차이를 줄인다.
 - `INBOUND-00E`: parallel TUI/admin/CLI entrypoint를 control-plane runtime command/event
   vocabulary로 정렬한다.
@@ -65,3 +65,12 @@ application command enum으로 내려가는 최소 regression을 추가한다.
   `PlanningControlService::execute_request`를 통과한다.
 - `execute_request_returns_shared_response_context` regression으로 response가 shared reply와
   workspace context를 함께 반환하는 계약을 고정했다.
+
+## INBOUND-00C 완료 근거
+
+- admin HTML reset route와 JSON reset route가 같은 `parse_reset_target`과
+  `PlanningAdminFacadeService::reset_workspace`를 쓰는지 고정했다.
+- draft save/validate/promote HTML route와 JSON route가 `PlanningAdminDraftMutationRequest`와
+  같은 save/promote facade method를 쓰는지 고정했다.
+- direction/task CRUD HTML route와 JSON route가 같은 facade mutation method를 쓰는지
+  source-level regression으로 고정했다.

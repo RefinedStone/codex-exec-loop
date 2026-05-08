@@ -297,6 +297,7 @@ long-running loop나 background worker는 effect completion을 application event
    contract로 정렬한다. `PlanningControlRequest`/`PlanningControlResponse`가 shared
    request/result vocabulary다.
 3. admin HTML/JSON의 같은 mutation이 같은 request DTO와 facade method를 통과하는지 고정한다.
+   reset, draft, direction/task CRUD route pair regression이 이 기준을 보호한다.
 4. TUI planning shell command와 admin/CLI reset/status/queue vocabulary의 차이를 문서화하고,
    공통 application command로 내릴 수 있는 부분부터 이동한다.
 5. parallel TUI/admin/CLI entrypoint가 control-plane runtime command/event를 공유하도록

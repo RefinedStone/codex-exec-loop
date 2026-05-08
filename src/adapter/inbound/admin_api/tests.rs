@@ -23,8 +23,10 @@ const ADMIN_GRAPHIC_VISUAL_SCRIPT: &str =
     include_str!("../../../../scripts/check_admin_graphic_visual.sh");
 const ADMIN_CHARACTER_SPRITES: &str =
     include_str!("../../../../assets/admin/admin-character-sprites.svg");
+const ADMIN_API: &str = include_str!("api.rs");
 const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
+const ADMIN_PAGES: &str = include_str!("pages.rs");
 const ADMIN_STATIC_ASSETS: &str = include_str!("static_assets.rs");
 
 /*
@@ -80,6 +82,107 @@ fn reset_form_and_json_spelling_maps_to_shared_application_target() {
         assert_eq!(parse_reset_target(raw).unwrap(), expected);
     }
     assert!(parse_reset_target("tasks").is_err());
+}
+
+#[test]
+fn admin_html_and_json_reset_routes_share_parser_and_facade() {
+    /*
+     * Reset is exposed as both a browser POST and a JSON POST. They may render
+     * different responses, but they must share the same text-to-target parser
+     * and facade mutation so queue/directions/all cannot drift by transport.
+     */
+    for route in [
+        ".route(\"/admin/controls/reset\", post(pages::reset_page))",
+        ".route(\"/api/planning/reset\", post(api::reset_api))",
+    ] {
+        assert!(
+            ADMIN_MOD.contains(route),
+            "route table should keep paired reset route {route}"
+        );
+    }
+
+    assert!(ADMIN_PAGES.contains("let target = parse_reset_target(&form.target)?;"));
+    assert!(ADMIN_PAGES.contains(".reset_workspace(target)"));
+    assert!(ADMIN_API.contains(".reset_workspace(parse_reset_target(&request.target)?)"));
+}
+
+#[test]
+fn admin_html_and_json_draft_routes_share_mutation_facade_methods() {
+    /*
+     * Draft save/validate/promote has HTML and JSON variants. This source-level
+     * guard keeps both transports on PlanningAdminDraftMutationRequest and the
+     * same facade methods while still allowing different response rendering.
+     */
+    for route in [
+        ".route(\n            \"/admin/drafts/{draft_name}/save\",\n            post(pages::save_draft_page),\n        )",
+        ".route(\n            \"/admin/drafts/{draft_name}/validate\",\n            post(pages::validate_draft_page),\n        )",
+        ".route(\n            \"/admin/drafts/{draft_name}/promote\",\n            post(pages::promote_draft_page),\n        )",
+        ".route(\n            \"/api/planning/drafts/{draft_name}\",\n            get(api::load_draft_api).put(api::save_draft_api),\n        )",
+        ".route(\n            \"/api/planning/drafts/{draft_name}/validate\",\n            post(api::validate_draft_api),\n        )",
+        ".route(\n            \"/api/planning/drafts/{draft_name}/promote\",\n            post(api::promote_draft_api),\n        )",
+    ] {
+        assert!(
+            ADMIN_MOD.contains(route),
+            "route table should keep paired draft route {route}"
+        );
+    }
+
+    for (label, source) in [("HTML", ADMIN_PAGES), ("JSON", ADMIN_API)] {
+        assert!(
+            source.contains("PlanningAdminDraftMutationRequest"),
+            "{label} draft path should use the shared draft mutation request"
+        );
+        assert!(
+            source.contains(".save_draft("),
+            "{label} draft path should call the shared save facade method"
+        );
+        assert!(
+            source.contains(".promote_draft("),
+            "{label} draft path should call the shared promote facade method"
+        );
+    }
+    assert!(ADMIN_PAGES.contains("page_mutation_request(draft_name, form)"));
+    assert!(ADMIN_API.contains("PlanningAdminDraftMutationRequest {"));
+}
+
+#[test]
+fn admin_html_and_json_direction_task_routes_share_facade_methods() {
+    /*
+     * Direction and task CRUD are the easiest places to accidentally add a
+     * browser-only or API-only rule. Pair the route table and facade calls so
+     * both transports keep the same application mutation owner.
+     */
+    for route in [
+        ".route(\n            \"/admin/directions/upsert\",\n            post(pages::upsert_direction_page),\n        )",
+        ".route(\n            \"/admin/directions/delete\",\n            post(pages::delete_direction_page),\n        )",
+        ".route(\"/admin/tasks/upsert\", post(pages::upsert_task_page))",
+        ".route(\"/admin/tasks/delete\", post(pages::delete_task_page))",
+        ".route(\"/api/planning/directions\", post(api::upsert_direction_api))",
+        ".route(\n            \"/api/planning/directions/delete\",\n            post(api::delete_direction_api),\n        )",
+        ".route(\"/api/planning/tasks\", post(api::upsert_task_api))",
+        ".route(\"/api/planning/tasks/delete\", post(api::delete_task_api))",
+    ] {
+        assert!(
+            ADMIN_MOD.contains(route),
+            "route table should keep paired admin CRUD route {route}"
+        );
+    }
+
+    for method in [
+        ".upsert_direction(",
+        ".delete_direction(",
+        ".upsert_task(",
+        ".delete_task(",
+    ] {
+        assert!(
+            ADMIN_PAGES.contains(method),
+            "HTML admin path should call shared facade method {method}"
+        );
+        assert!(
+            ADMIN_API.contains(method),
+            "JSON admin path should call shared facade method {method}"
+        );
+    }
 }
 
 /*
