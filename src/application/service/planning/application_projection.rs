@@ -14,6 +14,7 @@ use crate::domain::planning::{
 pub struct PlanningApplicationProjection {
     pub workspace_present: bool,
     pub workspace_status: PlanningRuntimeWorkspaceStatus,
+    pub auto_follow_paused: bool,
     pub status_label: String,
     pub status_detail: Option<String>,
     pub queue_summary: Option<String>,
@@ -92,6 +93,7 @@ impl PlanningApplicationProjection {
         Self {
             workspace_present: snapshot.workspace_present(),
             workspace_status: snapshot.workspace_status(),
+            auto_follow_paused: snapshot.auto_follow_pause_reason().is_some(),
             status_label: snapshot.preview_status_label().to_string(),
             status_detail: snapshot.preview_detail().map(str::to_string),
             queue_summary: snapshot.queue_summary().map(str::to_string),
@@ -190,6 +192,7 @@ mod tests {
             projection.queue_idle_policy,
             QueueIdlePolicy::ReviewAndEnqueue
         );
+        assert!(!projection.auto_follow_paused);
         assert!(projection.has_structured_queue_projection);
         assert_eq!(
             projection
@@ -223,6 +226,7 @@ mod tests {
             projection.status_detail.as_deref(),
             Some("planning validation failed: task authority is unavailable")
         );
+        assert!(!projection.auto_follow_paused);
         assert!(projection.queue_head.is_none());
         assert!(!projection.has_structured_queue_projection);
         assert!(projection.visible_tasks.is_empty());

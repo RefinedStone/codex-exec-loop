@@ -2,7 +2,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningApplicationProjection, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 
 use super::super::{AkraTheme, ConversationState, NativeTuiApp};
@@ -36,12 +36,19 @@ pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicat
 
 // Derive the execution-level substate that sits beside the broader workspace lifecycle label.
 pub(super) fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
-    if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+    plan_runtime_substate_label_from_projection(&projection)
+}
+
+fn plan_runtime_substate_label_from_projection(
+    projection: &PlanningApplicationProjection,
+) -> &'static str {
+    if projection.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid {
         "invalid"
     // A pause reason suppresses automatic continuation even when queue work exists, so it outranks queue readiness.
-    } else if snapshot.auto_follow_pause_reason().is_some() {
+    } else if projection.auto_follow_paused {
         "paused"
-    } else if snapshot.has_actionable_queue_head() {
+    } else if projection.workspace_status == PlanningRuntimeWorkspaceStatus::ReadyWithTask {
         "ready"
     } else {
         "idle"
@@ -64,21 +71,96 @@ pub(super) fn plan_mode_prefixed_spans(
 
 // Central mapping from application planning runtime to TUI vocabulary, shared by footer and tail surfaces.
 fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanModeIndicatorView {
+    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+    plan_mode_indicator_from_projection(&projection)
+}
+
+// Central mapping from the application planning projection to TUI vocabulary, shared by footer and tail surfaces.
+fn plan_mode_indicator_from_projection(
+    projection: &PlanningApplicationProjection,
+) -> PlanModeIndicatorView {
     PlanModeIndicatorView {
         // Task presence is a detail concern; both ready workspace variants keep the same primary label.
-        primary_label: match snapshot.workspace_status() {
+        primary_label: match projection.workspace_status {
             PlanningRuntimeWorkspaceStatus::Uninitialized => "Plan setup",
             PlanningRuntimeWorkspaceStatus::Invalid => "Plan invalid",
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
             | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "Plan ready",
         },
         // Always include detail so repeated footer scans expose pause and queue readiness without opening the planning popup.
-        detail_label: Some(plan_runtime_substate_label(snapshot)),
+        detail_label: Some(plan_runtime_substate_label_from_projection(projection)),
         // Reserve danger for invalid workspace state; pause and idle are operational states rather than hard failures.
-        style: if snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid {
+        style: if projection.workspace_status == PlanningRuntimeWorkspaceStatus::Invalid {
             AkraTheme::danger()
         } else {
             AkraTheme::accent()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::planning::{PriorityQueueTask, TaskStatus};
+
+    #[test]
+    fn plan_indicator_projects_invalid_runtime_snapshot_through_application_projection() {
+        let snapshot = PlanningRuntimeSnapshot::invalid("planning validation failed");
+        let indicator = plan_mode_indicator_from_snapshot(&snapshot);
+
+        assert_eq!(indicator.primary_label, "Plan invalid");
+        assert_eq!(indicator.detail_label, Some("invalid"));
+    }
+
+    #[test]
+    fn plan_indicator_projection_keeps_pause_ahead_of_ready_queue() {
+        let snapshot = PlanningRuntimeSnapshot::ready(
+            "Planning Context".to_string(),
+            "queue head ready".to_string(),
+            Some(queue_task("task-1", "Ready task")),
+        )
+        .with_auto_follow_pause_reason("queue head repeated");
+        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+
+        assert_eq!(
+            plan_runtime_substate_label_from_projection(&projection),
+            "paused"
+        );
+        let indicator = plan_mode_indicator_from_projection(&projection);
+        assert_eq!(indicator.primary_label, "Plan ready");
+        assert_eq!(indicator.detail_label, Some("paused"));
+    }
+
+    #[test]
+    fn plan_indicator_projection_distinguishes_ready_and_idle_queue_state() {
+        let ready =
+            PlanningApplicationProjection::from_runtime_snapshot(&PlanningRuntimeSnapshot::ready(
+                "Planning Context".to_string(),
+                "queue head ready".to_string(),
+                Some(queue_task("task-1", "Ready task")),
+            ));
+        let idle =
+            PlanningApplicationProjection::from_runtime_snapshot(&PlanningRuntimeSnapshot::ready(
+                "Planning Context".to_string(),
+                "no executable tasks".to_string(),
+                None,
+            ));
+
+        assert_eq!(plan_runtime_substate_label_from_projection(&ready), "ready");
+        assert_eq!(plan_runtime_substate_label_from_projection(&idle), "idle");
+    }
+
+    fn queue_task(task_id: &str, task_title: &str) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank: 1,
+            task_id: task_id.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_title: "Direction A".to_string(),
+            task_title: task_title.to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 90,
+            updated_at: "2026-05-08T00:00:00Z".to_string(),
+            rank_reasons: vec!["priority".to_string()],
+        }
     }
 }
