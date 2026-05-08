@@ -24,6 +24,9 @@ use self::status_text::{
 use super::super::planning_reset_shell_command::{
     PLANNING_RESET_USAGE_TEXT, parse_planning_reset_shell_argument,
 };
+use super::super::planning_shell_command::{
+    PLANNING_SHELL_USAGE_TEXT, ParsedPlanningShellCommand, parse_planning_shell_argument,
+};
 
 // Planning control is the TUI adapter layer for workspace mutations: it keeps
 // shell overlays, editor state, and conversation status messages in sync while
@@ -209,8 +212,8 @@ impl NativeTuiApp {
         &mut self,
         argument: Option<&str>,
     ) {
-        match argument.map(str::trim).filter(|value| !value.is_empty()) {
-            None => {
+        match parse_planning_shell_argument(argument) {
+            Ok(ParsedPlanningShellCommand::OpenControlCenter) => {
                 let workspace_directory = self.planning_workspace_directory();
                 match self
                     .planning
@@ -228,14 +231,16 @@ impl NativeTuiApp {
                     }
                 }
             }
-            Some(value) if value.eq_ignore_ascii_case("doctor") => self.run_planning_doctor(),
-            Some(value) => self.dispatch_conversation_input(
-                ConversationInputEvent::StatusMessageShown {
+            Ok(ParsedPlanningShellCommand::Doctor) => self.run_planning_doctor(),
+            Err(error) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "unsupported :planning argument `{value}` / supported: :planning, :planning doctor, :doctor"
+                        "unsupported :planning argument `{}` / {}",
+                        error.argument(),
+                        PLANNING_SHELL_USAGE_TEXT
                     ),
-                },
-            ),
+                })
+            }
         }
     }
     pub(in crate::adapter::inbound::tui::app) fn run_planning_doctor(&mut self) {
