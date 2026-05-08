@@ -377,6 +377,33 @@ impl ParallelModeDispatchEligibility {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParallelModeDispatchTaskCandidate {
+    pub(crate) task_id: String,
+    pub(crate) task_updated_at_epoch_millis: Option<i64>,
+}
+
+impl ParallelModeDispatchTaskCandidate {
+    pub(crate) fn new(
+        task_id: impl Into<String>,
+        task_updated_at_epoch_millis: Option<i64>,
+    ) -> Self {
+        Self {
+            task_id: task_id.into(),
+            task_updated_at_epoch_millis,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParallelModeDispatchCandidateSelection {
+    pub(crate) idle_slot_count: usize,
+    pub(crate) requested_count: usize,
+    pub(crate) dispatch_capacity: usize,
+    pub(crate) excluded_task_ids: Vec<String>,
+    pub(crate) selected_task_ids: Vec<String>,
+}
+
 pub struct ParallelModeOrchestratorStateMachine;
 
 impl ParallelModeOrchestratorStateMachine {
@@ -422,6 +449,48 @@ impl ParallelModeOrchestratorStateMachine {
         }
 
         ParallelModeDispatchEligibility::dispatchable()
+    }
+
+    pub(crate) fn select_dispatch_candidates(
+        idle_slot_count: usize,
+        requested_count: usize,
+        runtime_owned_task_ids: impl IntoIterator<Item = String>,
+        failed_start_blockers: &std::collections::BTreeMap<String, i64>,
+        active_tasks: impl IntoIterator<Item = ParallelModeDispatchTaskCandidate>,
+    ) -> ParallelModeDispatchCandidateSelection {
+        let dispatch_capacity = requested_count.min(idle_slot_count);
+        let runtime_owned_task_ids = runtime_owned_task_ids
+            .into_iter()
+            .map(|task_id| task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut excluded_task_ids = runtime_owned_task_ids.clone();
+        let mut selected_task_ids = Vec::new();
+
+        for task in active_tasks {
+            if selected_task_ids.len() >= dispatch_capacity {
+                break;
+            }
+            let task_id = task.task_id.trim();
+            let eligibility = Self::dispatch_eligibility(
+                runtime_owned_task_ids.contains(task_id),
+                failed_start_blockers.get(task_id).copied(),
+                task.task_updated_at_epoch_millis,
+            );
+            if !eligibility.is_dispatchable() {
+                excluded_task_ids.insert(task_id.to_string());
+                continue;
+            }
+            selected_task_ids.push(task_id.to_string());
+        }
+
+        ParallelModeDispatchCandidateSelection {
+            idle_slot_count,
+            requested_count,
+            dispatch_capacity,
+            excluded_task_ids: excluded_task_ids.into_iter().collect(),
+            selected_task_ids,
+        }
     }
 
     pub fn post_turn_queue_continuation(

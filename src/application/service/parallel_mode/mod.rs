@@ -5,7 +5,7 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchTaskCandidate,
     ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
     ParallelModePoolResetReport, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot,
@@ -14,7 +14,6 @@ use crate::domain::parallel_mode::{
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
 use chrono::DateTime;
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 mod branch_names;
 mod completion;
@@ -35,6 +34,7 @@ use self::branch_names::{sanitize_task_slug, short_branch_slug_hash};
 use self::distributor::ParallelModeDistributorService;
 use self::orchestration::{
     inspect_akra_integration_worktree_blocker, parallel_dispatch_excluded_task_ids,
+    parallel_failed_start_dispatch_blockers,
 };
 pub use self::orchestrator_loop::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeDispatchOrchestratorTickResult,
@@ -111,59 +111,6 @@ pub struct ParallelModeDispatchPlan {
     pub idle_slot_count: usize,
     pub excluded_task_ids: Vec<String>,
     pub candidates: Vec<PriorityQueueTask>,
-}
-
-fn failed_start_dispatch_blockers(context: &PoolRuntimeContext) -> BTreeMap<String, i64> {
-    let mut blockers = BTreeMap::new();
-    for block in &context.task_dispatch_blocks {
-        if block.reason != ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges {
-            continue;
-        }
-        let task_id = block.task_id.trim();
-        if task_id.is_empty() {
-            continue;
-        }
-        let Ok(blocked_at) = DateTime::parse_from_rfc3339(block.blocked_at.trim())
-            .map(|timestamp| timestamp.timestamp_millis())
-        else {
-            continue;
-        };
-        blockers
-            .entry(task_id.to_string())
-            .and_modify(|current| {
-                if blocked_at > *current {
-                    *current = blocked_at;
-                }
-            })
-            .or_insert(blocked_at);
-    }
-    for detail in &context.session_details {
-        let task_id = detail.task_id.trim();
-        if task_id.is_empty() {
-            continue;
-        }
-        let Ok(failed_at) = DateTime::parse_from_rfc3339(detail.updated_at.trim())
-            .map(|timestamp| timestamp.timestamp_millis())
-        else {
-            continue;
-        };
-        if detail.state_label == "failed"
-            && detail.completion_state_label == "aborted"
-            && detail
-                .latest_summary
-                .contains("launch failed before the session reached the running state")
-        {
-            blockers
-                .entry(task_id.to_string())
-                .and_modify(|current| {
-                    if failed_at > *current {
-                        *current = failed_at;
-                    }
-                })
-                .or_insert(failed_at);
-        }
-    }
-    blockers
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,56 +408,61 @@ impl ParallelModeService {
             .into_iter()
             .filter(|slot| slot.state == ParallelModePoolSlotState::Idle)
             .count();
-        let capacity = requested_count.min(idle_slot_count);
         let excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
-        /*
-        excluded_task_ids crosses two sources: live slot leases and distributor
-        queue records. It is kept as a returned field so the TUI can explain why
-        fewer tasks were dispatched than the planning queue appears to contain.
-        */
-        let failed_start_blockers = failed_start_dispatch_blockers(&context);
-        let excluded = excluded_task_ids
-            .iter()
-            .map(|task_id| task_id.trim().to_string())
-            .collect::<BTreeSet<_>>();
-        let mut reported_excluded = excluded.clone();
-        let candidates = planning_snapshot
+        let failed_start_blockers = parallel_failed_start_dispatch_blockers(&context);
+        let (selection, candidates) = planning_snapshot
             .queue_projection()
             .map(|projection| {
-                projection
+                let active_task_inputs = projection
                     .active_tasks
                     .iter()
-                    .filter(|task| {
-                        let task_id = task.task_id.trim();
-                        let task_updated_at =
+                    .map(|task| {
+                        ParallelModeDispatchTaskCandidate::new(
+                            task.task_id.clone(),
                             DateTime::parse_from_rfc3339(task.updated_at.as_str())
                                 .map(|timestamp| timestamp.timestamp_millis())
-                                .ok();
-                        let eligibility =
-                            ParallelModeOrchestratorStateMachine::dispatch_eligibility(
-                                excluded.contains(task_id),
-                                failed_start_blockers.get(task_id).copied(),
-                                task_updated_at,
-                            );
-                        if !eligibility.is_dispatchable() {
-                            reported_excluded.insert(task_id.to_string());
-                            return false;
-                        }
-                        true
+                                .ok(),
+                        )
                     })
-                    /*
-                    Capacity is applied after exclusion, not before. Otherwise a
-                    leased task near the front of the queue could consume one of
-                    the requested slots and hide a later dispatchable task.
-                    */
-                    .take(capacity)
-                    .cloned()
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                let selection = ParallelModeOrchestratorStateMachine::select_dispatch_candidates(
+                    idle_slot_count,
+                    requested_count,
+                    excluded_task_ids.clone(),
+                    &failed_start_blockers,
+                    active_task_inputs,
+                );
+                let mut selected_task_ids = selection.selected_task_ids.iter();
+                let mut next_selected_task_id = selected_task_ids.next();
+                let candidates = projection
+                    .active_tasks
+                    .iter()
+                    .filter_map(|task| {
+                        let expected_task_id = next_selected_task_id?;
+                        if task.task_id.trim() != expected_task_id {
+                            return None;
+                        }
+                        next_selected_task_id = selected_task_ids.next();
+                        Some(task.clone())
+                    })
+                    .collect::<Vec<_>>();
+                (selection, candidates)
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                (
+                    ParallelModeOrchestratorStateMachine::select_dispatch_candidates(
+                        idle_slot_count,
+                        requested_count,
+                        excluded_task_ids.clone(),
+                        &failed_start_blockers,
+                        Vec::new(),
+                    ),
+                    Vec::new(),
+                )
+            });
         Ok(ParallelModeDispatchPlan {
-            idle_slot_count,
-            excluded_task_ids: reported_excluded.into_iter().collect(),
+            idle_slot_count: selection.idle_slot_count,
+            excluded_task_ids: selection.excluded_task_ids,
             candidates,
         })
     }

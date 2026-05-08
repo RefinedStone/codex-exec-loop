@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::domain::parallel_mode::ParallelModeDispatchBlockReason;
+use chrono::DateTime;
 
 // orchestration service는 slot pool의 runtime 관찰값과 distributor queue를 함께 본다.
 // 하위 pool helper가 repo root 탐색과 git 상태 판정을 맡고, 이 파일은 tick을 막을지 결정한다.
@@ -42,6 +44,67 @@ pub(super) fn parallel_dispatch_excluded_task_ids(context: &PoolRuntimeContext) 
 
     // 정렬 순서를 그대로 반환해 caller의 비교, 로그, snapshot 테스트가 매번 같은 순서를 본다.
     task_ids.into_iter().collect()
+}
+
+/*
+startup 실패 차단 목록은 authority projection과 session detail이라는 runtime 관찰값에서
+뽑은 사실 목록이다. 이 함수는 "어떤 task를 막을지"를 판단하지 않고, 각 task의 가장
+최근 startup 실패 시각만 안정적으로 수집한다. 실제 dispatch 가능 여부는 domain
+state machine이 task 갱신 시각과 비교해 결정한다.
+*/
+pub(super) fn parallel_failed_start_dispatch_blockers(
+    context: &PoolRuntimeContext,
+) -> std::collections::BTreeMap<String, i64> {
+    let mut blockers = std::collections::BTreeMap::new();
+    for block in &context.task_dispatch_blocks {
+        if block.reason != ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges {
+            continue;
+        }
+        let task_id = block.task_id.trim();
+        if task_id.is_empty() {
+            continue;
+        }
+        let Ok(blocked_at) = DateTime::parse_from_rfc3339(block.blocked_at.trim())
+            .map(|timestamp| timestamp.timestamp_millis())
+        else {
+            continue;
+        };
+        blockers
+            .entry(task_id.to_string())
+            .and_modify(|current| {
+                if blocked_at > *current {
+                    *current = blocked_at;
+                }
+            })
+            .or_insert(blocked_at);
+    }
+    for detail in &context.session_details {
+        let task_id = detail.task_id.trim();
+        if task_id.is_empty() {
+            continue;
+        }
+        let Ok(failed_at) = DateTime::parse_from_rfc3339(detail.updated_at.trim())
+            .map(|timestamp| timestamp.timestamp_millis())
+        else {
+            continue;
+        };
+        if detail.state_label == "failed"
+            && detail.completion_state_label == "aborted"
+            && detail
+                .latest_summary
+                .contains("launch failed before the session reached the running state")
+        {
+            blockers
+                .entry(task_id.to_string())
+                .and_modify(|current| {
+                    if failed_at > *current {
+                        *current = failed_at;
+                    }
+                })
+                .or_insert(failed_at);
+        }
+    }
+    blockers
 }
 
 /*

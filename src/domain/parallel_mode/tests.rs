@@ -5,9 +5,9 @@ use super::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandState, ParallelModeDispatchOutcome,
-    ParallelModeLiveSessionDetailDefaults, ParallelModeOrchestratorState,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
-    ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState,
+    ParallelModeDispatchTaskCandidate, ParallelModeLiveSessionDetailDefaults,
+    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
+    ParallelModePoolResetScope, ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState,
     ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
     ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
     ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
@@ -306,6 +306,42 @@ fn orchestrator_dispatch_eligibility_blocks_runtime_and_stale_failed_start_tasks
         Some(ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges)
     );
     assert!(changed_after_failure.is_dispatchable());
+}
+
+// dispatch 후보 선정은 capacity, 이미 처리 중인 task, startup 실패 차단을 함께 판단한다.
+// capacity는 exclusion 뒤에 적용되어야 앞쪽 task가 제외되어도 뒤쪽 ready task가 idle slot을 채운다.
+#[test]
+fn orchestrator_dispatch_selection_applies_capacity_after_exclusion() {
+    let selection = ParallelModeOrchestratorStateMachine::select_dispatch_candidates(
+        2,
+        usize::MAX,
+        vec!["task-1".to_string()],
+        &BTreeMap::from([("task-2".to_string(), 20)]),
+        vec![
+            ParallelModeDispatchTaskCandidate::new("task-1", Some(10)),
+            ParallelModeDispatchTaskCandidate::new("task-2", Some(10)),
+            ParallelModeDispatchTaskCandidate::new("task-3", Some(10)),
+            ParallelModeDispatchTaskCandidate::new("task-4", Some(10)),
+        ],
+    );
+
+    assert_eq!(selection.dispatch_capacity, 2);
+    assert_eq!(selection.excluded_task_ids, vec!["task-1", "task-2"]);
+    assert_eq!(selection.selected_task_ids, vec!["task-3", "task-4"]);
+}
+
+#[test]
+fn orchestrator_dispatch_selection_reopens_failed_start_task_after_task_update() {
+    let selection = ParallelModeOrchestratorStateMachine::select_dispatch_candidates(
+        1,
+        usize::MAX,
+        Vec::new(),
+        &BTreeMap::from([("task-1".to_string(), 10)]),
+        vec![ParallelModeDispatchTaskCandidate::new("task-1", Some(20))],
+    );
+
+    assert!(selection.excluded_task_ids.is_empty());
+    assert_eq!(selection.selected_task_ids, vec!["task-1"]);
 }
 
 // roster projection은 lease 생명주기와 runtime detail을 합쳐 TUI 목록을 만든다.
