@@ -89,7 +89,10 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 
 - `runtime_reset_preserves_latest_failed_start_dispatch_block_per_task`
 - `runtime_dispatch_command_enqueue_claim_and_update_round_trips`
+- `runtime_dispatch_command_cancel_marks_only_non_terminal_commands`
 - `runtime_task_cleanup_removes_deleted_task_projections_only`
+- `runtime_projection_snapshot_groups_current_rows_and_recent_events`
+- `official_refresh_claim_orders_are_enforced_by_authority_store`
 - `runtime_event_log_port_reads_recent_projection_events`
 - `runtime_event_log_port_filters_events_after_sequence`
 - `runtime_projection_loads_recent_runtime_event_feed_newest_first`
@@ -102,8 +105,6 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 
 보강할 anchor:
 
-- dispatch command pending/running/completed/canceled state별 projection matrix
-- runtime projection snapshot이 lease/session/queue/event를 같은 DB read boundary에서 조립하는지
 - filesystem workspace artifact reset이 accepted DB authority를 지우지 않는지
 - pool-local mirror write가 outbound boundary로 이동한 뒤 authority-first write order가 유지되는지
 - TUI in-flight/epoch state가 durable store에 저장되지 않고 application runtime event로만 흐르는지
@@ -114,7 +115,7 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 
 - `STORE-00A`: 이 inventory 문서로 durable/process runtime state와 adapter policy audit를 고정한다. 완료.
 - `STORE-00B`: SQLite runtime projection regression matrix를 보강한다. dispatch command, runtime event feed,
-  claim/recovery, task cleanup projection을 같은 DB read boundary로 검증한다. ready.
+  claim/recovery, task cleanup projection을 같은 DB read boundary로 검증한다. 완료.
 - `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime boundary로 이동한다.
   authority-first write order와 mirror-loss recovery 테스트를 유지한다. ready.
 - `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application control-plane runtime
@@ -125,6 +126,6 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 
 ## 다음 Worker 시작 기준
 
-다음 worker는 새 repository trait를 만들지 말고 `STORE-00B`부터 시작한다. 이유는 SQLite
-runtime projection이 이미 durable state의 대부분을 품고 있으므로, regression matrix를 먼저
-고정해야 이후 `STORE-00C/D`가 mirror I/O와 process runtime state를 이동해도 복구 계약이 흔들리지 않는다.
+다음 worker는 새 repository trait를 만들지 말고 `STORE-00C` 또는 `STORE-00E` 중 하나를 잡는다.
+`STORE-00D`는 TUI/application runtime migration이라 `STORE-00C`의 mirror I/O boundary가
+정리된 뒤에 진행한다.
