@@ -15,8 +15,9 @@ use crate::application::service::planning::runtime::prompt::{
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningWorkspaceFiles, TaskActor,
-    TaskAuthorityDocument, TaskStatus,
+    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningProposalPromotionDecision,
+    PlanningProposalPromotionPolicy, PlanningWorkspaceFiles, TaskActor, TaskAuthorityDocument,
+    TaskStatus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +62,8 @@ pub struct PlanningProposalPromotionService {
     planning_validation_service: PlanningValidationService,
     // domain projection은 이미 ready task가 있는지와 어떤 proposal이 1순위인지 판단한다.
     priority_queue_service: PriorityQueueService,
+    // promotion 가능 여부는 projection 기반 domain decision으로만 판단한다.
+    proposal_promotion_policy: PlanningProposalPromotionPolicy,
     // repository port는 accepted authority snapshot과 conflict-aware commit을 소유한다.
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
@@ -83,6 +86,7 @@ impl PlanningProposalPromotionService {
             planning_prompt_service,
             planning_validation_service,
             priority_queue_service,
+            proposal_promotion_policy: PlanningProposalPromotionPolicy::new(),
             planning_task_repository_port,
         }
     }
@@ -103,38 +107,34 @@ impl PlanningProposalPromotionService {
         // helper는 complete accepted state를 검증하고, 뒤 commit에 사용할 revision guard를 함께 반환한다.
         let (directions, mut task_authority, observed_planning_revision) =
             self.load_valid_workspace_documents(request.workspace_directory, &workspace_record)?;
-        // domain queue projection이 "이미 실행 가능한 work가 있는가"와 "top proposal은 무엇인가"를 동시에 정의한다.
+        // domain queue projection은 promotion policy가 판단할 active/proposed lane facts를 제공한다.
         let queue_projection = self
             .priority_queue_service
             .build_projection(&directions, &task_authority)?;
-        // ready queue head가 있으면 worker orchestration에는 이미 실행 가능한 work가 있다. 이때 promote하면 operator/model이
-        // 정한 실행 순서를 임의로 바꾸게 된다.
-        if queue_projection.next_task.is_some() || queue_projection.proposed_tasks.is_empty() {
-            return Ok(PlanningProposalPromotionOutcome {
-                runtime_snapshot: self
-                    .planning_prompt_service
-                    .load_runtime_snapshot(request.workspace_directory)?,
-                notices: Vec::new(),
-                promoted_task_title: None,
-                promoted: false,
-            });
-        }
+        let promotion_decision = self.proposal_promotion_policy.decide(&queue_projection);
+        let promotion_candidate = match promotion_decision {
+            PlanningProposalPromotionDecision::Promote(candidate) => candidate,
+            PlanningProposalPromotionDecision::Noop(_) => {
+                return Ok(PlanningProposalPromotionOutcome {
+                    runtime_snapshot: self
+                        .planning_prompt_service
+                        .load_runtime_snapshot(request.workspace_directory)?,
+                    notices: Vec::new(),
+                    promoted_task_title: None,
+                    promoted: false,
+                });
+            }
+        };
 
-        // 방금 평가한 ordering에서 selected proposal이 drift하지 않도록 projection에서 바로 consume한다.
-        let top_proposal = queue_projection
-            .proposed_tasks
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("proposal promotion requested without a promotable proposal"))?;
         // authority rewrite는 title이 아니라 task id로 수행한다. title은 presentation text라 중복되거나 변경될 수 있다.
         let promoted_task = task_authority
             .tasks
             .iter_mut()
-            .find(|task| task.id.trim() == top_proposal.task_id.trim())
+            .find(|task| task.id.trim() == promotion_candidate.task_id)
             .ok_or_else(|| {
                 anyhow!(
                     "top promotable proposal {} was not found in task authority",
-                    top_proposal.task_id
+                    promotion_candidate.task_id
                 )
             })?;
 
@@ -179,7 +179,7 @@ impl PlanningProposalPromotionService {
             .load_runtime_snapshot(request.workspace_directory)?;
 
         // notice는 projection title을 사용한다. queue가 operator/worker에게 보여 준 task 표현과 같은 wording을 유지한다.
-        let promoted_task_title = top_proposal.task_title.trim().to_string();
+        let promoted_task_title = promotion_candidate.task_title;
         let mut notices = Vec::new();
         notices.push(format!(
             "host promoted top follow-up proposal into the executable queue: {}",
