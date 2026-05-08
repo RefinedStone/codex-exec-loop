@@ -35,7 +35,7 @@ handler가 DB, filesystem planning authority, parallel dispatch queue, task auth
 | `ParallelModeOrchestratorWakeCompleted` | parallel control-plane effect | parallel application result mapping | readiness/supervisor projection cache, dispatch outcome notice |
 | `ParallelModeWorkerEvent` | worker completion channel | parallel application control-plane worker event | application service handles worker completion; TUI only routes |
 | `ParallelModeOrchestratorTickCompleted` | parallel tick effect | parallel panel projection cache/application wake state | blocked status and notices; no durable queue mutation |
-| `PostTurnEvaluated` | post-turn execution effect | stale guard, then `ConversationRuntimeEvent::PostTurnAutomationEvaluated` reducer | planning worker panel projection, runtime snapshot projection, automation provenance, queued auto prompt effect |
+| `PostTurnEvaluated` | post-turn execution effect | stale guard, then `ConversationRuntimeEvent::PostTurnAutomationEvaluated` reducer | planning worker panel projection, runtime snapshot projection, `PostTurnAutomationProvenance` consumption, queued auto prompt effect |
 | `GithubReviewPollLoaded` | GitHub polling effect | GitHub polling controller/projection cache | polling projection cache only |
 
 ## Regression Anchors
@@ -56,3 +56,8 @@ Existing and new tests that protect this boundary:
 `TUI-00C`는 prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는
 input/rendering regression을 추가했다. 완료 문서는
 [tui-shell-regression-anchors.md](./tui-shell-regression-anchors.md)이다.
+
+`TUI-01E` 이후 `PostTurnEvaluated`가 들고 온 completed turn id, planning handoff task,
+parallel queue signal은 `PostTurnAutomationProvenance`로 해석한다. `QueuedAutoPrompt`는
+prompt/mode/transcript submit payload만 가지며, post-turn handler는 이 provenance를
+직접 durable state에 쓰지 않고 conversation reducer와 automation router에 전달한다.
