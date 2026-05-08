@@ -429,6 +429,38 @@ fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
 }
 
 #[test]
+fn akra_parallel_admin_surface_is_read_only_snapshot_projection() {
+    /*
+     * Admin Akra routes inspect parallel mode; they do not provide a second
+     * manual tick/mutation surface beside CLI/TUI. This keeps parallel command
+     * ordering inside ParallelModeService and its control-plane runtime.
+     */
+    assert!(
+        AKRA_DASHBOARD_RS.contains("build_supervisor_snapshot"),
+        "admin dashboard should render the application supervisor projection"
+    );
+    assert!(
+        AKRA_DASHBOARD_RS.contains("build_runtime_events_snapshot"),
+        "admin dashboard should render the runtime event projection"
+    );
+    for forbidden in [
+        "run_orchestrator_tick",
+        "process_distributor_queue",
+        "ParallelModeControlPlaneCommand",
+        "ParallelModeControlPlaneEvent",
+    ] {
+        assert!(
+            !AKRA_DASHBOARD_RS.contains(forbidden),
+            "admin dashboard should not issue parallel control-plane commands: {forbidden}"
+        );
+        assert!(
+            !ADMIN_API.contains(forbidden),
+            "admin API routes should not issue parallel control-plane commands: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn akra_graphic_dashboard_character_sprite_asset_is_reviewable() {
     for token in [
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"528\" height=\"96\"",

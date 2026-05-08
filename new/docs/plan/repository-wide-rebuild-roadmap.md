@@ -662,8 +662,10 @@ application command/use case를 공유해야 한다.
   정렬한다. 완료.
 - `INBOUND-00E-B`: TUI `:parallel` execution path와 inline buffered hint path가 같은
   parser를 공유하게 해 enable/disable vocabulary drift를 막는다. 완료.
+- `INBOUND-00E-C`: admin Akra dashboard/API가 parallel tick mutation surface가 아니라
+  read-only supervisor/event projection surface임을 regression으로 고정한다. 완료.
 - `INBOUND-00E`: parallel TUI/admin/CLI entrypoint를 control-plane runtime command/event
-  vocabulary로 정렬한다. 남은 admin tick/snapshot vocabulary 정렬은 보류.
+  vocabulary로 정렬한다. 완료.
 
 금지:
 
