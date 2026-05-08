@@ -414,6 +414,104 @@ fn parallel_entry_from_off_preserves_running_branch_drift_and_resets_idle_slots(
     assert_eq!(current_branch(&slot_path), "HEAD");
 }
 
+// 실제 장애 재현 케이스: authority store에는 Running lease가 남아 있지만 slot worktree는
+// 이미 clean detached prerelease로 돌아와 있고 agent branch도 없다. 이 split-brain을
+// live slot으로 계속 보존하면 dispatcher가 capacity를 잃어 병렬 실행이 멈춘다.
+#[test]
+fn reconcile_releases_clean_baseline_split_brain_running_lease() {
+    let repo = TempGitRepo::new("reconcile-clean-baseline-split-brain");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
+    run_git(
+        &repo.repo_root,
+        &["branch", "-D", lease.branch_name.as_str()],
+    );
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projections should load");
+    let detail = read_agent_session_detail_record(&repo.pool_root(), &lease.session_key())
+        .expect("stale session detail should be recorded");
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.blocked_slots, 0);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!runtime_projection.slot_leases.contains_key("slot-1"));
+    assert!(
+        runtime_projection
+            .task_dispatch_blocks
+            .iter()
+            .any(|block| block.task_id == lease.task_id)
+    );
+    assert_eq!(detail.state_label, "failed");
+    assert_eq!(detail.completion_state_label, "aborted");
+    assert!(
+        detail
+            .latest_summary
+            .contains("stale active lease reconciled")
+    );
+}
+
+// 같은 split-brain이라도 baseline worktree에 변경이 남아 있으면 자동 회수하면 안 된다.
+// 이 경우는 사용자나 아직 늦게 쓰는 worker가 남긴 산출물일 수 있으므로 blocked로 보존한다.
+#[test]
+fn reconcile_preserves_dirty_baseline_split_brain_running_lease() {
+    let repo = TempGitRepo::new("reconcile-dirty-baseline-split-brain");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
+    run_git(
+        &repo.repo_root,
+        &["branch", "-D", lease.branch_name.as_str()],
+    );
+    fs::write(slot_path.join("README.md"), "dirty\n").expect("dirty slot file should write");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    );
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projections should load");
+
+    assert_eq!(pool.blocked_slots, 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(runtime_projection.slot_leases.contains_key("slot-1"));
+    assert!(
+        runtime_projection
+            .task_dispatch_blocks
+            .iter()
+            .all(|block| block.task_id != lease.task_id)
+    );
+    assert_eq!(
+        fs::read_to_string(slot_path.join("README.md")).expect("README should be readable"),
+        "dirty\n"
+    );
+}
+
 #[test]
 fn parallel_entry_from_off_resets_stale_startup_slots_even_when_another_slot_is_running() {
     let repo = TempGitRepo::new("parallel-enable-reset-stale-with-running");

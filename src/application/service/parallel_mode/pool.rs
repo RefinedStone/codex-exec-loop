@@ -49,7 +49,10 @@ use self::board::{
 pub(super) use self::cleanup::{
     branch_is_cleanup_ready, branch_is_integrated_into, cleanup_slot, reset_slot_worktree_to_akra,
 };
-use self::cleanup::{cleanup_reusable_slots, cleanup_stale_leased_startup_slots};
+use self::cleanup::{
+    cleanup_clean_baseline_split_brain_leases, cleanup_reusable_slots,
+    cleanup_stale_leased_startup_slots,
+};
 #[cfg(test)]
 pub(super) use self::lease_store::slot_lease_file_path;
 #[cfg(not(test))]
@@ -250,9 +253,25 @@ pub(super) fn reset_pool_for_parallel_enable(
         .map_err(|error| format!("pool root could not be created: {error}"))?;
     ensure_pool_baseline_branch(&repo_root)
         .map_err(|_| "pool baseline could not be created".to_string())?;
-    let context =
+    let mut context =
         load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
             .map_err(|detail| detail.to_string())?;
+    if cleanup_clean_baseline_split_brain_leases(
+        planning_authority,
+        &repo_root,
+        &pool_root,
+        &context.baseline_head,
+        &context.worktree_records,
+        &context.slot_leases,
+    ) > 0
+    {
+        context = load_pool_runtime_context_from_roots(
+            planning_authority,
+            &repo_root,
+            &canonical_repo_root,
+        )
+        .map_err(|detail| detail.to_string())?;
+    }
 
     let mut report = ParallelModePoolResetReport::new(
         ParallelModePoolResetRunId::new(format!("{}:{}", repo_root, Utc::now().to_rfc3339())),
@@ -557,7 +576,7 @@ pub(super) fn reconcile_pool_board_and_context(
     local/remote 표준 branch가 모두 없으면 reconcile이 현재 workspace HEAD를 표준 branch로
     seed하고 push한 뒤 slot 출발점을 확정한다.
     */
-    let Ok((_baseline_head, created_baseline_branch)) = ensure_pool_baseline_branch(&repo_root)
+    let Ok((baseline_head, created_baseline_branch)) = ensure_pool_baseline_branch(&repo_root)
     else {
         return Err(Box::new((
             build_blocked_pool_board(
@@ -588,7 +607,15 @@ pub(super) fn reconcile_pool_board_and_context(
         &runtime_projection.slot_leases,
         &runtime_projection.session_details,
     );
-    if stale_startup_cleaned_slots > 0 {
+    let split_brain_cleaned_slots = cleanup_clean_baseline_split_brain_leases(
+        planning_authority,
+        &repo_root,
+        &pool_root,
+        &baseline_head,
+        &worktree_records,
+        &runtime_projection.slot_leases,
+    );
+    if stale_startup_cleaned_slots + split_brain_cleaned_slots > 0 {
         runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root);
         if let Some(refreshed_records) = load_worktree_records(&repo_root) {
             worktree_records = refreshed_records;
@@ -637,6 +664,7 @@ pub(super) fn reconcile_pool_board_and_context(
         )));
     };
     let cleaned_slots = stale_startup_cleaned_slots
+        + split_brain_cleaned_slots
         + cleanup_reusable_slots(
             planning_authority,
             &repo_root,

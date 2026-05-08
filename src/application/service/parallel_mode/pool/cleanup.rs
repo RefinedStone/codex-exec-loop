@@ -9,7 +9,10 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use super::super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::super::readiness::command_succeeds;
-use super::super::record_failed_start_session_detail;
+use super::super::{
+    branch_exists, record_cleaned_session_detail, record_failed_start_session_detail,
+    record_stale_active_lease_released_session_detail,
+};
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, POOL_BASELINE_BRANCH,
     SlotGitStatus, inspect_slot_git_status, remove_slot_lease, slot_id,
@@ -140,6 +143,83 @@ pub(super) fn cleanup_stale_leased_startup_slots(
     }
 
     cleaned_slots
+}
+
+/*
+clean baseline split-brain cleanup handles the state where the source-of-truth
+lease still says Leased/Running/CleanupPending, but git has already returned
+the slot worktree to the pool baseline. This can happen if cleanup deletes or
+detaches the branch and then fails before removing the authority lease, or if a
+late worker event observes a recycled worktree. A clean baseline with a missing
+active agent branch has no remaining worktree result to preserve, and a
+CleanupPending branch that is already integrated is safe to close. Other active
+branch drift is intentionally left blocked for operator recovery.
+*/
+pub(super) fn cleanup_clean_baseline_split_brain_leases(
+    planning_authority: &dyn PlanningAuthorityPort,
+    repo_root: &str,
+    pool_root: &Path,
+    baseline_head: &str,
+    worktree_records: &[GitWorktreeRecord],
+    slot_leases: &std::collections::BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+) -> usize {
+    let mut cleaned_slots = 0;
+
+    for lease in slot_leases.values() {
+        let slot_path = pool_root.join(&lease.slot_id);
+        let Some(worktree_record) = worktree_records
+            .iter()
+            .find(|record| record.path == slot_path)
+        else {
+            continue;
+        };
+        if !worktree_is_clean_baseline(worktree_record, baseline_head, &slot_path) {
+            continue;
+        }
+        let branch_still_exists = branch_exists(repo_root, &lease.branch_name);
+        if branch_still_exists && lease.state != ParallelModeSlotLeaseState::CleanupPending {
+            continue;
+        }
+        if branch_still_exists
+            && (!branch_is_cleanup_ready(repo_root, &lease.branch_name)
+                || !delete_stale_agent_branch(repo_root, &lease.branch_name))
+        {
+            continue;
+        }
+        if !remove_slot_lease(planning_authority, repo_root, pool_root, &lease.slot_id) {
+            continue;
+        }
+        if lease.state == ParallelModeSlotLeaseState::CleanupPending {
+            let _ = record_cleaned_session_detail(planning_authority, repo_root, pool_root, lease);
+        } else {
+            let _ = record_stale_active_lease_released_session_detail(
+                planning_authority,
+                repo_root,
+                pool_root,
+                lease,
+                "stale active lease reconciled after slot worktree returned to clean baseline",
+            );
+        }
+        cleaned_slots += 1;
+    }
+
+    cleaned_slots
+}
+
+fn worktree_is_clean_baseline(
+    worktree_record: &GitWorktreeRecord,
+    baseline_head: &str,
+    slot_path: &Path,
+) -> bool {
+    let branch_is_baseline = worktree_record.branch_name.as_deref() == Some(POOL_BASELINE_BRANCH);
+    let detached_at_baseline =
+        worktree_record.detached && worktree_record.head_sha == baseline_head;
+    (branch_is_baseline || detached_at_baseline)
+        && inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
+}
+
+fn delete_stale_agent_branch(repo_root: &str, branch_name: &str) -> bool {
+    command_succeeds("git", ["-C", repo_root, "branch", "-D", branch_name])
 }
 
 fn stale_leased_startup_slot_can_be_released(
