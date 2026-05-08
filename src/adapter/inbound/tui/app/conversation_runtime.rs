@@ -26,8 +26,8 @@ pub(super) enum ConversationRuntimeEvent {
     /*
      * Runtime events are facts that already happened at the TUI boundary. Manual
      * and auto-follow submissions enter through SubmitPrompt, provider messages
-     * enter through StreamUpdated, and planning post-turn policy returns through
-     * PostTurnEvaluated.
+     * enter through StreamUpdated, and post-turn automation results return through
+     * PostTurnAutomationEvaluated.
      */
     SubmitPrompt {
         prompt: String,
@@ -38,7 +38,7 @@ pub(super) enum ConversationRuntimeEvent {
     StreamExecutionObserved {
         notice: String,
     },
-    PostTurnEvaluated {
+    PostTurnAutomationEvaluated {
         evaluation: Box<ConversationPostTurnEvaluation>,
     },
 }
@@ -55,7 +55,7 @@ pub(super) enum ConversationRuntimeEffect {
         thread_id: Option<String>,
         prompt: String,
     },
-    EvaluateAutoFollow {
+    EvaluatePostTurnAutomation {
         workspace_directory: String,
         completed_turn_id: String,
         changed_planning_file_paths: Vec<String>,
@@ -347,7 +347,7 @@ pub(super) fn reduce_conversation_runtime(
                         "changed_planning_file_count": changed_planning_file_paths.len(),
                     })
                 });
-                effects.push(ConversationRuntimeEffect::EvaluateAutoFollow {
+                effects.push(ConversationRuntimeEffect::EvaluatePostTurnAutomation {
                     workspace_directory,
                     completed_turn_id: turn_id,
                     changed_planning_file_paths,
@@ -365,7 +365,7 @@ pub(super) fn reduce_conversation_runtime(
             // background execution failures in the same place.
             state.extend_runtime_notices([notice]);
         }
-        ConversationRuntimeEvent::PostTurnEvaluated { evaluation } => {
+        ConversationRuntimeEvent::PostTurnAutomationEvaluated { evaluation } => {
             let evaluation = *evaluation;
             // Apply the new planning view before acting on the decision; queued
             // or skipped auto-follow copy should describe the latest queue state.
@@ -483,7 +483,7 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             state,
-            ConversationRuntimeEvent::PostTurnEvaluated {
+            ConversationRuntimeEvent::PostTurnAutomationEvaluated {
                 evaluation: Box::new(ConversationPostTurnEvaluation {
                     runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
                         "Planning Context".to_string(),
