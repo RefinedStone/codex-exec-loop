@@ -434,6 +434,32 @@ fn startup_background_message_updates_app_state() {
     }
 }
 #[test]
+fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
+    /*
+     * ConversationStream is a provider/runtime fact. ShellRuntime must route it
+     * through the conversation runtime reducer instead of mutating conversation
+     * projection fields directly in the background-message match arm.
+     */
+    let mut runtime = make_test_runtime();
+    runtime.take_redraw_request();
+
+    runtime
+        .app
+        .tx
+        .send(BackgroundMessage::ConversationStream(
+            ConversationStreamEvent::StatusUpdated {
+                text: "provider is thinking".to_string(),
+            },
+        ))
+        .expect("conversation stream message should enqueue");
+
+    runtime.poll_background_messages();
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.status_text, "provider is thinking");
+}
+#[test]
 fn session_catalog_request_uses_current_workspace_context() {
     let session_port = Arc::new(FakeSessionCatalogPort::default());
     let mut runtime = make_test_runtime_with_session_port(session_port.clone());
