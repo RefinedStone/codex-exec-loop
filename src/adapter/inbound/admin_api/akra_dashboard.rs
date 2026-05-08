@@ -1,6 +1,6 @@
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::service::parallel_mode::ParallelModeService;
-use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::{PlanningApplicationProjection, PlanningServices};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
@@ -273,6 +273,8 @@ pub(super) fn build_akra_dashboard_view(
     let planning_snapshot = planning
         .runtime
         .load_runtime_snapshot_or_invalid(workspace_dir);
+    let planning_projection =
+        PlanningApplicationProjection::from_runtime_snapshot(&planning_snapshot);
     let readiness = parallel_mode.inspect_readiness(workspace_dir, &planning_snapshot);
     let supervisor = parallel_mode.build_supervisor_snapshot(workspace_dir, true, Some(&readiness));
     let events = parallel_mode.build_runtime_events_snapshot(
@@ -326,9 +328,9 @@ pub(super) fn build_akra_dashboard_view(
                 .or_else(|| readiness.top_alert.clone()),
         },
         kpis: AkraKpiView {
-            total_tasks: planning_snapshot
-                .queue_projection()
-                .map(|projection| projection.visible_tasks(usize::MAX).len()),
+            total_tasks: planning_projection
+                .has_structured_queue_projection
+                .then_some(planning_projection.visible_tasks.len()),
             success_rate: None,
             today_throughput: None,
             active_agents: agents.active_count,

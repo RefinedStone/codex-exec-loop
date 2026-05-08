@@ -59,7 +59,7 @@ user-visible contract와 fan-in 지점을 고정해, 이후 `PLAN-01`과 `PLAN-0
 3. TUI/admin/CLI/Telegram 호출부를 한 번에 바꾸지 않고, 먼저 read-only status/queue
    command부터 facade 뒤로 보낸다. 진행: TUI status projection `PLAN-01B`, control
    surface status/queue `PLAN-01C`, CLI status/queue command `PLAN-01D`,
-   Telegram control facade `PLAN-01E`
+   Telegram control facade `PLAN-01E`, admin dashboard projection `PLAN-01F`
 4. mutation이나 worker orchestration은 `PLAN-01`에서 정책을 바꾸지 않는다. 필요한
    경우 `PLAN-02`로 미룬다.
 
