@@ -24,7 +24,8 @@ use crate::domain::parallel_mode::{
  */
 use super::{
     BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent,
-    ConversationState, NativeTuiApp,
+    ConversationState, NativeTuiApp, ParallelPanelStateController, ParallelPanelUiEvent,
+    ParallelPanelUiState,
 };
 
 impl NativeTuiApp {
@@ -64,35 +65,38 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn parallel_mode_activity_pulse_visible(&self) -> bool {
-        if self.shell_overlay != ShellOverlay::Supersession || !self.parallel_mode_enabled() {
-            return false;
-        }
-
-        let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref() else {
-            return true;
-        };
-
-        parallel_mode_supervisor_snapshot_is_loading(snapshot)
-            || parallel_mode_supervisor_snapshot_has_running_slot(snapshot)
-            || parallel_mode_supervisor_snapshot_has_active_distributor_queue(snapshot)
-            || parallel_mode_supervisor_snapshot_has_recoverable_pool_issue(snapshot)
+        ParallelPanelStateController::activity_pulse_visible(&self.parallel_panel_ui_state())
     }
 
     pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
-        if self.shell_overlay != ShellOverlay::Supersession || !self.parallel_mode_enabled() {
-            return false;
-        }
-
-        let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref() else {
-            return true;
-        };
-
-        parallel_mode_supervisor_snapshot_is_loading(snapshot)
+        ParallelPanelStateController::loading_prompt_indicator_visible(
+            &self.parallel_panel_ui_state(),
+        )
     }
 
     pub(crate) fn parallel_mode_prompt_input_locked(&self) -> bool {
-        self.shell_overlay == ShellOverlay::Supersession
-            && self.parallel_mode_loading_prompt_indicator_visible()
+        ParallelPanelStateController::prompt_input_locked(&self.parallel_panel_ui_state())
+    }
+
+    fn parallel_panel_ui_state(&self) -> ParallelPanelUiState {
+        let overlay_event = if self.shell_overlay == ShellOverlay::Supersession {
+            ParallelPanelUiEvent::OverlayShown
+        } else {
+            ParallelPanelUiEvent::OverlayHidden
+        };
+        let mut events = vec![
+            overlay_event,
+            ParallelPanelUiEvent::ModeSet(self.parallel_mode_enabled()),
+            ParallelPanelUiEvent::SupervisorSnapshotChanged(
+                self.parallel_mode_supervisor_snapshot.clone().map(Box::new),
+            ),
+        ];
+        if let Some(reason) = self.last_parallel_mode_dispatch_withheld_reason.as_ref() {
+            events.push(ParallelPanelUiEvent::StatusShown(format!(
+                "parallel mode: dispatch withheld / {reason}"
+            )));
+        }
+        ParallelPanelStateController::project(events)
     }
 
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
@@ -561,7 +565,7 @@ impl NativeTuiApp {
         }
 
         match self.parallel_mode_supervisor_snapshot.as_ref() {
-            Some(snapshot) => parallel_mode_supervisor_snapshot_is_loading(snapshot),
+            Some(snapshot) => ParallelPanelStateController::snapshot_is_loading(snapshot),
             None => true,
         }
     }
@@ -841,24 +845,23 @@ impl NativeTuiApp {
             return false;
         }
         let workspace_directory = self.planning_workspace_directory();
+        let epoch_id = self
+            .parallel_mode_automation_epoch_id
+            .expect("checked automation epoch should exist");
         match self
             .parallel_mode_service
-            .pending_dispatch_command_count(&workspace_directory)
+            .pending_dispatch_wake(&workspace_directory, epoch_id)
         {
-            Ok(0) => false,
-            Ok(_) => {
-                let epoch_id = self
-                    .parallel_mode_automation_epoch_id
-                    .expect("checked automation epoch should exist");
+            Ok(None) => false,
+            Ok(Some(wake)) => {
                 self.parallel_mode_orchestrator_wake_in_flight = true;
-                self.last_parallel_mode_automation_trigger =
-                    Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch);
+                self.last_parallel_mode_automation_trigger = Some(wake.trigger);
                 self.last_parallel_mode_dispatch_withheld_reason = None;
                 self.spawn_parallel_mode_orchestrator_wake_worker(
-                    workspace_directory,
-                    ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
-                    epoch_id,
-                    None,
+                    wake.workspace_directory,
+                    wake.trigger,
+                    wake.epoch_id,
+                    wake.enqueue_trigger,
                 );
                 true
             }
@@ -1106,34 +1109,6 @@ impl NativeTuiApp {
     }
 }
 
-fn parallel_mode_supervisor_snapshot_is_loading(snapshot: &ParallelModeSupervisorSnapshot) -> bool {
-    snapshot
-        .top_notice
-        .as_deref()
-        .is_some_and(|notice| notice.starts_with("loading "))
-        || snapshot.pool.pool_root_label.starts_with("loading:")
-}
-
-fn parallel_mode_supervisor_snapshot_has_running_slot(
-    snapshot: &ParallelModeSupervisorSnapshot,
-) -> bool {
-    snapshot.pool.running_slots > 0
-}
-
-fn parallel_mode_supervisor_snapshot_has_active_distributor_queue(
-    snapshot: &ParallelModeSupervisorSnapshot,
-) -> bool {
-    !snapshot.distributor.queue_items.is_empty()
-}
-
-fn parallel_mode_supervisor_snapshot_has_recoverable_pool_issue(
-    snapshot: &ParallelModeSupervisorSnapshot,
-) -> bool {
-    snapshot.pool.blocked_slots > 0
-        || snapshot.pool.missing_slots > 0
-        || snapshot.pool.unavailable_slots > 0
-}
-
 fn parallel_mode_distributor_tick_signature(
     snapshot: &ParallelModeSupervisorSnapshot,
 ) -> Option<String> {
@@ -1362,7 +1337,7 @@ mod orchestrator_retry_tests {
             blocked_signature, ready_signature,
             "integration readiness must be part of the retry signature so a fixed worktree retries the same queued head"
         );
-        assert!(parallel_mode_supervisor_snapshot_has_active_distributor_queue(&ready));
+        assert!(ParallelPanelStateController::snapshot_has_active_distributor_queue(&ready));
     }
 
     #[test]
@@ -1378,7 +1353,7 @@ mod orchestrator_retry_tests {
         );
 
         assert!(parallel_mode_distributor_tick_signature(&snapshot).is_none());
-        assert!(!parallel_mode_supervisor_snapshot_has_active_distributor_queue(&snapshot));
+        assert!(!ParallelPanelStateController::snapshot_has_active_distributor_queue(&snapshot));
     }
 
     fn supervisor_with_distributor_readiness(readiness: &str) -> ParallelModeSupervisorSnapshot {

@@ -90,6 +90,8 @@ mod inline_shell_commands;
 mod inline_terminal_adapter;
 #[path = "app/parallel_mode.rs"]
 mod parallel_mode;
+#[path = "app/parallel_mode/panel_controller.rs"]
+mod parallel_panel_controller;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
@@ -165,6 +167,9 @@ use directions_maintenance_ui::{
 use github_polling::GithubReviewPollingState;
 use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
+use parallel_panel_controller::{
+    ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
+};
 use planning::{PlanningWorkerPanelState, PlanningWorkerStatus, PlanningWorkerVisibility};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
