@@ -42,6 +42,7 @@ use self::store::{
     block_distributor_queue_record, distributor_queue_item_id, queue_order_key_from_timestamp,
     write_distributor_queue_record,
 };
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 
 #[derive(Clone)]
 /*
@@ -58,6 +59,7 @@ distributor service는 병렬 agent가 만든 commit-ready 결과를 `prerelease
 pub(super) struct ParallelModeDistributorService {
     github_automation: Arc<dyn GithubAutomationPort>,
     planning_authority: Arc<dyn PlanningAuthorityPort>,
+    parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
 }
 
 /*
@@ -85,10 +87,12 @@ impl ParallelModeDistributorService {
     pub(super) fn with_planning_authority(
         github_automation: Arc<dyn GithubAutomationPort>,
         planning_authority: Arc<dyn PlanningAuthorityPort>,
+        parallel_runtime: Arc<dyn ParallelModeRuntimePort>,
     ) -> Self {
         Self {
             github_automation,
             planning_authority,
+            parallel_runtime,
         }
     }
 
@@ -223,12 +227,14 @@ impl ParallelModeDistributorService {
         */
         write_distributor_queue_record(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &record,
         )?;
         let _ = record_merge_queued_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -246,7 +252,11 @@ impl ParallelModeDistributorService {
     head라면 planning authority claim을 획득한 프로세스만 delivery를 진행한다.
     */
     pub(super) fn process_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
-        let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
+        let _ = reconcile_pool_board(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        );
         let context = self.recover_runtime_state(workspace_dir)?;
         let mut records = context.distributor_queue_records.clone();
         let Some(head_index) = records
@@ -281,6 +291,7 @@ impl ParallelModeDistributorService {
 
         process_distributor_queue_record(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             head,
@@ -341,6 +352,7 @@ impl ParallelModeDistributorService {
                 .map_err(|(_, detail)| detail.to_string())?;
         recover_stale_ledger_refreshing_sessions(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             workspace_dir,
             &context,
         )?;
@@ -356,6 +368,7 @@ impl ParallelModeDistributorService {
             */
             recover_mismatched_slot_worktree(
                 self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
                 &context.repo_root,
                 &context.pool_root,
                 matching_lease.as_ref(),
@@ -363,6 +376,7 @@ impl ParallelModeDistributorService {
             )?;
             recover_retryable_blocked_queue_record(
                 self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
                 &context.repo_root,
                 &context.pool_root,
                 matching_lease.as_ref(),
@@ -386,6 +400,7 @@ impl ParallelModeDistributorService {
                 */
                 recover_integrated_queue_record(
                     self.planning_authority.as_ref(),
+                    self.parallel_runtime.as_ref(),
                     &context,
                     None,
                     &mut record,
@@ -407,6 +422,7 @@ impl ParallelModeDistributorService {
                 */
                 recover_integrated_queue_record(
                     self.planning_authority.as_ref(),
+                    self.parallel_runtime.as_ref(),
                     &context,
                     matching_lease.as_ref(),
                     &mut record,
@@ -431,6 +447,7 @@ impl ParallelModeDistributorService {
             if !Path::new(&record.worktree_path).exists() {
                 let _ = block_distributor_queue_record(
                     self.planning_authority.as_ref(),
+                    self.parallel_runtime.as_ref(),
                     &context.repo_root,
                     &context.pool_root,
                     matching_lease.as_ref(),
@@ -455,6 +472,7 @@ impl ParallelModeDistributorService {
                 if !pull_request.state.eq_ignore_ascii_case("open") {
                     let _ = block_distributor_queue_record(
                         self.planning_authority.as_ref(),
+                        self.parallel_runtime.as_ref(),
                         &context.repo_root,
                         &context.pool_root,
                         matching_lease.as_ref(),
@@ -470,6 +488,7 @@ impl ParallelModeDistributorService {
                 if pull_request.is_draft {
                     let _ = block_distributor_queue_record(
                         self.planning_authority.as_ref(),
+                        self.parallel_runtime.as_ref(),
                         &context.repo_root,
                         &context.pool_root,
                         matching_lease.as_ref(),
@@ -483,6 +502,7 @@ impl ParallelModeDistributorService {
                 }
                 write_distributor_queue_record(
                     self.planning_authority.as_ref(),
+                    self.parallel_runtime.as_ref(),
                     &context.repo_root,
                     &context.pool_root,
                     &record,
@@ -497,6 +517,7 @@ impl ParallelModeDistributorService {
 
 fn recover_stale_ledger_refreshing_sessions(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     context: &PoolRuntimeContext,
 ) -> Result<(), String> {
@@ -532,6 +553,7 @@ fn recover_stale_ledger_refreshing_sessions(
             StaleOfficialRefreshRecoveryOutcome::NoPendingOrder => {
                 record_official_completion_recovery_needed_session_detail(
                     planning_authority,
+                    runtime,
                     &context.repo_root,
                     &context.pool_root,
                     lease,
@@ -547,6 +569,7 @@ fn recover_stale_ledger_refreshing_sessions(
                 recovered_order_consumed = true;
                 record_official_completion_recovery_needed_session_detail(
                     planning_authority,
+                    runtime,
                     &context.repo_root,
                     &context.pool_root,
                     lease,
@@ -604,6 +627,7 @@ queued로 복구한다. 사용자의 변경이 있는 슬롯을 자동 checkout�
 */
 fn recover_mismatched_slot_worktree(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
@@ -654,7 +678,7 @@ fn recover_mismatched_slot_worktree(
     record.integration_note =
         "recovered clean slot worktree checkout and queued distributor retry".to_string();
     record.updated_at = current_timestamp();
-    write_distributor_queue_record(planning_authority, repo_root, pool_root, record)?;
+    write_distributor_queue_record(planning_authority, runtime, repo_root, pool_root, record)?;
     Ok(())
 }
 
@@ -666,6 +690,7 @@ fn recover_mismatched_slot_worktree(
 */
 fn recover_retryable_blocked_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
@@ -700,7 +725,7 @@ fn recover_retryable_blocked_queue_record(
     record.recovery_note = Some("recovered retryable distributor block before retry".to_string());
     record.integration_note = "recovered retryable distributor block and queued retry".to_string();
     record.updated_at = current_timestamp();
-    write_distributor_queue_record(planning_authority, repo_root, pool_root, record)?;
+    write_distributor_queue_record(planning_authority, runtime, repo_root, pool_root, record)?;
     Ok(())
 }
 
@@ -802,6 +827,7 @@ lease를 CleanupPending으로 옮겨 슬롯 반환 경로를 태우고, lease가
 */
 fn recover_integrated_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     context: &PoolRuntimeContext,
     matching_lease: Option<&ParallelModeSlotLeaseSnapshot>,
     record: &mut ParallelModeDistributorQueueRecord,
@@ -812,12 +838,14 @@ fn recover_integrated_queue_record(
             cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
             write_slot_lease(
                 planning_authority,
+                runtime,
                 &context.repo_root,
                 &context.pool_root,
                 &cleanup_pending_lease,
             )?;
             let _ = record_cleanup_pending_session_detail(
                 planning_authority,
+                runtime,
                 &context.repo_root,
                 &context.pool_root,
                 &cleanup_pending_lease,
@@ -831,6 +859,7 @@ fn recover_integrated_queue_record(
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
             planning_authority,
+            runtime,
             &context.repo_root,
             &context.pool_root,
             record,
@@ -845,6 +874,7 @@ fn recover_integrated_queue_record(
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
+        runtime,
         &context.repo_root,
         &context.pool_root,
         record,

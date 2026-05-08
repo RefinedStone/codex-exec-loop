@@ -175,6 +175,7 @@ impl ParallelModeService {
             distributor_service: ParallelModeDistributorService::with_planning_authority(
                 github_automation,
                 planning_authority.clone(),
+                parallel_runtime.clone(),
             ),
             supervisor_service: ParallelModeSupervisorService::new(),
             planning_authority,
@@ -386,6 +387,7 @@ impl ParallelModeService {
     ) -> ParallelModeSupervisorSnapshot {
         self.supervisor_service.reconcile_snapshot(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             workspace_dir,
             mode_enabled,
             readiness_snapshot,
@@ -410,7 +412,11 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<ParallelModePoolResetReport, String> {
-        reset_pool_for_parallel_enable(self.planning_authority.as_ref(), workspace_dir)
+        reset_pool_for_parallel_enable(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        )
     }
 
     /*
@@ -426,7 +432,11 @@ impl ParallelModeService {
         planning_snapshot: &PlanningRuntimeSnapshot,
         requested_count: usize,
     ) -> Result<ParallelModeDispatchPlan, String> {
-        let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
+        let _ = reconcile_pool_board(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        );
         let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
             .map_err(|(_, detail)| detail.to_string())?;
         let idle_slot_count = build_pool_slots(&context)

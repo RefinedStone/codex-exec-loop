@@ -27,6 +27,7 @@ notice만 TUI에 표시된다.
 */
 pub(super) fn process_distributor_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     record: &mut ParallelModeDistributorQueueRecord,
@@ -36,6 +37,7 @@ pub(super) fn process_distributor_queue_record(
         // source worktree가 없으면 lease를 신뢰할 수 없어 delivery를 시작하지 않고 durable block으로 남긴다.
         return Ok(vec![block_distributor_queue_record(
             planning_authority,
+            runtime,
             workspace_dir,
             pool_root,
             None,
@@ -50,6 +52,7 @@ pub(super) fn process_distributor_queue_record(
         Ok(None) => {
             return Ok(vec![block_distributor_queue_record(
                 planning_authority,
+                runtime,
                 workspace_dir,
                 pool_root,
                 None,
@@ -60,6 +63,7 @@ pub(super) fn process_distributor_queue_record(
         Err(error) => {
             return Ok(vec![block_distributor_queue_record(
                 planning_authority,
+                runtime,
                 workspace_dir,
                 pool_root,
                 None,
@@ -81,6 +85,7 @@ pub(super) fn process_distributor_queue_record(
     ) {
         notices.push(distributor_push_source_branch(
             planning_authority,
+            runtime,
             &resolution,
             record,
             github_automation,
@@ -92,6 +97,7 @@ pub(super) fn process_distributor_queue_record(
 
         notices.push(distributor_ensure_pull_request(
             planning_authority,
+            runtime,
             &resolution,
             record,
             github_automation,
@@ -102,6 +108,7 @@ pub(super) fn process_distributor_queue_record(
 
         notices.push(distributor_check_pull_request_merge_readiness(
             planning_authority,
+            runtime,
             &resolution,
             record,
             github_automation,
@@ -112,6 +119,7 @@ pub(super) fn process_distributor_queue_record(
 
         notices.push(distributor_integrate_branch(
             planning_authority,
+            runtime,
             &resolution,
             record,
             github_automation,
@@ -123,7 +131,7 @@ pub(super) fn process_distributor_queue_record(
 
     // 이미 Cleaning인 record도 이 경로로 들어와 slot cleanup만 재시도할 수 있다.
     let cleanup_notice =
-        distributor_cleanup_integrated_slot(planning_authority, &resolution, record)?;
+        distributor_cleanup_integrated_slot(planning_authority, runtime, &resolution, record)?;
     notices.push(cleanup_notice);
     Ok(notices)
 }
@@ -140,6 +148,7 @@ branch를 push하고, source PR이 있으면 닫은 뒤 Cleaning 상태로 넘�
 */
 fn distributor_integrate_branch(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
@@ -156,6 +165,7 @@ fn distributor_integrate_branch(
     if slot_status.has_pending_operation {
         return block_distributor_queue_record(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -171,6 +181,7 @@ fn distributor_integrate_branch(
         // branch drift는 queue record가 가리키는 agent output과 실제 worktree가 달라졌다는 뜻이다.
         return block_distributor_queue_record(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -192,6 +203,7 @@ fn distributor_integrate_branch(
     if current_head != source_commit_sha {
         return block_distributor_queue_record(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -216,6 +228,7 @@ fn distributor_integrate_branch(
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -223,6 +236,7 @@ fn distributor_integrate_branch(
     // session detail은 queue record와 별개로 supervisor detail timeline을 갱신하므로 실패를 무시한다.
     let _ = record_integrating_session_detail(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -239,6 +253,7 @@ fn distributor_integrate_branch(
     ) {
         if let Err(notice) = ensure_distributor_integration_worktree_ready(
             planning_authority,
+            runtime,
             resolution,
             record,
             &integration_repo_root,
@@ -260,6 +275,7 @@ fn distributor_integrate_branch(
             record.updated_at = current_timestamp();
             write_distributor_queue_record(
                 planning_authority,
+                runtime,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 record,
@@ -292,6 +308,7 @@ fn distributor_integrate_branch(
             record.integration_state = "blocked".to_string();
             return block_distributor_queue_record(
                 planning_authority,
+                runtime,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -314,6 +331,7 @@ fn distributor_integrate_branch(
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             record,
@@ -337,6 +355,7 @@ fn distributor_integrate_branch(
             record.updated_at = current_timestamp();
             write_distributor_queue_record(
                 planning_authority,
+                runtime,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 record,
@@ -345,6 +364,7 @@ fn distributor_integrate_branch(
             // local integration이 성공해도 remote push 실패는 operator가 다시 밀어야 하는 delivery block이다.
             return block_distributor_queue_record(
                 planning_authority,
+                runtime,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -362,6 +382,7 @@ fn distributor_integrate_branch(
             Err(error) => {
                 return block_distributor_queue_record(
                     planning_authority,
+                    runtime,
                     &resolution.context.repo_root,
                     &resolution.context.pool_root,
                     Some(&resolution.lease),
@@ -378,6 +399,7 @@ fn distributor_integrate_branch(
         {
             return block_distributor_queue_record(
                 planning_authority,
+                runtime,
                 &resolution.context.repo_root,
                 &resolution.context.pool_root,
                 Some(&resolution.lease),
@@ -394,6 +416,7 @@ fn distributor_integrate_branch(
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,
@@ -418,6 +441,7 @@ operator가 worktree/branch 상태를 복구한 뒤 같은 queue item을 다시 
 */
 fn distributor_cleanup_integrated_slot(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
 ) -> Result<String, String> {
@@ -427,12 +451,14 @@ fn distributor_cleanup_integrated_slot(
         cleanup_pending_lease.state = ParallelModeSlotLeaseState::CleanupPending;
         write_slot_lease(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &cleanup_pending_lease,
         )?;
         let _ = record_cleanup_pending_session_detail(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &cleanup_pending_lease,
@@ -441,6 +467,7 @@ fn distributor_cleanup_integrated_slot(
 
     if !cleanup_slot(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease.slot_id,
@@ -450,6 +477,7 @@ fn distributor_cleanup_integrated_slot(
         // cleanup 실패는 integration 결과를 되돌리지 않고, slot 반환 문제로 block 처리한다.
         return block_distributor_queue_record(
             planning_authority,
+            runtime,
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             Some(&resolution.lease),
@@ -464,6 +492,7 @@ fn distributor_cleanup_integrated_slot(
     // cleaned detail은 queue Done 상태와 별도로 session history에 slot 반환 완료를 남긴다.
     let _ = record_cleaned_session_detail(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         &resolution.lease,
@@ -475,6 +504,7 @@ fn distributor_cleanup_integrated_slot(
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
+        runtime,
         &resolution.context.repo_root,
         &resolution.context.pool_root,
         record,

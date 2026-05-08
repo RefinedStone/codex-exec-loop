@@ -3,16 +3,15 @@
  * planning authority runtime store를 source of truth로 갱신하고, pool root의 `.agent-sessions`
  * JSON mirror를 recovery/debug용 durable trace로 유지한다.
  */
-use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
     ParallelModeSlotLeaseSnapshot,
 };
 
-use super::super::ensure_directory_exists;
 use super::lease_session_key;
 
 pub(super) fn push_session_history(
@@ -56,6 +55,7 @@ closure가 `Option<ParallelModeAgentSessionDetailSnapshot>`을 받는 이유는 
 */
 pub(super) fn update_agent_session_detail_record<F>(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -73,9 +73,15 @@ where
     queue record와 session detail을 같은 logical session으로 다시 연결할 수 있다.
     */
     let session_key = lease_session_key(lease);
-    let current = read_agent_session_detail_record(pool_root, &session_key);
+    let current = read_agent_session_detail_record(runtime, pool_root, &session_key);
     let detail = mutate(current);
-    write_agent_session_detail_record(planning_authority, workspace_dir, pool_root, &detail)?;
+    write_agent_session_detail_record(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        &detail,
+    )?;
     Ok(detail)
 }
 
@@ -87,11 +93,12 @@ root 아래의 JSON mirror를 통해 runtime session history를 빠르게 복원
 한다.
 */
 pub(crate) fn read_agent_session_detail_record(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
     session_key: &str,
 ) -> Option<ParallelModeAgentSessionDetailSnapshot> {
     let path = agent_session_detail_record_path(pool_root, session_key);
-    let content = fs::read_to_string(path).ok()?;
+    let content = runtime.read_to_string(&path).ok()?;
     // mirror parse 실패는 authority-backed state를 계속 쓰게 하기 위해 absence로 접는다.
     serde_json::from_str(&content).ok()
 }
@@ -109,6 +116,7 @@ supervisor rendering이 authority를 우선으로 보고 mirror는 호환성과 
 */
 pub(super) fn write_agent_session_detail_record(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     detail: &ParallelModeAgentSessionDetailSnapshot,
@@ -134,7 +142,8 @@ pub(super) fn write_agent_session_detail_record(
     줄 수 있다.
     */
     let history_dir = agent_session_history_dir(pool_root);
-    ensure_directory_exists(&history_dir)
+    runtime
+        .ensure_directory_exists(&history_dir)
         .map_err(|error| format!("failed to create agent session history directory: {error}"))?;
 
     let path = agent_session_detail_record_path(pool_root, &detail.session_key);
@@ -147,13 +156,13 @@ pub(super) fn write_agent_session_detail_record(
     session detail은 recovery와 UI가 바로 읽는 파일이므로, partially-written JSON을 피하는 것이
     중요하다.
     */
-    fs::write(&temp_path, body).map_err(|error| {
+    runtime.write_string(&temp_path, &body).map_err(|error| {
         format!(
             "failed to write temporary agent session detail `{}`: {error}",
             detail.session_key
         )
     })?;
-    fs::rename(&temp_path, &path).map_err(|error| {
+    runtime.rename(&temp_path, &path).map_err(|error| {
         format!(
             "failed to persist agent session detail `{}`: {error}",
             detail.session_key

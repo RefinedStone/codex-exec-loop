@@ -5,6 +5,7 @@ use super::{
     format_elapsed_label_from_timestamp, inspect_pool_board_and_context, lease_session_key,
     pool_operator_recovery_notice, reconcile_pool_board_and_context,
 };
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
@@ -88,6 +89,7 @@ impl ParallelModeSupervisorService {
     pub(super) fn reconcile_snapshot(
         &self,
         planning_authority: &dyn PlanningAuthorityPort,
+        runtime: &dyn ParallelModeRuntimePort,
         workspace_dir: &str,
         mode_enabled: bool,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
@@ -99,17 +101,17 @@ impl ParallelModeSupervisorService {
             .unwrap_or_else(|| workspace_dir.to_string());
         let (pool, roster, detail) = match readiness_snapshot {
             Some(snapshot) if snapshot.allows_parallel_mode() => {
-                let runtime = if mode_enabled {
+                let pool_runtime = if mode_enabled {
                     /*
                     Only the enabled path may reconcile. A user can inspect the
                     board before turning parallel mode on, but slot provisioning
                     and cleanup should wait until the mode flag is actually live.
                     */
-                    reconcile_pool_board_and_context(planning_authority, workspace_dir)
+                    reconcile_pool_board_and_context(planning_authority, runtime, workspace_dir)
                 } else {
                     inspect_pool_board_and_context(planning_authority, workspace_dir)
                 };
-                build_supervisor_views(runtime, mode_enabled)
+                build_supervisor_views(pool_runtime, mode_enabled)
             }
             _ => (
                 build_pool_board(planning_authority, workspace_dir, readiness_snapshot),

@@ -749,9 +749,9 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - `STORE-00B`: SQLite runtime projection regression matrix를 보강한다. dispatch command,
   runtime event feed, claim/recovery, task cleanup projection을 같은 DB read boundary로 검증한다. 완료.
 - `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime
-  boundary로 이동한다. authority-first write order와 mirror-loss recovery 테스트를 유지한다. ready.
+  boundary로 이동한다. authority-first write order와 mirror-loss recovery 테스트를 유지한다. 완료.
 - `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application
-  control-plane runtime state로 이동한다. `STORE-00B/C` 이후 진행한다. blocked.
+  control-plane runtime state로 이동한다. `STORE-00B/C` 이후 진행한다. ready.
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact,
   repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. 완료.
 
@@ -766,6 +766,16 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
   grouping, official refresh claim ordering regression을 추가했다.
 - `cargo test adapter::outbound::db::sqlite_planning_authority_adapter`로 DB adapter projection
   contract를 검증했다.
+
+`STORE-00C` 완료 근거:
+
+- `.leases`, `.agent-sessions`, `.distributor-queue` mirror read/write/remove 경로가
+  application service helper의 직접 `std::fs` 호출 대신 `ParallelModeRuntimePort` filesystem
+  primitive를 사용한다.
+- authority store upsert/delete가 mirror write/remove보다 먼저 실행되는 순서는 유지했다.
+- `acquire_slot_lease_rolls_back_authority_when_mirror_write_fails`,
+  `build_supervisor_snapshot_reads_store_backed_runtime_projections_after_mirror_loss`,
+  distributor recovery tests로 mirror failure/loss contract를 검증한다.
 
 `STORE-00E` 완료 근거:
 
@@ -821,18 +831,17 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 현재 바로 시작 가능한 조합:
 
 - `INBOUND-00`
-- `STORE-00C`
+- `STORE-00D`
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- `INBOUND-00`과 `STORE-00C`
+- `INBOUND-00`과 `STORE-00D`
 
 동시에 진행하면 안 되는 조합:
 
 - `PLAN-01`과 `INBOUND-00`
 - `PAR-04`와 `TUI-01`
-- `STORE-00C`와 parallel pool/distributor 구현 slice
-- `STORE-00D`와 `PAR-03`/`PAR-04`/`TUI-01` 계열 runtime migration
+- `STORE-00D`와 parallel control-plane/TUI runtime migration slice
 
 ## Worker 완료 보고 형식
 

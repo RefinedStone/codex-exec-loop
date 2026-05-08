@@ -133,6 +133,7 @@ impl ParallelModeService {
         */
         record_reported_complete_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -206,6 +207,7 @@ impl ParallelModeService {
         */
         record_ledger_refreshing_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -253,6 +255,7 @@ impl ParallelModeService {
         */
         record_commit_ready_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -331,6 +334,7 @@ impl ParallelModeService {
         */
         record_official_completion_failed_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -431,6 +435,7 @@ impl ParallelModeService {
         // caller가 slot을 재사용하지 않도록 오류로 승격한다.
         if !cleanup_slot(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease.slot_id,
@@ -446,6 +451,7 @@ impl ParallelModeService {
         // 이 기록은 관찰용이므로 실패해도 이미 완료된 slot reset을 되돌리지 않는다.
         let _ = record_cleaned_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,

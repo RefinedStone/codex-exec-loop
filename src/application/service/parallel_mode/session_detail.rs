@@ -1,4 +1,5 @@
 use super::current_timestamp;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchBlockReason,
@@ -50,6 +51,7 @@ pub(super) fn build_assigned_session_detail(
 }
 pub(super) fn record_assigned_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -57,7 +59,13 @@ pub(super) fn record_assigned_session_detail(
     // 최초 lease record와 session detail record를 같은 시점에 맞춘다. 이후 상태 전이는
     // 모두 이 record를 update하면서 history만 추가하므로, missing detail 복구의 기준점이다.
     let detail = build_assigned_session_detail(lease);
-    write_agent_session_detail_record(planning_authority, workspace_dir, pool_root, &detail)?;
+    write_agent_session_detail_record(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        &detail,
+    )?;
     Ok(detail)
 }
 
@@ -69,6 +77,7 @@ history에 thread id를 남긴다.
 */
 pub(super) fn record_thread_prepared_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -76,6 +85,7 @@ pub(super) fn record_thread_prepared_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -95,6 +105,7 @@ pub(super) fn record_thread_prepared_session_detail(
 }
 pub(super) fn record_running_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -103,6 +114,7 @@ pub(super) fn record_running_session_detail(
     // lease에 running_started_at이 있으면 그 시간을 우선해 roster duration과 history 기준을 맞춘다.
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -141,6 +153,7 @@ pub(super) struct ReportedCompleteSessionDetailUpdate<'a> {
 }
 pub(super) fn record_reported_complete_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -148,6 +161,7 @@ pub(super) fn record_reported_complete_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -177,6 +191,7 @@ pub(super) fn record_reported_complete_session_detail(
 }
 pub(super) fn record_ledger_refreshing_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -185,6 +200,7 @@ pub(super) fn record_ledger_refreshing_session_detail(
     // lease는 아직 Running이므로 distributor가 이 상태만 보고 queue에 넣으면 안 된다.
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -218,6 +234,7 @@ authority refresh outcome을 저장하고, distributor_outcome에는 아직 통�
 */
 pub(super) fn record_commit_ready_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -225,6 +242,7 @@ pub(super) fn record_commit_ready_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -251,6 +269,7 @@ pub(super) fn record_commit_ready_session_detail(
 }
 pub(super) fn record_merge_queued_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -259,6 +278,7 @@ pub(super) fn record_merge_queued_session_detail(
     // 이 기록이 있어 supervisor는 official refresh와 queue enqueue 사이 실패를 구분한다.
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -285,6 +305,7 @@ pub(super) fn record_merge_queued_session_detail(
 }
 pub(super) fn record_pushing_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -294,16 +315,16 @@ pub(super) fn record_pushing_session_detail(
     // caller는 summary만 넘기고, 공통 history/label 갱신은 아래 helper가 맡는다.
     record_distributor_progress_session_detail(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
-        "pushing",
-        summary,
-        false,
+        DistributorProgressSessionDetailUpdate::new("pushing", summary, false),
     )
 }
 pub(super) fn record_pr_pending_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -311,16 +332,16 @@ pub(super) fn record_pr_pending_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     record_distributor_progress_session_detail(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
-        "pr_pending",
-        summary,
-        false,
+        DistributorProgressSessionDetailUpdate::new("pr_pending", summary, false),
     )
 }
 pub(super) fn record_merge_pending_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -328,16 +349,16 @@ pub(super) fn record_merge_pending_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     record_distributor_progress_session_detail(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
-        "merge_pending",
-        summary,
-        false,
+        DistributorProgressSessionDetailUpdate::new("merge_pending", summary, false),
     )
 }
 pub(super) fn record_integrating_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -345,12 +366,11 @@ pub(super) fn record_integrating_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     record_distributor_progress_session_detail(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
-        "integrating",
-        summary,
-        true,
+        DistributorProgressSessionDetailUpdate::new("integrating", summary, true),
     )
 }
 
@@ -364,37 +384,57 @@ integrating 단계는 같은 상태에서 summary가 자주 바뀔 수 있어 �
 있다. 이렇게 하지 않으면 cherry-pick/rebase 진행 중 같은 상태의 noisy history가 과도하게
 쌓인다.
 */
+struct DistributorProgressSessionDetailUpdate<'a> {
+    state_label: &'static str,
+    summary: &'a str,
+    replace_latest_same_state_history: bool,
+}
+
+impl<'a> DistributorProgressSessionDetailUpdate<'a> {
+    fn new(
+        state_label: &'static str,
+        summary: &'a str,
+        replace_latest_same_state_history: bool,
+    ) -> Self {
+        Self {
+            state_label,
+            summary,
+            replace_latest_same_state_history,
+        }
+    }
+}
+
 fn record_distributor_progress_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
-    state_label: &'static str,
-    summary: &str,
-    replace_latest_same_state_history: bool,
+    update: DistributorProgressSessionDetailUpdate<'_>,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
         |current| {
             let timestamp = current_timestamp();
-            let summary = summary.trim().to_string();
+            let summary = update.summary.trim().to_string();
             let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
-            detail.state_label = state_label.to_string();
+            detail.state_label = update.state_label.to_string();
             detail.completion_state_label = "merge_queued".to_string();
             detail.latest_summary = summary.clone();
             detail.distributor_outcome = Some(summary.clone());
             detail.updated_at = timestamp.clone();
-            if replace_latest_same_state_history
+            if update.replace_latest_same_state_history
                 && let Some(last_entry) = detail.history.last_mut()
-                && last_entry.state_label == state_label
+                && last_entry.state_label == update.state_label
             {
                 last_entry.timestamp = timestamp;
                 last_entry.summary = summary;
             } else {
-                push_session_history(&mut detail, state_label, timestamp, summary);
+                push_session_history(&mut detail, update.state_label, timestamp, summary);
             }
             detail
         },
@@ -402,6 +442,7 @@ fn record_distributor_progress_session_detail(
 }
 pub(super) fn record_distributor_failed_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -411,6 +452,7 @@ pub(super) fn record_distributor_failed_session_detail(
     // push, PR, integration 중 멈춘 상태라 distributor_outcome에 실패 사유를 둔다.
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -434,6 +476,7 @@ pub(super) fn record_distributor_failed_session_detail(
 }
 pub(super) fn record_official_completion_failed_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -443,6 +486,7 @@ pub(super) fn record_official_completion_failed_session_detail(
     // authority_refresh_outcome을 실패 원인으로 덮어 이후 자동 통합 대상에서 빠진 이유를 남긴다.
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -471,6 +515,7 @@ pub(super) fn record_official_completion_failed_session_detail(
 
 pub(super) fn record_official_completion_recovery_needed_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -480,6 +525,7 @@ pub(super) fn record_official_completion_recovery_needed_session_detail(
     // 자동 로딩은 멈추되 실제 작업 실패로 오인하지 않도록 별도 복구 상태로 남긴다.
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -513,12 +559,14 @@ history에 두 단계로 남긴다. 먼저 merged를 기록해 completion feed�
 */
 pub(super) fn record_cleanup_pending_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -557,12 +605,14 @@ failure cleanup이 slot을 baseline으로 돌려놓으면 이 상태를 남겨 s
 */
 pub(super) fn record_cleaned_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -594,12 +644,14 @@ startup failure 기록은 turn이 running 상태에 들어가기 전에 lease가
 */
 pub(super) fn record_failed_start_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     let detail = update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,
@@ -649,6 +701,7 @@ task가 갱신될 때까지 dispatch block도 함께 남긴다.
 */
 pub(super) fn record_stale_active_lease_released_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
@@ -656,6 +709,7 @@ pub(super) fn record_stale_active_lease_released_session_detail(
 ) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
     let detail = update_agent_session_detail_record(
         planning_authority,
+        runtime,
         workspace_dir,
         pool_root,
         lease,

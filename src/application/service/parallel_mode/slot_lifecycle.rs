@@ -44,7 +44,11 @@ impl ParallelModeService {
         // lock을 잡은 뒤 reconcile을 먼저 돌려 stale lease/slot 상태를 최신 board로 맞춘다.
         // 실패해도 lease 시도 자체를 막지는 않는다. 다음 context load와 idle slot 선택이
         // 현재 파일 상태를 다시 읽어 최종 판단을 하기 때문이다.
-        let _ = reconcile_pool_board(self.planning_authority.as_ref(), workspace_dir);
+        let _ = reconcile_pool_board(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        );
         let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
             .map_err(|(_, detail)| detail.to_string())?;
 
@@ -123,12 +127,14 @@ impl ParallelModeService {
         );
         if let Err(error) = write_slot_lease(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             &lease,
         ) {
             let _ = remove_slot_lease(
                 self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
                 &context.repo_root,
                 &context.pool_root,
                 &lease.slot_id,
@@ -142,6 +148,7 @@ impl ParallelModeService {
         // truth는 lease 파일이고, detail은 roster/detail UI를 위한 관측 보조 자료다.
         let _ = record_assigned_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             &lease,
@@ -206,6 +213,7 @@ impl ParallelModeService {
         }
         write_slot_lease(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             &lease,
@@ -215,6 +223,7 @@ impl ParallelModeService {
         // 끝났고, detail 쓰기 실패가 실행 중인 slot을 되돌리지는 않는다.
         let _ = record_running_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             &lease,
@@ -243,6 +252,7 @@ impl ParallelModeService {
 
         record_thread_prepared_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease,
@@ -319,6 +329,7 @@ impl ParallelModeService {
         lease.state = ParallelModeSlotLeaseState::CleanupPending;
         write_slot_lease(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             &lease,
@@ -328,6 +339,7 @@ impl ParallelModeService {
         // 성공을 기준으로 cleanup worker가 다음 단계를 진행할 수 있다.
         let _ = record_cleanup_pending_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             &lease,
@@ -419,6 +431,7 @@ impl ParallelModeService {
         // 명시적으로 알려 supervisor가 slot을 idle로 오판하지 않게 한다.
         if !cleanup_slot(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.repo_root,
             &resolution.context.pool_root,
             &resolution.lease.slot_id,
@@ -440,6 +453,7 @@ impl ParallelModeService {
         // "왜 사라졌는지"가 남고, slot 자체는 즉시 재사용 가능해진다.
         record_failed_start_session_detail(
             self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
             &resolution.context.canonical_repo_root.display().to_string(),
             &resolution.context.pool_root,
             &resolution.lease,

@@ -201,6 +201,7 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
         .expect("untracked slot residue should be written");
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -233,6 +234,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     .expect("origin prerelease should resolve");
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
@@ -253,6 +255,7 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
         .expect("idle slot should become dirty");
     let refreshed_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -339,6 +342,7 @@ fn parallel_entry_from_off_forces_dirty_no_lease_slot_back_to_baseline() {
     let service = test_parallel_mode_service();
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
@@ -439,13 +443,18 @@ fn reconcile_releases_clean_baseline_split_brain_running_lease() {
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     let runtime_projection =
         SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
             .expect("runtime projections should load");
-    let detail = read_agent_session_detail_record(&repo.pool_root(), &lease.session_key())
-        .expect("stale session detail should be recorded");
+    let detail = read_agent_session_detail_record(
+        &test_parallel_runtime(),
+        &repo.pool_root(),
+        &lease.session_key(),
+    )
+    .expect("stale session detail should be recorded");
 
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
     assert_eq!(pool.blocked_slots, 0);
@@ -491,6 +500,7 @@ fn reconcile_preserves_dirty_baseline_split_brain_running_lease() {
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     let runtime_projection =
@@ -547,6 +557,7 @@ fn parallel_entry_from_off_resets_stale_startup_slots_even_when_another_slot_is_
         .expect("stale lease should be persisted");
     record_assigned_session_detail(
         &adapter,
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         &repo.pool_root(),
         &stale_lease,
@@ -605,6 +616,7 @@ fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
         .expect("stale lease should be persisted");
     record_assigned_session_detail(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         &repo.pool_root(),
         &lease,
@@ -702,6 +714,7 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
     let repo = TempGitRepo::new("provision-slots");
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -726,6 +739,7 @@ fn reconcile_recreates_missing_slot_over_filesystem_residue() {
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -754,6 +768,7 @@ fn reconcile_releases_stale_leased_startup_slot() {
         .expect("stale lease should be persisted");
     record_assigned_session_detail(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
         &repo.pool_root(),
         &lease,
@@ -762,6 +777,7 @@ fn reconcile_releases_stale_leased_startup_slot() {
 
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -772,9 +788,13 @@ fn reconcile_releases_stale_leased_startup_slot() {
     assert!(!repo.branch_exists(&lease.branch_name));
     assert_eq!(current_branch(&PathBuf::from(&lease.worktree_path)), "HEAD");
     assert_eq!(
-        read_agent_session_detail_record(&repo.pool_root(), &lease.session_key())
-            .expect("failed startup detail should be recorded")
-            .state_label,
+        read_agent_session_detail_record(
+            &test_parallel_runtime(),
+            &repo.pool_root(),
+            &lease.session_key()
+        )
+        .expect("failed startup detail should be recorded")
+        .state_label,
         "failed"
     );
 }
@@ -808,6 +828,7 @@ fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
     assert!(!repo.branch_exists(POOL_BASELINE_BRANCH));
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -845,6 +866,7 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
     );
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -876,6 +898,7 @@ fn reconcile_seeds_missing_standard_branch_from_current_head_and_pushes_origin()
     let expected_head = repo.head_sha();
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     let remote_head = run_command(
@@ -930,6 +953,7 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     let repo = TempGitRepo::new("reset-detached-slots");
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
@@ -937,6 +961,7 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
     let refreshed_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
 
@@ -984,6 +1009,7 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
     );
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         slot_path.to_str().expect("slot path should be utf-8"),
     );
 
@@ -1031,6 +1057,7 @@ fn reconcile_cleans_merged_agent_slot_back_to_idle() {
         .expect("untracked file should be written");
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     let slot = &pool.slots[0];

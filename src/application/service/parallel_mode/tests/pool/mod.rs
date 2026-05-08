@@ -288,6 +288,7 @@ fn concurrent_slot_lease_requests_are_serialized_across_idle_slots() {
     let service = Arc::new(test_parallel_mode_service());
     let initial_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolSlotCleanupDecision,
@@ -33,6 +34,7 @@ count를 올린다.
 */
 pub(super) fn cleanup_reusable_slots(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
@@ -85,6 +87,7 @@ pub(super) fn cleanup_reusable_slots(
         }
         if cleanup_slot(
             planning_authority,
+            runtime,
             repo_root,
             pool_root,
             &slot_id,
@@ -100,6 +103,7 @@ pub(super) fn cleanup_reusable_slots(
 
 pub(super) fn cleanup_stale_leased_startup_slots(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
@@ -130,14 +134,20 @@ pub(super) fn cleanup_stale_leased_startup_slots(
         }
         if cleanup_slot(
             planning_authority,
+            runtime,
             repo_root,
             pool_root,
             &lease.slot_id,
             &slot_path,
             &lease.branch_name,
         ) {
-            let _ =
-                record_failed_start_session_detail(planning_authority, repo_root, pool_root, lease);
+            let _ = record_failed_start_session_detail(
+                planning_authority,
+                runtime,
+                repo_root,
+                pool_root,
+                lease,
+            );
             cleaned_slots += 1;
         }
     }
@@ -157,6 +167,7 @@ branch drift is intentionally left blocked for operator recovery.
 */
 pub(super) fn cleanup_clean_baseline_split_brain_leases(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     baseline_head: &str,
@@ -186,14 +197,27 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
         {
             continue;
         }
-        if !remove_slot_lease(planning_authority, repo_root, pool_root, &lease.slot_id) {
+        if !remove_slot_lease(
+            planning_authority,
+            runtime,
+            repo_root,
+            pool_root,
+            &lease.slot_id,
+        ) {
             continue;
         }
         if lease.state == ParallelModeSlotLeaseState::CleanupPending {
-            let _ = record_cleaned_session_detail(planning_authority, repo_root, pool_root, lease);
+            let _ = record_cleaned_session_detail(
+                planning_authority,
+                runtime,
+                repo_root,
+                pool_root,
+                lease,
+            );
         } else {
             let _ = record_stale_active_lease_released_session_detail(
                 planning_authority,
+                runtime,
                 repo_root,
                 pool_root,
                 lease,
@@ -296,6 +320,7 @@ supervisor가 계속 복구 대상으로 볼 수 있게 된다.
 */
 pub(in crate::application::service::parallel_mode) fn cleanup_slot(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
     pool_root: &Path,
     slot_id: &str,
@@ -321,7 +346,7 @@ pub(in crate::application::service::parallel_mode) fn cleanup_slot(
         let _failure_summary = delete_branch.failure_summary();
         return false;
     }
-    if !remove_slot_lease(planning_authority, repo_root, pool_root, slot_id) {
+    if !remove_slot_lease(planning_authority, runtime, repo_root, pool_root, slot_id) {
         return false;
     }
 

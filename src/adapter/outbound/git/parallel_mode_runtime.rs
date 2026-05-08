@@ -175,10 +175,19 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
     fn ensure_directory_exists(&self, path: &Path) -> std::io::Result<()> {
         /*
          * pool root나 session detail directory 생성은 idempotent해야 한다.
-         * 이미 있으면 성공으로 보고, 없을 때만 create_dir_all의 io error를 caller에게 보존한다.
+         * directory가 이미 있으면 성공으로 보고, 같은 path에 파일이 있으면 caller가 mirror
+         * namespace 충돌을 사용자-facing 오류로 바꿀 수 있도록 io error를 보존한다.
          */
-        if path.exists() {
-            return Ok(());
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => return Ok(()),
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "path exists and is not a directory",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
 
         std::fs::create_dir_all(path)

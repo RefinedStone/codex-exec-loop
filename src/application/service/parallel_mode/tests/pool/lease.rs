@@ -50,6 +50,7 @@ fn acquire_slot_lease_rolls_back_authority_when_mirror_write_fails() {
     let service = test_parallel_mode_service();
     reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     fs::write(repo.pool_root().join(".leases"), "not a directory\n")
@@ -669,6 +670,7 @@ fn reconcile_does_not_cleanup_pending_slot_with_new_unintegrated_commit() {
     );
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
     let slot = pool

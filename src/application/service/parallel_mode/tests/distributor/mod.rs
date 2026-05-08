@@ -254,7 +254,7 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
             "queue tick should return the integrated slot: {notices:?}"
         );
         assert_eq!(
-            load_distributor_queue_records(&repo.pool_root())
+            load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
                 .iter()
                 .filter(|record| record.queue_state == ParallelModeQueueItemState::Done)
                 .count(),
@@ -267,7 +267,7 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
     assert_eq!(drained_snapshot.roster.active_count(), 0);
     assert_eq!(drained_snapshot.distributor.head_summary, "idle");
     assert_eq!(drained_snapshot.distributor.queue_depth(), 0);
-    let records = load_distributor_queue_records(&repo.pool_root());
+    let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
     assert_eq!(records.len(), 3);
     assert!(
         records
@@ -426,10 +426,11 @@ fn process_distributor_queue_recovers_patch_equivalent_closed_head_and_merges_tw
         &["push", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
     );
 
-    let mut stale_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("stale queue record should exist");
+    let mut stale_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("stale queue record should exist");
     stale_record.queue_state = ParallelModeQueueItemState::Blocked;
     stale_record.integration_state = "blocked".to_string();
     stale_record.pull_request_number = Some(1383);
@@ -528,7 +529,7 @@ fn process_distributor_queue_recovers_patch_equivalent_closed_head_and_merges_tw
             "queue tick should return the integrated slot: {notices:?}"
         );
         assert_eq!(
-            load_distributor_queue_records(&repo.pool_root())
+            load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
                 .iter()
                 .filter(|record| record.queue_state == ParallelModeQueueItemState::Done)
                 .count(),
@@ -536,7 +537,7 @@ fn process_distributor_queue_recovers_patch_equivalent_closed_head_and_merges_tw
         );
     }
 
-    let records = load_distributor_queue_records(&repo.pool_root());
+    let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
     assert_eq!(records.len(), 3);
     assert!(
         records
@@ -836,7 +837,7 @@ fn process_distributor_queue_treats_remote_patch_equivalent_push_rejection_as_in
             .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
         "remote patch-equivalent push rejection should still converge through cleanup: {notices:?}"
     );
-    let queue_record = load_distributor_queue_records(&repo.pool_root())
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should persist");
