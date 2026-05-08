@@ -274,6 +274,90 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
 }
 
 #[test]
+fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selection() {
+    /*
+     * Supervisor refresh is an application projection update. It may replace the
+     * cached board, but it must not close the active overlay or reset MUD
+     * navigation selection, which are UI-only state.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    let build_snapshot = |pool_status: &str| {
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(
+                2,
+                "/tmp/pool",
+                pool_status,
+                vec![
+                    ParallelModePoolSlotSnapshot::new(
+                        "slot-1",
+                        ParallelModePoolSlotState::Idle,
+                        "prerelease",
+                        "slot-1",
+                        "idle",
+                    ),
+                    ParallelModePoolSlotSnapshot::new(
+                        "slot-2",
+                        ParallelModePoolSlotState::Running,
+                        "akra-agent/slot-2/mud",
+                        "slot-2",
+                        "agent-2",
+                    ),
+                ],
+            ),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![ParallelModeAgentRosterEntry::new(
+                    "agent-2",
+                    "MUD navigation",
+                    "slot-2",
+                    "akra-agent/slot-2/mud",
+                    "running",
+                    "01m00s",
+                    "working",
+                )],
+                "no active agents",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        )
+    };
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().parallel_mode_supervisor_snapshot = Some(build_snapshot("running"));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Down,
+        KeyModifiers::empty(),
+    )));
+
+    let refreshed_snapshot = build_snapshot("running / refreshed");
+    runtime
+        .app
+        .tx
+        .send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
+            workspace_directory,
+            supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
+        })
+        .expect("supervisor refresh should enqueue");
+    runtime.poll_background_messages();
+
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
+    assert_eq!(
+        runtime
+            .app()
+            .supersession_mud_ui_state
+            .selected_room_index(),
+        1
+    );
+    assert_eq!(
+        runtime.app().parallel_mode_supervisor_snapshot,
+        Some(refreshed_snapshot)
+    );
+}
+
+#[test]
 fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
     /*
      * Task intake before a successful :parallel entry is data-plane intake only.

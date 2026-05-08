@@ -55,8 +55,8 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P1 | `PLAN-01` | done | planning application facade 표준화 |
 | P1 | `PLAN-02` | done | planning domain decision/projection 정리 |
 | P2 | `DOC-TUI-00` | done | TUI/application boundary architecture 작성 |
-| P2 | `TUI-00` | ready | TUI shell state inventory와 regression |
-| P2 | `TUI-01` | blocked | conversation lifecycle와 automation lifecycle 분리 |
+| P2 | `TUI-00` | done | TUI shell state inventory와 regression |
+| P2 | `TUI-01` | ready | conversation lifecycle와 automation lifecycle 분리 |
 | P3 | `DOC-INBOUND-00` | ready | inbound surface unification architecture 작성 |
 | P3 | `INBOUND-00` | blocked | CLI/admin/Telegram command surface 통일 |
 | P4 | `DOC-STORE-00` | ready | store/runtime-state architecture 작성 |
@@ -463,7 +463,7 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 
 ### TUI-00. Shell State Inventory And Regression
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -479,6 +479,7 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 - `src/adapter/inbound/tui/app/shell_rendering*_tests.rs`
 - `new/docs/plan/tui-shell-state-inventory.md`
 - `new/docs/plan/tui-background-message-inventory.md`
+- `new/docs/plan/tui-shell-regression-anchors.md`
 
 산출물:
 
@@ -493,7 +494,7 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 - `TUI-00B`: `BackgroundMessage`별 target boundary inventory를 작성하고, background
   message가 reducer/application event로만 들어가는 최소 shell runtime regression을 추가한다. 완료.
 - `TUI-00C`: prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는
-  shell input/rendering regression을 추가한다.
+  shell input/rendering regression을 추가한다. 완료.
 
 금지:
 
@@ -504,9 +505,21 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 - shell runtime tests
 - shell rendering snapshot tests
 
+완료 근거:
+
+- [tui-shell-state-inventory.md](./tui-shell-state-inventory.md)가 `NativeTuiApp` field별
+  UI-only, Application Projection Cache, Runtime Bridge, Service Wiring ownership을
+  고정한다.
+- [tui-background-message-inventory.md](./tui-background-message-inventory.md)가
+  `BackgroundMessage`별 target boundary를 고정한다.
+- [tui-shell-regression-anchors.md](./tui-shell-regression-anchors.md)가 prompt lock,
+  overlay focus, selection/cursor, projection refresh regression anchor를 묶는다.
+- shell runtime tests에 supervisor projection refresh가 Supersession overlay focus와 MUD
+  selection을 보존하는 regression을 추가했다.
+
 ### TUI-01. Conversation And Automation Split
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 
