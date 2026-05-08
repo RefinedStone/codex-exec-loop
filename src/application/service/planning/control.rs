@@ -1,4 +1,4 @@
-use super::{PlanningAdminFacadeService, PlanningResetTarget};
+use super::PlanningResetTarget;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
     PlanningServices, PlanningWorkspaceResetResult,
@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 /*
  * PlanningControlService는 operator-facing entrypoint가 쓰는 compact command surface다.
- * PlanningControlFacadeService나 admin facade가 제공하는 planning facts를 TUI/CLI/Telegram control flow가
- * 바로 표시할 수 있는 stable text reply로 낮춘다. inbound adapter는 command enum과 text reply만 다루고,
- * queue/proposal 판단은 application projection 뒤에 둔다.
+ * PlanningControlFacadeService가 제공하는 planning facts를 TUI/CLI/Telegram control flow가 바로 표시할 수
+ * 있는 stable text reply로 낮춘다. inbound adapter는 command enum과 text reply만 다루고, queue/proposal
+ * 판단은 application projection 뒤에 둔다.
  */
 const CONTROL_HELP_TEXT: &str = "지원 명령어\n\
 /help\n\
@@ -24,7 +24,7 @@ pub enum PlanningControlCommand {
     Help,
     Status,
     Queue,
-    // reset은 target enum을 통해서만 들어온다. caller가 free-form 파괴 명령 문자열을 admin reset use case로 넘기지 못하게 한다.
+    // reset은 target enum을 통해서만 들어온다. caller가 free-form 파괴 명령 문자열을 reset use case로 넘기지 못하게 한다.
     Reset(PlanningResetTarget),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,8 +48,8 @@ pub struct PlanningControlQueueEntry {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningControlStatusSnapshot {
-    // snapshot data는 rendering을 위해 denormalize되어 있다. /status와 /queue를 format하는 동안 admin facade를
-    // 반복 호출하지 않고, 같은 관측 시점의 health/queue/proposal 상태를 함께 보여 주기 위해서다.
+    // snapshot data는 rendering을 위해 denormalize되어 있다. /status와 /queue를 format하는 동안 application
+    // facade를 반복 호출하지 않고, 같은 관측 시점의 health/queue/proposal 상태를 함께 보여 주기 위해서다.
     pub workspace_dir: String,
     pub planning_state: String,
     pub queue_summary: Option<String>,
@@ -65,7 +65,7 @@ pub struct PlanningControlStatusSnapshot {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningControlResetOutcome {
-    // reset output은 admin reset 결과를 반영하되 doctor state를 납작하게 합친다. command caller가 reset 효과와
+    // reset output은 reset 결과를 반영하되 doctor state를 납작하게 합친다. command caller가 reset 효과와
     // post-reset health를 한 reply 안에서 보여 줄 수 있게 하는 shape다.
     pub target: String,
     pub rewritten_paths: Vec<String>,
@@ -75,7 +75,7 @@ pub struct PlanningControlResetOutcome {
     pub issue: Option<String>,
 }
 pub trait PlanningControlSurface: Send + Sync {
-    // 좁은 trait은 command executor를 testable하게 만들고, text layer가 full admin facade API에 의존하지 않게 한다.
+    // 좁은 trait은 command executor를 testable하게 만들고, text layer가 full planning facade API에 의존하지 않게 한다.
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot>;
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome>;
 }
@@ -120,31 +120,6 @@ impl PlanningControlSurface for PlanningControlFacadeService {
             result,
             &self.planning,
         ))
-    }
-}
-
-impl PlanningControlSurface for PlanningAdminFacadeService {
-    fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
-        let doctor = self.load_doctor_report();
-        let projection = self.load_runtime_application_projection()?;
-        Ok(map_control_status_snapshot(
-            self.workspace_dir().to_string(),
-            doctor,
-            projection,
-        ))
-    }
-    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
-        // admin reset은 file change와 doctor summary를 함께 돌려준다. reset 자체가 성공해도 operator가 봐야 할
-        // planning health issue가 남을 수 있으므로 control caller에는 둘 다 필요하다.
-        let outcome = self.reset_workspace(target)?;
-        Ok(PlanningControlResetOutcome {
-            target: outcome.target,
-            rewritten_paths: outcome.rewritten_paths,
-            removed_paths: outcome.removed_paths,
-            planning_state: outcome.doctor.planning_state,
-            health: outcome.doctor.health,
-            issue: outcome.doctor.issue,
-        })
     }
 }
 
