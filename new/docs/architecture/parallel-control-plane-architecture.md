@@ -120,7 +120,7 @@ repository/store는 “domain object collection처럼 보이는 접근 계층”
 | Durable/recoverable state | repository/store | dispatch command, slot lease, session detail, distributor queue |
 | Domain invariant state | domain aggregate | eligibility, capacity decision, retry/block reason |
 
-DB에 저장할 필요 없는 shared state는 repository 구현체 안의 `HashMap`이나 runtime store에 둘 수 있다. 그러나 UI-only state는 repository로 내리지 않는다. 복구가 필요한 state는 반드시 durable store로 간다.
+DB에 저장할 필요 없는 shared state는 application runtime store에서 관리한다. in-memory repository는 repository가 소유한 aggregate/read model의 process-local 구현일 때만 사용하고, timer나 effect id처럼 도메인 규칙과 무관한 orchestration state는 repository로 내리지 않는다. UI-only state는 TUI controller에 머물며, 복구가 필요한 state는 반드시 durable store로 간다.
 
 ## 레이어 책임
 
@@ -250,8 +250,8 @@ TUI key/input
   -> repository.save(next_state)
   -> effect runner executes readiness/reconcile/refresh
   -> completion event returns to loop
-  -> supervisor snapshot refreshed
-  -> TUI renders snapshot
+  -> supervisor snapshot refreshed in repository/read model
+  -> TUI observes change and renders snapshot
 ```
 
 ### Worker completion이 다음 dispatch를 유발하는 경우
