@@ -903,9 +903,11 @@ impl NativeTuiApp {
             let execution = executor.run(&conversation, &request);
             self.planning_worker_panel_state = execution.planning_worker_panel_state;
             self.invalidate_parallel_mode_supervisor_snapshot();
-            self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
-                evaluation: Box::new(execution.evaluation),
-            });
+            self.dispatch_conversation_runtime(
+                ConversationRuntimeEvent::PostTurnAutomationEvaluated {
+                    evaluation: Box::new(execution.evaluation),
+                },
+            );
         }
         #[cfg(not(test))]
         {

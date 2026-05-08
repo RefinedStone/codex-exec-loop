@@ -112,9 +112,10 @@ Automation lifecycle은 turn 종료 뒤 planning/parallel state를 검사하고 
 
 ```text
 Stream finished
-  -> EvaluateAutoFollow effect
+  -> EvaluatePostTurnAutomation effect
   -> post-turn executor calls planning/parallel application services
   -> PostTurnEvaluated background message
+  -> PostTurnAutomationEvaluated reducer event
   -> reducer records projection and either queues an auto prompt or stops
 ```
 
@@ -123,7 +124,7 @@ Stream finished
 - manual prompt submit은 conversation lifecycle의 시작이다.
 - auto-follow, planning repair, queue refresh, official completion refresh는 automation lifecycle이다.
 - automation은 TUI background thread에서 durable state를 직접 고치지 않는다. application service를 호출하고 결과 event로 돌아온다.
-- reducer는 `PostTurnEvaluated` 결과를 표시하고 다음 effect를 큐잉할 수 있지만, queue policy를 다시 판단하지 않는다.
+- reducer는 `PostTurnAutomationEvaluated` 결과를 표시하고 다음 effect를 큐잉할 수 있지만, queue policy를 다시 판단하지 않는다.
 - repeated queue head, queue idle, repair eligibility, parallel official completion 같은 판단은 domain/application 결과를 따른다.
 
 ## Background Message 규칙

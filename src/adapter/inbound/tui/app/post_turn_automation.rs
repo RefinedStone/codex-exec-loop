@@ -31,7 +31,7 @@ impl NativeTuiApp {
         self.record_post_turn_evaluation_applied(&result.completed_turn_id);
         self.planning_worker_panel_state = result.planning_worker_panel_state;
         self.invalidate_parallel_mode_supervisor_snapshot();
-        self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluated {
+        self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnAutomationEvaluated {
             evaluation: result.evaluation,
         });
         true
@@ -48,7 +48,7 @@ impl NativeTuiApp {
             ),
             route_after_reduction: matches!(
                 event,
-                ConversationRuntimeEvent::PostTurnEvaluated { .. }
+                ConversationRuntimeEvent::PostTurnAutomationEvaluated { .. }
                     | ConversationRuntimeEvent::StreamUpdated(
                         ConversationStreamEvent::Failed { .. }
                     )
