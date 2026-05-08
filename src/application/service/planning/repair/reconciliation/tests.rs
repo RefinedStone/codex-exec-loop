@@ -1,5 +1,8 @@
 use super::{PlanningChangeSet, PlanningExecutionSnapshot, execution_snapshot_to_workspace_record};
-use super::{PlanningRepairPromptHandoff, PlanningRepairRequest, build_planning_repair_prompt};
+use super::{PlanningRepairRequest, build_planning_repair_prompt};
+use crate::domain::planning::repair_candidate::{
+    PlanningRepairCandidatePolicy, PlanningRepairPreviousHandoff,
+};
 use crate::domain::planning::{
     PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskStatus,
@@ -12,112 +15,6 @@ use crate::domain::planning::{
  * 이미 승인된 DB 작업을 지우거나, 완료된 상태를 되돌리거나, 이전 ready handoff를
  * 그대로 반복하면서 진행된 것처럼 보이면 안 된다.
  */
-
-// 복구 오케스트레이션의 stale-candidate 진단 문구를 테스트 안에 고정한 미러 가드다.
-fn stale_candidate_guard_failure(
-    accepted_task_authority: Option<&TaskAuthorityDocument>,
-    candidate_task_authority: &TaskAuthorityDocument,
-) -> Option<String> {
-    let accepted_task_authority = accepted_task_authority?;
-    for accepted_task in &accepted_task_authority.tasks {
-        let task_id = accepted_task.id.trim();
-        let Some(candidate_task) = find_task(candidate_task_authority, task_id) else {
-            return Some(format!(
-                "planning worker task authority candidate removed accepted DB task `{task_id}`"
-            ));
-        };
-        if terminal_status(accepted_task.status) && candidate_task.status != accepted_task.status {
-            return Some(format!(
-                "planning worker task authority candidate regressed accepted DB task `{task_id}` from `{}` to `{}`",
-                accepted_task.status.label(),
-                candidate_task.status.label()
-            ));
-        }
-        if timestamp_regressed(&candidate_task.updated_at, &accepted_task.updated_at) {
-            return Some(format!(
-                "planning worker task authority candidate regressed accepted DB task `{task_id}` updated_at from `{}` to `{}`",
-                accepted_task.updated_at.trim(),
-                candidate_task.updated_at.trim()
-            ));
-        }
-    }
-    None
-}
-
-// 복구 후보는 완료/취소된 작업을 다시 진행 가능한 상태로 되돌릴 수 없다.
-fn terminal_status(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
-}
-
-// 날짜 형식 검증은 호출자 책임이므로, 비어 있거나 파싱 불가능한 값은 회귀 판정에서 제외한다.
-fn timestamp_regressed(candidate_updated_at: &str, accepted_updated_at: &str) -> bool {
-    let candidate_updated_at = candidate_updated_at.trim();
-    let accepted_updated_at = accepted_updated_at.trim();
-    if candidate_updated_at.is_empty() || accepted_updated_at.is_empty() {
-        return false;
-    }
-    let Ok(candidate_updated_at) = chrono::DateTime::parse_from_rfc3339(candidate_updated_at)
-    else {
-        return false;
-    };
-    let Ok(accepted_updated_at) = chrono::DateTime::parse_from_rfc3339(accepted_updated_at) else {
-        return false;
-    };
-
-    candidate_updated_at < accepted_updated_at
-}
-
-/*
- * ready 큐 head를 그대로 다시 내보내는 복구 루프를 막는 가드다.
- * 같은 작업이 계속 head에 남아도, 승인된 DB 기준선과 비교해 해당 권한 row가 실제로
- * 바뀌었다면 허용된다. 그렇지 않으면 워커가 이전 handoff를 소비하지 못한 상태에서
- * 자동 후속 복구만 반복하게 된다.
- */
-fn queue_advancement_guard_failure(
-    previous_handoff: Option<PlanningRepairPromptHandoff<'_>>,
-    accepted_task_authority: Option<&TaskAuthorityDocument>,
-    candidate_task_authority: &TaskAuthorityDocument,
-    queue_projection: &PriorityQueueProjection,
-) -> Option<String> {
-    let previous_handoff = previous_handoff?;
-    let queue_head = queue_projection.next_task.as_ref()?;
-    if queue_head.task_id.trim() != previous_handoff.task_id.trim() {
-        return None;
-    }
-    let accepted_task = accepted_task_authority
-        .and_then(|task_authority| find_task(task_authority, previous_handoff.task_id));
-    let candidate_task = find_task(candidate_task_authority, previous_handoff.task_id)?;
-    match accepted_task {
-        Some(accepted_task)
-            if accepted_task.normalized() == candidate_task.normalized()
-                && queue_head.status.label() == previous_handoff.status_label.trim() =>
-        {
-            Some(format!(
-                "planning worker refresh kept previous handoff `{}` unchanged as the ready queue head",
-                previous_handoff.task_id.trim()
-            ))
-        }
-        None if candidate_task.updated_at.trim() == previous_handoff.updated_at.trim() => {
-            Some(format!(
-                "planning worker refresh returned previous handoff `{}` as the queue head without DB baseline evidence of a task update",
-                previous_handoff.task_id.trim()
-            ))
-        }
-        _ => None,
-    }
-}
-
-// 프롬프트와 JSON 후보에는 공백이 섞일 수 있으므로, 운영 코드처럼 id를 trim해서 찾는다.
-fn find_task<'a>(
-    task_authority: &'a TaskAuthorityDocument,
-    task_id: &str,
-) -> Option<&'a TaskDefinition> {
-    let task_id = task_id.trim();
-    task_authority
-        .tasks
-        .iter()
-        .find(|task| task.id.trim() == task_id)
-}
 
 /*
  * 복구 프롬프트는 전체 권한 문서 교체가 아니라 planning_task_commands payload를 요구해야 한다.
@@ -210,8 +107,8 @@ fn queue_advancement_guard_rejects_unchanged_previous_handoff_head() {
         proposed_tasks: Vec::new(),
         skipped_tasks: Vec::new(),
     };
-    let failure = queue_advancement_guard_failure(
-        Some(PlanningRepairPromptHandoff {
+    let failure = PlanningRepairCandidatePolicy::new().queue_advancement_failure(
+        Some(PlanningRepairPreviousHandoff {
             task_id: "task-1",
             task_title: "Task 1",
             updated_at: "2026-04-29T00:00:00Z",
@@ -247,8 +144,8 @@ fn queue_advancement_guard_allows_updated_same_head() {
         proposed_tasks: Vec::new(),
         skipped_tasks: Vec::new(),
     };
-    let failure = queue_advancement_guard_failure(
-        Some(PlanningRepairPromptHandoff {
+    let failure = PlanningRepairCandidatePolicy::new().queue_advancement_failure(
+        Some(PlanningRepairPreviousHandoff {
             task_id: "task-1",
             task_title: "Task 1",
             updated_at: "2026-04-29T00:00:00Z",
@@ -295,7 +192,8 @@ fn stale_candidate_guard_rejects_accepted_db_status_regression() {
             ),
         ],
     };
-    let failure = stale_candidate_guard_failure(Some(&accepted), &stale_candidate);
+    let failure = PlanningRepairCandidatePolicy::new()
+        .stale_candidate_failure(Some(&accepted), &stale_candidate);
 
     assert_eq!(
         failure.as_deref(),
@@ -316,7 +214,8 @@ fn stale_candidate_guard_rejects_older_accepted_db_timestamp() {
         version: PLANNING_FORMAT_VERSION,
         tasks: vec![task("task-1", "ready", "2026-04-29T01:43:52Z")],
     };
-    let failure = stale_candidate_guard_failure(Some(&accepted), &stale_candidate);
+    let failure = PlanningRepairCandidatePolicy::new()
+        .stale_candidate_failure(Some(&accepted), &stale_candidate);
 
     assert_eq!(
         failure.as_deref(),
@@ -337,7 +236,8 @@ fn stale_candidate_guard_compares_rfc3339_timestamps_by_time() {
         version: PLANNING_FORMAT_VERSION,
         tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32.500Z")],
     };
-    let failure = stale_candidate_guard_failure(Some(&accepted), &candidate);
+    let failure =
+        PlanningRepairCandidatePolicy::new().stale_candidate_failure(Some(&accepted), &candidate);
 
     assert_eq!(failure, None);
 }

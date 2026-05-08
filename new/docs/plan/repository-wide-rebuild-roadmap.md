@@ -389,6 +389,8 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
   `PlanningProposalPromotionPolicy`로 이동하고, application은 authority load/commit만 맡는다. 완료.
 - `PLAN-02D`: queue-idle/repeated-head auto-follow gate를 domain
   `PlanningQueueFollowPolicy`로 이동하고, runtime policy service는 snapshot fact mapping만 맡는다. 완료.
+- `PLAN-02E`: repair candidate stale/queue-advancement eligibility regression을 domain
+  `PlanningRepairCandidatePolicy` test guard로 이동하고, reconciliation regression은 같은 policy를 검증한다. 완료.
 
 금지:
 
