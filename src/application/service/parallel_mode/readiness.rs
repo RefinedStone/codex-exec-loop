@@ -5,7 +5,7 @@ use super::{
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningApplicationProjection, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -337,7 +337,19 @@ planning capability는 병렬 mode가 배정할 queue와 official completion led
 pub(super) fn inspect_planning(
     snapshot: &PlanningRuntimeSnapshot,
 ) -> ParallelModeCapabilitySnapshot {
-    if !snapshot.workspace_present() {
+    inspect_planning_projection(&PlanningApplicationProjection::from_runtime_snapshot(
+        snapshot,
+    ))
+}
+
+/*
+planning application projection은 admin/TUI/CLI가 공유하는 read model이다. parallel readiness가
+이 projection을 받을 수 있으면 inbound adapter가 runtime snapshot 내부를 다시 읽지 않아도 된다.
+*/
+pub(super) fn inspect_planning_projection(
+    projection: &PlanningApplicationProjection,
+) -> ParallelModeCapabilitySnapshot {
+    if !projection.workspace_present {
         /*
         workspace_present is checked before workspace_status because an absent
         planning tree cannot offer repair-specific validation detail. The next
@@ -353,7 +365,7 @@ pub(super) fn inspect_planning(
             ),
         );
     }
-    match snapshot.workspace_status() {
+    match projection.workspace_status {
         PlanningRuntimeWorkspaceStatus::Uninitialized => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::Planning,
             ParallelModeCapabilityState::Blocked,
@@ -366,24 +378,27 @@ pub(super) fn inspect_planning(
         PlanningRuntimeWorkspaceStatus::Invalid => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::Planning,
             ParallelModeCapabilityState::Blocked,
-            snapshot
-                .failure_reason()
+            projection
+                .status_detail
+                .as_deref()
                 .unwrap_or("planning validation failed"),
             Some("repair planning state before enabling parallel mode".to_string()),
         ),
         PlanningRuntimeWorkspaceStatus::ReadyNoTask => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::Planning,
             ParallelModeCapabilityState::Ready,
-            snapshot
-                .queue_summary()
+            projection
+                .queue_summary
+                .as_deref()
                 .unwrap_or("planning workspace is ready with no queue head"),
             None,
         ),
         PlanningRuntimeWorkspaceStatus::ReadyWithTask => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::Planning,
             ParallelModeCapabilityState::Ready,
-            snapshot
-                .queue_summary()
+            projection
+                .queue_summary
+                .as_deref()
                 .unwrap_or("planning workspace is ready"),
             None,
         ),

@@ -52,7 +52,6 @@ struct AdminAppState {
      * HTML page handler와 JSON API handler가 같은 facade instance를 바라보므로 두 surface의 상태 해석도 함께 묶인다.
      */
     facade: Arc<PlanningAdminFacadeService>,
-    planning: PlanningServices,
     parallel_mode: Arc<ParallelModeService>,
     graphic: AdminGraphicConfig,
 }
@@ -153,7 +152,6 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
     ));
     AdminAppState {
         facade,
-        planning,
         parallel_mode,
         graphic: AdminGraphicConfig::from_env(),
     }

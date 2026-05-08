@@ -60,7 +60,8 @@ user-visible contract와 fan-in 지점을 고정해, 이후 `PLAN-01`과 `PLAN-0
    command부터 facade 뒤로 보낸다. 진행: TUI status projection `PLAN-01B`, control
    surface status/queue `PLAN-01C`, CLI status/queue command `PLAN-01D`,
    Telegram control facade `PLAN-01E`, admin dashboard projection `PLAN-01F`,
-   TUI queue overlay projection `PLAN-01G`
+   TUI queue overlay projection `PLAN-01G`, Akra admin dashboard facade projection
+   `PLAN-01H`
 4. mutation이나 worker orchestration은 `PLAN-01`에서 정책을 바꾸지 않는다. 필요한
    경우 `PLAN-02`로 미룬다.
 

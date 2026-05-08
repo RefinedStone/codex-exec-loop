@@ -1,4 +1,6 @@
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::{
+    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+};
 use crate::domain::planning::{
     PriorityQueueSkippedTask, PriorityQueueTask, QueueIdlePolicy, TaskStatus,
 };
@@ -11,6 +13,7 @@ use crate::domain::planning::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningApplicationProjection {
     pub workspace_present: bool,
+    pub workspace_status: PlanningRuntimeWorkspaceStatus,
     pub status_label: String,
     pub status_detail: Option<String>,
     pub queue_summary: Option<String>,
@@ -88,6 +91,7 @@ impl PlanningApplicationProjection {
 
         Self {
             workspace_present: snapshot.workspace_present(),
+            workspace_status: snapshot.workspace_status(),
             status_label: snapshot.preview_status_label().to_string(),
             status_detail: snapshot.preview_detail().map(str::to_string),
             queue_summary: snapshot.queue_summary().map(str::to_string),
