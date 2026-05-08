@@ -53,7 +53,7 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P1 | `DOC-PLAN-00` | done | planning control-plane architecture 작성 |
 | P1 | `PLAN-00` | done | planning regression/audit contract |
 | P1 | `PLAN-01` | done | planning application facade 표준화 |
-| P1 | `PLAN-02` | ready | planning domain decision/projection 정리 |
+| P1 | `PLAN-02` | done | planning domain decision/projection 정리 |
 | P2 | `DOC-TUI-00` | ready | TUI/application boundary architecture 작성 |
 | P2 | `TUI-00` | blocked | TUI shell state inventory와 regression |
 | P2 | `TUI-01` | blocked | conversation lifecycle와 automation lifecycle 분리 |
@@ -397,6 +397,9 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
   전진 규칙을 domain `PlanningTaskIdPolicy`로 일원화한다. 완료.
 - `PLAN-02H`: task mutation create/update의 `depends_on`/`blocked_by` reference
   normalization을 domain `PlanningTaskReferencePolicy`로 일원화한다. 완료.
+- `PLAN-02I`: worker command candidate extraction은 untrusted worker output을 typed
+  application command로 낮추는 boundary라 domain으로 이동하지 않는다고 감사하고,
+  invalid 후보 뒤의 valid command 후보가 승리하는 regression을 추가한다. 완료.
 
 금지:
 
@@ -407,6 +410,16 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 
 - `cargo test domain::planning`
 - planning runtime/task mutation tests
+
+완료 근거:
+
+- task mutation legality, validation, promotion, queue follow, repair candidate guard,
+  active direction selection, task-id allocation, reference normalization이 domain decision
+  또는 domain test guard로 이동했다.
+- worker command candidate extraction은 prompt/worker text parsing과 repair evidence
+  preservation을 다루는 application boundary라 domain으로 이동하지 않는 것으로 감사했다.
+- worker command는 accepted authority가 아니라 typed mutation command candidate로만 들어가며,
+  이후 mutation service의 validation, projection rebuild, optimistic commit을 통과한다.
 
 ## P2. TUI Shell And Conversation Slices
 
