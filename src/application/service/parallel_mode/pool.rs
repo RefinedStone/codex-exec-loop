@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
     PlanningAuthorityRuntimeEventRecord, PlanningAuthorityRuntimeProjectionSnapshot,
@@ -226,9 +227,10 @@ cleanup을 수행한 뒤 같은 board projection으로 돌아온다.
 */
 pub(super) fn reconcile_pool_board(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
 ) -> ParallelModePoolBoardSnapshot {
-    match reconcile_pool_board_and_context(planning_authority, workspace_dir) {
+    match reconcile_pool_board_and_context(planning_authority, runtime, workspace_dir) {
         Ok((_, pool)) => pool,
         Err(error) => {
             let (pool, _) = *error;
@@ -239,6 +241,7 @@ pub(super) fn reconcile_pool_board(
 
 pub(super) fn reset_pool_for_parallel_enable(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
 ) -> Result<ParallelModePoolResetReport, String> {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
@@ -258,6 +261,7 @@ pub(super) fn reset_pool_for_parallel_enable(
             .map_err(|detail| detail.to_string())?;
     if cleanup_clean_baseline_split_brain_leases(
         planning_authority,
+        runtime,
         &repo_root,
         &pool_root,
         &context.baseline_head,
@@ -403,7 +407,7 @@ pub(super) fn reset_pool_for_parallel_enable(
         planning_authority
             .apply_parallel_pool_reset_report(&repo_root, &report)
             .map_err(|error| format!("parallel runtime projection reset report failed: {error}"))?;
-        clear_pool_runtime_mirrors_for_report(&pool_root, &report)?;
+        clear_pool_runtime_mirrors_for_report(runtime, &pool_root, &report)?;
     }
 
     Ok(report)
@@ -482,13 +486,14 @@ fn collect_reset_projection_keys(
 }
 
 fn clear_pool_runtime_mirrors_for_report(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
     report: &ParallelModePoolResetReport,
 ) -> Result<(), String> {
     for slot_id in report.succeeded_reset_slot_ids() {
         let path = slot_lease_file_path(pool_root, &slot_id);
-        if path.exists() {
-            fs::remove_file(&path).map_err(|error| {
+        if runtime.path_exists(&path) {
+            runtime.remove_file(&path).map_err(|error| {
                 format!(
                     "failed to remove reset lease mirror `{}`: {error}",
                     path.display()
@@ -500,8 +505,8 @@ fn clear_pool_runtime_mirrors_for_report(
     }
     for session_key in &report.reset_session_keys {
         let path = agent_session_detail_record_path(pool_root, session_key);
-        if path.exists() {
-            fs::remove_file(&path).map_err(|error| {
+        if runtime.path_exists(&path) {
+            runtime.remove_file(&path).map_err(|error| {
                 format!(
                     "failed to remove reset session mirror `{}`: {error}",
                     path.display()
@@ -512,8 +517,8 @@ fn clear_pool_runtime_mirrors_for_report(
     let queue_root = pool_root.join(".distributor-queue");
     for queue_item_id in &report.reset_queue_item_ids {
         let path = queue_root.join(format!("{queue_item_id}.json"));
-        if path.exists() {
-            fs::remove_file(&path).map_err(|error| {
+        if runtime.path_exists(&path) {
+            runtime.remove_file(&path).map_err(|error| {
                 format!(
                     "failed to remove reset distributor mirror `{}`: {error}",
                     path.display()
@@ -526,6 +531,7 @@ fn clear_pool_runtime_mirrors_for_report(
 
 pub(super) fn reconcile_pool_board_and_context(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
 ) -> PoolBoardWithContextResult {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
@@ -601,6 +607,7 @@ pub(super) fn reconcile_pool_board_and_context(
     };
     let stale_startup_cleaned_slots = cleanup_stale_leased_startup_slots(
         planning_authority,
+        runtime,
         &repo_root,
         &pool_root,
         &worktree_records,
@@ -609,6 +616,7 @@ pub(super) fn reconcile_pool_board_and_context(
     );
     let split_brain_cleaned_slots = cleanup_clean_baseline_split_brain_leases(
         planning_authority,
+        runtime,
         &repo_root,
         &pool_root,
         &baseline_head,
@@ -667,6 +675,7 @@ pub(super) fn reconcile_pool_board_and_context(
         + split_brain_cleaned_slots
         + cleanup_reusable_slots(
             planning_authority,
+            runtime,
             &repo_root,
             &pool_root,
             &reloaded_worktree_records,

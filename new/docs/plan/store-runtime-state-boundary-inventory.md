@@ -104,10 +104,11 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 - `acquire_slot_lease_persists_metadata_and_marks_slot_leased`
 - `acquire_slot_lease_rolls_back_authority_when_mirror_write_fails`
 - `pool_ignores_stale_legacy_lease_mirror_after_store_removal`
+- pool-local lease/session/distributor mirror write가 `ParallelModeRuntimePort`를 거치면서
+  authority-first write order를 유지한다.
 
 보강할 anchor:
 
-- pool-local mirror write가 outbound boundary로 이동한 뒤 authority-first write order가 유지되는지
 - TUI in-flight/epoch state가 durable store에 저장되지 않고 application runtime event로만 흐르는지
 
 ## STORE-00 분할
@@ -118,14 +119,16 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 - `STORE-00B`: SQLite runtime projection regression matrix를 보강한다. dispatch command, runtime event feed,
   claim/recovery, task cleanup projection을 같은 DB read boundary로 검증한다. 완료.
 - `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime boundary로 이동한다.
-  authority-first write order와 mirror-loss recovery 테스트를 유지한다. ready.
+  authority-first write order와 mirror-loss recovery 테스트를 유지한다. 완료.
 - `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application control-plane runtime
   state로 이동하는 최소 slice를 설계/구현한다. `PAR-03`, `PAR-04`, `TUI-01` regression을 같이 확인해야 하므로
-  `STORE-00B/C` 이후 진행한다.
+  `STORE-00B/C` 이후 진행한다. ready.
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact, repo-scoped
   active documents, shadow documents, accepted DB authority가 서로 다른 reset boundary를 갖는지 고정한다. 완료.
 
 ## 다음 Worker 시작 기준
 
-다음 worker는 새 repository trait를 만들지 말고 `STORE-00C`를 잡는다. `STORE-00D`는
-TUI/application runtime migration이라 `STORE-00C`의 mirror I/O boundary가 정리된 뒤에 진행한다.
+다음 worker는 새 repository trait를 만들지 말고 `STORE-00D`를 잡는다. `STORE-00D`는
+TUI/application runtime migration이므로 durable mirror I/O처럼 filesystem primitive를 옮기는
+작업이 아니라, process-lifetime wake/epoch/in-flight state가 application control-plane runtime
+event로만 흐르는지 고정하는 slice다.

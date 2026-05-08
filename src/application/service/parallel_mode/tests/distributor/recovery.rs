@@ -47,10 +47,11 @@ fn build_supervisor_snapshot_does_not_trigger_runtime_recovery_side_effects() {
         .enqueue_workspace_commit_ready_result(&lease.worktree_path)
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
-    let mut queue_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queued record should exist");
+    let mut queue_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queued record should exist");
     queue_record.queue_state = ParallelModeQueueItemState::MergePending;
     queue_record.pull_request_number = Some(77);
     queue_record.pull_request_url =
@@ -100,8 +101,9 @@ fn readiness_recovery_marks_stale_ledger_refreshing_session_for_manual_recovery(
         .expect("ledger refreshing should be recorded");
 
     let session_key = lease.session_key();
-    let mut detail = read_agent_session_detail_record(&repo.pool_root(), &session_key)
-        .expect("session detail should be mirrored");
+    let mut detail =
+        read_agent_session_detail_record(&test_parallel_runtime(), &repo.pool_root(), &session_key)
+            .expect("session detail should be mirrored");
     detail.updated_at = "2020-01-01T00:00:00+00:00".to_string();
     if let Some(history) = detail.history.last_mut() {
         history.timestamp = detail.updated_at.clone();
@@ -410,7 +412,7 @@ fn distributor_recovery_blocks_missing_worktree_from_store_backed_queue_record()
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
     let session_key = lease_session_key(&lease);
-    let queue_record = load_distributor_queue_records(&repo.pool_root())
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should exist before mirror loss");
@@ -430,10 +432,11 @@ fn distributor_recovery_blocks_missing_worktree_from_store_backed_queue_record()
         }),
         "recovery notice should explain the blocked head: {notices:?}"
     );
-    let recovered_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("blocked queue record should be rewritten from the authority store");
+    let recovered_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("blocked queue record should be rewritten from the authority store");
     assert_eq!(
         recovered_record.queue_state,
         ParallelModeQueueItemState::Blocked
@@ -443,8 +446,9 @@ fn distributor_recovery_blocks_missing_worktree_from_store_backed_queue_record()
             .integration_note
             .contains("recovered after restart: source worktree is missing")
     );
-    let recovered_detail = read_agent_session_detail_record(&repo.pool_root(), &session_key)
-        .expect("failed session detail should be rewritten from the authority store");
+    let recovered_detail =
+        read_agent_session_detail_record(&test_parallel_runtime(), &repo.pool_root(), &session_key)
+            .expect("failed session detail should be rewritten from the authority store");
     assert_eq!(recovered_detail.state_label, "failed");
     assert!(
         recovered_detail
@@ -498,7 +502,7 @@ fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_reco
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
     let session_key = lease_session_key(&lease);
-    let queue_record = load_distributor_queue_records(&repo.pool_root())
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should exist");
@@ -608,10 +612,11 @@ fn distributor_retries_blocked_cleanup_failure_after_integrated_recovery() {
     )
     .expect("cleanup pending lease should be persisted");
 
-    let mut queue_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should exist");
+    let mut queue_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
     queue_record.queue_state = ParallelModeQueueItemState::Blocked;
     queue_record.integration_state = "blocked".to_string();
     queue_record.integration_note =

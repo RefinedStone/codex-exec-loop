@@ -1,7 +1,6 @@
-use super::super::ensure_directory_exists;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /*
@@ -55,6 +54,9 @@ pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     // planning_authority는 runtime projection의 source of truth이다. SQLite adapter든
     // 테스트 fake든 같은 port를 통해 lease row를 갱신한다.
     planning_authority: &dyn PlanningAuthorityPort,
+    // runtime은 pool-local mirror 파일 I/O의 outbound boundary이다. authority write 순서는
+    // application이 결정하지만, 실제 directory/write/rename 호출은 이 port 뒤에서 수행한다.
+    runtime: &dyn ParallelModeRuntimePort,
     // workspace_dir은 authority row scope이다. 같은 pool이라도 workspace별 runtime projection이
     // 다를 수 있으므로 lease upsert/remove에는 항상 workspace를 같이 넘긴다.
     workspace_dir: &str,
@@ -86,13 +88,8 @@ pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     // mirror directory는 authority write 이후에 만든다. directory 생성 실패는 authority에는
     // 이미 반영된 상태라 caller에게 오류를 돌려 cleanup/retry가 가능하게 한다.
     let leases_root = slot_leases_root(pool_root);
-    if leases_root.exists() && !leases_root.is_dir() {
-        return Err(format!(
-            "failed to create lease directory: `{}` is not a directory",
-            leases_root.display()
-        ));
-    }
-    ensure_directory_exists(&leases_root)
+    runtime
+        .ensure_directory_exists(&leases_root)
         .map_err(|error| format!("failed to create lease directory: {error}"))?;
     // 최종 파일과 임시 파일 경로를 분리한다. 같은 slot의 lease를 덮어쓸 때도 기존 JSON은
     // rename 직전까지 유지된다.
@@ -109,15 +106,18 @@ pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     */
     // temp write 실패에는 slot id를 붙인다. pool에는 여러 slot이 동시에 존재하므로
     // path보다 운영자가 알아보는 slot id가 오류 triage에 바로 필요하다.
-    fs::write(&temp_path, lease_body).map_err(|error| {
-        format!(
-            "failed to write temporary slot lease `{}`: {error}",
-            lease.slot_id
-        )
-    })?;
+    runtime
+        .write_string(&temp_path, &lease_body)
+        .map_err(|error| {
+            format!(
+                "failed to write temporary slot lease `{}`: {error}",
+                lease.slot_id
+            )
+        })?;
     // rename이 성공하는 순간 mirror의 최종 파일이 새 snapshot으로 교체된다. 이 단계가
     // 실패하면 authority는 이미 갱신됐지만 파일 관찰 상태가 낡을 수 있어 오류를 반환한다.
-    fs::rename(&temp_path, &lease_path)
+    runtime
+        .rename(&temp_path, &lease_path)
         .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
 }
 
@@ -133,6 +133,9 @@ pub(in crate::application::service::parallel_mode) fn remove_slot_lease(
     // lease row 삭제의 source of truth이다. 삭제 실패는 slot이 아직 runtime projection에서
     // active로 보일 수 있음을 뜻하므로 false로 반환한다.
     planning_authority: &dyn PlanningAuthorityPort,
+    // runtime은 mirror file deletion의 outbound boundary이다. authority delete는 먼저 수행하고,
+    // mirror deletion은 idempotent cleanup으로 처리한다.
+    runtime: &dyn ParallelModeRuntimePort,
     // workspace_dir은 삭제할 authority projection scope이다.
     workspace_dir: &str,
     // pool_root는 삭제할 mirror file scope이다.
@@ -161,5 +164,5 @@ pub(in crate::application::service::parallel_mode) fn remove_slot_lease(
     // mirror가 이미 없으면 성공으로 본다. authority가 지워진 뒤의 mirror deletion은
     // idempotent cleanup 성격이라, missing file을 오류로 만들면 수동 복구 후 cleanup 재시도가 불필요하게 실패한다.
     let lease_path = slot_lease_file_path(pool_root, slot_id);
-    !lease_path.exists() || fs::remove_file(lease_path).is_ok()
+    !runtime.path_exists(&lease_path) || runtime.remove_file(&lease_path).is_ok()
 }

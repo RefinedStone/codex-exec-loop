@@ -3,17 +3,15 @@
  * authority projection이 application이 읽는 source of truth이고, pool root 아래 JSON mirror는 운영자가
  * queue 상태를 조사하거나 테스트가 recovery/order 보존을 확인할 때 쓰는 durable trace다.
  */
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot};
 
-use super::super::{
-    current_timestamp, ensure_directory_exists, record_distributor_failed_session_detail,
-};
+use super::super::{current_timestamp, record_distributor_failed_session_detail};
 use super::ParallelModeDistributorQueueRecord;
 use super::queue_keys::sanitize_runtime_record_key;
 
@@ -76,10 +74,11 @@ pub(super) fn queue_order_key_from_timestamp(timestamp: &str) -> u64 {
 않고 order를 보존하는지 확인하려면 이 경로가 필요하다.
 */
 pub(crate) fn load_distributor_queue_records(
+    runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
 ) -> Vec<ParallelModeDistributorQueueRecord> {
     let queue_root = distributor_queue_root(pool_root);
-    let Ok(entries) = fs::read_dir(queue_root) else {
+    let Ok(entries) = runtime.read_dir_paths(&queue_root) else {
         // mirror directory가 없다는 것은 아직 distributor queue가 생성되지 않았다는 정상 상태다.
         return Vec::new();
     };
@@ -89,10 +88,9 @@ pub(crate) fn load_distributor_queue_records(
      * planning authority projection이므로, mirror 검증은 읽을 수 있는 record의 order와 content를 보는 데 집중한다.
      */
     let mut records = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
+        .into_iter()
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|path| runtime.read_to_string(&path).ok())
         .filter_map(|content| {
             serde_json::from_str::<ParallelModeDistributorQueueRecord>(&content).ok()
         })
@@ -114,6 +112,7 @@ JSON이 최종 파일명으로 남는 위험을 줄인다.
 */
 pub(super) fn write_distributor_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     record: &ParallelModeDistributorQueueRecord,
@@ -129,7 +128,8 @@ pub(super) fn write_distributor_queue_record(
         })?;
 
     let queue_root = distributor_queue_root(pool_root);
-    ensure_directory_exists(&queue_root)
+    runtime
+        .ensure_directory_exists(&queue_root)
         .map_err(|error| format!("failed to create distributor queue directory: {error}"))?;
 
     let path = distributor_queue_record_path(pool_root, &record.queue_item_id);
@@ -137,13 +137,13 @@ pub(super) fn write_distributor_queue_record(
     let body = serde_json::to_string_pretty(record)
         .map_err(|error| format!("failed to serialize distributor queue record: {error}"))?;
     // temp file write가 성공한 뒤 rename해야 partially written JSON이 canonical path에 남지 않는다.
-    fs::write(&temp_path, body).map_err(|error| {
+    runtime.write_string(&temp_path, &body).map_err(|error| {
         format!(
             "failed to write temporary distributor queue record `{}`: {error}",
             record.queue_item_id
         )
     })?;
-    fs::rename(&temp_path, &path).map_err(|error| {
+    runtime.rename(&temp_path, &path).map_err(|error| {
         format!(
             "failed to persist distributor queue record `{}`: {error}",
             record.queue_item_id
@@ -161,6 +161,7 @@ completion feed가 queue block을 agent session 관점에서도 보여 준다.
 */
 pub(super) fn block_distributor_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
     pool_root: &Path,
     lease: Option<&ParallelModeSlotLeaseSnapshot>,
@@ -175,11 +176,18 @@ pub(super) fn block_distributor_queue_record(
     }
     record.integration_note = failure_detail.clone();
     record.updated_at = current_timestamp();
-    write_distributor_queue_record(planning_authority, workspace_dir, pool_root, record)?;
+    write_distributor_queue_record(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        record,
+    )?;
     // lease가 있으면 queue item뿐 아니라 session detail history도 failed 상태로 투영한다.
     if let Some(lease) = lease {
         let _ = record_distributor_failed_session_detail(
             planning_authority,
+            runtime,
             workspace_dir,
             pool_root,
             lease,

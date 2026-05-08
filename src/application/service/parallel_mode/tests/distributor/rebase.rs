@@ -66,10 +66,11 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
         .enqueue_workspace_commit_ready_result(&lease.worktree_path)
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
-    let original_queue_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should exist");
+    let original_queue_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
     let original_commit_sha = original_queue_record.commit_sha;
 
     /*
@@ -97,7 +98,7 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
             .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
         "processing should surface the cherry-pick integration outcome: {notices:?}"
     );
-    let queue_record = load_distributor_queue_records(&repo.pool_root())
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should persist");
@@ -213,7 +214,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         }),
         "processing should surface the cherry-pick conflict block: {notices:?}"
     );
-    let queue_record = load_distributor_queue_records(&repo.pool_root())
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("blocked queue record should persist");

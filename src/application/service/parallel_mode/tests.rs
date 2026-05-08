@@ -805,6 +805,10 @@ fn test_parallel_mode_service_with_github(
     )
 }
 
+fn test_parallel_runtime() -> GitParallelModeRuntimeAdapter {
+    GitParallelModeRuntimeAdapter::new()
+}
+
 // 세부 시나리오는 dispatcher, pool, supervisor 하위 모듈로 나누되 같은 fixture를
 // 공유한다. 이 파일은 공통 contract와 helper가 바뀔 때 전체 parallel_mode 테스트
 // 표면이 함께 흔들리도록 묶어 두는 entry point다.

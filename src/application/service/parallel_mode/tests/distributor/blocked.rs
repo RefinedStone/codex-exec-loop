@@ -77,7 +77,7 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
             .clone(),
         vec![format!("push:{}:false", lease.branch_name)]
     );
-    let queue_records = load_distributor_queue_records(&repo.pool_root());
+    let queue_records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
     assert_eq!(queue_records.len(), 1);
     assert_eq!(
         queue_records[0].queue_state,
@@ -89,8 +89,12 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
             .contains("GitHub automation is unavailable")
     );
     assert!(repo.slot_lease_path(1).exists());
-    let detail = read_agent_session_detail_record(&repo.pool_root(), &lease_session_key(&lease))
-        .expect("session detail should be persisted");
+    let detail = read_agent_session_detail_record(
+        &test_parallel_runtime(),
+        &repo.pool_root(),
+        &lease_session_key(&lease),
+    )
+    .expect("session detail should be persisted");
     assert_eq!(detail.state_label, "failed");
     assert_eq!(
         detail
@@ -175,7 +179,7 @@ fn distributor_blocks_source_push_rejection_without_ensuring_pull_request() {
             .all(|operation| !operation.starts_with("ensure-pr:")),
         "PR ensure must not run after source push failure: {operations:?}"
     );
-    let queue_records = load_distributor_queue_records(&repo.pool_root());
+    let queue_records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
     assert_eq!(queue_records.len(), 1);
     assert_eq!(
         queue_records[0].queue_state,
@@ -241,7 +245,7 @@ fn distributor_retries_blocked_head_after_clean_slot_branch_recovery() {
             "prerelease",
         ],
     );
-    let mut record = load_distributor_queue_records(&repo.pool_root())
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should exist");
@@ -265,10 +269,11 @@ fn distributor_retries_blocked_head_after_clean_slot_branch_recovery() {
             || notice.contains("distributor returned slot to idle")
     }));
     assert_eq!(current_branch(&slot_path), "HEAD");
-    let recovered_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should remain available");
+    let recovered_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should remain available");
     assert_eq!(
         recovered_record.queue_state,
         ParallelModeQueueItemState::Done
@@ -323,7 +328,7 @@ fn distributor_retries_blocked_pull_request_ensure_after_recovery() {
         .enqueue_workspace_commit_ready_result(&lease.worktree_path)
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
-    let mut record = load_distributor_queue_records(&repo.pool_root())
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should exist");
@@ -347,10 +352,11 @@ fn distributor_retries_blocked_pull_request_ensure_after_recovery() {
         notice.contains("distributor integrated queue head into prerelease")
             || notice.contains("distributor returned slot to idle")
     }));
-    let recovered_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should remain available");
+    let recovered_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should remain available");
     assert_eq!(
         recovered_record.queue_state,
         ParallelModeQueueItemState::Done
@@ -404,7 +410,7 @@ fn distributor_retries_blocked_source_branch_push_after_recovery() {
         .enqueue_workspace_commit_ready_result(&lease.worktree_path)
         .expect("commit-ready result should enqueue")
         .expect("queue item should be created");
-    let mut record = load_distributor_queue_records(&repo.pool_root())
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should exist");
@@ -430,10 +436,11 @@ fn distributor_retries_blocked_source_branch_push_after_recovery() {
         notice.contains("distributor integrated queue head into prerelease")
             || notice.contains("distributor returned slot to idle")
     }));
-    let recovered_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should remain available");
+    let recovered_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should remain available");
     assert_eq!(
         recovered_record.queue_state,
         ParallelModeQueueItemState::Done
@@ -502,10 +509,11 @@ fn distributor_treats_patch_equivalent_source_commit_as_integrated() {
         notice.contains("distributor integrated queue head into prerelease")
             || notice.contains("distributor returned slot to idle")
     }));
-    let recovered_record = load_distributor_queue_records(&repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should remain available");
+    let recovered_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should remain available");
     assert_eq!(
         recovered_record.queue_state,
         ParallelModeQueueItemState::Done
