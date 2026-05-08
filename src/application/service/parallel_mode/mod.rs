@@ -17,6 +17,7 @@ use chrono::DateTime;
 use std::sync::Arc;
 mod branch_names;
 mod completion;
+pub mod control_plane;
 pub(crate) mod distributor;
 mod git_sequence;
 mod orchestration;
