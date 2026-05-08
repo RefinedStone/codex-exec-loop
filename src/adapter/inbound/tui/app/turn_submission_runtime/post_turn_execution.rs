@@ -22,6 +22,10 @@ use crate::application::service::planning::{
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
+use crate::application::service::post_turn_decision::{
+    PostTurnAutoFollowStopReason, PostTurnDecision as ApplicationPostTurnDecision,
+    decide_parallel_official_completion_post_turn,
+};
 use crate::diagnostics::event_log;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
@@ -75,18 +79,28 @@ struct OfficialCompletionRefreshOutcome {
     runtime_notices: Vec<String>,
 }
 #[derive(Debug, Clone)]
-struct PostTurnDecision {
+struct TuiPostTurnDecision {
     action: ConversationPostTurnAction,
     parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
     operator_alerts: Vec<OperatorAlert>,
 }
-impl PostTurnDecision {
+impl TuiPostTurnDecision {
     fn from_action(action: ConversationPostTurnAction) -> Self {
         let operator_alerts = operator_alerts_for_action(&action);
         Self {
             action,
             parallel_queue_signal: None,
             operator_alerts,
+        }
+    }
+
+    fn from_application_decision(decision: ApplicationPostTurnDecision) -> Self {
+        Self {
+            action: ConversationPostTurnAction::SkipAutoFollow {
+                reason: auto_follow_skip_reason_from_post_turn(decision.auto_follow_stop_reason),
+            },
+            parallel_queue_signal: decision.parallel_queue_signal,
+            operator_alerts: decision.operator_alerts,
         }
     }
 }
@@ -204,9 +218,11 @@ impl PostTurnEvaluationExecutor {
             runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
         let post_turn_decision = if handled_parallel_completion {
-            parallel_completion_decision_from_snapshot(&runtime_snapshot)
+            TuiPostTurnDecision::from_application_decision(
+                decide_parallel_official_completion_post_turn(&runtime_snapshot),
+            )
         } else {
-            PostTurnDecision::from_action(self.auto_follow_action_from_snapshot(
+            TuiPostTurnDecision::from_action(self.auto_follow_action_from_snapshot(
                 conversation,
                 request,
                 &runtime_snapshot,
@@ -843,22 +859,16 @@ impl PostTurnEvaluationExecutor {
     }
 }
 
-fn parallel_completion_decision_from_snapshot(
-    runtime_snapshot: &PlanningRuntimeSnapshot,
-) -> PostTurnDecision {
-    let (reason, parallel_queue_signal) = if runtime_snapshot.queue_is_drained() {
-        (AutoFollowSkipReason::PlanningQueueDrained, None)
-    } else {
-        (
-            AutoFollowSkipReason::ParallelSessionCompleted,
-            Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized),
-        )
-    };
-    let action = ConversationPostTurnAction::SkipAutoFollow { reason };
-    PostTurnDecision {
-        operator_alerts: operator_alerts_for_action(&action),
-        action,
-        parallel_queue_signal,
+fn auto_follow_skip_reason_from_post_turn(
+    reason: PostTurnAutoFollowStopReason,
+) -> AutoFollowSkipReason {
+    match reason {
+        PostTurnAutoFollowStopReason::PlanningQueueDrained => {
+            AutoFollowSkipReason::PlanningQueueDrained
+        }
+        PostTurnAutoFollowStopReason::ParallelSessionCompleted => {
+            AutoFollowSkipReason::ParallelSessionCompleted
+        }
     }
 }
 
@@ -1051,7 +1061,9 @@ mod tests {
             },
         );
 
-        let decision = parallel_completion_decision_from_snapshot(&runtime_snapshot);
+        let decision = TuiPostTurnDecision::from_application_decision(
+            decide_parallel_official_completion_post_turn(&runtime_snapshot),
+        );
         let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
         };
@@ -1069,7 +1081,9 @@ mod tests {
     fn parallel_completion_keeps_supervisor_handoff_when_queue_still_has_work() {
         let runtime_snapshot = PlanningRuntimeSnapshot::invalid("planning still blocked");
 
-        let decision = parallel_completion_decision_from_snapshot(&runtime_snapshot);
+        let decision = TuiPostTurnDecision::from_application_decision(
+            decide_parallel_official_completion_post_turn(&runtime_snapshot),
+        );
         let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
         };

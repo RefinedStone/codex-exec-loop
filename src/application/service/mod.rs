@@ -11,6 +11,8 @@ pub mod github_review_poller_service;
 pub mod parallel_agent_persona;
 // parallel_mode는 여러 worktree/agent lane을 만들고 배분하는 application 흐름이다.
 pub mod parallel_mode;
+// post_turn_decision은 턴 완료 후 auto-follow, parallel continuation, operator alert를 분리해 결정한다.
+pub(crate) mod post_turn_decision;
 // planning은 작업 방향, queue, worker 실행, control 명령을 한 도메인 흐름으로 묶는다.
 pub mod planning;
 // prompt_component는 사용자에게 보이지 않는 prompt 조각을 service 내부에서 재사용하게 한다.
