@@ -63,7 +63,7 @@ TUI / CLI / Admin / Telegram
 | `ParallelModeControlPlaneAggregate` | `src/domain/parallel_mode` | durable snapshot과 입력을 받아 decision 생성 |
 | `ParallelModeControlPlaneDecision` | `src/domain/parallel_mode` | 저장 변경과 실행할 effect를 구조화 |
 | `ParallelModeControlPlaneRuntime` | `src/application/service/parallel_mode` | command/event 직렬 처리, runtime store, effect scheduling |
-| `ParallelModeControlPlaneProjection` | domain projection 또는 application read model | TUI/Admin이 읽는 현재 상태 |
+| `ParallelModeControlPlaneProjection` | `Application Projection` | TUI/Admin이 읽는 현재 상태 |
 | `ParallelPanelStateController` | `src/adapter/inbound/tui/app/parallel_mode` | overlay, cursor, prompt lock, loading 표시만 관리 |
 
 초기 PR에서 이 이름을 모두 만들 필요는 없다. 다만 새 코드가 다른 이름을 쓰더라도
@@ -71,19 +71,22 @@ TUI / CLI / Admin / Telegram
 
 application command/event가 surface metadata, channel, effect id를 담아야 한다면 domain으로
 내리지 않는다. domain에는 I/O와 surface 정보를 제거한 순수 입력만 전달한다.
+이 문서에서 `Application Projection`은 inbound adapter가 읽는 현재 상태 view를 뜻한다.
+구현은 domain projection을 감쌀 수도 있고 durable repository/read model에서 조립할 수도 있지만,
+TUI/Admin/CLI가 읽는 이름은 하나로 유지한다.
 
 ## 상태 소유권 이전표
 
 | 상태 | 현재 흔한 위치 | 목표 소유자 | 비고 |
 | --- | --- | --- | --- |
 | parallel mode enabled 여부 | TUI app state | application runtime store | 자동 dispatch에 영향을 주므로 UI-only가 아니다. TUI는 projection만 가진다. |
-| readiness snapshot | TUI refresh path/application service | application projection | 계산은 service/effect, 표시 모델은 projection으로 제공한다. |
-| supervisor snapshot | TUI cache/application service | repository/read model projection | TUI cache는 마지막 렌더링 값이어야 한다. |
+| readiness snapshot | TUI refresh path/application service | Application Projection | 계산은 service/effect, 표시 모델은 projection으로 제공한다. |
+| supervisor snapshot | TUI cache/application service | Application Projection | durable repository/read model에서 조립하되 TUI cache는 마지막 렌더링 값이어야 한다. |
 | in-flight refresh/tick flags | TUI app state | application runtime store | 중복 worker spawn 방지는 single-writer loop가 판단한다. |
 | last tick signature | TUI app state | application runtime store | wake coalescing과 같은 orchestration state다. |
 | overlay open/close | TUI app state | TUI controller | 순수 presentation state다. |
 | board selection/cursor | TUI app state | TUI controller | domain/application으로 올리지 않는다. |
-| prompt lock 표시 | TUI app state | TUI controller projection | lock 원인은 application projection에서 읽되, 표시 상태는 TUI가 가진다. |
+| prompt lock 표시 | TUI app state | TUI controller | lock 원인은 Application Projection에서 읽되, 표시 상태는 TUI가 가진다. |
 | dispatch command | SQLite authority runtime projection | durable repository/store | 기존 `PlanningAuthorityPort` 경로를 유지한다. |
 | slot lease | lease file + SQLite projection | durable repository/store | load/save 경로는 single-writer loop에서만 호출한다. |
 | session detail | runtime projection | durable repository/store | worker stream event가 직접 UI를 고치지 않게 한다. |
@@ -285,6 +288,8 @@ ParallelPanelUiEffect::RequestRedraw
 ```text
 worker thread
   -> ParallelModeControlPlaneEvent::WorkerCompleted(...)
+     or ParallelModeControlPlaneEvent::WorkerLaunchFailed(...)
+     or ParallelModeControlPlaneEvent::WorkerStreamFailed(...)
   -> application runtime
   -> domain decision
   -> repository/projection update
@@ -296,11 +301,16 @@ worker thread
 - 실제 worker launch는 여전히 application effect runner의 책임이다.
 - worker stream 자체는 별도 thread에서 돌 수 있다.
 - thread가 직접 바꿀 수 있는 것은 channel에 event를 보내는 일뿐이다.
+- thread 생성 실패, worker port I/O 실패, stream 중단, effect runner 내부 오류도
+  `ParallelModeControlPlaneEvent`로 runtime에 되돌린다.
+- runtime은 실패 event를 보고 lease/session detail/dispatch command 보상 갱신을 수행한다.
+  실패를 TUI status copy로만 소비하면 durable state가 다음 dispatch를 막는 원인을 잃는다.
 
 완료 조건:
 
 - stale epoch completion은 application runtime에서 drop된다.
 - TUI에는 stale drop 판단이 없다.
+- worker launch/stream failure가 application runtime에서 보상 처리된다.
 - capacity available event가 남은 queue dispatch를 다시 깨운다.
 - blocked slot이 있어도 idle slot이 있으면 dispatch가 계속된다.
 
@@ -343,6 +353,30 @@ worker thread
 - 새 inbound가 추가되어도 domain/application decision을 복사하지 않는다.
 
 ## PR 슬라이스 제안
+
+### PR 0. Regression Contract Lock
+
+목적:
+
+- 구조 변경 전에 Phase 0의 현재 동작 고정 테스트를 먼저 추가한다.
+- 특히 이번 버그 계열인 “task가 많아도 하나만 진행됨”과 “blocked worktree가 남은 capacity를 막음”을 회귀 테스트로 고정한다.
+
+소유 파일:
+
+- `src/application/service/parallel_mode/tests/orchestrator_loop.rs`
+- `src/application/service/parallel_mode/tests/pool/*`
+- 필요한 경우 `src/adapter/inbound/tui/app/shell_runtime/tests/*`
+
+검증:
+
+- blocked worktree + idle slot dispatch regression
+- capacity available event continuation regression
+- repeated `:parallel` duplicate worker guard
+
+완료 조건:
+
+- 이 PR이 없으면 PR 1 이후 구조 변경을 시작하지 않는다.
+- 테스트 이름만 봐도 어떤 operator-visible 실패를 막는지 알 수 있어야 한다.
 
 ### PR 1. Domain Decision Extraction
 
