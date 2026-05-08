@@ -1,7 +1,5 @@
 use super::*;
-use crate::domain::planning::{
-    PlanningValidationSeverity, PriorityQueueSkippedTask, PriorityQueueTask,
-};
+use crate::domain::planning::PlanningValidationSeverity;
 use crate::domain::text::compact_whitespace_detail;
 
 /*

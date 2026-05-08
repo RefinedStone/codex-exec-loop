@@ -69,9 +69,9 @@ pub(crate) struct SupersessionOverlayView {
 }
 
 /*
- * Queue overlay projects PlanningRuntimeSnapshot into renderer sections. Accepted
- * queue rows, proposal candidates, and explanatory notes are intentionally separate
- * so the UI never blends committed work with suggested next work.
+ * Queue overlay projects the planning application read model into renderer sections.
+ * Accepted queue rows, proposal candidates, and explanatory notes are intentionally
+ * separate so the UI never blends committed work with suggested next work.
  */
 pub(crate) struct QueueOverlayView {
     // Queue overlay title and conversation/runtime context.
