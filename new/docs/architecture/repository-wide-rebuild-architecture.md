@@ -25,6 +25,7 @@ outbound adapter, domain/application/port 계층을 모두 포함한다.
 
 - [parallel-control-plane-architecture.md](./parallel-control-plane-architecture.md)
 - [../plan/parallel-control-plane-migration-plan.md](../plan/parallel-control-plane-migration-plan.md)
+- [store-and-runtime-state-architecture.md](./store-and-runtime-state-architecture.md)
 
 parallel control-plane은 새 구조의 신뢰 기준으로 적합하다.
 
@@ -222,7 +223,8 @@ outbound adapter는 infrastructure detail을 숨기는 구현체다.
 
 ### P4. Outbound And Store 경계 통일
 
-- repository/store와 runtime store를 분리한다.
+- repository/store와 runtime store를
+  [store-and-runtime-state-architecture.md](./store-and-runtime-state-architecture.md) 기준으로 분리한다.
 - adapter mapping과 application orchestration을 분리한다.
 - SQLite/file/git/GitHub/app-server 구현체가 policy를 갖지 않게 한다.
 
