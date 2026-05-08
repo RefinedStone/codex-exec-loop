@@ -74,7 +74,7 @@
 
 - UI-only: prompt input readiness copy, transcript viewport/rendering context
 - Application Projection Cache: `PlanningRuntimeSnapshot`, runtime status text, app-server stream projection
-- Runtime Bridge: auto-follow submission provenance, queued prompt context, post-turn state transition
+- Runtime Bridge: post-turn automation provenance, auto-follow submit context, post-turn state transition
 
 `TUI-00B`는 `ConversationState`와 `BackgroundMessage`를 함께 감사해 background event가
 어느 reducer 또는 application command로 들어가야 하는지 표로 고정했다. 완료 문서는
@@ -96,3 +96,6 @@
   input/rendering regression. 완료 문서는
   [tui-shell-regression-anchors.md](./tui-shell-regression-anchors.md)이다.
 - `TUI-01`: `TUI-00` regression 이후 conversation lifecycle과 automation lifecycle 분리.
+  `TUI-01D`에서 completed turn id, planning handoff, parallel handoff signal은
+  `PostTurnAutomationProvenance`로 묶였고, `QueuedAutoPrompt`는 prompt submit payload만
+  보유한다.

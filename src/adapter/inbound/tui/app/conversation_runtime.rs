@@ -73,6 +73,9 @@ pub(super) enum ConversationRuntimeEffect {
 }
 #[derive(Debug, Clone)]
 pub(super) struct ConversationPostTurnEvaluation {
+    // Provenance binds every post-turn decision to the completed turn and
+    // optional handoff signals that downstream automation may consume.
+    pub provenance: PostTurnAutomationProvenance,
     // Fresh planning projection after the just-finished turn. It replaces the
     // embedded conversation snapshot before auto-follow copy is derived.
     pub runtime_snapshot: PlanningRuntimeSnapshot,
@@ -85,30 +88,48 @@ pub(super) struct ConversationPostTurnEvaluation {
     // The post-turn policy either schedules the next internal prompt or records
     // the reason the loop stopped.
     pub action: ConversationPostTurnAction,
-    // Parallel orchestration handoff is independent from auto-follow copy. Keeping
-    // this separate prevents SkipAutoFollow reasons from becoming hidden control
-    // signals for the supervisor.
-    pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
     // Operator alerts are explicit post-turn outputs, not inferred by the reducer
     // from auto-follow skip copy.
     pub operator_alerts: Vec<OperatorAlert>,
+}
+#[derive(Debug, Clone)]
+pub(super) struct PostTurnAutomationProvenance {
+    pub completed_turn_id: String,
+    pub handoff_task: Option<PlanningTaskHandoff>,
+    pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+}
+impl PostTurnAutomationProvenance {
+    pub(super) fn new(completed_turn_id: String) -> Self {
+        Self {
+            completed_turn_id,
+            handoff_task: None,
+            parallel_queue_signal: None,
+        }
+    }
+
+    pub(super) fn with_handoff_task(mut self, handoff_task: Option<PlanningTaskHandoff>) -> Self {
+        self.handoff_task = handoff_task;
+        self
+    }
+
+    pub(super) fn with_parallel_queue_signal(
+        mut self,
+        parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    ) -> Self {
+        self.parallel_queue_signal = parallel_queue_signal;
+        self
+    }
 }
 #[derive(Debug, Clone)]
 pub(super) struct QueuedAutoPrompt {
     // Prompt sent to app-server. It can include planning context not meant to be
     // shown verbatim in transcript.
     pub prompt: String,
-    // Turn id used to prevent repeatedly queuing auto-follow for the same queue
-    // head after retries or delayed background messages.
-    pub completed_turn_id: String,
     // Human label for the auto-follow policy that produced this prompt.
     pub mode_label: String,
     // Transcript marker shown to the operator; deliberately distinct from the
     // executable prompt text above.
     pub transcript_text: String,
-    // Optional planning task identity when this auto-follow is tied to a concrete
-    // queue handoff.
-    pub handoff_task: Option<PlanningTaskHandoff>,
 }
 #[derive(Debug, Clone)]
 pub(super) enum ConversationPostTurnAction {
@@ -366,24 +387,31 @@ pub(super) fn reduce_conversation_runtime(
             state.extend_runtime_notices([notice]);
         }
         ConversationRuntimeEvent::PostTurnAutomationEvaluated { evaluation } => {
-            let evaluation = *evaluation;
+            let ConversationPostTurnEvaluation {
+                provenance,
+                runtime_snapshot,
+                planning_repair_state,
+                runtime_notices,
+                action,
+                operator_alerts,
+            } = *evaluation;
             // Apply the new planning view before acting on the decision; queued
             // or skipped auto-follow copy should describe the latest queue state.
-            state.replace_planning_runtime_snapshot(evaluation.runtime_snapshot);
-            state.planning_repair_state = evaluation.planning_repair_state;
-            state.extend_runtime_notices(evaluation.runtime_notices);
-            match evaluation.action {
+            state.replace_planning_runtime_snapshot(runtime_snapshot);
+            state.planning_repair_state = planning_repair_state;
+            state.extend_runtime_notices(runtime_notices);
+            match action {
                 ConversationPostTurnAction::QueueAutoPrompt(queued_prompt) => {
                     // Queueing records the pending loop in visible history before
                     // emitting QueueAutoPrompt. The effect will re-enter this
                     // reducer as SubmitPrompt with PromptOrigin::AutoFollow.
                     let QueuedAutoPrompt {
                         prompt,
-                        completed_turn_id,
                         mode_label,
                         transcript_text,
-                        handoff_task,
                     } = *queued_prompt;
+                    let completed_turn_id = provenance.completed_turn_id;
+                    let handoff_task = provenance.handoff_task;
                     state.clear_auto_follow_skip();
                     state.record_auto_follow_queue(&completed_turn_id);
                     state.status_text =
@@ -404,7 +432,7 @@ pub(super) fn reduce_conversation_runtime(
                     state.record_auto_follow_skip(reason);
                     state.status_text = reason.runtime_status(&state.auto_follow_state);
                     state.append_status_message(state.status_text.clone());
-                    for alert in evaluation.operator_alerts {
+                    for alert in operator_alerts {
                         state.extend_runtime_notices([alert.runtime_notice()]);
                         state.append_status_message(alert.transcript_banner());
                         effects.push(ConversationRuntimeEffect::DispatchOperatorAlert { alert });
@@ -485,6 +513,7 @@ mod tests {
             state,
             ConversationRuntimeEvent::PostTurnAutomationEvaluated {
                 evaluation: Box::new(ConversationPostTurnEvaluation {
+                    provenance: PostTurnAutomationProvenance::new("turn-root".to_string()),
                     runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
                         "Planning Context".to_string(),
                         "queue idle: no executable planning task".to_string(),
@@ -496,7 +525,6 @@ mod tests {
                     action: ConversationPostTurnAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
-                    parallel_queue_signal: None,
                     operator_alerts: vec![OperatorAlert::planning_queue_drained()],
                 }),
             },
@@ -527,5 +555,61 @@ mod tests {
             ConversationRuntimeEffect::DispatchOperatorAlert { alert }
                 if alert.audible && alert.title == "All planning tasks complete"
         )));
+    }
+
+    #[test]
+    fn queued_auto_prompt_uses_post_turn_provenance_for_handoff() {
+        let state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        let handoff_task = PlanningTaskHandoff {
+            task_id: "task-1".to_string(),
+            task_title: "Implement provenance".to_string(),
+            direction_id: "general-workstream".to_string(),
+            combined_priority: 10,
+            updated_at: "2026-05-08T00:00:00Z".to_string(),
+            status_label: "Ready".to_string(),
+        };
+
+        let reduction = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::PostTurnAutomationEvaluated {
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    provenance: PostTurnAutomationProvenance::new(
+                        "turn-from-provenance".to_string(),
+                    )
+                    .with_handoff_task(Some(handoff_task.clone())),
+                    runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
+                        "Planning Context".to_string(),
+                        "queue has a ready task".to_string(),
+                        None,
+                        None,
+                    ),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
+                        QueuedAutoPrompt {
+                            prompt: "run task".to_string(),
+                            mode_label: "planning queue".to_string(),
+                            transcript_text: "next-task".to_string(),
+                        },
+                    )),
+                    operator_alerts: Vec::new(),
+                }),
+            },
+        );
+
+        let queued_effect = reduction
+            .effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                ConversationRuntimeEffect::QueueAutoPrompt {
+                    completed_turn_id,
+                    handoff_task,
+                    ..
+                } => Some((completed_turn_id, handoff_task)),
+                _ => None,
+            })
+            .expect("post-turn queue action should emit an auto prompt effect");
+        assert_eq!(queued_effect.0, "turn-from-provenance");
+        assert_eq!(queued_effect.1, Some(handoff_task));
     }
 }

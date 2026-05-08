@@ -578,7 +578,7 @@ impl NativeTuiApp {
         let ConversationRuntimeEvent::PostTurnAutomationEvaluated { evaluation } = event else {
             return None;
         };
-        evaluation.parallel_queue_signal
+        evaluation.provenance.parallel_queue_signal
     }
 
     pub(super) fn apply_parallel_mode_post_turn_queue_continuation(

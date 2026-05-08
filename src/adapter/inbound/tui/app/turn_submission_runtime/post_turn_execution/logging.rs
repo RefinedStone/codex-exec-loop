@@ -1,7 +1,9 @@
 use serde_json::{Map, Value, json};
 
 use super::super::super::ConversationViewModel;
-use super::super::super::conversation_runtime::ConversationPostTurnAction;
+use super::super::super::conversation_runtime::{
+    ConversationPostTurnAction, PostTurnAutomationProvenance,
+};
 use super::PostTurnEvaluationRequest;
 use crate::application::service::planning::{PlanningQueueRefreshMode, PlanningRuntimeSnapshot};
 
@@ -159,15 +161,18 @@ pub(super) fn planning_refresh_mode_label(mode: &PlanningQueueRefreshMode<'_>) -
     }
 }
 
-pub(super) fn post_turn_action_log_detail(action: &ConversationPostTurnAction) -> Value {
+pub(super) fn post_turn_action_log_detail(
+    action: &ConversationPostTurnAction,
+    provenance: &PostTurnAutomationProvenance,
+) -> Value {
     match action {
         ConversationPostTurnAction::QueueAutoPrompt(prompt) => json!({
             "type": "queue_auto_prompt",
-            "completed_turn_id": prompt.completed_turn_id,
+            "completed_turn_id": provenance.completed_turn_id,
             "mode_label": prompt.mode_label,
             "prompt_chars": prompt.prompt.chars().count(),
             "transcript_text_chars": prompt.transcript_text.chars().count(),
-            "handoff_task_id": prompt
+            "handoff_task_id": provenance
                 .handoff_task
                 .as_ref()
                 .map(|task| task.task_id.as_str()),
@@ -234,7 +239,10 @@ mod tests {
             reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
         };
 
-        let detail = post_turn_action_log_detail(&action);
+        let detail = post_turn_action_log_detail(
+            &action,
+            &PostTurnAutomationProvenance::new("turn-1".to_string()),
+        );
 
         assert_eq!(detail["type"], json!("skip_auto_followup"));
         assert_eq!(detail["reason"], json!("PlanningQueueIdlePolicyStop"));
