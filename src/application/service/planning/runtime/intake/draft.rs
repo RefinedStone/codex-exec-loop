@@ -2,7 +2,8 @@ use super::{
     PlanningTaskIntakeDraft, PlanningTaskIntakeRequest, PlanningTaskIntakeValidationError,
 };
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionDefinition, DirectionState, TaskActor, TaskStatus,
+    DirectionCatalogDocument, PlanningActiveDirectionPolicy, PlanningActiveDirectionSelectionError,
+    TaskActor, TaskStatus,
 };
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -48,11 +49,13 @@ impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
     ) -> Result<PlanningTaskIntakeDraft> {
         let intake_request = generation.intake_request;
         let normalized_prompt = normalize_prompt(&intake_request.raw_prompt);
-        let direction = select_direction(
-            intake_request.requested_direction_id.as_deref(),
-            generation.directions,
-        )
-        .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
+        let direction = PlanningActiveDirectionPolicy::new()
+            .select_direction(
+                intake_request.requested_direction_id.as_deref(),
+                generation.directions,
+            )
+            .map_err(map_direction_selection_error)
+            .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
         let task_id = build_task_id(
             generation.generated_at,
             &normalized_prompt,
@@ -101,56 +104,39 @@ pub(super) fn normalize_prompt(prompt: &str) -> String {
     prompt.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn select_direction<'a>(
-    requested_direction_id: Option<&str>,
-    directions: &'a DirectionCatalogDocument,
-) -> std::result::Result<&'a DirectionDefinition, PlanningTaskIntakeValidationError> {
-    // 명시된 direction은 권위 있는 선택으로 취급하지만, 이미 Active인 lane이어야 한다.
-    // 사용자 프롬프트 하나로 archived planning lane을 되살리는 일은 mutation 정책 밖이다.
-    if let Some(requested_direction_id) = requested_direction_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let direction = directions
-            .directions
-            .iter()
-            .find(|direction| direction.id.trim() == requested_direction_id)
-            .ok_or_else(|| {
-                PlanningTaskIntakeValidationError::new(
-                    "unknown_direction",
-                    format!("Requested direction `{requested_direction_id}` does not exist."),
-                )
-            })?;
-        if direction.state != DirectionState::Active {
-            return Err(PlanningTaskIntakeValidationError::new(
+fn map_direction_selection_error(
+    error: PlanningActiveDirectionSelectionError,
+) -> PlanningTaskIntakeValidationError {
+    match error {
+        PlanningActiveDirectionSelectionError::InvalidDirectionId { direction_id } => {
+            PlanningTaskIntakeValidationError::new(
+                "invalid_direction",
+                format!(
+                    "Requested direction `{direction_id}` must not contain whitespace or path separators."
+                ),
+            )
+        }
+        PlanningActiveDirectionSelectionError::UnknownDirection { direction_id } => {
+            PlanningTaskIntakeValidationError::new(
+                "unknown_direction",
+                format!("Requested direction `{direction_id}` does not exist."),
+            )
+        }
+        PlanningActiveDirectionSelectionError::InactiveDirection { direction_id } => {
+            PlanningTaskIntakeValidationError::new(
                 "inactive_direction",
                 format!(
-                    "Requested direction `{requested_direction_id}` is not active; use :directions or :planning first."
+                    "Requested direction `{direction_id}` is not active; use :directions or :planning first."
                 ),
-            ));
+            )
         }
-        return Ok(direction);
-    }
-
-    // direction이 없으면 TUI의 안정적인 기본 lane인 general-workstream을 먼저 고른다.
-    // 그 lane이 생기기 전의 오래된 카탈로그도 읽을 수 있도록 마지막에는 임의의 Active
-    // direction으로 후퇴하되, Active가 전혀 없으면 intake 자체를 막는다.
-    if let Some(direction) = directions.directions.iter().find(|direction| {
-        direction.id.trim() == "general-workstream" && direction.state == DirectionState::Active
-    }) {
-        return Ok(direction);
-    }
-
-    directions
-        .directions
-        .iter()
-        .find(|direction| direction.state == DirectionState::Active)
-        .ok_or_else(|| {
+        PlanningActiveDirectionSelectionError::NoActiveDirection => {
             PlanningTaskIntakeValidationError::new(
                 "no_active_direction",
                 "Task intake requires an active planning direction; use :directions or :planning first.",
             )
-        })
+        }
+    }
 }
 
 fn build_task_title(normalized_prompt: &str) -> String {
