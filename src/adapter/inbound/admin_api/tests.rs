@@ -282,6 +282,18 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 }
 
 #[test]
+fn akra_dashboard_reads_planning_queue_through_application_projection() {
+    assert!(
+        AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_snapshot"),
+        "dashboard should lower planning runtime through the application projection"
+    );
+    assert!(
+        !AKRA_DASHBOARD_RS.contains(".queue_projection()"),
+        "dashboard adapter should not read queue projection internals directly"
+    );
+}
+
+#[test]
 fn akra_graphic_dashboard_character_sprite_asset_is_reviewable() {
     for token in [
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"528\" height=\"96\"",
