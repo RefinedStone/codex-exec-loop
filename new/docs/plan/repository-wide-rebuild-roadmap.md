@@ -54,8 +54,8 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P1 | `PLAN-00` | done | planning regression/audit contract |
 | P1 | `PLAN-01` | done | planning application facade 표준화 |
 | P1 | `PLAN-02` | done | planning domain decision/projection 정리 |
-| P2 | `DOC-TUI-00` | ready | TUI/application boundary architecture 작성 |
-| P2 | `TUI-00` | blocked | TUI shell state inventory와 regression |
+| P2 | `DOC-TUI-00` | done | TUI/application boundary architecture 작성 |
+| P2 | `TUI-00` | ready | TUI shell state inventory와 regression |
 | P2 | `TUI-01` | blocked | conversation lifecycle와 automation lifecycle 분리 |
 | P3 | `DOC-INBOUND-00` | ready | inbound surface unification architecture 작성 |
 | P3 | `INBOUND-00` | blocked | CLI/admin/Telegram command surface 통일 |
@@ -428,7 +428,7 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 
 ### DOC-TUI-00. TUI Application Boundary Architecture
 
-상태: `ready`
+상태: `done`
 
 목적:
 
@@ -450,9 +450,20 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 
 - repository-wide rebuild architecture와 같은 용어를 사용해야 한다.
 
+완료 근거:
+
+- [../architecture/tui-application-boundary-architecture.md](../architecture/tui-application-boundary-architecture.md)
+  에 controller/reducer/presentation/runtime bridge 역할과 state ownership 기준을
+  고정했다.
+- prompt lock, overlay, selection, cursor는 UI-only state로 분류했고, planning/parallel
+  handoff와 post-turn automation은 application/domain 결과를 따르는 projection/event
+  흐름으로 정의했다.
+- `TUI-00`은 이 문서를 선행 조건으로 하는 state inventory/regression slice가 되었으므로
+  ready 상태로 전환한다.
+
 ### TUI-00. Shell State Inventory And Regression
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 
