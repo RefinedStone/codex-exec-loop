@@ -3,9 +3,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningActiveDirectionPolicy,
-    PlanningTaskMutationPolicy, PriorityQueueProjection, PriorityQueueService, PriorityQueueTask,
-    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskDescriptionUpdateDecision,
-    TaskMutationProvenance, TaskStatus,
+    PlanningTaskIdPolicy, PlanningTaskMutationPolicy, PriorityQueueProjection,
+    PriorityQueueService, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
+    TaskDescriptionUpdateDecision, TaskMutationProvenance, TaskStatus,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -13,7 +13,6 @@ use std::sync::Arc;
 const DEFAULT_TASK_PRIORITY: i32 = 80;
 const MAX_REVISION_CONFLICT_RETRIES: usize = 3;
 const MAX_COLLISION_SUFFIX_ATTEMPTS: u32 = 20;
-const TASK_ID_HASH_CHARS: usize = 12;
 const MAX_TASK_MUTATION_COMMANDS: usize = 16;
 mod commands;
 mod helpers;
@@ -23,8 +22,8 @@ pub use self::commands::{
     PlanningTaskUpdateInput, extract_planning_task_commands,
 };
 use self::helpers::{
-    build_task_id, direction_title, find_direction, format_timestamp, increment_suffix,
-    normalize_references, required_id, required_text, task_id_exists,
+    direction_title, find_direction, format_timestamp, normalize_references, required_id,
+    required_text, task_id_exists,
 };
 
 /*
@@ -39,20 +38,13 @@ pub enum PlanningTaskMutationSource {
     System,
 }
 impl PlanningTaskMutationSource {
-    // domain audit record는 actor identity를 저장하고, task-id generation은 stable slug가 필요하다.
-    // 두 mapping을 source enum 가까이에 두면 helper code가 inbound mutation attribution을 추측하지 않는다.
+    // domain audit record와 task-id policy는 TaskActor를 기준으로 한다. source mapping을 요청
+    // enum 가까이에 두면 helper code가 inbound mutation attribution을 추측하지 않는다.
     fn actor(self) -> TaskActor {
         match self {
             Self::User => TaskActor::User,
             Self::Worker => TaskActor::Worker,
             Self::System => TaskActor::System,
-        }
-    }
-    fn id_slug(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Worker => "worker",
-            Self::System => "system",
         }
     }
 }
@@ -104,6 +96,7 @@ pub struct PlanningTaskMutationService {
     priority_queue_service: PriorityQueueService,
     task_mutation_policy: PlanningTaskMutationPolicy,
     active_direction_policy: PlanningActiveDirectionPolicy,
+    task_id_policy: PlanningTaskIdPolicy,
 }
 impl PlanningTaskMutationService {
     pub fn new(
@@ -115,6 +108,7 @@ impl PlanningTaskMutationService {
             priority_queue_service,
             task_mutation_policy: PlanningTaskMutationPolicy::new(),
             active_direction_policy: PlanningActiveDirectionPolicy::new(),
+            task_id_policy: PlanningTaskIdPolicy::new(),
         }
     }
     pub fn preview_create_task(
@@ -231,7 +225,7 @@ impl PlanningTaskMutationService {
                     // revision conflict는 authority set이 바뀌었을 수 있다는 뜻이다. 다음 loop는
                     // 새 revision을 관찰하고 collision suffix도 한 단계 올려 같은 id 재시도를 피한다.
                     observed_revision = current_planning_revision;
-                    next_suffix = increment_suffix(next_suffix);
+                    next_suffix = self.task_id_policy.next_collision_suffix(next_suffix);
                 }
             }
         }
@@ -421,7 +415,7 @@ impl PlanningTaskMutationService {
             if !task_id_exists(authority.task_authority, &task.id) {
                 return Ok(task);
             }
-            suffix = increment_suffix(suffix);
+            suffix = self.task_id_policy.next_collision_suffix(suffix);
         }
         bail!("planning task mutation could not allocate a unique task id")
     }
@@ -462,7 +456,9 @@ impl PlanningTaskMutationService {
         // authority document에 들어가기 전 모든 field를 normalize한다. 이후 update path가 structural
         // equality만으로 no-op 여부를 판단할 수 있게 하려는 전처리다.
         Ok(TaskDefinition {
-            id: build_task_id(audit_context.source, generated_at, &title, collision_suffix),
+            id: self
+                .task_id_policy
+                .build_task_id(actor, generated_at, &title, collision_suffix),
             direction_id: direction.id.trim().to_string(),
             direction_relation_note: self
                 .active_direction_policy

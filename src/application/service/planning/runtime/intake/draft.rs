@@ -3,7 +3,7 @@ use super::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningActiveDirectionPolicy, PlanningActiveDirectionSelectionError,
-    TaskActor, TaskStatus,
+    PlanningTaskIdPolicy, TaskActor, TaskStatus,
 };
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -57,6 +57,7 @@ impl PlanningTaskDraftGenerator for LocalPromptTaskDraftGenerator {
             .map_err(map_direction_selection_error)
             .map_err(PlanningTaskIntakeValidationError::into_anyhow)?;
         let task_id = build_task_id(
+            TaskActor::User,
             generation.generated_at,
             &normalized_prompt,
             generation.collision_suffix,
@@ -163,43 +164,18 @@ fn build_task_title(normalized_prompt: &str) -> String {
 }
 
 fn build_task_id(
+    actor: TaskActor,
     generated_at: DateTime<Utc>,
     normalized_prompt: &str,
     collision_suffix: Option<u32>,
 ) -> String {
-    let timestamp = generated_at.format("%Y%m%dT%H%M%SZ");
-    // timestamp와 prompt hash를 결합해 사람이 읽을 수 있고 재시도에 안정적인 base를 만든다.
-    // suffix는 preview 계층이 실제 충돌을 확인한 뒤에만 붙이므로 정상 생성 ID를 불필요하게
-    // 흔들지 않는다.
-    let base = format!(
-        "task-user-{timestamp}-{}",
-        stable_short_hash(normalized_prompt)
-    );
-    match collision_suffix {
-        Some(suffix) => format!("{base}-{suffix}"),
-        None => base,
-    }
-}
-
-fn stable_short_hash(value: &str) -> String {
-    // 보안용 digest가 아니라 ID suffix 가독성을 위한 결정적 FNV 축약값이다. 같은 prompt는
-    // 같은 suffix를 만들고, 충돌이 나면 상위 preview/retry 경로가 숫자 suffix로 구분한다.
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let mut hash = FNV_OFFSET;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    format!("{hash:016x}")[..12].to_string()
-}
-
-#[cfg(test)]
-fn increment_suffix(suffix: Option<u32>) -> Option<u32> {
-    // 테스트 전용 helper로 preview 충돌 재시도가 suffix 없음 -> 1 -> 2 순서로 움직이는
-    // 정책을 작은 단위에서 고정한다.
-    Some(suffix.unwrap_or(0) + 1)
+    // timestamp와 prompt hash를 결합한 deterministic id shape는 domain policy가 소유한다.
+    PlanningTaskIdPolicy::new().build_task_id(
+        actor,
+        generated_at,
+        normalized_prompt,
+        collision_suffix,
+    )
 }
 
 #[cfg(test)]
@@ -208,7 +184,7 @@ mod tests {
 
     use super::{
         LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator,
-        PlanningTaskIntakeGenerationRequest, increment_suffix,
+        PlanningTaskIntakeGenerationRequest,
     };
     use crate::application::service::planning::runtime::intake::tests::{directions, request};
     use crate::domain::planning::{TaskActor, TaskStatus};
@@ -244,11 +220,5 @@ mod tests {
                 .description
                 .contains("Ship the runtime intake UI")
         );
-    }
-
-    #[test]
-    fn increment_suffix_starts_with_one() {
-        assert_eq!(increment_suffix(None), Some(1));
-        assert_eq!(increment_suffix(Some(1)), Some(2));
     }
 }
