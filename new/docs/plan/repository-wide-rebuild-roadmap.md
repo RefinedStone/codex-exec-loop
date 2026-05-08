@@ -753,7 +753,7 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application
   control-plane runtime state로 이동한다. `STORE-00B/C` 이후 진행한다. blocked.
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact,
-  repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. ready.
+  repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. 완료.
 
 `STORE-00A` 완료 근거:
 
@@ -766,6 +766,13 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
   grouping, official refresh claim ordering regression을 추가했다.
 - `cargo test adapter::outbound::db::sqlite_planning_authority_adapter`로 DB adapter projection
   contract를 검증했다.
+
+`STORE-00E` 완료 근거:
+
+- SQLite repo-scoped active workspace artifact removal과 draft staging이 accepted task authority
+  snapshot을 mutate하지 않는 regression을 추가했다.
+- `cargo test adapter::outbound::db::sqlite_planning_authority_adapter`로 DB authority와 workspace
+  artifact boundary를 검증했다.
 
 ## P5. Test And Docs Slices
 
@@ -815,12 +822,10 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 
 - `INBOUND-00`
 - `STORE-00C`
-- `STORE-00E`
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- `INBOUND-00`과 `STORE-00E`
-- `STORE-00C`와 `STORE-00E`
+- `INBOUND-00`과 `STORE-00C`
 
 동시에 진행하면 안 되는 조합:
 
