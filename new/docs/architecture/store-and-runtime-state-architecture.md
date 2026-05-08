@@ -269,3 +269,6 @@ Outbound adapter 소유:
 - SQLite authority, filesystem workspace, git worktree, runtime event projection의 책임이 분류된다.
 - recovery와 test reset 기준이 각 inventory 항목에 연결된다.
 - parallel architecture의 state table과 모순이 없어야 한다.
+
+구체 inventory와 후속 분할은
+[store-runtime-state-boundary-inventory.md](../plan/store-runtime-state-boundary-inventory.md)를 따른다.
