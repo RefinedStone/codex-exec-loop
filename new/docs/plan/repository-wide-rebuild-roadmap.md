@@ -56,7 +56,7 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P1 | `PLAN-02` | done | planning domain decision/projection 정리 |
 | P2 | `DOC-TUI-00` | done | TUI/application boundary architecture 작성 |
 | P2 | `TUI-00` | done | TUI shell state inventory와 regression |
-| P2 | `TUI-01` | ready | conversation lifecycle와 automation lifecycle 분리 |
+| P2 | `TUI-01` | done | conversation lifecycle와 automation lifecycle 분리 |
 | P3 | `DOC-INBOUND-00` | ready | inbound surface unification architecture 작성 |
 | P3 | `INBOUND-00` | blocked | CLI/admin/Telegram command surface 통일 |
 | P4 | `DOC-STORE-00` | ready | store/runtime-state architecture 작성 |
@@ -519,7 +519,7 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 
 ### TUI-01. Conversation And Automation Split
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -559,7 +559,17 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
   automation provenance로 묶고 pending task-intake flush와 parallel continuation의
   ordering contract를 테스트로 고정한다. 완료.
 - `TUI-01E`: `conversation_state`의 `Hybrid` 분류를 제거하거나 남은 Runtime Bridge field의
-  유지 사유와 후속 migration owner를 문서화한다. 준비됨.
+  유지 사유와 후속 migration owner를 문서화한다. 완료.
+
+완료 근거:
+
+- `TUI-01A`: conversation/automation lifecycle fan-in과 slice ownership을 고정했다.
+- `TUI-01B`: post-turn automation routing을 TUI-side router로 추출했다.
+- `TUI-01C`: reducer vocabulary에서 stream lifecycle과 automation result를 분리했다.
+- `TUI-01D`: completed turn id, planning handoff, parallel handoff signal을
+  `PostTurnAutomationProvenance`로 묶었다.
+- `TUI-01E`: `conversation_state`의 opaque `Hybrid` 분류를 제거하고 하위 field별 UI-only,
+  Application Projection Cache, Runtime Bridge ownership과 후속 owner를 문서화했다.
 
 금지:
 
