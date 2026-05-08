@@ -51,8 +51,8 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P0 | `PAR-03` | done | parallel TUI controller split |
 | P0 | `PAR-04` | done | parallel worker event path |
 | P1 | `DOC-PLAN-00` | done | planning control-plane architecture 작성 |
-| P1 | `PLAN-00` | ready | planning regression/audit contract |
-| P1 | `PLAN-01` | blocked | planning application facade 표준화 |
+| P1 | `PLAN-00` | done | planning regression/audit contract |
+| P1 | `PLAN-01` | ready | planning application facade 표준화 |
 | P1 | `PLAN-02` | blocked | planning domain decision/projection 정리 |
 | P2 | `DOC-TUI-00` | ready | TUI/application boundary architecture 작성 |
 | P2 | `TUI-00` | blocked | TUI shell state inventory와 regression |
@@ -279,7 +279,7 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 
 ### PLAN-00. Planning Regression And Audit Contract
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -314,7 +314,7 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 
 ### PLAN-01. Planning Application Facade Standardization
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 

@@ -244,3 +244,90 @@ fn direction_state_label(state: DirectionState) -> &'static str {
         DirectionState::Done => "done",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::map_queue_preview;
+    use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
+
+    #[test]
+    fn admin_queue_preview_reads_domain_projection_without_reordering() {
+        /*
+         * admin overview는 queue policy를 다시 계산하지 않는다. domain projection이 준 rank
+         * 순서와 proposal lane을 표시용 DTO로 낮추되, 화면 한계 때문에 각 list를 5개로만 자른다.
+         */
+        let projection = PriorityQueueProjection {
+            next_task: Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
+            active_tasks: (1..=6)
+                .map(|rank| {
+                    queue_task(
+                        rank,
+                        &format!("task-{rank}"),
+                        &format!("Active task {rank}"),
+                        TaskStatus::Ready,
+                    )
+                })
+                .collect(),
+            proposed_tasks: (1..=6)
+                .map(|rank| {
+                    queue_task(
+                        rank,
+                        &format!("proposal-{rank}"),
+                        &format!("Proposal {rank}"),
+                        TaskStatus::Proposed,
+                    )
+                })
+                .collect(),
+            skipped_tasks: Vec::new(),
+        };
+
+        let preview = map_queue_preview(&projection);
+
+        assert_eq!(preview.queue_summary, "now: Current task");
+        assert_eq!(
+            preview.queue_head.expect("queue head").rank_reasons,
+            vec!["domain-rank=1".to_string()]
+        );
+        assert_eq!(
+            preview
+                .visible_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-1", "task-2", "task-3", "task-4", "task-5"]
+        );
+        assert_eq!(
+            preview
+                .proposed_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "proposal-1",
+                "proposal-2",
+                "proposal-3",
+                "proposal-4",
+                "proposal-5"
+            ]
+        );
+    }
+
+    fn queue_task(
+        rank: usize,
+        task_id: &str,
+        task_title: &str,
+        status: TaskStatus,
+    ) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank,
+            task_id: task_id.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_title: "Direction A".to_string(),
+            task_title: task_title.to_string(),
+            status,
+            combined_priority: 100 - rank as i32,
+            updated_at: "2026-05-08T00:00:00Z".to_string(),
+            rank_reasons: vec![format!("domain-rank={rank}")],
+        }
+    }
+}

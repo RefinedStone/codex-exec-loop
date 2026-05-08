@@ -390,7 +390,9 @@ mod tests {
         compact_queue_framing_summary,
     };
     use crate::application::service::planning::PlanningRuntimeSnapshot;
-    use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
+    use crate::domain::planning::{
+        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
+    };
     #[test]
     fn resumed_session_status_prefers_queue_summary_projection() {
         let snapshot = PlanningRuntimeSnapshot::ready_with_details(
@@ -448,6 +450,42 @@ mod tests {
         );
     }
     #[test]
+    fn queue_framing_summary_uses_structured_projection_for_proposals_and_blocked_work() {
+        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+            "Planning Context".to_string(),
+            "legacy queue summary should not override structured projection".to_string(),
+            Some("legacy proposal summary".to_string()),
+            None,
+            PriorityQueueProjection {
+                next_task: Some(queue_task("task-1", "Current task", 1)),
+                active_tasks: vec![
+                    queue_task("task-1", "Current task", 1),
+                    queue_task("task-2", "Next task", 2),
+                    queue_task("task-3", "Later task", 3),
+                ],
+                proposed_tasks: vec![
+                    queue_task("proposal-1", "First proposal", 1),
+                    queue_task("proposal-2", "Second proposal", 2),
+                ],
+                skipped_tasks: vec![
+                    skipped_task("blocked-1", "Blocked task", "dependency-open(ready)"),
+                    skipped_task(
+                        "blocked-2",
+                        "Paused task",
+                        "direction direction-b is paused",
+                    ),
+                ],
+            },
+        );
+        let summary = build_queue_framing_summary_from_snapshot(&snapshot, 96)
+            .expect("queue framing summary should exist");
+
+        assert_eq!(
+            summary,
+            "now: Current task  |  next: Next task (+1 more)  |  proposed: First proposal (+1 more)  |  blocked: Blocked task (dependency-open(ready)) (+1 more)"
+        );
+    }
+    #[test]
     fn compact_queue_framing_summary_fills_missing_fields_with_none() {
         assert_eq!(
             compact_queue_framing_summary("now: Review overlays", 96),
@@ -465,6 +503,15 @@ mod tests {
             combined_priority: 100,
             updated_at: "2026-04-17T00:00:00Z".to_string(),
             rank_reasons: vec!["test".to_string()],
+        }
+    }
+    fn skipped_task(task_id: &str, title: &str, reason: &str) -> PriorityQueueSkippedTask {
+        PriorityQueueSkippedTask {
+            task_id: task_id.to_string(),
+            task_title: title.to_string(),
+            direction_id: "direction-1".to_string(),
+            status: TaskStatus::Blocked,
+            reason: reason.to_string(),
         }
     }
 }

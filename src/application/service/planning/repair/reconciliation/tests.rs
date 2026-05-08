@@ -1,3 +1,4 @@
+use super::{PlanningChangeSet, PlanningExecutionSnapshot, execution_snapshot_to_workspace_record};
 use super::{PlanningRepairPromptHandoff, PlanningRepairRequest, build_planning_repair_prompt};
 use crate::domain::planning::{
     PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
@@ -163,6 +164,37 @@ fn repair_prompt_requests_task_command_payload_from_db_authority() {
     assert!(!prompt.contains("task-ledger.json"));
     assert!(!prompt.contains("task authority schema file"));
     assert!(!prompt.contains("queue snapshot artifact"));
+}
+
+// post-turn reconciliation은 active result-output 변경만 복구 대상으로 본다.
+#[test]
+fn reconciliation_change_set_only_tracks_active_result_output_paths() {
+    let changed_paths = vec![
+        "/tmp/workspace/.codex-exec-loop/planning/result-output.md".to_string(),
+        ".codex-exec-loop/planning/DB task authority".to_string(),
+        "src/main.rs".to_string(),
+    ];
+    let change_set = PlanningChangeSet::from_paths(&changed_paths);
+
+    assert!(change_set.result_output_changed);
+
+    let unrelated_paths = vec![
+        ".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string(),
+        ".codex-exec-loop/planning/directions/core.md".to_string(),
+    ];
+    let unrelated_change_set = PlanningChangeSet::from_paths(&unrelated_paths);
+
+    assert!(!unrelated_change_set.has_relevant_changes());
+}
+
+// protected-file restore payload는 pre-turn snapshot을 그대로 workspace port 계약으로 낮춘다.
+#[test]
+fn execution_snapshot_restore_payload_preserves_absent_result_output() {
+    let record = execution_snapshot_to_workspace_record(&PlanningExecutionSnapshot {
+        result_output_markdown: None,
+    });
+
+    assert_eq!(record.result_output_markdown, None);
 }
 
 // 이전 ready handoff를 변경 없이 다시 내보내면 자동 후속 복구 루프가 생긴다.
