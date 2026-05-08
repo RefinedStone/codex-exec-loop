@@ -57,8 +57,8 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P2 | `DOC-TUI-00` | done | TUI/application boundary architecture 작성 |
 | P2 | `TUI-00` | done | TUI shell state inventory와 regression |
 | P2 | `TUI-01` | done | conversation lifecycle와 automation lifecycle 분리 |
-| P3 | `DOC-INBOUND-00` | ready | inbound surface unification architecture 작성 |
-| P3 | `INBOUND-00` | blocked | CLI/admin/Telegram command surface 통일 |
+| P3 | `DOC-INBOUND-00` | done | inbound surface unification architecture 작성 |
+| P3 | `INBOUND-00` | ready | CLI/admin/Telegram command surface 통일 |
 | P4 | `DOC-STORE-00` | ready | store/runtime-state architecture 작성 |
 | P4 | `STORE-00` | blocked | durable store와 runtime store 경계 정리 |
 | P5 | `TEST-00` | blocked | test/doc contract taxonomy 정리 |
@@ -588,7 +588,7 @@ application command/use case를 공유해야 한다.
 
 ### DOC-INBOUND-00. Inbound Surface Unification Architecture
 
-상태: `ready`
+상태: `done`
 
 목적:
 
@@ -609,9 +609,17 @@ application command/use case를 공유해야 한다.
 
 - TUI/admin/CLI/Telegram을 bounded context로 취급하지 않아야 한다.
 
+완료 근거:
+
+- [inbound-surface-unification-architecture.md](../architecture/inbound-surface-unification-architecture.md)
+  에 TUI, CLI, admin API, Telegram bot을 bounded context가 아닌 inbound adapter로 고정했다.
+- surface별 책임, shared application command 호출 원칙, auth/session/context mapping 위치,
+  response rendering과 policy 분리 규칙을 문서화했다.
+- current surface inventory와 `INBOUND-00` 구현 분할 기준을 추가했다.
+
 ### INBOUND-00. Shared Command Surface
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 
@@ -754,19 +762,14 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 
 ## 병렬 작업 가능 조합
 
-바로 병렬로 시작 가능한 조합:
+현재 바로 시작 가능한 조합:
 
-- `PAR-00`
-- `DOC-PLAN-00`
-- `DOC-TUI-00`
-- `DOC-INBOUND-00`
+- `INBOUND-00`
 - `DOC-STORE-00`
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- `PAR-01`과 `DOC-PLAN-00`
-- `PLAN-00`과 `DOC-TUI-00`
-- `DOC-INBOUND-00`과 `DOC-STORE-00`
+- `INBOUND-00`과 `DOC-STORE-00`
 
 동시에 진행하면 안 되는 조합:
 

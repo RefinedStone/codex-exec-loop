@@ -179,6 +179,7 @@ TUI는 화면의 중심이지만 정책의 중심이 아니다.
 ### Admin, CLI, Telegram
 
 이들은 별도 business logic 소유자가 아니다.
+상세 기준은 [inbound-surface-unification-architecture.md](./inbound-surface-unification-architecture.md)를 따른다.
 
 - 각 surface는 request parsing, auth/session/context mapping, response rendering을 맡는다.
 - 같은 기능은 같은 application command/use case를 호출한다.
@@ -217,6 +218,7 @@ outbound adapter는 infrastructure detail을 숨기는 구현체다.
 
 - CLI, admin API, Telegram이 application use case를 복제하지 않도록 한다.
 - surface별 request/response mapping 규칙을 통일한다.
+- 세부 기준 문서는 [inbound-surface-unification-architecture.md](./inbound-surface-unification-architecture.md)이다.
 
 ### P4. Outbound And Store 경계 통일
 
