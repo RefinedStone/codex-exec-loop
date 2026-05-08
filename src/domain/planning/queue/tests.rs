@@ -299,6 +299,81 @@ fn excludes_non_promotable_proposals_from_proposed_queue() {
 }
 
 #[test]
+fn keeps_executable_queue_and_proposal_queue_separate_when_both_have_candidates() {
+    /*
+     * proposed task priority가 ready task보다 높아도 자동 실행 queue head가 되면 안 된다.
+     * proposal classification은 domain queue projection의 별도 lane이며, application/TUI는
+     * 이 분리를 다시 계산하지 않고 active/proposed list를 그대로 표시해야 한다.
+     */
+    let queue_service = PriorityQueueService::new();
+    let directions = directions(&[("direction-a", DirectionState::Active)]);
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![
+            task(
+                "ready-low",
+                "direction-a",
+                TaskStatus::Ready,
+                40,
+                0,
+                "2026-04-09T09:00:00Z",
+            ),
+            task(
+                "proposal-high",
+                "direction-a",
+                TaskStatus::Proposed,
+                100,
+                0,
+                "2026-04-09T07:00:00Z",
+            ),
+            task(
+                "ready-high",
+                "direction-a",
+                TaskStatus::Ready,
+                80,
+                0,
+                "2026-04-09T10:00:00Z",
+            ),
+            task(
+                "proposal-low",
+                "direction-a",
+                TaskStatus::Proposed,
+                60,
+                0,
+                "2026-04-09T08:00:00Z",
+            ),
+        ],
+    };
+    let snapshot = queue_service
+        .build_projection(&directions, &task_authority)
+        .expect("queue projection should build");
+
+    assert_eq!(
+        snapshot
+            .next_task
+            .as_ref()
+            .map(|task| task.task_id.as_str()),
+        Some("ready-high")
+    );
+    assert_eq!(
+        snapshot
+            .active_tasks
+            .iter()
+            .map(|task| (task.rank, task.task_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(1, "ready-high"), (2, "ready-low")]
+    );
+    assert_eq!(
+        snapshot
+            .proposed_tasks
+            .iter()
+            .map(|task| (task.rank, task.task_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(1, "proposal-high"), (2, "proposal-low")]
+    );
+}
+
+#[test]
 fn trims_direction_and_task_ids_for_queue_resolution() {
     // resolution은 matching할 때 id를 trim하지만 projection에는 원래 task id를 보존한다.
     // legacy/hand-authored 문서를 accepted authority identity rewrite 없이 해석하기 위한 절충이다.
