@@ -7,15 +7,18 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
     ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
 };
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDistributorQueueRecord;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
+    PlanningAuthorityPort,
+};
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
-    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
-    ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchCommandState, ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
     OriginSessionKind, PriorityQueueProjection, TaskActor, TaskAuthorityDocument, TaskDefinition,
@@ -264,6 +267,87 @@ fn runtime_dispatch_command_enqueue_claim_and_update_round_trips() {
 }
 
 #[test]
+fn runtime_dispatch_command_cancel_marks_only_non_terminal_commands() {
+    let workspace_dir = temp_workspace("dispatch-command-cancel");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let running_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        Some("queue-head-running".to_string()),
+        Some(21),
+        "2026-05-08T00:00:00+00:00",
+    );
+    let completed_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("queue-head-completed".to_string()),
+        Some(22),
+        "2026-05-08T00:00:01+00:00",
+    );
+    let pending_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("queue-head-pending".to_string()),
+        Some(23),
+        "2026-05-08T00:00:02+00:00",
+    );
+
+    adapter
+        .enqueue_runtime_dispatch_command(&workspace_dir, &running_command)
+        .expect("running seed should enqueue");
+    let running = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-running")
+        .expect("running command should claim")
+        .expect("running command should exist");
+
+    adapter
+        .enqueue_runtime_dispatch_command(&workspace_dir, &completed_command)
+        .expect("completed seed should enqueue");
+    let mut completed = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-completed")
+        .expect("completed command should claim")
+        .expect("completed command should exist");
+    completed.mark_completed("already launched workers", "2026-05-08T00:00:03+00:00");
+    adapter
+        .update_runtime_dispatch_command(&workspace_dir, &completed)
+        .expect("completed command should persist");
+
+    adapter
+        .enqueue_runtime_dispatch_command(&workspace_dir, &pending_command)
+        .expect("pending seed should enqueue");
+
+    let canceled = adapter
+        .cancel_runtime_dispatch_commands(&workspace_dir, "parallel mode disabled")
+        .expect("non-terminal commands should cancel");
+    assert_eq!(canceled, 2);
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(
+        snapshot
+            .dispatch_commands
+            .iter()
+            .find(|command| command.command_id == running.command_id)
+            .map(|command| command.state),
+        Some(ParallelModeDispatchCommandState::Canceled)
+    );
+    assert_eq!(
+        snapshot
+            .dispatch_commands
+            .iter()
+            .find(|command| command.command_id == completed.command_id)
+            .map(|command| command.state),
+        Some(ParallelModeDispatchCommandState::Completed)
+    );
+    assert_eq!(
+        snapshot
+            .dispatch_commands
+            .iter()
+            .find(|command| command.command_id == pending_command.command_id)
+            .map(|command| command.state),
+        Some(ParallelModeDispatchCommandState::Canceled)
+    );
+}
+
+#[test]
 fn runtime_task_cleanup_removes_deleted_task_projections_only() {
     let workspace_dir = temp_workspace("runtime-task-cleanup");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -342,6 +426,113 @@ fn runtime_task_cleanup_removes_deleted_task_projections_only() {
         adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-deleted", "owner-2")
             .expect("deleted queue claim should be cleared")
+    );
+}
+
+#[test]
+fn runtime_projection_snapshot_groups_current_rows_and_recent_events() {
+    let workspace_dir = temp_workspace("runtime-projection-matrix");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let lease = slot_lease_for_task("slot-1", "task-1", ParallelModeSlotLeaseState::Running);
+    let session = failed_start_session_detail("session-1", "task-1", "2026-05-04T12:00:00+00:00");
+    let block = ParallelModeTaskDispatchBlockSnapshot::new(
+        "task-1",
+        "2026-05-04T11:55:00+00:00",
+        "2026-05-04T12:00:00+00:00",
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    let queue_record = queue_record_for_task("queue-1", "session-1", "task-1");
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("task-1:ready".to_string()),
+        Some(31),
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &lease)
+        .expect("slot lease should persist");
+    adapter
+        .upsert_runtime_session_detail(&workspace_dir, &session)
+        .expect("session detail should persist");
+    adapter
+        .upsert_runtime_task_dispatch_block(&workspace_dir, &block)
+        .expect("task dispatch block should persist");
+    adapter
+        .upsert_runtime_distributor_queue_record(&workspace_dir, &queue_record)
+        .expect("distributor queue record should persist");
+    adapter
+        .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+        .expect("dispatch command should persist");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(snapshot.slot_leases.get("slot-1"), Some(&lease));
+    assert_eq!(snapshot.session_details, vec![session]);
+    assert_eq!(snapshot.task_dispatch_blocks, vec![block]);
+    assert_eq!(snapshot.distributor_queue_records, vec![queue_record]);
+    assert_eq!(snapshot.dispatch_commands, vec![command]);
+
+    let event_kinds = snapshot
+        .runtime_events
+        .iter()
+        .map(|event| event.event_kind.as_str())
+        .collect::<Vec<_>>();
+    assert!(event_kinds.contains(&"slot_lease_upsert"));
+    assert!(event_kinds.contains(&"session_detail_upsert"));
+    assert!(event_kinds.contains(&"task_dispatch_block_upsert"));
+    assert!(event_kinds.contains(&"distributor_queue_upsert"));
+    assert!(event_kinds.contains(&"dispatch_command_enqueued"));
+}
+
+#[test]
+fn official_refresh_claim_orders_are_enforced_by_authority_store() {
+    let workspace_dir = temp_workspace("official-refresh-claims");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let first_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("first order should reserve");
+    let second_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("second order should reserve");
+    assert_eq!(first_order, 1);
+    assert_eq!(second_order, 2);
+
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, second_order, "owner-2")
+            .expect("later order should inspect"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, first_order, "owner-1")
+            .expect("head order should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, first_order, "owner-other")
+            .expect("competing owner should wait"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+    );
+
+    adapter
+        .release_official_refresh_claim(&workspace_dir, first_order, "owner-1")
+        .expect("first order should release");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, first_order, "owner-1")
+            .expect("completed order should inspect"),
+        PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, second_order, "owner-2")
+            .expect("next order should acquire after first release"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
     );
 }
 
