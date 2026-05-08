@@ -411,6 +411,8 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
                     transcript_text: "next-task".to_string(),
                     handoff_task: None,
                 })),
+                parallel_queue_signal: None,
+                operator_alerts: Vec::new(),
             }),
             planning_worker_panel_state: Default::default(),
         })
