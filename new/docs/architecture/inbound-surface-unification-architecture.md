@@ -244,7 +244,7 @@ Renderer가 domain rule을 재판단하면 안 된다.
 | CLI planning-tool | `PlanningTaskToolRequest`, `PlanningTaskToolResponse` | stdin JSON contract와 JSON line response | tool command도 command context와 error taxonomy를 공유 |
 | CLI parallel-tick | `ParallelModeService::run_orchestrator_tick(..., ManualDispatch)` | manual/cron driver로 제한하고 application tick result를 렌더링 | 남은 TUI/admin parallel command vocabulary와 정렬 |
 | Admin HTML/JSON | `PlanningAdminFacadeService`, `PlanningAdmin*Request` DTO | HTML/JSON route가 같은 facade를 공유 | duplicate form/JSON mapping helper를 request mapper로 모으기 |
-| Admin Akra dashboard | `PlanningAdminFacadeService`, `ParallelModeService` projection | read-only dashboard projection | dashboard view가 domain type을 직접 읽는 곳은 application projection으로 낮추기 |
+| Admin Akra dashboard | `PlanningAdminFacadeService`, `ParallelModeService` projection | read-only dashboard projection; supervisor/event projection만 렌더링하고 tick mutation은 제공하지 않음 | dashboard view가 domain type을 직접 읽는 곳은 application projection으로 낮추기 |
 | Telegram bot | `PlanningControlCommand`, `PlanningControlService` | chat parser와 allowlist를 adapter에 유지 | shared compact response renderer 또는 typed reply DTO 검토 |
 
 ## 금지 패턴
@@ -305,7 +305,8 @@ long-running loop나 background worker는 effect completion을 application event
 5. parallel TUI/admin/CLI entrypoint가 control-plane runtime command/event를 공유하도록
    tick/wake/snapshot vocabulary를 정리한다. CLI manual tick은 application orchestrator tick
    result vocabulary를 쓰고, TUI `:parallel` enable/disable grammar는 execution path와
-   buffered hint path가 같은 parser를 쓴다.
+   buffered hint path가 같은 parser를 쓴다. Admin Akra surface는 별도 tick mutation을 만들지 않고
+   supervisor/event snapshot projection만 읽는다.
 
 각 implementation slice는 하나의 surface pair 또는 하나의 context command만 다룬다.
 TUI, admin API, Telegram, CLI를 한 PR에서 모두 수정하지 않는다.
