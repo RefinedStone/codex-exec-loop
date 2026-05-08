@@ -1,13 +1,16 @@
 use super::super::super::{
-    AkraTheme, ConversationState, Line, NativeTuiApp, PriorityQueueSkippedTask, PriorityQueueTask,
-    QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
-    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, compact_whitespace_detail,
+    AkraTheme, ConversationState, Line, NativeTuiApp, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
+    QUEUE_INSPECTION_PROPOSAL_LIMIT, QUEUE_INSPECTION_TASK_LIMIT,
+    QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, compact_whitespace_detail,
 };
 use super::QueueOverlayView;
+use crate::application::service::planning::{
+    PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
+};
 
 pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     /*
-     * Queue overlay는 PlanningRuntimeSnapshot을 popup renderer가 바로 배치할 수 있는
+     * Queue overlay는 PlanningApplicationProjection을 popup renderer가 바로 배치할 수 있는
      * header/summary/queue/proposal/note/key section으로 낮춘다. PriorityQueueService가 이미
      * active/proposed/skipped 분류와 rank를 계산했으므로, 이 파일은 queue 의미를 재판단하지 않고
      * 좁은 popup 폭에 맞춰 title/detail을 압축하는 presentation adapter로 남는다.
@@ -54,20 +57,19 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         ConversationState::Ready(conversation) => {
             // Ready conversation만 runtime snapshot을 갖는다. popup은 여기서 read model을 빌려 presentation copy만 만든다.
             let snapshot = &conversation.planning_runtime_snapshot;
-            let queue_projection = snapshot.queue_projection();
+            let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
             /*
              * 새 queue projection이 있으면 active task preview 전체를 보여 준다. 오래된 snapshot이나
              * compatibility path처럼 projection이 없을 때만 legacy queue_head 한 줄로 fallback한다.
              */
-            let queue_lines = queue_projection
-                .map(|queue_projection| {
-                    build_queue_task_lines(
-                        &queue_projection.active_tasks,
-                        "No executable tasks in the current planning queue.",
-                        QUEUE_INSPECTION_TASK_LIMIT,
-                    )
-                })
-                .unwrap_or_else(|| match snapshot.queue_head() {
+            let queue_lines = if projection.has_structured_queue_projection {
+                build_queue_task_lines(
+                    &projection.visible_tasks,
+                    "No executable tasks in the current planning queue.",
+                    QUEUE_INSPECTION_TASK_LIMIT,
+                )
+            } else {
+                match projection.queue_head.as_ref() {
                     Some(queue_head) => build_queue_task_lines(
                         std::slice::from_ref(queue_head),
                         "No executable tasks in the current planning queue.",
@@ -76,36 +78,32 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     None => vec![Line::from(
                         "No executable tasks in the current planning queue.",
                     )],
-                });
+                }
+            };
             /*
              * Proposed tasks는 실행 가능한 active queue가 아니라 operator가 promote할 수 있는 lane이다.
              * 별도 section으로 분리해 "다음 실행"과 "승격 후보"가 같은 우선순위처럼 읽히지 않게 한다.
              */
-            let proposal_lines = queue_projection
-                .map(|queue_projection| {
-                    build_queue_task_lines(
-                        &queue_projection.proposed_tasks,
-                        "No promotable proposals are queued right now.",
-                        QUEUE_INSPECTION_PROPOSAL_LIMIT,
-                    )
-                })
-                .unwrap_or_else(|| {
-                    if let Some(summary) = snapshot.proposal_summary() {
-                        vec![Line::from(format!(
-                            "proposals: {}",
-                            compact_whitespace_detail(summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                        ))]
-                    } else {
-                        vec![Line::from("No promotable proposals are queued right now.")]
-                    }
-                });
-
+            let proposal_lines = if projection.has_structured_queue_projection {
+                build_queue_task_lines(
+                    &projection.proposed_tasks,
+                    "No promotable proposals are queued right now.",
+                    QUEUE_INSPECTION_PROPOSAL_LIMIT,
+                )
+            } else if let Some(summary) = projection.proposal_summary.as_deref() {
+                vec![Line::from(format!(
+                    "proposals: {}",
+                    compact_whitespace_detail(summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                ))]
+            } else {
+                vec![Line::from("No promotable proposals are queued right now.")]
+            };
             /*
              * Summary는 popup 첫 시선에 필요한 queue-head/queue/proposal 상태만 한 줄로 합친다. 상세 row를
              * 읽기 전에 현재 queue head, queue health, proposal lane 유무를 빠르게 확인하게 하는 headline이다.
              */
             let mut summary_segments = Vec::new();
-            if let Some(queue_head) = snapshot.queue_head() {
+            if let Some(queue_head) = projection.queue_head.as_ref() {
                 summary_segments.push(format!(
                     "next: {}",
                     compact_whitespace_detail(
@@ -114,25 +112,25 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     )
                 ));
             }
-            if let Some(queue_summary) = snapshot.queue_summary() {
+            if let Some(queue_summary) = projection.queue_summary.as_deref() {
                 summary_segments.push(format!(
                     "queue: {}",
                     compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 ));
-                if snapshot.queue_head().is_none() {
+                if projection.queue_head.is_none() {
                     summary_segments
-                        .push(format!("policy: {}", snapshot.queue_idle_policy().label()));
+                        .push(format!("policy: {}", projection.queue_idle_policy.label()));
                 }
             }
-            if let Some(proposal_summary) = snapshot.proposal_summary() {
+            if let Some(proposal_summary) = projection.proposal_summary.as_deref() {
                 summary_segments.push(format!(
                     "proposals: {}",
                     compact_whitespace_detail(proposal_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 ));
             }
             if summary_segments.is_empty() {
-                // queue/proposal 요약이 모두 없을 때는 snapshot의 preview status가 가장 압축된 상태 설명이다.
-                summary_segments.push(format!("status: {}", snapshot.preview_status_label()));
+                // queue/proposal 요약이 모두 없을 때는 projection의 preview status가 가장 압축된 상태 설명이다.
+                summary_segments.push(format!("status: {}", projection.status_label));
             }
             let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
 
@@ -173,9 +171,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
-            if let Some(detail) = queue_projection.and_then(|queue_projection| {
-                build_skipped_queue_note_line(&queue_projection.skipped_tasks)
-            }) {
+            if let Some(detail) = build_skipped_queue_note_line(&projection.skipped_tasks) {
                 note_lines.push(detail);
             }
             if note_lines.is_empty() {
@@ -206,7 +202,7 @@ fn build_queue_overlay_key_lines() -> Vec<Line<'static>> {
 }
 
 fn build_queue_task_lines(
-    tasks: &[PriorityQueueTask],
+    tasks: &[PlanningApplicationQueueTask],
     empty_message: &str,
     max_visible_tasks: usize,
 ) -> Vec<Line<'static>> {
@@ -215,7 +211,7 @@ fn build_queue_task_lines(
     }
 
     /*
-     * Popup row는 rank, status, combined priority, title만 남긴다. dependency/blocker 설명은 domain
+     * Popup row는 rank, status, combined priority, title만 남긴다. dependency/blocker 설명은 application
      * projection의 rank_reasons에 있지만 popup에서는 한 줄 scan 비용이 더 중요해 상세 원인은 생략한다.
      */
     let mut lines = Vec::new();
@@ -223,7 +219,7 @@ fn build_queue_task_lines(
         lines.push(Line::from(format!(
             "#{} [{} / p{}] {}",
             task.rank,
-            task.status.label(),
+            task.status_label,
             task.combined_priority,
             compact_whitespace_detail(task.task_title.trim(), QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
         )));
@@ -241,7 +237,7 @@ fn build_queue_task_lines(
 }
 
 fn build_skipped_queue_note_line(
-    skipped_tasks: &[PriorityQueueSkippedTask],
+    skipped_tasks: &[PlanningApplicationSkippedTask],
 ) -> Option<Line<'static>> {
     /*
      * Skipped tasks는 active queue에서 빠졌기 때문에 전체 목록보다 "왜 줄어든 것처럼 보이는가"가 중요하다.
