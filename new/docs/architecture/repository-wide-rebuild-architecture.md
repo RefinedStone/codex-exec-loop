@@ -71,7 +71,7 @@ application/service
 | --- | --- | --- |
 | `adapter/inbound/*` | 입력 해석, UI-only state, request/response mapping, rendering | domain policy, durable mutation, worker launch decision |
 | `application/service/*` | use case, single-writer runtime, transaction order, port effect orchestration | business invariant 직접 성장, surface별 정책 복제 |
-| `domain/*` | aggregate, policy, invariant, pure decision, state transition | I/O, thread, channel, DB/git/filesystem/TUI import |
+| `domain/*` | aggregate, policy, invariant, pure decision, state transition | I/O, thread, channel, `application/*` 및 `adapter/*` 의존성 전체 |
 | `application/port/outbound/*` | 외부 boundary trait과 request/response contract | concrete adapter detail |
 | `adapter/outbound/*` | DB/git/github/filesystem/app-server/telegram 구현과 mapping | use case policy, domain rule |
 
@@ -126,7 +126,7 @@ inbound event/request
   -> repository/save if needed
   -> outbound effect if needed
   -> Application Projection update
-  -> inbound renders/returns response
+  -> inbound renders from projection or returns response
 ```
 
 ### background/effect 완료 흐름
@@ -250,7 +250,7 @@ service {
 }
 ```
 
-이 형태가 커지면 domain decision으로 이동한다.
+비즈니스 규칙이나 invariant 판단이 포함되면 domain decision으로 이동한다.
 
 ### Runtime Store As Repository
 

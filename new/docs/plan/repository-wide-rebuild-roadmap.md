@@ -668,9 +668,8 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 
 동시에 진행하면 안 되는 조합:
 
-- `PAR-02`와 `PAR-04`
 - `PLAN-01`과 `INBOUND-00`
-- `TUI-01`과 `PAR-03`
+- `PAR-04`와 `TUI-01`
 - `STORE-00`과 parallel/planning repository 구현 slice
 
 ## Worker 완료 보고 형식
