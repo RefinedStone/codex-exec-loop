@@ -14,6 +14,10 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
+use crate::application::port::outbound::planning_workspace_port::{
+    PlanningDraftFileRecord, PlanningWorkspaceLoadRecord,
+};
+use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
@@ -176,6 +180,128 @@ fn task_authority_snapshot_persists_queryable_provenance_columns() {
             "main-turn-1".to_string(),
         )
     );
+}
+
+#[test]
+fn active_workspace_artifact_removal_preserves_task_authority_snapshot() {
+    let workspace_dir = temp_workspace("active-artifact-preserves-authority");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("task authority should commit");
+    SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
+        &workspace_dir,
+        &PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("operator result output".to_string()),
+        },
+    )
+    .expect("active workspace artifact should commit");
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            &workspace_dir,
+            RESULT_OUTPUT_FILE_PATH,
+        )
+        .expect("active artifact should load")
+        .as_deref(),
+        Some("operator result output")
+    );
+
+    SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+        &workspace_dir,
+        RESULT_OUTPUT_FILE_PATH,
+        None,
+    )
+    .expect("active workspace artifact should be removable");
+
+    assert!(
+        !SqlitePlanningAuthorityAdapter::load_active_workspace_files(&workspace_dir)
+            .expect("active workspace should load after artifact removal")
+            .has_any_files()
+    );
+    let snapshot = adapter
+        .load_task_authority_snapshot(&workspace_dir)
+        .expect("task authority should still load")
+        .expect("task authority snapshot should remain accepted authority");
+    assert_eq!(snapshot.task_authority, task_authority);
+    assert_eq!(snapshot.queue_projection, queue_projection);
+}
+
+#[test]
+fn staged_draft_rows_do_not_mutate_active_workspace_or_task_authority_snapshot() {
+    let workspace_dir = temp_workspace("draft-preserves-authority");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("task authority should commit");
+    SqlitePlanningAuthorityAdapter::commit_active_workspace_files(
+        &workspace_dir,
+        &PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("active result output".to_string()),
+        },
+    )
+    .expect("active workspace artifact should commit");
+
+    SqlitePlanningAuthorityAdapter::stage_repo_scoped_draft_files(
+        &workspace_dir,
+        "draft-one",
+        &[PlanningDraftFileRecord {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            body: "draft result output".to_string(),
+        }],
+    )
+    .expect("draft artifact should stage");
+
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            &workspace_dir,
+            RESULT_OUTPUT_FILE_PATH,
+        )
+        .expect("active artifact should load")
+        .as_deref(),
+        Some("active result output")
+    );
+    let snapshot = adapter
+        .load_task_authority_snapshot(&workspace_dir)
+        .expect("task authority should still load")
+        .expect("task authority snapshot should remain accepted authority");
+    assert_eq!(snapshot.task_authority, task_authority);
+    assert_eq!(snapshot.queue_projection, queue_projection);
 }
 
 #[test]

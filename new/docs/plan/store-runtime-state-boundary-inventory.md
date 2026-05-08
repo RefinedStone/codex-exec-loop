@@ -93,6 +93,8 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 - `runtime_task_cleanup_removes_deleted_task_projections_only`
 - `runtime_projection_snapshot_groups_current_rows_and_recent_events`
 - `official_refresh_claim_orders_are_enforced_by_authority_store`
+- `active_workspace_artifact_removal_preserves_task_authority_snapshot`
+- `staged_draft_rows_do_not_mutate_active_workspace_or_task_authority_snapshot`
 - `runtime_event_log_port_reads_recent_projection_events`
 - `runtime_event_log_port_filters_events_after_sequence`
 - `runtime_projection_loads_recent_runtime_event_feed_newest_first`
@@ -105,7 +107,6 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
 
 보강할 anchor:
 
-- filesystem workspace artifact reset이 accepted DB authority를 지우지 않는지
 - pool-local mirror write가 outbound boundary로 이동한 뒤 authority-first write order가 유지되는지
 - TUI in-flight/epoch state가 durable store에 저장되지 않고 application runtime event로만 흐르는지
 
@@ -122,10 +123,9 @@ adapter 경계와 runtime state migration을 작은 slice로 나눈다.
   state로 이동하는 최소 slice를 설계/구현한다. `PAR-03`, `PAR-04`, `TUI-01` regression을 같이 확인해야 하므로
   `STORE-00B/C` 이후 진행한다.
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact, repo-scoped
-  active documents, shadow documents, accepted DB authority가 서로 다른 reset boundary를 갖는지 고정한다.
+  active documents, shadow documents, accepted DB authority가 서로 다른 reset boundary를 갖는지 고정한다. 완료.
 
 ## 다음 Worker 시작 기준
 
-다음 worker는 새 repository trait를 만들지 말고 `STORE-00C` 또는 `STORE-00E` 중 하나를 잡는다.
-`STORE-00D`는 TUI/application runtime migration이라 `STORE-00C`의 mirror I/O boundary가
-정리된 뒤에 진행한다.
+다음 worker는 새 repository trait를 만들지 말고 `STORE-00C`를 잡는다. `STORE-00D`는
+TUI/application runtime migration이라 `STORE-00C`의 mirror I/O boundary가 정리된 뒤에 진행한다.
