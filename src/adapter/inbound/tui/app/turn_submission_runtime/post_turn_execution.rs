@@ -23,6 +23,8 @@ use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
 };
 use crate::diagnostics::event_log;
+use crate::domain::operator_alert::OperatorAlert;
+use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 use crate::domain::planning::QueueIdlePolicy;
 use serde_json::json;
 const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
@@ -71,6 +73,22 @@ struct PlanningQueueRefreshOutcome {
 struct OfficialCompletionRefreshOutcome {
     runtime_snapshot: PlanningRuntimeSnapshot,
     runtime_notices: Vec<String>,
+}
+#[derive(Debug, Clone)]
+struct PostTurnDecision {
+    action: ConversationPostTurnAction,
+    parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    operator_alerts: Vec<OperatorAlert>,
+}
+impl PostTurnDecision {
+    fn from_action(action: ConversationPostTurnAction) -> Self {
+        let operator_alerts = operator_alerts_for_action(&action);
+        Self {
+            action,
+            parallel_queue_signal: None,
+            operator_alerts,
+        }
+    }
 }
 #[derive(Debug, Clone)]
 #[cfg_attr(test, allow(dead_code))]
@@ -185,10 +203,14 @@ impl PostTurnEvaluationExecutor {
                 self.run_planning_queue_refresh(conversation, request, runtime_snapshot.clone());
             runtime_snapshot = refresh_outcome.runtime_snapshot;
         }
-        let action = if handled_parallel_completion {
-            parallel_completion_action_from_snapshot(&runtime_snapshot)
+        let post_turn_decision = if handled_parallel_completion {
+            parallel_completion_decision_from_snapshot(&runtime_snapshot)
         } else {
-            self.auto_follow_action_from_snapshot(conversation, request, &runtime_snapshot)
+            PostTurnDecision::from_action(self.auto_follow_action_from_snapshot(
+                conversation,
+                request,
+                &runtime_snapshot,
+            ))
         };
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
@@ -196,7 +218,7 @@ impl PostTurnEvaluationExecutor {
                 request,
                 "post_turn",
                 "completed",
-                Some(post_turn_action_decision(&action)),
+                Some(post_turn_action_decision(&post_turn_decision.action)),
                 Some(&runtime_snapshot),
                 [
                     (
@@ -204,7 +226,22 @@ impl PostTurnEvaluationExecutor {
                         json!(handled_parallel_completion),
                     ),
                     ("runtime_notices_count", json!(runtime_notices.len())),
-                    ("action", post_turn_action_log_detail(&action)),
+                    (
+                        "operator_alerts_count",
+                        json!(post_turn_decision.operator_alerts.len()),
+                    ),
+                    (
+                        "parallel_queue_signal",
+                        json!(
+                            post_turn_decision
+                                .parallel_queue_signal
+                                .map(|signal| format!("{signal:?}"))
+                        ),
+                    ),
+                    (
+                        "action",
+                        post_turn_action_log_detail(&post_turn_decision.action),
+                    ),
                 ],
             )
         });
@@ -216,7 +253,9 @@ impl PostTurnEvaluationExecutor {
                 runtime_snapshot,
                 planning_repair_state: None,
                 runtime_notices,
-                action,
+                action: post_turn_decision.action,
+                parallel_queue_signal: post_turn_decision.parallel_queue_signal,
+                operator_alerts: post_turn_decision.operator_alerts,
             },
             planning_worker_panel_state: self.planning_worker_panel_state,
         }
@@ -804,15 +843,33 @@ impl PostTurnEvaluationExecutor {
     }
 }
 
-fn parallel_completion_action_from_snapshot(
+fn parallel_completion_decision_from_snapshot(
     runtime_snapshot: &PlanningRuntimeSnapshot,
-) -> ConversationPostTurnAction {
-    let reason = if runtime_snapshot.queue_is_drained() {
-        AutoFollowSkipReason::PlanningQueueDrained
+) -> PostTurnDecision {
+    let (reason, parallel_queue_signal) = if runtime_snapshot.queue_is_drained() {
+        (AutoFollowSkipReason::PlanningQueueDrained, None)
     } else {
-        AutoFollowSkipReason::ParallelSessionCompleted
+        (
+            AutoFollowSkipReason::ParallelSessionCompleted,
+            Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized),
+        )
     };
-    ConversationPostTurnAction::SkipAutoFollow { reason }
+    let action = ConversationPostTurnAction::SkipAutoFollow { reason };
+    PostTurnDecision {
+        operator_alerts: operator_alerts_for_action(&action),
+        action,
+        parallel_queue_signal,
+    }
+}
+
+fn operator_alerts_for_action(action: &ConversationPostTurnAction) -> Vec<OperatorAlert> {
+    match action {
+        ConversationPostTurnAction::SkipAutoFollow {
+            reason: AutoFollowSkipReason::PlanningQueueDrained,
+        } => vec![OperatorAlert::planning_queue_drained()],
+        ConversationPostTurnAction::QueueAutoPrompt(_)
+        | ConversationPostTurnAction::SkipAutoFollow { .. } => Vec::new(),
+    }
 }
 
 impl NativeTuiApp {
@@ -926,6 +983,8 @@ fn post_turn_evaluation_timeout_execution(
             action: ConversationPostTurnAction::SkipAutoFollow {
                 reason: AutoFollowSkipReason::PostTurnEvaluationTimedOut,
             },
+            parallel_queue_signal: None,
+            operator_alerts: Vec::new(),
         },
         planning_worker_panel_state: PlanningWorkerPanelState {
             status: PlanningWorkerStatus::RefreshFailed,
@@ -992,25 +1051,34 @@ mod tests {
             },
         );
 
-        let ConversationPostTurnAction::SkipAutoFollow { reason } =
-            parallel_completion_action_from_snapshot(&runtime_snapshot)
-        else {
+        let decision = parallel_completion_decision_from_snapshot(&runtime_snapshot);
+        let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
         };
 
         assert_eq!(reason, AutoFollowSkipReason::PlanningQueueDrained);
+        assert_eq!(decision.parallel_queue_signal, None);
+        assert_eq!(decision.operator_alerts.len(), 1);
+        assert_eq!(
+            decision.operator_alerts[0].title,
+            "All planning tasks complete"
+        );
     }
 
     #[test]
     fn parallel_completion_keeps_supervisor_handoff_when_queue_still_has_work() {
         let runtime_snapshot = PlanningRuntimeSnapshot::invalid("planning still blocked");
 
-        let ConversationPostTurnAction::SkipAutoFollow { reason } =
-            parallel_completion_action_from_snapshot(&runtime_snapshot)
-        else {
+        let decision = parallel_completion_decision_from_snapshot(&runtime_snapshot);
+        let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
         };
 
         assert_eq!(reason, AutoFollowSkipReason::ParallelSessionCompleted);
+        assert_eq!(
+            decision.parallel_queue_signal,
+            Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized)
+        );
+        assert!(decision.operator_alerts.is_empty());
     }
 }

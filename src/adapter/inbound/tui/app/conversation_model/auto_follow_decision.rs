@@ -5,7 +5,6 @@
  * 소비하므로 이 enum들이 adapter 내부 protocol 역할을 한다.
  */
 use crate::application::service::planning::PlanningRuntimeQueuedAutoFollowPrompt;
-use crate::domain::operator_alert::OperatorAlert;
 
 use super::super::turn_activity::TurnActivityState;
 use super::AutoFollowState;
@@ -192,23 +191,6 @@ impl AutoFollowSkipReason {
             Self::PostTurnEvaluationTimedOut => {
                 "turn completed / auto-follow paused: post-turn planning worker timed out".to_string()
             }
-        }
-    }
-
-    pub(crate) fn operator_alert(self) -> Option<OperatorAlert> {
-        match self {
-            Self::PlanningQueueDrained => Some(OperatorAlert::planning_queue_drained()),
-            Self::PostTurnContinuationPaused
-            | Self::LimitReached
-            | Self::NoAgentReply
-            | Self::StopKeywordMatched
-            | Self::NoFileChanges
-            | Self::PlanningBlocked
-            | Self::PlanningQueueIdlePolicyStop
-            | Self::PlanningQueueHeadRequired
-            | Self::PlanningRepeatedQueueHead
-            | Self::ParallelSessionCompleted
-            | Self::PostTurnEvaluationTimedOut => None,
         }
     }
 }

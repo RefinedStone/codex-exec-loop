@@ -23,8 +23,8 @@ use crate::domain::parallel_mode::{
  * copy, and wake application-owned orchestration work.
  */
 use super::{
-    AutoFollowSkipReason, BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect,
-    ConversationRuntimeEvent, ConversationState, NativeTuiApp,
+    BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent,
+    ConversationState, NativeTuiApp,
 };
 
 impl NativeTuiApp {
@@ -573,12 +573,7 @@ impl NativeTuiApp {
         let ConversationRuntimeEvent::PostTurnEvaluated { evaluation } = event else {
             return None;
         };
-        match &evaluation.action {
-            super::conversation_runtime::ConversationPostTurnAction::SkipAutoFollow {
-                reason: AutoFollowSkipReason::ParallelSessionCompleted,
-            } => Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized),
-            _ => None,
-        }
+        evaluation.parallel_queue_signal
     }
 
     pub(super) fn apply_parallel_mode_post_turn_queue_continuation(

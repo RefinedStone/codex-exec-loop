@@ -5,21 +5,24 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
-use crate::application::service::planning::PlanningTaskIntakeCommitResult;
 use crate::application::service::planning::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolUpdateRequest, PlanningTaskUpdatePayload,
 };
+use crate::application::service::planning::{
+    PlanningRuntimeSnapshot, PlanningTaskIntakeCommitResult,
+};
+use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
     ParallelModeCapabilityState, ParallelModeDispatchBlockReason,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
     ParallelModeDistributorSnapshot, ParallelModeLiveSessionDetailDefaults,
-    ParallelModePoolBoardSnapshot, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorDetailSnapshot,
-    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
-    ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotState, ParallelModePostTurnQueueSignal,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeSlotLeaseRequest,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState, ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::TaskStatus;
 use anyhow::Result;
@@ -403,6 +406,8 @@ impl NativeFlowHarness {
                             handoff_task: None,
                         },
                     )),
+                    parallel_queue_signal: None,
+                    operator_alerts: Vec::new(),
                 }),
                 planning_worker_panel_state: Default::default(),
             })
@@ -440,10 +445,49 @@ impl NativeFlowHarness {
                     action: ConversationPostTurnAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::ParallelSessionCompleted,
                     },
+                    parallel_queue_signal: Some(
+                        ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
+                    ),
+                    operator_alerts: Vec::new(),
                 }),
                 planning_worker_panel_state: Default::default(),
             })
             .expect("parallel completion evaluation should enqueue");
+    }
+
+    fn send_parallel_completion_with_drained_queue(&mut self, turn_id: &str) {
+        let planning_snapshot = PlanningRuntimeSnapshot::ready_with_details(
+            "Planning Context".to_string(),
+            "queue idle: no executable planning task".to_string(),
+            None,
+            None,
+        );
+        let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
+        else {
+            panic!("expected ready conversation state");
+        };
+        conversation.thread_id = "thread-1".to_string();
+        conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
+
+        self.runtime
+            .app
+            .tx
+            .send(BackgroundMessage::PostTurnEvaluated {
+                thread_id: "thread-1".to_string(),
+                completed_turn_id: turn_id.to_string(),
+                evaluation: Box::new(ConversationPostTurnEvaluation {
+                    runtime_snapshot: planning_snapshot,
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: ConversationPostTurnAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::PlanningQueueDrained,
+                    },
+                    parallel_queue_signal: None,
+                    operator_alerts: vec![OperatorAlert::planning_queue_drained()],
+                }),
+                planning_worker_panel_state: Default::default(),
+            })
+            .expect("drained parallel completion evaluation should enqueue");
     }
 
     fn send_dispatch_request_for_current_epoch(&self, trigger: ParallelModeAutomationTrigger) {
@@ -1126,6 +1170,51 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
         projections.dispatch_commands[0].state,
         ParallelModeDispatchCommandState::Completed
     );
+}
+
+#[test]
+fn parallel_completion_with_drained_queue_alerts_without_dispatching() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-parallel-completion-drained");
+    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
+        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
+        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(1);
+
+    harness.send_parallel_completion_with_drained_queue("parallel-turn-drained");
+    harness.runtime.poll_background_messages();
+
+    let ConversationState::Ready(conversation) = &harness.runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(
+        conversation
+            .status_text
+            .contains("all planning tasks complete")
+    );
+    assert!(
+        conversation
+            .messages
+            .iter()
+            .any(|message| message.text.contains("ALL PLANNING TASKS COMPLETE"))
+    );
+    assert!(
+        conversation
+            .runtime_notices
+            .iter()
+            .any(|notice| notice.contains("All planning tasks complete"))
+    );
+
+    for _ in 0..10 {
+        harness.runtime.poll_background_messages();
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(harness.worker_port.requests().len(), 0);
+    assert!(harness.runtime_projections().dispatch_commands.is_empty());
 }
 
 #[test]

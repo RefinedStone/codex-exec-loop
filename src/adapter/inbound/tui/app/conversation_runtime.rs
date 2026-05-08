@@ -19,6 +19,7 @@ use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningTas
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use crate::domain::operator_alert::OperatorAlert;
+use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
@@ -84,6 +85,13 @@ pub(super) struct ConversationPostTurnEvaluation {
     // The post-turn policy either schedules the next internal prompt or records
     // the reason the loop stopped.
     pub action: ConversationPostTurnAction,
+    // Parallel orchestration handoff is independent from auto-follow copy. Keeping
+    // this separate prevents SkipAutoFollow reasons from becoming hidden control
+    // signals for the supervisor.
+    pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    // Operator alerts are explicit post-turn outputs, not inferred by the reducer
+    // from auto-follow skip copy.
+    pub operator_alerts: Vec<OperatorAlert>,
 }
 #[derive(Debug, Clone)]
 pub(super) struct QueuedAutoPrompt {
@@ -393,11 +401,10 @@ pub(super) fn reduce_conversation_runtime(
                     // Skips are durable status messages because they explain why
                     // the automatic loop stopped and often require operator
                     // action before the next manual prompt.
-                    let operator_alert = reason.operator_alert();
                     state.record_auto_follow_skip(reason);
                     state.status_text = reason.runtime_status(&state.auto_follow_state);
                     state.append_status_message(state.status_text.clone());
-                    if let Some(alert) = operator_alert {
+                    for alert in evaluation.operator_alerts {
                         state.extend_runtime_notices([alert.runtime_notice()]);
                         state.append_status_message(alert.transcript_banner());
                         effects.push(ConversationRuntimeEffect::DispatchOperatorAlert { alert });
@@ -489,6 +496,8 @@ mod tests {
                     action: ConversationPostTurnAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
+                    parallel_queue_signal: None,
+                    operator_alerts: vec![OperatorAlert::planning_queue_drained()],
                 }),
             },
         );
