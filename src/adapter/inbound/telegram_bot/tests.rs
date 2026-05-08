@@ -29,6 +29,10 @@ use std::time::Duration;
 struct FakePlanningControlSurface;
 
 impl PlanningControlSurface for FakePlanningControlSurface {
+    fn workspace_dir(&self) -> &str {
+        "/tmp/repo"
+    }
+
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         /*
          * Keep this snapshot intentionally small but not empty. Telegram status
@@ -82,6 +86,10 @@ struct FlakyPlanningControlSurface {
 }
 
 impl PlanningControlSurface for FlakyPlanningControlSurface {
+    fn workspace_dir(&self) -> &str {
+        "/tmp/repo"
+    }
+
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         let call = self.load_calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {

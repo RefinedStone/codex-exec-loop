@@ -37,6 +37,28 @@ impl PlanningControlReply {
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningControlRequest {
+    pub command: PlanningControlCommand,
+}
+impl PlanningControlRequest {
+    pub fn new(command: PlanningControlCommand) -> Self {
+        Self { command }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningControlResponse {
+    pub workspace_dir: String,
+    pub reply: PlanningControlReply,
+}
+impl PlanningControlResponse {
+    fn new(workspace_dir: impl Into<String>, reply: PlanningControlReply) -> Self {
+        Self {
+            workspace_dir: workspace_dir.into(),
+            reply,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningControlQueueEntry {
     // queue entry는 operator text에 필요한 field만 남긴다. rich admin view가 UI 전용 metadata를 늘려도
     // command API의 compact line 계약은 바뀌지 않는다.
@@ -78,6 +100,7 @@ pub struct PlanningControlResetOutcome {
 }
 pub trait PlanningControlSurface: Send + Sync {
     // 좁은 trait은 command executor를 testable하게 만들고, text layer가 full planning facade API에 의존하지 않게 한다.
+    fn workspace_dir(&self) -> &str;
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot>;
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome>;
 }
@@ -96,6 +119,10 @@ impl PlanningControlFacadeService {
     }
 }
 impl PlanningControlSurface for PlanningControlFacadeService {
+    fn workspace_dir(&self) -> &str {
+        self.workspace_dir.as_str()
+    }
+
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         let doctor = self
             .planning
@@ -149,6 +176,16 @@ pub struct PlanningControlService {
 impl PlanningControlService {
     pub fn new(surface: Arc<dyn PlanningControlSurface>) -> Self {
         Self { surface }
+    }
+    pub fn execute_request(
+        &self,
+        request: PlanningControlRequest,
+    ) -> Result<PlanningControlResponse> {
+        let reply = self.execute(request.command)?;
+        Ok(PlanningControlResponse::new(
+            self.surface.workspace_dir(),
+            reply,
+        ))
     }
     pub fn execute(&self, command: PlanningControlCommand) -> Result<PlanningControlReply> {
         // execute는 의도적으로 dispatch와 formatting만 담당한다. 모든 read/write는 PlanningControlSurface 경계를 지난다.
@@ -324,9 +361,9 @@ fn format_reset(outcome: &PlanningControlResetOutcome) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanningControlCommand, PlanningControlQueueEntry, PlanningControlResetOutcome,
-        PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
-        map_control_status_snapshot,
+        PlanningControlCommand, PlanningControlQueueEntry, PlanningControlRequest,
+        PlanningControlResetOutcome, PlanningControlService, PlanningControlStatusSnapshot,
+        PlanningControlSurface, map_control_status_snapshot,
     };
     use crate::application::service::planning::{
         PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
@@ -345,6 +382,10 @@ mod tests {
         reset_outcome: PlanningControlResetOutcome,
     }
     impl PlanningControlSurface for FakePlanningControlSurface {
+        fn workspace_dir(&self) -> &str {
+            self.status.workspace_dir.as_str()
+        }
+
         fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
             Ok(self.status.clone())
         }
@@ -436,6 +477,22 @@ mod tests {
 
         assert!(reply.text.contains("reset queue 완료"));
         assert!(reply.text.contains("DB task authority"));
+    }
+
+    #[test]
+    fn execute_request_returns_shared_response_context() {
+        /*
+         * CLI and Telegram call the same request/response path. The workspace
+         * context comes from the control surface, so adapters do not need their
+         * own response envelope for the same planning command.
+         */
+        let service = build_service();
+        let response = service
+            .execute_request(PlanningControlRequest::new(PlanningControlCommand::Status))
+            .expect("status request should execute");
+
+        assert_eq!(response.workspace_dir, "/tmp/repo");
+        assert!(response.reply.text.contains("상태 요약"));
     }
 
     #[test]
