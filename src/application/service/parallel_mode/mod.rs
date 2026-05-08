@@ -4,12 +4,12 @@ use crate::application::port::outbound::parallel_mode_runtime_port::ParallelMode
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::domain::parallel_mode::{
-    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchTaskCandidate,
-    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetReport, ParallelModePoolSlotState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+    ParallelModeCapabilityState, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchTaskCandidate, ParallelModeOrchestratorState,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetReport, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEvent,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -32,6 +32,7 @@ pub(crate) mod turn;
 use self::branch_names::{allocate_agent_branch_name, branch_exists};
 #[cfg(test)]
 use self::branch_names::{sanitize_task_slug, short_branch_slug_hash};
+use self::control_plane::ParallelModeControlPlaneWake;
 use self::distributor::ParallelModeDistributorService;
 use self::orchestration::{
     inspect_akra_integration_worktree_blocker, parallel_dispatch_excluded_task_ids,
@@ -532,6 +533,22 @@ impl ParallelModeService {
                     == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Pending
             })
             .count())
+    }
+
+    pub fn pending_dispatch_wake(
+        &self,
+        workspace_dir: &str,
+        epoch_id: u64,
+    ) -> Result<Option<ParallelModeControlPlaneWake>, String> {
+        if self.pending_dispatch_command_count(workspace_dir)? == 0 {
+            return Ok(None);
+        }
+        Ok(Some(ParallelModeControlPlaneWake::new(
+            workspace_dir,
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id,
+            None,
+        )))
     }
 
     pub fn update_dispatch_command(
