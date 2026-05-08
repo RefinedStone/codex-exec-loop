@@ -641,6 +641,61 @@ pub(super) fn record_failed_start_session_detail(
 }
 
 /*
+stale active lease 기록은 runtime authority가 Running/CleanupPending lease를 보존하지만
+git worktree는 이미 clean baseline으로 돌아간 split-brain 복구 경로에서 사용한다.
+이 상태는 더 이상 실행 중인 agent branch를 신뢰할 수 없으므로 live roster에서는 failed로
+닫고, slot은 idle로 회수한다. 같은 task를 즉시 재배정하면 같은 손실 상태를 반복할 수 있어
+task가 갱신될 때까지 dispatch block도 함께 남긴다.
+*/
+pub(super) fn record_stale_active_lease_released_session_detail(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    recovery_summary: &str,
+) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
+    let detail = update_agent_session_detail_record(
+        planning_authority,
+        workspace_dir,
+        pool_root,
+        lease,
+        |current| {
+            let timestamp = current_timestamp();
+            let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
+            detail.state_label = "failed".to_string();
+            detail.completion_state_label = "aborted".to_string();
+            detail.latest_summary = recovery_summary.to_string();
+            detail.distributor_outcome =
+                Some("stale lease removed and slot returned to idle".to_string());
+            detail.updated_at = timestamp.clone();
+            push_session_history(
+                &mut detail,
+                "failed",
+                timestamp.clone(),
+                recovery_summary.to_string(),
+            );
+            push_session_history(
+                &mut detail,
+                "cleaned",
+                timestamp,
+                "slot returned to idle after stale lease reconciliation".to_string(),
+            );
+            detail
+        },
+    )?;
+    let block = ParallelModeTaskDispatchBlockSnapshot::new(
+        detail.task_id.clone(),
+        String::new(),
+        detail.updated_at.clone(),
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    planning_authority
+        .upsert_runtime_task_dispatch_block(workspace_dir, &block)
+        .map_err(|error| format!("failed to store stale lease dispatch block: {error}"))?;
+    Ok(detail)
+}
+
+/*
 running elapsed label은 supervisor roster에서 live agent가 얼마나 오래 실행 중인지
 보여 주는 표시값이다. 저장된 RFC3339 timestamp를 UTC로 파싱하고 현재 시각과 비교한다.
 파싱 실패는 None으로 두어 화면이 잘못된 시간을 억지로 표시하지 않게 한다.

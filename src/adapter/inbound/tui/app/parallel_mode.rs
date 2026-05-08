@@ -12,7 +12,7 @@ use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger, ParallelModeDispatchOutcome,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStateMachine,
     ParallelModePoolBoardSnapshot, ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
-    ParallelModeReadinessSnapshot, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 
@@ -811,6 +811,26 @@ impl NativeTuiApp {
         Ok(inserted_count)
     }
 
+    fn enqueue_parallel_mode_slot_capacity_command(
+        &mut self,
+        workspace_directory: &str,
+    ) -> Result<usize, String> {
+        let Some(epoch_id) = self.parallel_mode_automation_epoch_id else {
+            return Ok(0);
+        };
+        let planning_snapshot = self
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(workspace_directory);
+        self.parallel_mode_service
+            .enqueue_dispatch_commands_for_event(
+                workspace_directory,
+                ParallelModeRuntimeEvent::SlotCapacityAvailable,
+                &planning_snapshot,
+                Some(epoch_id),
+            )
+    }
+
     pub(super) fn maybe_wake_parallel_mode_orchestrator_for_pending_command(&mut self) -> bool {
         if !self.parallel_mode_enabled() || self.parallel_mode_automation_epoch_id.is_none() {
             return false;
@@ -985,6 +1005,7 @@ impl NativeTuiApp {
         }
 
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        self.maybe_wake_parallel_mode_orchestrator_for_pending_command();
         self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
     }
 
@@ -1058,6 +1079,22 @@ impl NativeTuiApp {
             workspace_directory,
         );
         self.invalidate_parallel_mode_supervisor_snapshot();
+        if !blocked {
+            match self.enqueue_parallel_mode_slot_capacity_command(workspace_directory) {
+                Ok(0) => {}
+                Ok(_) => {
+                    self.last_parallel_mode_automation_trigger =
+                        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch);
+                    self.last_parallel_mode_dispatch_withheld_reason = None;
+                }
+                Err(error) => {
+                    self.record_parallel_mode_dispatch_withheld(
+                        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+                        &format!("slot-capacity dispatch queue failed: {error}"),
+                    );
+                }
+            }
+        }
         let status_text = if blocked {
             format!("parallel mode: distributor retry blocked / notices: {notice_count}")
         } else {

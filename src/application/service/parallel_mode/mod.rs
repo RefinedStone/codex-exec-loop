@@ -70,7 +70,7 @@ use self::session_detail::{
     record_integrating_session_detail, record_merge_pending_session_detail,
     record_merge_queued_session_detail, record_official_completion_recovery_needed_session_detail,
     record_pr_pending_session_detail, record_pushing_session_detail, record_running_session_detail,
-    record_thread_prepared_session_detail,
+    record_stale_active_lease_released_session_detail, record_thread_prepared_session_detail,
 };
 use self::supervisor::ParallelModeSupervisorService;
 pub(super) use self::support::{
