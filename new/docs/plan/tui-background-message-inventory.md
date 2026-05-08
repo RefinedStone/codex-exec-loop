@@ -35,7 +35,7 @@ handler가 DB, filesystem planning authority, parallel dispatch queue, task auth
 | `ParallelModeOrchestratorWakeCompleted` | parallel control-plane effect | parallel application result mapping | readiness/supervisor projection cache, dispatch outcome notice |
 | `ParallelModeWorkerEvent` | worker completion channel | parallel application control-plane worker event | application service handles worker completion; TUI only routes |
 | `ParallelModeOrchestratorTickCompleted` | parallel tick effect | parallel panel projection cache/application wake state | blocked status and notices; no durable queue mutation |
-| `PostTurnEvaluated` | post-turn execution effect | stale guard, then `ConversationRuntimeEvent::PostTurnAutomationEvaluated` reducer | planning worker panel projection, runtime snapshot projection, queued auto prompt effect |
+| `PostTurnEvaluated` | post-turn execution effect | stale guard, then `ConversationRuntimeEvent::PostTurnAutomationEvaluated` reducer | planning worker panel projection, runtime snapshot projection, automation provenance, queued auto prompt effect |
 | `GithubReviewPollLoaded` | GitHub polling effect | GitHub polling controller/projection cache | polling projection cache only |
 
 ## Regression Anchors

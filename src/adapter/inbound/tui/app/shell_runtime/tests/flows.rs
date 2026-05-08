@@ -1,7 +1,8 @@
 use super::*;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
+    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
+    QueuedAutoPrompt,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
@@ -397,19 +398,17 @@ impl NativeFlowHarness {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
+                    provenance: PostTurnAutomationProvenance::new(turn_id.to_string()),
                     runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
                         QueuedAutoPrompt {
                             prompt: "run next task".to_string(),
-                            completed_turn_id: turn_id.to_string(),
                             mode_label: "flow".to_string(),
                             transcript_text: "next-task".to_string(),
-                            handoff_task: None,
                         },
                     )),
-                    parallel_queue_signal: None,
                     operator_alerts: Vec::new(),
                 }),
                 planning_worker_panel_state: Default::default(),
@@ -442,15 +441,16 @@ impl NativeFlowHarness {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
+                    provenance: PostTurnAutomationProvenance::new(turn_id.to_string())
+                        .with_parallel_queue_signal(Some(
+                            ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
+                        )),
                     runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: ConversationPostTurnAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::ParallelSessionCompleted,
                     },
-                    parallel_queue_signal: Some(
-                        ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
-                    ),
                     operator_alerts: Vec::new(),
                 }),
                 planning_worker_panel_state: Default::default(),
@@ -479,13 +479,13 @@ impl NativeFlowHarness {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
+                    provenance: PostTurnAutomationProvenance::new(turn_id.to_string()),
                     runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: ConversationPostTurnAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
-                    parallel_queue_signal: None,
                     operator_alerts: vec![OperatorAlert::planning_queue_drained()],
                 }),
                 planning_worker_panel_state: Default::default(),

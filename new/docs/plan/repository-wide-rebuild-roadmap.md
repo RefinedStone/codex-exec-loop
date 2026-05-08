@@ -557,9 +557,9 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
   event를 사용하고, auto-follow는 automation result action으로만 남긴다. 완료.
 - `TUI-01D`: queued auto prompt metadata, planning handoff, parallel handoff signal을
   automation provenance로 묶고 pending task-intake flush와 parallel continuation의
-  ordering contract를 테스트로 고정한다. 준비됨.
+  ordering contract를 테스트로 고정한다. 완료.
 - `TUI-01E`: `conversation_state`의 `Hybrid` 분류를 제거하거나 남은 Runtime Bridge field의
-  유지 사유와 후속 migration owner를 문서화한다.
+  유지 사유와 후속 migration owner를 문서화한다. 준비됨.
 
 금지:
 

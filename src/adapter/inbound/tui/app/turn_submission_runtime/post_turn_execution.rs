@@ -3,7 +3,8 @@ use super::super::app_runtime::BackgroundMessage;
 #[cfg(test)]
 use super::super::conversation_runtime::ConversationRuntimeEvent;
 use super::super::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
+    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
+    QueuedAutoPrompt,
 };
 use super::super::{
     ActiveTurnExecutionSnapshotCapture, ActiveTurnExecutionSnapshotState, AutoFollowDecision,
@@ -28,6 +29,7 @@ use crate::application::service::post_turn_decision::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::operator_alert::OperatorAlert;
+#[cfg(test)]
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 use crate::domain::planning::QueueIdlePolicy;
 use serde_json::json;
@@ -81,25 +83,41 @@ struct OfficialCompletionRefreshOutcome {
 #[derive(Debug, Clone)]
 struct TuiPostTurnDecision {
     action: ConversationPostTurnAction,
-    parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    provenance: PostTurnAutomationProvenance,
     operator_alerts: Vec<OperatorAlert>,
 }
 impl TuiPostTurnDecision {
-    fn from_action(action: ConversationPostTurnAction) -> Self {
+    fn from_action(completed_turn_id: String, action: ConversationPostTurnAction) -> Self {
         let operator_alerts = operator_alerts_for_action(&action);
         Self {
             action,
-            parallel_queue_signal: None,
+            provenance: PostTurnAutomationProvenance::new(completed_turn_id),
             operator_alerts,
         }
     }
 
-    fn from_application_decision(decision: ApplicationPostTurnDecision) -> Self {
+    fn from_action_with_provenance(
+        action: ConversationPostTurnAction,
+        provenance: PostTurnAutomationProvenance,
+    ) -> Self {
+        let operator_alerts = operator_alerts_for_action(&action);
+        Self {
+            action,
+            provenance,
+            operator_alerts,
+        }
+    }
+
+    fn from_application_decision(
+        completed_turn_id: String,
+        decision: ApplicationPostTurnDecision,
+    ) -> Self {
         Self {
             action: ConversationPostTurnAction::SkipAutoFollow {
                 reason: auto_follow_skip_reason_from_post_turn(decision.auto_follow_stop_reason),
             },
-            parallel_queue_signal: decision.parallel_queue_signal,
+            provenance: PostTurnAutomationProvenance::new(completed_turn_id)
+                .with_parallel_queue_signal(decision.parallel_queue_signal),
             operator_alerts: decision.operator_alerts,
         }
     }
@@ -219,14 +237,11 @@ impl PostTurnEvaluationExecutor {
         }
         let post_turn_decision = if handled_parallel_completion {
             TuiPostTurnDecision::from_application_decision(
+                request.completed_turn_id.clone(),
                 decide_parallel_official_completion_post_turn(&runtime_snapshot),
             )
         } else {
-            TuiPostTurnDecision::from_action(self.auto_follow_action_from_snapshot(
-                conversation,
-                request,
-                &runtime_snapshot,
-            ))
+            self.auto_follow_decision_from_snapshot(conversation, request, &runtime_snapshot)
         };
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
@@ -250,13 +265,17 @@ impl PostTurnEvaluationExecutor {
                         "parallel_queue_signal",
                         json!(
                             post_turn_decision
+                                .provenance
                                 .parallel_queue_signal
                                 .map(|signal| format!("{signal:?}"))
                         ),
                     ),
                     (
                         "action",
-                        post_turn_action_log_detail(&post_turn_decision.action),
+                        post_turn_action_log_detail(
+                            &post_turn_decision.action,
+                            &post_turn_decision.provenance,
+                        ),
                     ),
                 ],
             )
@@ -266,11 +285,11 @@ impl PostTurnEvaluationExecutor {
             thread_id: conversation.thread_id.clone(),
             completed_turn_id: request.completed_turn_id.clone(),
             evaluation: ConversationPostTurnEvaluation {
+                provenance: post_turn_decision.provenance,
                 runtime_snapshot,
                 planning_repair_state: None,
                 runtime_notices,
                 action: post_turn_decision.action,
-                parallel_queue_signal: post_turn_decision.parallel_queue_signal,
                 operator_alerts: post_turn_decision.operator_alerts,
             },
             planning_worker_panel_state: self.planning_worker_panel_state,
@@ -740,12 +759,12 @@ impl PostTurnEvaluationExecutor {
     // pause states and queue-idle stop policy win before the conversation model
     // is allowed to enqueue another prompt.
     #[tracing::instrument(level = "trace", skip(self))]
-    fn auto_follow_action_from_snapshot(
+    fn auto_follow_decision_from_snapshot(
         &self,
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
         runtime_snapshot: &PlanningRuntimeSnapshot,
-    ) -> ConversationPostTurnAction {
+    ) -> TuiPostTurnDecision {
         if conversation
             .auto_follow_state
             .post_turn_continuation_paused()
@@ -761,9 +780,12 @@ impl PostTurnEvaluationExecutor {
                     [("reason", json!("PostTurnContinuationPaused"))],
                 )
             });
-            return ConversationPostTurnAction::SkipAutoFollow {
-                reason: AutoFollowSkipReason::PostTurnContinuationPaused,
-            };
+            return TuiPostTurnDecision::from_action(
+                request.completed_turn_id.clone(),
+                ConversationPostTurnAction::SkipAutoFollow {
+                    reason: AutoFollowSkipReason::PostTurnContinuationPaused,
+                },
+            );
         }
         if runtime_snapshot.queue_is_drained() {
             event_log::emit_lazy("auto_follow_decision", || {
@@ -777,9 +799,12 @@ impl PostTurnEvaluationExecutor {
                     [("reason", json!("PlanningQueueDrained"))],
                 )
             });
-            return ConversationPostTurnAction::SkipAutoFollow {
-                reason: AutoFollowSkipReason::PlanningQueueDrained,
-            };
+            return TuiPostTurnDecision::from_action(
+                request.completed_turn_id.clone(),
+                ConversationPostTurnAction::SkipAutoFollow {
+                    reason: AutoFollowSkipReason::PlanningQueueDrained,
+                },
+            );
         }
         if runtime_snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
             && runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
@@ -795,9 +820,12 @@ impl PostTurnEvaluationExecutor {
                     [("reason", json!("PlanningQueueIdlePolicyStop"))],
                 )
             });
-            return ConversationPostTurnAction::SkipAutoFollow {
-                reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
-            };
+            return TuiPostTurnDecision::from_action(
+                request.completed_turn_id.clone(),
+                ConversationPostTurnAction::SkipAutoFollow {
+                    reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
+                },
+            );
         }
         match conversation
             .decide_auto_follow_with_snapshot(&self.planning.runtime, runtime_snapshot)
@@ -833,13 +861,15 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
-                    prompt: queued_prompt.prompt,
-                    completed_turn_id: request.completed_turn_id.clone(),
-                    mode_label: conversation.auto_follow_state.mode_label().to_string(),
-                    transcript_text: queued_prompt.transcript_text,
-                    handoff_task: queued_prompt.handoff_task,
-                }))
+                TuiPostTurnDecision::from_action_with_provenance(
+                    ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
+                        prompt: queued_prompt.prompt,
+                        mode_label: conversation.auto_follow_state.mode_label().to_string(),
+                        transcript_text: queued_prompt.transcript_text,
+                    })),
+                    PostTurnAutomationProvenance::new(request.completed_turn_id.clone())
+                        .with_handoff_task(queued_prompt.handoff_task),
+                )
             }
             AutoFollowDecision::Skip(reason) => {
                 event_log::emit_lazy("auto_follow_decision", || {
@@ -853,7 +883,10 @@ impl PostTurnEvaluationExecutor {
                         [("reason", json!(format!("{:?}", reason)))],
                     )
                 });
-                ConversationPostTurnAction::SkipAutoFollow { reason }
+                TuiPostTurnDecision::from_action(
+                    request.completed_turn_id.clone(),
+                    ConversationPostTurnAction::SkipAutoFollow { reason },
+                )
             }
         }
     }
@@ -989,13 +1022,13 @@ fn post_turn_evaluation_timeout_execution(
         thread_id: conversation.thread_id.clone(),
         completed_turn_id: request.completed_turn_id.clone(),
         evaluation: ConversationPostTurnEvaluation {
+            provenance: PostTurnAutomationProvenance::new(request.completed_turn_id.clone()),
             runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
             planning_repair_state: None,
             runtime_notices: vec![message.clone()],
             action: ConversationPostTurnAction::SkipAutoFollow {
                 reason: AutoFollowSkipReason::PostTurnEvaluationTimedOut,
             },
-            parallel_queue_signal: None,
             operator_alerts: Vec::new(),
         },
         planning_worker_panel_state: PlanningWorkerPanelState {
@@ -1064,6 +1097,7 @@ mod tests {
         );
 
         let decision = TuiPostTurnDecision::from_application_decision(
+            "turn-1".to_string(),
             decide_parallel_official_completion_post_turn(&runtime_snapshot),
         );
         let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
@@ -1071,7 +1105,8 @@ mod tests {
         };
 
         assert_eq!(reason, AutoFollowSkipReason::PlanningQueueDrained);
-        assert_eq!(decision.parallel_queue_signal, None);
+        assert_eq!(decision.provenance.completed_turn_id, "turn-1");
+        assert_eq!(decision.provenance.parallel_queue_signal, None);
         assert_eq!(decision.operator_alerts.len(), 1);
         assert_eq!(
             decision.operator_alerts[0].title,
@@ -1084,6 +1119,7 @@ mod tests {
         let runtime_snapshot = PlanningRuntimeSnapshot::invalid("planning still blocked");
 
         let decision = TuiPostTurnDecision::from_application_decision(
+            "turn-1".to_string(),
             decide_parallel_official_completion_post_turn(&runtime_snapshot),
         );
         let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
@@ -1092,7 +1128,7 @@ mod tests {
 
         assert_eq!(reason, AutoFollowSkipReason::ParallelSessionCompleted);
         assert_eq!(
-            decision.parallel_queue_signal,
+            decision.provenance.parallel_queue_signal,
             Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized)
         );
         assert!(decision.operator_alerts.is_empty());

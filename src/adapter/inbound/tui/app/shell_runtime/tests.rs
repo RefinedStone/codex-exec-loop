@@ -1,7 +1,7 @@
 use super::*;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation,
+    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
 };
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, PlanningWorkerPanelState,
@@ -544,6 +544,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: "turn-1".to_string(),
                 evaluation: Box::new(ConversationPostTurnEvaluation {
+                    provenance: PostTurnAutomationProvenance::new("turn-1".to_string()),
                     runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
                         "stale snapshot".to_string(),
                     ),
@@ -552,7 +553,6 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                     action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollow {
                         reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason::PostTurnContinuationPaused,
                     },
-                    parallel_queue_signal: None,
                     operator_alerts: Vec::new(),
                 }),
                 planning_worker_panel_state: crate::adapter::inbound::tui::app::PlanningWorkerPanelState {
@@ -596,13 +596,13 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
         thread_id: "thread-1".to_string(),
         completed_turn_id: "turn-1".to_string(),
         evaluation: Box::new(ConversationPostTurnEvaluation {
+            provenance: PostTurnAutomationProvenance::new("turn-1".to_string()),
             runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
             planning_repair_state: None,
             runtime_notices: vec![notice.to_string()],
             action: ConversationPostTurnAction::SkipAutoFollow {
                 reason: AutoFollowSkipReason::PlanningBlocked,
             },
-            parallel_queue_signal: None,
             operator_alerts: Vec::new(),
         }),
         planning_worker_panel_state: PlanningWorkerPanelState {

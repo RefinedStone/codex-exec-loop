@@ -3,7 +3,8 @@ use super::{
     make_dispatch_ready_parallel_runtime, make_test_runtime, sample_startup_diagnostics,
 };
 use crate::adapter::inbound::tui::app::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation, QueuedAutoPrompt,
+    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
+    QueuedAutoPrompt,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
@@ -486,17 +487,15 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             thread_id: "thread-1".to_string(),
             completed_turn_id: "turn-1".to_string(),
             evaluation: Box::new(ConversationPostTurnEvaluation {
+                provenance: PostTurnAutomationProvenance::new("turn-1".to_string()),
                 runtime_snapshot: planning_snapshot,
                 planning_repair_state: None,
                 runtime_notices: Vec::new(),
                 action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
                     prompt: "run next task".to_string(),
-                    completed_turn_id: "turn-1".to_string(),
                     mode_label: "test".to_string(),
                     transcript_text: "next-task".to_string(),
-                    handoff_task: None,
                 })),
-                parallel_queue_signal: None,
                 operator_alerts: Vec::new(),
             }),
             planning_worker_panel_state: Default::default(),
