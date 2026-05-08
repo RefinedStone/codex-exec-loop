@@ -28,6 +28,10 @@ use crate::domain::parallel_mode::{
  * shell commands should refresh snapshots, show overlay chrome, publish status
  * copy, and wake application-owned orchestration work.
  */
+use super::parallel_mode_shell_command::{
+    PARALLEL_MODE_SHELL_USAGE_TEXT, ParsedParallelModeShellCommand,
+    parse_parallel_mode_shell_argument,
+};
 use super::{
     BackgroundMessage, ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent,
     ConversationState, NativeTuiApp, ParallelPanelStateController, ParallelPanelUiEvent,
@@ -381,8 +385,8 @@ impl NativeTuiApp {
          * branch updates the same conversation status line so the inline shell,
          * footer, and popup all report the most recent control action.
          */
-        match argument {
-            Some(value) if value.eq_ignore_ascii_case("off") => {
+        match parse_parallel_mode_shell_argument(argument) {
+            Ok(ParsedParallelModeShellCommand::Disable) => {
                 // Turning off parallel mode is local UI state. Keep the snapshot
                 // read-only and close the control tower so normal shell focus
                 // resumes immediately.
@@ -396,18 +400,20 @@ impl NativeTuiApp {
                     status_text: "parallel mode: off / shell returned to normal mode".to_string(),
                 });
             }
-            Some(value) => {
+            Err(error) => {
                 // Unsupported arguments still open the control tower. That makes
                 // the supported commands and current readiness visible next to
                 // the error copy.
                 self.inspect_parallel_mode_shell();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "parallel mode command: unsupported argument `{value}` / supported: :parallel, :parallel off"
+                        "parallel mode command: unsupported argument `{}` / {}",
+                        error.argument(),
+                        PARALLEL_MODE_SHELL_USAGE_TEXT
                     ),
                 });
             }
-            None => {
+            Ok(ParsedParallelModeShellCommand::Enable) => {
                 // Bare `:parallel` is the only enable entrypoint. Open the
                 // control tower first, then let readiness/reconcile run off the
                 // terminal event loop so prompt typing stays responsive.

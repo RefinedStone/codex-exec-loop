@@ -239,7 +239,7 @@ Renderer가 domain rule을 재판단하면 안 된다.
 | --- | --- | --- | --- |
 | TUI planning shell/overlay | `PlanningServices`, planning controllers, status projection, `PlanningResetTarget` | UI-only overlay/editor state와 application service 호출 분리, `:reset` execution/hint path는 shared parser로 mapping | 남은 planning command request DTO를 admin/CLI와 같은 이름으로 정렬 |
 | TUI conversation/automation | `ConversationRuntimeEvent`, post-turn automation router | reducer/effect vocabulary와 background message routing 분리 | remaining runtime bridge correlation을 application runtime store로 이동 |
-| TUI parallel panel | `ParallelModeService`, domain state machine, panel controller | projection 표시와 application wake request 분리 | shell command entry와 admin/CLI tick command vocabulary 정렬 |
+| TUI parallel panel | `ParallelModeService`, domain state machine, panel controller, TUI parallel shell parser | projection 표시와 application wake request 분리, `:parallel` execution/hint path는 shared parser로 mapping | admin/CLI tick command vocabulary 정렬 |
 | CLI status/queue/reset | `PlanningControlCommand`, `PlanningControlService` | compact command surface 공유 | reset은 workspace reset path와 control reset path의 response shape 정렬 검토 |
 | CLI planning-tool | `PlanningTaskToolRequest`, `PlanningTaskToolResponse` | stdin JSON contract와 JSON line response | tool command도 command context와 error taxonomy를 공유 |
 | CLI parallel-tick | `ParallelModeService::run_orchestrator_tick(..., ManualDispatch)` | manual/cron driver로 제한하고 application tick result를 렌더링 | 남은 TUI/admin parallel command vocabulary와 정렬 |
@@ -303,7 +303,9 @@ long-running loop나 background worker는 effect completion을 application event
    path는 같은 parser를 쓴다. 남은 `:planning`, `:task`, editor/overlay command는 공통
    application command로 내릴 수 있는 부분부터 이동한다.
 5. parallel TUI/admin/CLI entrypoint가 control-plane runtime command/event를 공유하도록
-   tick/wake/snapshot vocabulary를 정리한다.
+   tick/wake/snapshot vocabulary를 정리한다. CLI manual tick은 application orchestrator tick
+   result vocabulary를 쓰고, TUI `:parallel` enable/disable grammar는 execution path와
+   buffered hint path가 같은 parser를 쓴다.
 
 각 implementation slice는 하나의 surface pair 또는 하나의 context command만 다룬다.
 TUI, admin API, Telegram, CLI를 한 PR에서 모두 수정하지 않는다.
