@@ -414,7 +414,9 @@ fn parse_reset_target(target: &OsStr) -> Result<PlanningResetTarget> {
 }
 #[cfg(test)]
 mod tests {
-    use super::run_with_args;
+    use super::{parse_reset_target, run_with_args};
+    use crate::application::service::planning::PlanningResetTarget;
+    use std::ffi::OsStr;
 
     fn create_temp_workspace(label: &str) -> String {
         let unique = format!(
@@ -490,5 +492,22 @@ mod tests {
         assert!(queue_rendered.contains("큐 요약"));
 
         std::fs::remove_dir_all(workspace).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn reset_command_spelling_maps_to_shared_application_target() {
+        /*
+         * CLI spelling is an inbound grammar detail. The application reset path
+         * should receive PlanningResetTarget, not a CLI-only target enum or
+         * free-form destructive string.
+         */
+        for (raw, expected) in [
+            ("queue", PlanningResetTarget::Queue),
+            ("directions", PlanningResetTarget::Directions),
+            ("all", PlanningResetTarget::All),
+        ] {
+            assert_eq!(parse_reset_target(OsStr::new(raw)).unwrap(), expected);
+        }
+        assert!(parse_reset_target(OsStr::new("tasks")).is_err());
     }
 }
