@@ -22,6 +22,7 @@ pub(super) struct AkraAdminDashboardView {
     pub distributor: DistributorView,
     pub events: Vec<RuntimeEventView>,
     pub metrics: GuildMetricsView,
+    pub campaign: CampaignView,
     pub event_feed: EventFeedView,
     pub generated_at: String,
     pub generated_time_label: String,
@@ -203,6 +204,54 @@ pub(super) struct RuntimeEventView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct CampaignView {
+    pub summary: String,
+    pub attempt_count: usize,
+    pub visible_attempt_count: usize,
+    pub active_lane_count: usize,
+    pub signal_count: usize,
+    pub lane_cards: Vec<CampaignLaneView>,
+    pub attempts: Vec<CampaignAttemptView>,
+    pub intel_cards: Vec<CampaignIntelView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CampaignLaneView {
+    pub agent_id: String,
+    pub slot_id: String,
+    pub class_label: String,
+    pub task_title: String,
+    pub state: String,
+    pub progress_label: String,
+    pub summary: String,
+    pub severity: String,
+    pub score_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CampaignAttemptView {
+    pub label: String,
+    pub source: String,
+    pub state: String,
+    pub timestamp: String,
+    pub summary: String,
+    pub severity: String,
+    pub score_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CampaignIntelView {
+    pub label: String,
+    pub value: String,
+    pub note: String,
+    pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct GuildMetricsView {
     pub pool_utilization_percent: usize,
     pub test_success_rate: Option<f64>,
@@ -248,6 +297,15 @@ pub(super) fn build_akra_dashboard_view(
         .collect::<Vec<_>>();
     let metrics = map_metrics(&pool, &agents, &distributor);
     let readiness_label = readiness_label(&readiness).to_string();
+    let campaign = map_campaign(
+        &supervisor,
+        &pool,
+        &agents,
+        &distributor,
+        &events,
+        &event_feed,
+        readiness_label.as_str(),
+    );
     let generated_at = Utc::now();
 
     AkraAdminDashboardView {
@@ -290,6 +348,7 @@ pub(super) fn build_akra_dashboard_view(
         distributor,
         events,
         metrics,
+        campaign,
         event_feed,
         generated_at: generated_at.to_rfc3339(),
         generated_time_label: generated_at.format("%H:%M:%S").to_string(),
@@ -510,6 +569,232 @@ fn map_metrics(
         source_label: "derived from read-only supervisor snapshot".to_string(),
         mock_metric_note: "success_rate, today_throughput, test_success_rate, error_rate are uncollected and rendered as 미집계".to_string(),
         badges,
+    }
+}
+
+fn map_campaign(
+    supervisor: &ParallelModeSupervisorSnapshot,
+    pool: &PoolBoardView,
+    agents: &AgentRosterView,
+    distributor: &DistributorView,
+    events: &[RuntimeEventView],
+    event_feed: &EventFeedView,
+    readiness_label: &str,
+) -> CampaignView {
+    let lane_cards = agents
+        .entries
+        .iter()
+        .map(map_campaign_lane)
+        .collect::<Vec<_>>();
+    let (attempt_count, attempts) = map_campaign_attempts(supervisor, distributor, events);
+    let active_lane_count = lane_cards.len();
+    let signal_count = event_feed.total_event_count.max(events.len());
+    let summary = if active_lane_count > 0 {
+        format!("{active_lane_count}개 병렬 시도 진행 중 · {signal_count}개 정보 신호 관측")
+    } else if distributor.queue_depth > 0 {
+        format!(
+            "활성 요원은 없지만 분배 큐 {queue_depth}건이 통합 대기 중",
+            queue_depth = distributor.queue_depth
+        )
+    } else {
+        "진행 중인 병렬 시도는 없고 read-only 관제 대기 중".to_string()
+    };
+
+    CampaignView {
+        summary,
+        attempt_count,
+        visible_attempt_count: attempts.len(),
+        active_lane_count,
+        signal_count,
+        lane_cards,
+        attempts,
+        intel_cards: map_campaign_intel(pool, distributor, event_feed, readiness_label),
+    }
+}
+
+fn map_campaign_lane(agent: &AgentView) -> CampaignLaneView {
+    let progress = progress_percent(agent.lifecycle_state.as_str());
+    CampaignLaneView {
+        agent_id: agent.agent_id.clone(),
+        slot_id: agent.slot_id.clone(),
+        class_label: agent.class_label.clone(),
+        task_title: agent.task_title.clone(),
+        state: agent.lifecycle_state.clone(),
+        progress_label: agent.progress_label.clone(),
+        summary: agent.latest_summary.clone(),
+        severity: agent_status_severity(agent.status.as_str()).to_string(),
+        score_label: format!("stage {progress}/100"),
+    }
+}
+
+fn map_campaign_attempts(
+    supervisor: &ParallelModeSupervisorSnapshot,
+    distributor: &DistributorView,
+    events: &[RuntimeEventView],
+) -> (usize, Vec<CampaignAttemptView>) {
+    if let Some(session) = supervisor.detail.session.as_ref()
+        && !session.history.is_empty()
+    {
+        let total = session.history.len();
+        let attempts = session
+            .history
+            .iter()
+            .rev()
+            .take(6)
+            .enumerate()
+            .map(|(index, entry)| CampaignAttemptView {
+                label: format!("시도 #{}", total.saturating_sub(index)),
+                source: format!("{} / {}", session.agent_id, session.slot_id),
+                state: entry.state_label.clone(),
+                timestamp: entry.timestamp.clone(),
+                summary: entry.summary.clone(),
+                severity: lifecycle_severity(entry.state_label.as_str()).to_string(),
+                score_label: format!("stage {}/100", progress_percent(entry.state_label.as_str())),
+            })
+            .collect();
+        return (total, attempts);
+    }
+
+    if !distributor.queue_items.is_empty() {
+        let total = distributor.queue_items.len();
+        let attempts = distributor
+            .queue_items
+            .iter()
+            .take(6)
+            .enumerate()
+            .map(|(index, item)| CampaignAttemptView {
+                label: format!("큐 시도 #{}", index + 1),
+                source: item.source_agent.clone(),
+                state: item.queue_state.clone(),
+                timestamp: item.commit_short_sha.clone(),
+                summary: item.integration_note.clone(),
+                severity: queue_state_severity(item.queue_state.as_str()).to_string(),
+                score_label: item.branch_name.clone(),
+            })
+            .collect();
+        return (total, attempts);
+    }
+
+    let total = events.len();
+    let attempts = events
+        .iter()
+        .take(6)
+        .map(|event| CampaignAttemptView {
+            label: format!("신호 #{}", event.sequence),
+            source: format!("{}:{}", event.projection_kind, event.projection_key),
+            state: event.event_kind.clone(),
+            timestamp: event.recorded_at.clone(),
+            summary: event.summary.clone(),
+            severity: event.severity.clone(),
+            score_label: format!("rev {}", event.observed_planning_revision),
+        })
+        .collect();
+    (total, attempts)
+}
+
+fn map_campaign_intel(
+    pool: &PoolBoardView,
+    distributor: &DistributorView,
+    event_feed: &EventFeedView,
+    readiness_label: &str,
+) -> Vec<CampaignIntelView> {
+    vec![
+        CampaignIntelView {
+            label: "Readiness".to_string(),
+            value: readiness_label.to_string(),
+            note: "parallel capability gate".to_string(),
+            severity: readiness_severity(readiness_label).to_string(),
+        },
+        CampaignIntelView {
+            label: "Pool Pressure".to_string(),
+            value: format!("{}/{}", pool.summary.running, pool.configured_size),
+            note: format!(
+                "idle {} / blocked {} / cleanup {}",
+                pool.summary.idle, pool.summary.blocked, pool.summary.cleanup
+            ),
+            severity: pool_pressure_severity(pool).to_string(),
+        },
+        CampaignIntelView {
+            label: "Distributor".to_string(),
+            value: distributor.barrier_state.clone(),
+            note: distributor
+                .blocked_reason
+                .clone()
+                .unwrap_or_else(|| distributor.head_summary.clone()),
+            severity: distributor_severity(distributor).to_string(),
+        },
+        CampaignIntelView {
+            label: "Event Feed".to_string(),
+            value: format!(
+                "{}/{}",
+                event_feed.visible_event_count, event_feed.total_event_count
+            ),
+            note: event_feed
+                .newest_sequence
+                .map(|sequence| format!("latest #{sequence}"))
+                .unwrap_or_else(|| event_feed.empty_state.clone()),
+            severity: "info".to_string(),
+        },
+    ]
+}
+
+fn agent_status_severity(status: &str) -> &'static str {
+    match status {
+        "blocked" => "danger",
+        "cleanup" => "warning",
+        "running" => "success",
+        _ => "info",
+    }
+}
+
+fn lifecycle_severity(state_label: &str) -> &'static str {
+    match state_label {
+        "failed" | "official_refresh_recovery_needed" => "danger",
+        "cleanup_pending" | "integrating" | "cleaning" => "warning",
+        "done" | "cleaned" | "merged" => "success",
+        "reported_complete" | "commit_ready" | "merge_queued" | "pushing" | "pr_pending"
+        | "merge_pending" | "running" => "success",
+        _ => "info",
+    }
+}
+
+fn queue_state_severity(state_label: &str) -> &'static str {
+    match state_label {
+        "blocked" | "failed" => "danger",
+        "cleaning" | "integrating" => "warning",
+        "done" => "success",
+        _ => "info",
+    }
+}
+
+fn readiness_severity(readiness_label: &str) -> &'static str {
+    match readiness_label {
+        "ready" => "success",
+        "blocked" => "danger",
+        "degraded" | "repairing" => "warning",
+        _ => "info",
+    }
+}
+
+fn pool_pressure_severity(pool: &PoolBoardView) -> &'static str {
+    if pool.summary.blocked + pool.summary.missing + pool.summary.unavailable > 0 {
+        "danger"
+    } else if pool.exhausted || pool.summary.cleanup > 0 {
+        "warning"
+    } else if pool.summary.running > 0 {
+        "success"
+    } else {
+        "info"
+    }
+}
+
+fn distributor_severity(distributor: &DistributorView) -> &'static str {
+    if distributor.blocked_reason.is_some() {
+        "danger"
+    } else if distributor.barrier_state != "idle" || distributor.queue_depth > 0 {
+        "warning"
+    } else {
+        "success"
     }
 }
 

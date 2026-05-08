@@ -127,8 +127,14 @@ for token in \
   'class="pool-overlay" id="pool"' \
   'class="scene-object object-sprite server-rack"' \
   'id="events"' \
+  'id="campaign"' \
+  'id="attempts"' \
+  'id="intel"' \
   'id="pipeline"' \
   'id="metrics"' \
+  '시도 보드' \
+  '최근 시도 로그' \
+  '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
   'Automation Epoch' \
   'Last Updated' \
@@ -166,6 +172,9 @@ for token in \
   '"pool"' \
   '"agents"' \
   '"distributor"' \
+  '"campaign"' \
+  '"laneCards"' \
+  '"intelCards"' \
   '"events"' \
   '"generatedTimeLabel"' \
   '"automationEpoch"'; do

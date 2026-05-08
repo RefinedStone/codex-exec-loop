@@ -143,6 +143,9 @@
   .graphic-action-btn:active,
   .drawer-close:active,
   .slot-card:active,
+  .campaign-lane:active,
+  .attempt-row:active,
+  .intel-card:active,
   .scene-object:active,
   .event-row:active,
   .queue-row[data-detail-type]:active {
@@ -204,6 +207,117 @@
   .kpi-icon.yellow { background: var(--game-yellow); }
   .kpi-icon.red { background: var(--game-red); }
   .kpi-icon.violet { background: var(--game-violet); color: #fff; }
+  .campaign-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.05fr) minmax(280px, 0.85fr);
+    gap: 12px;
+    margin: 0 0 12px;
+  }
+  .campaign-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .campaign-summary span,
+  .campaign-lane,
+  .attempt-row,
+  .intel-card {
+    border: 2px solid rgba(255,255,255,0.12);
+    border-radius: 0;
+    background: rgba(255,255,255,0.05);
+  }
+  .campaign-summary span {
+    display: grid;
+    gap: 4px;
+    padding: 10px;
+  }
+  .campaign-summary strong {
+    font-size: 20px;
+    line-height: 1;
+  }
+  .campaign-lanes,
+  .attempt-list,
+  .intel-grid {
+    display: grid;
+    gap: 8px;
+  }
+  .campaign-lanes {
+    grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
+  }
+  .campaign-lane,
+  .attempt-row,
+  .intel-card {
+    appearance: none;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .campaign-lane {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 10px;
+  }
+  .campaign-lane strong,
+  .campaign-lane small,
+  .attempt-row strong,
+  .attempt-row small,
+  .intel-card strong,
+  .intel-card small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .score-chip {
+    align-self: start;
+    padding: 5px 7px;
+    border: 2px solid rgba(93,169,255,0.4);
+    color: var(--game-blue);
+    background: rgba(93,169,255,0.12);
+    font-size: 11px;
+    font-weight: 900;
+    white-space: nowrap;
+  }
+  .attempt-row {
+    display: grid;
+    grid-template-columns: 86px minmax(0, 1fr) 96px;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+  }
+  .attempt-state {
+    padding: 6px 8px;
+    border: 2px solid rgba(93,169,255,0.34);
+    color: var(--game-blue);
+    background: rgba(93,169,255,0.1);
+    text-align: center;
+    font-size: 11px;
+    font-weight: 900;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .intel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .intel-card {
+    padding: 10px;
+  }
+  .campaign-lane.severity-success,
+  .attempt-row.severity-success,
+  .intel-card.severity-success { border-color: rgba(53, 208, 127, 0.44); background: rgba(53, 208, 127, 0.08); }
+  .campaign-lane.severity-warning,
+  .attempt-row.severity-warning,
+  .intel-card.severity-warning { border-color: rgba(245, 200, 75, 0.44); background: rgba(245, 200, 75, 0.09); }
+  .campaign-lane.severity-danger,
+  .attempt-row.severity-danger,
+  .intel-card.severity-danger { border-color: rgba(255, 107, 107, 0.48); background: rgba(255, 107, 107, 0.1); }
+  .campaign-lane.severity-info,
+  .attempt-row.severity-info,
+  .intel-card.severity-info { border-color: rgba(93, 169, 255, 0.38); background: rgba(93, 169, 255, 0.08); }
   .board-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 316px;
@@ -804,12 +918,16 @@
   }
   @media (max-width: 1320px) {
     .kpi-grid { grid-template-columns: repeat(4, minmax(128px, 1fr)); }
+    .campaign-grid,
     .board-row,
     .bottom-grid { grid-template-columns: 1fr; }
   }
   @media (max-width: 860px) {
     .akra-topbar,
     .kpi-grid,
+    .campaign-grid,
+    .campaign-summary,
+    .intel-grid,
     .pipeline,
     .timeline { grid-template-columns: 1fr; }
     .admin-user { justify-content: flex-start; }
@@ -904,6 +1022,102 @@
     <div class="kpi is-success" data-kpi="queueDepth"><span class="kpi-head"><i class="kpi-icon red">Q</i>대기 작업</span><strong data-value>{{ dashboard.kpis.queue_depth }}</strong><small>{{ dashboard.kpis.queue_depth_basis }}</small></div>
     <div class="kpi is-success" data-kpi="readiness"><span class="kpi-head"><i class="kpi-icon green">R</i>준비도</span><strong data-value>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
     <div class="kpi is-success" data-kpi="distributor"><span class="kpi-head"><i class="kpi-icon violet">B</i>분배기 상태</span><strong data-value>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
+  </div>
+
+  <div class="campaign-grid" aria-label="parallel mode attempt and information board">
+    <section class="game-panel" id="campaign">
+      <div class="panel-title"><h3>시도 보드</h3><small>{{ dashboard.campaign.summary }}</small></div>
+      <div class="campaign-summary">
+        <span><small>활성 시도</small><strong>{{ dashboard.campaign.active_lane_count }}</strong></span>
+        <span><small>최근 로그</small><strong>{{ dashboard.campaign.visible_attempt_count }}</strong></span>
+        <span><small>정보 신호</small><strong>{{ dashboard.campaign.signal_count }}</strong></span>
+      </div>
+      {% if dashboard.campaign.lane_cards.is_empty() %}
+      <p>{{ dashboard.agents.empty_state }}</p>
+      {% else %}
+      <div class="campaign-lanes">
+        {% for lane in dashboard.campaign.lane_cards %}
+        <button
+          type="button"
+          class="campaign-lane severity-{{ lane.severity }}"
+          data-detail-type="campaignLane"
+          data-detail-title="시도 레인 · {{ lane.agent_id }}"
+          data-detail-subtitle="{{ lane.class_label }} / {{ lane.slot_id }}"
+          data-detail-state="{{ lane.state }}"
+          data-detail-severity="{{ lane.severity }}"
+          data-detail-agent="{{ lane.agent_id }}"
+          data-detail-slot="{{ lane.slot_id }}"
+          data-detail-task="{{ lane.task_title }}"
+          data-detail-progress="{{ lane.progress_label }}"
+          data-detail-score="{{ lane.score_label }}"
+          data-detail-summary="{{ lane.summary }}"
+          data-agent-id="{{ lane.agent_id }}"
+          data-slot-id="{{ lane.slot_id }}"
+        >
+          <div>
+            <strong>{{ lane.agent_id }} · {{ lane.class_label }}</strong>
+            <small>{{ lane.task_title }}</small>
+            <small>{{ lane.summary }}</small>
+          </div>
+          <span class="score-chip">{{ lane.score_label }}</span>
+        </button>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="game-panel" id="attempts">
+      <div class="panel-title"><h3>최근 시도 로그</h3><small>{{ dashboard.campaign.visible_attempt_count }}/{{ dashboard.campaign.attempt_count }}</small></div>
+      {% if dashboard.campaign.attempts.is_empty() %}
+      <p>아직 표시할 시도 로그가 없습니다.</p>
+      {% else %}
+      <div class="attempt-list">
+        {% for attempt in dashboard.campaign.attempts %}
+        <button
+          type="button"
+          class="attempt-row severity-{{ attempt.severity }}"
+          data-detail-type="campaignAttempt"
+          data-detail-title="{{ attempt.label }}"
+          data-detail-subtitle="{{ attempt.source }}"
+          data-detail-state="{{ attempt.state }}"
+          data-detail-severity="{{ attempt.severity }}"
+          data-detail-time="{{ attempt.timestamp }}"
+          data-detail-score="{{ attempt.score_label }}"
+          data-detail-summary="{{ attempt.summary }}"
+        >
+          <strong>{{ attempt.label }}</strong>
+          <div>
+            <small>{{ attempt.source }} · {{ attempt.timestamp }}</small>
+            <strong>{{ attempt.summary }}</strong>
+          </div>
+          <span class="attempt-state">{{ attempt.state }}</span>
+        </button>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="game-panel" id="intel">
+      <div class="panel-title"><h3>정보 카드</h3><small>read-only signals</small></div>
+      <div class="intel-grid">
+        {% for intel in dashboard.campaign.intel_cards %}
+        <button
+          type="button"
+          class="intel-card severity-{{ intel.severity }}"
+          data-detail-type="campaignIntel"
+          data-detail-title="정보 · {{ intel.label }}"
+          data-detail-subtitle="{{ intel.value }}"
+          data-detail-state="{{ intel.value }}"
+          data-detail-severity="{{ intel.severity }}"
+          data-detail-note="{{ intel.note }}"
+        >
+          <small>{{ intel.label }}</small>
+          <strong>{{ intel.value }}</strong>
+          <small>{{ intel.note }}</small>
+        </button>
+        {% endfor %}
+      </div>
+    </section>
   </div>
 
   <div class="board-row">
@@ -1420,6 +1634,25 @@
       ["브랜치", "detailBranch"],
       ["Commit", "detailCommit"],
       ["운영 메모", "detailNote"]
+    ],
+    campaignLane: [
+      ["상태", "detailState", "chip"],
+      ["요원", "detailAgent"],
+      ["슬롯", "detailSlot"],
+      ["작업", "detailTask"],
+      ["진행률", "detailProgress"],
+      ["점수", "detailScore"],
+      ["최근 신호", "detailSummary"]
+    ],
+    campaignAttempt: [
+      ["상태", "detailState", "chip"],
+      ["시간", "detailTime"],
+      ["점수", "detailScore"],
+      ["요약", "detailSummary"]
+    ],
+    campaignIntel: [
+      ["상태", "detailState", "chip"],
+      ["정보", "detailNote"]
     ],
     refresh: [
       ["상태", "detailState", "chip"],
