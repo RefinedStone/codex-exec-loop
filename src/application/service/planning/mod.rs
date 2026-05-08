@@ -70,7 +70,10 @@ pub use self::authoring::proposal_promotion::{
 };
 // control 타입은 planning subsystem을 명령형으로 조작하는 경로를 제공한다. CLI/admin이 service 내부 구조를 몰라도
 // command/reply 단위로 호출할 수 있다.
-pub use self::control::{PlanningControlCommand, PlanningControlReply, PlanningControlService};
+pub use self::control::{
+    PlanningControlCommand, PlanningControlFacadeService, PlanningControlReply,
+    PlanningControlService,
+};
 // PlanningFeature는 adapter가 가장 많이 받는 planning facade다. 내부 feature 모듈은 숨기고 타입 이름만 공개한다.
 pub use self::feature::PlanningFeature;
 // PlanningServices 별칭은 기존 호출자 호환용 이름이다. 새 구조는 PlanningFeature지만, TUI와 테스트의 점진적 이전을

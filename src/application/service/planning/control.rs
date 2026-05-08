@@ -1,15 +1,16 @@
 use super::{PlanningAdminFacadeService, PlanningResetTarget};
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningDoctorReport,
+    PlanningServices, PlanningWorkspaceResetResult,
 };
 use anyhow::Result;
 use std::sync::Arc;
 
 /*
  * PlanningControlService는 operator-facing entrypoint가 쓰는 compact command surface다.
- * admin facade는 풍부한 관리 데이터를 소유하고, 이 계층은 그 데이터를 TUI/CLI/Telegram control flow가
- * 바로 표시할 수 있는 stable text reply로 낮춘다. admin view struct를 planning boundary 밖에 노출하지 않기 위한
- * 얇은 anti-corruption layer다.
+ * PlanningControlFacadeService나 admin facade가 제공하는 planning facts를 TUI/CLI/Telegram control flow가
+ * 바로 표시할 수 있는 stable text reply로 낮춘다. inbound adapter는 command enum과 text reply만 다루고,
+ * queue/proposal 판단은 application projection 뒤에 둔다.
  */
 const CONTROL_HELP_TEXT: &str = "지원 명령어\n\
 /help\n\
@@ -78,6 +79,50 @@ pub trait PlanningControlSurface: Send + Sync {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot>;
     fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome>;
 }
+
+#[derive(Clone)]
+pub struct PlanningControlFacadeService {
+    workspace_dir: String,
+    planning: PlanningServices,
+}
+impl PlanningControlFacadeService {
+    pub fn new(workspace_dir: impl Into<String>, planning: PlanningServices) -> Self {
+        Self {
+            workspace_dir: workspace_dir.into(),
+            planning,
+        }
+    }
+}
+impl PlanningControlSurface for PlanningControlFacadeService {
+    fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
+        let doctor = self
+            .planning
+            .workspace
+            .inspect_workspace(self.workspace_dir.as_str());
+        let runtime = self
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
+        Ok(map_control_status_snapshot(
+            self.workspace_dir.clone(),
+            doctor,
+            PlanningApplicationProjection::from_runtime_snapshot(&runtime),
+        ))
+    }
+
+    fn reset_workspace(&self, target: PlanningResetTarget) -> Result<PlanningControlResetOutcome> {
+        let result = self
+            .planning
+            .workspace
+            .reset_workspace(self.workspace_dir.as_str(), target)?;
+        Ok(map_workspace_reset_result(
+            self.workspace_dir.as_str(),
+            result,
+            &self.planning,
+        ))
+    }
+}
+
 impl PlanningControlSurface for PlanningAdminFacadeService {
     fn load_status_snapshot(&self) -> Result<PlanningControlStatusSnapshot> {
         let doctor = self.load_doctor_report();
@@ -102,6 +147,24 @@ impl PlanningControlSurface for PlanningAdminFacadeService {
         })
     }
 }
+
+fn map_workspace_reset_result(
+    workspace_dir: &str,
+    result: PlanningWorkspaceResetResult,
+    planning: &PlanningServices,
+) -> PlanningControlResetOutcome {
+    // reset 직후 doctor를 다시 읽어 command reply가 실제 post-reset health를 보여 주게 한다.
+    let doctor = planning.workspace.inspect_workspace(workspace_dir);
+    PlanningControlResetOutcome {
+        target: result.target.label().to_string(),
+        rewritten_paths: result.rewritten_paths,
+        removed_paths: result.removed_paths,
+        planning_state: doctor.planning_state().label().to_string(),
+        health: doctor.health().map(str::to_string),
+        issue: doctor.issue().map(str::to_string),
+    }
+}
+
 #[derive(Clone)]
 pub struct PlanningControlService {
     surface: Arc<dyn PlanningControlSurface>,
