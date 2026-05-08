@@ -39,6 +39,8 @@ impl PlanningControlSurface for FakePlanningControlSurface {
         Ok(PlanningControlStatusSnapshot {
             workspace_dir: "/tmp/repo".to_string(),
             planning_state: "ready".to_string(),
+            task_authority_signature: Some(42),
+            queue_head_task_signature: Some(7),
             queue_summary: Some("queue head ready".to_string()),
             proposal_summary: None,
             health: Some("planning workspace ready".to_string()),
