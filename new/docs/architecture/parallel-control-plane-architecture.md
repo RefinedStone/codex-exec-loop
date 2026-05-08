@@ -7,6 +7,12 @@
 `repository/store`의 책임을 분명히 고정해, 이후 LLM이나 사람이 수정할 때 같은
 정책을 여러 계층에 중복 구현하지 않게 만드는 것이다.
 
+이 문서는 `new/docs` 구조 재설계 문서군의 첫 reference architecture이기도 하다.
+parallel control-plane은 thread, worktree, durable command, worker stream, TUI
+presentation state, process-lifetime runtime state가 한 흐름에 모이는 가장 까다로운
+영역이다. 따라서 여기서 정한 책임 경계는 parallel 전용 예외가 아니라 repository
+전체 구조 재설계의 검증 모델로 사용한다.
+
 핵심 결론은 단순하다.
 
 ```text
