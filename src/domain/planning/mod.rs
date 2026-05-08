@@ -13,9 +13,11 @@
  */
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod mutation;
 mod queue;
 mod validation;
 
+pub(crate) use mutation::{PlanningTaskMutationPolicy, TaskDescriptionUpdateDecision};
 pub use queue::PriorityQueueService;
 pub use validation::PlanningSemanticValidationService;
 
@@ -612,6 +614,11 @@ impl TaskStatus {
             Self::AwaitingUser => "awaiting_user",
             Self::Proposed => "proposed",
         }
+    }
+
+    // terminal status는 historical record라 generic update path에서 재분류할 수 없다.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Done | Self::Cancelled)
     }
 
     // Done task만 dependency를 만족시킨다.

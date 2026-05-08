@@ -2,9 +2,10 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PriorityQueueProjection,
-    PriorityQueueService, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
-    TaskMutationProvenance, TaskStatus,
+    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningTaskMutationPolicy,
+    PriorityQueueProjection, PriorityQueueService, PriorityQueueTask, TaskActor,
+    TaskAuthorityDocument, TaskDefinition, TaskDescriptionUpdateDecision, TaskMutationProvenance,
+    TaskStatus,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -24,7 +25,7 @@ pub use self::commands::{
 use self::helpers::{
     build_task_id, default_relation_note, direction_title, find_direction, format_timestamp,
     increment_suffix, normalize_references, required_id, required_text, select_direction,
-    task_id_exists, terminal_status,
+    task_id_exists,
 };
 
 /*
@@ -54,9 +55,6 @@ impl PlanningTaskMutationSource {
             Self::Worker => "worker",
             Self::System => "system",
         }
-    }
-    fn can_update_existing_description(self) -> bool {
-        matches!(self, Self::User)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +103,7 @@ pub struct PlanningTaskMutationCommitResult {
 pub struct PlanningTaskMutationService {
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     priority_queue_service: PriorityQueueService,
+    task_mutation_policy: PlanningTaskMutationPolicy,
 }
 impl PlanningTaskMutationService {
     pub fn new(
@@ -114,6 +113,7 @@ impl PlanningTaskMutationService {
         Self {
             planning_task_repository_port,
             priority_queue_service,
+            task_mutation_policy: PlanningTaskMutationPolicy::new(),
         }
     }
     pub fn preview_create_task(
@@ -500,6 +500,12 @@ impl PlanningTaskMutationService {
             .find(|task| task.id.trim() == task_id)
             .ok_or_else(|| anyhow!("task `{task_id}` does not exist"))?;
         let previous_task = task.clone();
+        let update_decision = self.task_mutation_policy.decide_task_update(
+            &previous_task,
+            audit_context.source.actor(),
+            input.status,
+            input.description.is_some(),
+        )?;
 
         /*
          * update command는 partial patch다. absent optional field는 기존 값을 보존하고,
@@ -522,24 +528,12 @@ impl PlanningTaskMutationService {
         if let Some(title) = input.title.as_deref() {
             task.title = required_text(title, "task title")?.to_string();
         }
-        if audit_context.source.can_update_existing_description() {
-            if let Some(description) = input.description.as_deref() {
-                task.description = required_text(description, "task description")?.to_string();
-            }
-        } else if task.description.trim().is_empty()
+        if update_decision.description == TaskDescriptionUpdateDecision::AcceptSupplied
             && let Some(description) = input.description.as_deref()
         {
             task.description = required_text(description, "task description")?.to_string();
         }
         if let Some(status) = input.status {
-            if terminal_status(task.status) && task.status != status {
-                bail!(
-                    "task `{}` cannot change from terminal status `{}` to `{}`",
-                    task.id.trim(),
-                    task.status.label(),
-                    status.label()
-                );
-            }
             task.status = status;
         }
         if let Some(base_priority) = input.base_priority {

@@ -6,7 +6,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use super::{PlanningTaskMutationSource, TASK_ID_HASH_CHARS};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningFileKind,
-    PlanningValidationReport, TaskAuthorityDocument, TaskStatus,
+    PlanningValidationReport, TaskAuthorityDocument,
 };
 
 /*
@@ -245,12 +245,6 @@ pub(super) fn normalize_references(values: &[String]) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
-}
-
-pub(super) fn terminal_status(status: TaskStatus) -> bool {
-    // terminal status는 더 이상 자동 queue progression 대상이 아닌 historical record다.
-    // update validation이 완료/취소 task를 다시 변형할 수 있는지 판단할 때 쓰는 작은 predicate다.
-    matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
 }
 
 pub(super) fn format_timestamp(timestamp: DateTime<Utc>) -> String {

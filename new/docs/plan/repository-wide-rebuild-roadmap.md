@@ -379,6 +379,11 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 - Application Projection assembly path
 - task mutation validation 중복 제거
 
+작업 단위:
+
+- `PLAN-02A`: task mutation update legality 중 terminal status 재분류 금지와
+  description update ownership을 domain `PlanningTaskMutationPolicy`로 이동한다. 완료.
+
 금지:
 
 - domain에서 workspace file, DB, adapter type import
