@@ -93,7 +93,8 @@ decision으로 이동한다.
 
 `PLAN-02`는 application helper에 남은 순수 판단을 domain으로 이동한다.
 
-- task mutation legality
+- task mutation legality: terminal status 재분류 금지와 description update ownership은
+  `PlanningTaskMutationPolicy`의 I/O 없는 domain decision으로 이동했다. 완료: `PLAN-02A`
 - proposal promotion 가능 여부
 - queue-idle / repeated-head decision
 - repair eligibility
@@ -103,6 +104,9 @@ decision으로 이동한다.
 - domain decision은 I/O 없이 테스트된다.
 - application service는 load/save/effect ordering만 테스트한다.
 - worker output은 accepted authority가 아니라 untrusted candidate로만 들어온다.
+
+`PLAN-02A` 이후 남은 task mutation 범위는 create/defaulting, link/priority validation,
+worker command candidate handling 중 domain으로 이동 가능한 순수 판단을 추가 감사하는 것이다.
 
 ## 금지 패턴
 
