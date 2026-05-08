@@ -1,5 +1,8 @@
 use super::pages::{extract_file_updates, nav_for_kind};
-use crate::application::service::planning::{PlanningAdminDraftKind, PlanningAdminFileKey};
+use super::parse_reset_target;
+use crate::application::service::planning::{
+    PlanningAdminDraftKind, PlanningAdminFileKey, PlanningResetTarget,
+};
 use std::collections::HashMap;
 
 /*
@@ -60,6 +63,23 @@ fn nav_no_longer_has_raw_task_authority_draft_kind() {
         nav_for_kind(PlanningAdminDraftKind::QueueIdlePrompt),
         "directions"
     );
+}
+
+#[test]
+fn reset_form_and_json_spelling_maps_to_shared_application_target() {
+    /*
+     * HTML forms and JSON callers share parse_reset_target in admin_api::mod.
+     * Keep the accepted labels mapped directly to PlanningResetTarget so admin
+     * never grows a surface-specific destructive reset vocabulary.
+     */
+    for (raw, expected) in [
+        ("queue", PlanningResetTarget::Queue),
+        ("directions", PlanningResetTarget::Directions),
+        ("all", PlanningResetTarget::All),
+    ] {
+        assert_eq!(parse_reset_target(raw).unwrap(), expected);
+    }
+    assert!(parse_reset_target("tasks").is_err());
 }
 
 /*

@@ -291,7 +291,8 @@ long-running loop나 background worker는 effect completion을 application event
 
 `INBOUND-00`은 production code를 한 번에 대규모 변경하지 않는다. 다음 순서로 작게 나눈다.
 
-1. Surface command inventory와 regression을 먼저 고정한다.
+1. Surface command inventory와 regression을 먼저 고정한다. 완료 문서는
+   [../plan/inbound-surface-command-inventory.md](../plan/inbound-surface-command-inventory.md)이다.
 2. planning control command의 workspace/context/request mapping을 CLI와 Telegram에서 같은
    contract로 정렬한다.
 3. admin HTML/JSON의 같은 mutation이 같은 request DTO와 facade method를 통과하는지 고정한다.

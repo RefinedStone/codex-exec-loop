@@ -176,6 +176,44 @@ fn parse_message_accepts_plan_status_command_with_bot_mention() {
 }
 
 #[test]
+fn parse_message_maps_supported_planning_commands_to_shared_control_enum() {
+    /*
+     * Telegram command spelling is transport vocabulary. Planning operations
+     * must leave the parser as PlanningControlCommand so CLI and Telegram keep
+     * the same application command surface.
+     */
+    for (raw, expected) in [
+        ("/start", PlanningControlCommand::Help),
+        ("/help", PlanningControlCommand::Help),
+        ("help", PlanningControlCommand::Help),
+        ("/status", PlanningControlCommand::Status),
+        ("status", PlanningControlCommand::Status),
+        ("/queue", PlanningControlCommand::Queue),
+        ("queue", PlanningControlCommand::Queue),
+        ("/plan", PlanningControlCommand::Status),
+        ("/plan status", PlanningControlCommand::Status),
+        (
+            "/reset queue",
+            PlanningControlCommand::Reset(PlanningResetTarget::Queue),
+        ),
+        (
+            "/reset_directions",
+            PlanningControlCommand::Reset(PlanningResetTarget::Directions),
+        ),
+        (
+            "/reset_all",
+            PlanningControlCommand::Reset(PlanningResetTarget::All),
+        ),
+    ] {
+        assert_eq!(
+            parse_message(Some(raw)),
+            TelegramParsedMessage::Command(TelegramInboundCommand::Planning(expected)),
+            "Telegram input `{raw}` should map to the shared planning control command"
+        );
+    }
+}
+
+#[test]
 fn parse_message_reports_usage_for_reset_without_target() {
     /*
      * `/reset` is destructive enough that Telegram must reject an omitted target
