@@ -1,3 +1,4 @@
+use super::task_shell_command::{ParsedTaskShellCommand, parse_task_shell_argument};
 use super::*;
 
 // Startup diagnostics gate user actions differently from rendering. The
@@ -190,9 +191,14 @@ impl NativeTuiApp {
         });
     }
     fn handle_task_shell_command(&mut self, prompt: Option<&str>) {
+        let parsed = parse_task_shell_argument(prompt);
+        let prompt = match parsed {
+            ParsedTaskShellCommand::OpenPromptEditor => None,
+            ParsedTaskShellCommand::PreviewPrompt { prompt } => Some(prompt),
+        };
         self.task_intake_overlay_ui_state.open(prompt);
         self.dispatch_shell_chrome(ShellChromeEvent::TaskIntakeOverlayShown);
-        if prompt.is_some_and(|value| !value.trim().is_empty()) {
+        if matches!(parsed, ParsedTaskShellCommand::PreviewPrompt { .. }) {
             self.preview_task_intake_prompt();
         }
     }

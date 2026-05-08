@@ -5,6 +5,7 @@ use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
+use super::task_shell_command::{ParsedTaskShellCommand, parse_task_shell_argument};
 use crate::application::service::planning::PlanningResetTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,10 +205,7 @@ impl InlineShellCommandInput {
                 ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
-            InlineShellCommand::Task => match self.argument() {
-                Some(value) => format!("Press Enter to preview a runtime task for `{value}`."),
-                None => self.command.spec().buffered_hint.to_string(),
-            },
+            InlineShellCommand::Task => task_argument_hint(self.argument()),
             InlineShellCommand::Turns => match self.argument() {
                 Some(value) => {
                     format!("Press Enter to set the auto-follow turn budget to `{value}`.")
@@ -454,6 +452,16 @@ fn planning_argument_hint(argument: Option<&str>) -> String {
             "Press Enter to apply `:planning {}`. Supported arguments: doctor.",
             error.argument()
         ),
+    }
+}
+fn task_argument_hint(argument: Option<&str>) -> String {
+    match parse_task_shell_argument(argument) {
+        ParsedTaskShellCommand::OpenPromptEditor => {
+            InlineShellCommand::Task.spec().buffered_hint.to_string()
+        }
+        ParsedTaskShellCommand::PreviewPrompt { prompt } => {
+            format!("Press Enter to preview a runtime task for `{prompt}`.")
+        }
     }
 }
 fn parse_reset_argument(argument: Option<&str>) -> Option<ParsedPlanningResetShellCommand> {
