@@ -4,6 +4,7 @@ use super::parallel_mode_shell_command::{
 use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
+use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
 use crate::application::service::planning::PlanningResetTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,15 +197,7 @@ impl InlineShellCommandInput {
     pub(super) fn buffered_hint(&self) -> String {
         match self.command {
             InlineShellCommand::Parallel => parallel_argument_hint(self.argument()),
-            InlineShellCommand::PlanningInit => match self.argument() {
-                Some(value) if value.eq_ignore_ascii_case("doctor") => {
-                    "Press Enter to inspect planning health.".to_string()
-                }
-                Some(value) => format!(
-                    "Press Enter to apply `:planning {value}`. Supported arguments: doctor."
-                ),
-                None => self.command.spec().buffered_hint.to_string(),
-            },
+            InlineShellCommand::PlanningInit => planning_argument_hint(self.argument()),
             InlineShellCommand::Directions => match self.argument() {
                 Some(value) => format!(
                     "Press Enter to apply `:directions {value}`. Supported command: :directions."
@@ -444,6 +437,21 @@ fn parallel_argument_hint(argument: Option<&str>) -> String {
         }
         Err(error) => format!(
             "Press Enter to apply `:parallel {}`. Supported command forms: :parallel, :parallel off.",
+            error.argument()
+        ),
+    }
+}
+fn planning_argument_hint(argument: Option<&str>) -> String {
+    match parse_planning_shell_argument(argument) {
+        Ok(ParsedPlanningShellCommand::OpenControlCenter) => InlineShellCommand::PlanningInit
+            .spec()
+            .buffered_hint
+            .to_string(),
+        Ok(ParsedPlanningShellCommand::Doctor) => {
+            "Press Enter to inspect planning health.".to_string()
+        }
+        Err(error) => format!(
+            "Press Enter to apply `:planning {}`. Supported arguments: doctor.",
             error.argument()
         ),
     }

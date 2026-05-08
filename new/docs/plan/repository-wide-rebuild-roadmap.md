@@ -656,7 +656,9 @@ application command/use case를 공유해야 한다.
   vocabulary로 고정한다. 완료.
 - `INBOUND-00D-B`: TUI `:reset` execution path와 inline buffered hint path가 같은
   parser를 공유하게 해 reset vocabulary drift를 막는다. 완료.
-- `INBOUND-00D`: 남은 TUI `:planning`, `:task`, editor/overlay command vocabulary와
+- `INBOUND-00D-C`: TUI `:planning [doctor]` execution path와 inline buffered hint path가 같은
+  parser를 공유하게 해 planning control-center/doctor vocabulary drift를 막는다. 완료.
+- `INBOUND-00D`: 남은 TUI `:task`, editor/overlay command vocabulary와
   CLI/admin control vocabulary의 차이를 줄인다. 보류.
 - `INBOUND-00E-A`: CLI `parallel-tick`을 application orchestrator tick result vocabulary로
   정렬한다. 완료.

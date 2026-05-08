@@ -252,6 +252,11 @@ fn help_entries_use_renderable_command_forms() {
 fn planning_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");
     let doctor = InlineShellCommandInput::parse(":planning doctor").expect("command should parse");
+    let doctor_upper =
+        InlineShellCommandInput::parse(":planning DOCTOR").expect("command should parse");
+    let invalid = InlineShellCommandInput::parse(":planning status").expect("command should parse");
+    let invalid_extra =
+        InlineShellCommandInput::parse(":planning doctor now").expect("command should parse");
 
     assert_eq!(
         plain.buffered_hint(),
@@ -260,6 +265,18 @@ fn planning_command_hint_is_argument_aware() {
     assert_eq!(
         doctor.buffered_hint(),
         "Press Enter to inspect planning health."
+    );
+    assert_eq!(
+        doctor_upper.buffered_hint(),
+        "Press Enter to inspect planning health."
+    );
+    assert_eq!(
+        invalid.buffered_hint(),
+        "Press Enter to apply `:planning status`. Supported arguments: doctor."
+    );
+    assert_eq!(
+        invalid_extra.buffered_hint(),
+        "Press Enter to apply `:planning doctor now`. Supported arguments: doctor."
     );
 }
 
