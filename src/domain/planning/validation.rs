@@ -207,6 +207,7 @@ impl PlanningSemanticValidationService {
                     ),
                 );
             }
+            self.validate_task_priority(task, report);
             if DateTime::parse_from_rfc3339(task.updated_at.as_str()).is_err() {
                 report.push_error(
                     PlanningFileKind::TaskAuthority,
@@ -217,6 +218,36 @@ impl PlanningSemanticValidationService {
 
             // 내부 link shape는 task 하나만으로 판정할 수 있어 cross-reference pass를 기다릴 필요가 없다.
             self.validate_task_links(task, report);
+        }
+    }
+
+    fn validate_task_priority(&self, task: &TaskDefinition, report: &mut PlanningValidationReport) {
+        /*
+         * priority bounds are task-authority invariants, not mutation-service details. Queue ranking
+         * and every inbound projection read the same combined priority, so semantic validation owns
+         * the accepted range before queue projection is rebuilt.
+         */
+        let task_id = task.id.trim();
+        if !(0..=100).contains(&task.base_priority) {
+            report.push_error(
+                PlanningFileKind::TaskAuthority,
+                "invalid_base_priority",
+                format!("task {task_id} base_priority must be within 0..100"),
+            );
+        }
+        if !(-100..=100).contains(&task.dynamic_priority_delta) {
+            report.push_error(
+                PlanningFileKind::TaskAuthority,
+                "invalid_dynamic_priority_delta",
+                format!("task {task_id} dynamic_priority_delta must be within -100..100"),
+            );
+        }
+        if !(0..=100).contains(&task.combined_priority()) {
+            report.push_error(
+                PlanningFileKind::TaskAuthority,
+                "invalid_combined_priority",
+                format!("task {task_id} combined priority must stay within 0..100"),
+            );
         }
     }
 
@@ -642,5 +673,39 @@ mod tests {
                 .iter()
                 .any(|issue| issue.code == "multiple_in_progress_tasks")
         );
+    }
+
+    #[test]
+    fn validates_task_priority_bounds() {
+        // priority 범위는 mutation helper가 아니라 task authority semantic validation에서 보고돼야 한다.
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction("direction-a")],
+        };
+        let mut invalid_base = task("invalid-base", TaskStatus::Ready);
+        invalid_base.base_priority = -1;
+        let mut invalid_delta = task("invalid-delta", TaskStatus::Ready);
+        invalid_delta.dynamic_priority_delta = 101;
+        invalid_delta.priority_reason = "temporary boost".to_string();
+        let mut invalid_combined = task("invalid-combined", TaskStatus::Ready);
+        invalid_combined.base_priority = 90;
+        invalid_combined.dynamic_priority_delta = 20;
+        invalid_combined.priority_reason = "temporary boost".to_string();
+        let ledger = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![invalid_base, invalid_delta, invalid_combined],
+        };
+
+        let report = validate(&directions, &ledger);
+        let codes = report
+            .issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(codes.contains(&"invalid_base_priority"));
+        assert!(codes.contains(&"invalid_dynamic_priority_delta"));
+        assert!(codes.contains(&"invalid_combined_priority"));
     }
 }

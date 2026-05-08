@@ -383,6 +383,8 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 
 - `PLAN-02A`: task mutation update legality 중 terminal status 재분류 금지와
   description update ownership을 domain `PlanningTaskMutationPolicy`로 이동한다. 완료.
+- `PLAN-02B`: task authority link/priority invariant를 domain semantic validation으로
+  일원화하고, task mutation application validation의 중복 helper를 제거한다. 완료.
 
 금지:
 
