@@ -3,7 +3,9 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::GithubAutomationAdapter;
-use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::{
+    ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger, ParallelModeService,
+};
 use crate::application::service::planning::{
     PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
     PlanningControlService, PlanningResetTarget, PlanningServices, PlanningTaskToolRequest,
@@ -273,22 +275,31 @@ fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> 
 
     writeln!(stdout, "workspace: {workspace_label}")?;
     // 이 command는 TUI가 supervise하는 같은 distributor queue를 수동/cron 환경에서 tick하는 driver다.
-    match service.process_distributor_queue(&workspace_label) {
-        Ok(notices) if notices.is_empty() => {
-            writeln!(stdout, "parallel distributor queue-idle")?;
-            Ok(0)
-        }
-        Ok(notices) => {
-            for notice in notices {
-                writeln!(stdout, "{notice}")?;
-            }
-            Ok(0)
-        }
+    match service.run_orchestrator_tick(
+        &workspace_label,
+        ParallelModeOrchestratorTrigger::ManualDispatch,
+    ) {
+        Ok(result) => render_parallel_tick_result(stdout, &result),
         Err(error) => {
             writeln!(stdout, "parallel distributor tick failed: {error}")?;
             Ok(1)
         }
     }
+}
+
+fn render_parallel_tick_result(
+    stdout: &mut impl Write,
+    result: &ParallelModeOrchestratorTickResult,
+) -> Result<i32> {
+    if result.notices.is_empty() {
+        writeln!(stdout, "parallel distributor queue-idle")?;
+    } else {
+        for notice in &result.notices {
+            writeln!(stdout, "{notice}")?;
+        }
+    }
+
+    if result.blocked { Ok(1) } else { Ok(0) }
 }
 
 fn run_planning_tool_request(
@@ -415,8 +426,12 @@ fn parse_reset_target(target: &OsStr) -> Result<PlanningResetTarget> {
 }
 #[cfg(test)]
 mod tests {
-    use super::{parse_reset_target, run_with_args};
+    use super::{parse_reset_target, render_parallel_tick_result, run_with_args};
+    use crate::application::service::parallel_mode::{
+        ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger,
+    };
     use crate::application::service::planning::PlanningResetTarget;
+    use crate::domain::parallel_mode::ParallelModeOrchestratorStateMachine;
     use std::ffi::OsStr;
 
     fn create_temp_workspace(label: &str) -> String {
@@ -510,5 +525,47 @@ mod tests {
             assert_eq!(parse_reset_target(OsStr::new(raw)).unwrap(), expected);
         }
         assert!(parse_reset_target(OsStr::new("tasks")).is_err());
+    }
+
+    #[test]
+    fn parallel_tick_result_renderer_uses_application_tick_state() {
+        /*
+         * `akra parallel-tick` should render the application tick result instead
+         * of calling distributor internals directly. Blocked is an application
+         * result state and must affect the process exit code.
+         */
+        let mut idle_output = Vec::new();
+        let idle_exit = render_parallel_tick_result(
+            &mut idle_output,
+            &ParallelModeOrchestratorTickResult {
+                trigger: ParallelModeOrchestratorTrigger::ManualDispatch,
+                state: ParallelModeOrchestratorStateMachine::tick_state(false),
+                blocked: false,
+                notices: Vec::new(),
+            },
+        )
+        .expect("idle tick result should render");
+        assert_eq!(idle_exit, 0);
+        assert_eq!(
+            String::from_utf8(idle_output).expect("idle output should be utf8"),
+            "parallel distributor queue-idle\n"
+        );
+
+        let mut blocked_output = Vec::new();
+        let blocked_exit = render_parallel_tick_result(
+            &mut blocked_output,
+            &ParallelModeOrchestratorTickResult {
+                trigger: ParallelModeOrchestratorTrigger::ManualDispatch,
+                state: ParallelModeOrchestratorStateMachine::tick_state(true),
+                blocked: true,
+                notices: vec!["integration worktree is blocked".to_string()],
+            },
+        )
+        .expect("blocked tick result should render");
+        assert_eq!(blocked_exit, 1);
+        assert_eq!(
+            String::from_utf8(blocked_output).expect("blocked output should be utf8"),
+            "integration worktree is blocked\n"
+        );
     }
 }

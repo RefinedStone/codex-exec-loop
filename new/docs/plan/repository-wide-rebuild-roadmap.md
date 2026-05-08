@@ -653,8 +653,10 @@ application command/use case를 공유해야 한다.
 - `INBOUND-00C`: admin HTML/JSON route pair가 같은 mutation request DTO와 facade method를
   통과하는지 route pair별 regression을 보강한다. 완료.
 - `INBOUND-00D`: TUI planning shell command와 CLI/admin control vocabulary의 차이를 줄인다. 보류.
+- `INBOUND-00E-A`: CLI `parallel-tick`을 application orchestrator tick result vocabulary로
+  정렬한다. 완료.
 - `INBOUND-00E`: parallel TUI/admin/CLI entrypoint를 control-plane runtime command/event
-  vocabulary로 정렬한다. 보류.
+  vocabulary로 정렬한다. 남은 TUI/admin 정렬은 보류.
 
 금지:
 
