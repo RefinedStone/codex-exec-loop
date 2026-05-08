@@ -286,17 +286,7 @@ impl NativeTuiApp {
         &mut self,
         event: ConversationRuntimeEvent,
     ) -> bool {
-        let clear_turn_snapshot = matches!(
-            &event,
-            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
-        );
-        let should_flush_pending_task_intake = matches!(
-            &event,
-            ConversationRuntimeEvent::PostTurnEvaluated { .. }
-                | ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
-        );
-        let parallel_mode_post_turn_queue_signal =
-            self.parallel_mode_post_turn_queue_signal(&event);
+        let automation_context = self.conversation_runtime_automation_context(&event);
         let Some(conversation) = self.take_ready_conversation_state() else {
             return false;
         };
@@ -307,39 +297,11 @@ impl NativeTuiApp {
             .iter()
             .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
-        if clear_turn_snapshot {
-            self.active_turn_execution_snapshot_capture = None;
-        }
-        // A task-intake command can become executable only after the stream or
-        // post-turn evaluation settles planning state. When it fires, suppress the
-        // reducer's generic auto prompt to avoid double-submitting.
-        if should_flush_pending_task_intake && self.execute_pending_task_intake_command_if_ready() {
-            effects.retain(|effect| {
-                !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
-            });
-        } else if should_flush_pending_task_intake {
-            self.apply_parallel_mode_post_turn_queue_continuation(
-                &mut effects,
-                parallel_mode_post_turn_queue_signal,
-            );
-        }
+        self.route_conversation_runtime_automation_effects(automation_context, &mut effects);
         for effect in effects {
             self.execute_conversation_runtime_effect(effect);
         }
         started_stream
-    }
-
-    pub(super) fn should_apply_post_turn_evaluation(
-        &self,
-        thread_id: &str,
-        completed_turn_id: &str,
-    ) -> bool {
-        match &self.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.accepts_post_turn_evaluation(thread_id, completed_turn_id)
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => false,
-        }
     }
 
     pub(super) fn dispatch_conversation_input(&mut self, event: ConversationInputEvent) {
