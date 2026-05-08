@@ -63,11 +63,8 @@ pub(super) async fn akra_dashboard_page(
             },
         );
     }
-    let dashboard = build_akra_dashboard_view(
-        state.facade.workspace_dir(),
-        &state.planning,
-        state.parallel_mode.as_ref(),
-    );
+    let dashboard = build_akra_dashboard_view(state.facade.as_ref(), state.parallel_mode.as_ref())
+        .map_err(internal_server_error)?;
     render_html(
         jar,
         AkraDashboardTemplate {

@@ -440,6 +440,8 @@ mod tests {
          */
         let projection = PlanningApplicationProjection {
             workspace_present: true,
+            workspace_status:
+                crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyWithTask,
             status_label: "ready".to_string(),
             status_detail: Some("queue head ready".to_string()),
             queue_summary: Some("projection queue summary".to_string()),

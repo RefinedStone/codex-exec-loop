@@ -282,10 +282,22 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 }
 
 #[test]
-fn akra_dashboard_reads_planning_queue_through_application_projection() {
+fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
     assert!(
-        AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_snapshot"),
-        "dashboard should lower planning runtime through the application projection"
+        AKRA_DASHBOARD_RS.contains("load_runtime_application_projection"),
+        "dashboard should ask the admin facade for the shared planning projection"
+    );
+    assert!(
+        AKRA_DASHBOARD_RS.contains("inspect_readiness_from_planning_projection"),
+        "dashboard should pass planning projection facts into parallel readiness"
+    );
+    assert!(
+        !AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_snapshot"),
+        "dashboard adapter should not rebuild planning projection from runtime internals"
+    );
+    assert!(
+        !AKRA_DASHBOARD_RS.contains("PlanningServices"),
+        "dashboard adapter should not depend on the broad planning service bundle"
     );
     assert!(
         !AKRA_DASHBOARD_RS.contains(".queue_projection()"),

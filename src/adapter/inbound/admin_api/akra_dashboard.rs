@@ -1,11 +1,12 @@
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::service::parallel_mode::ParallelModeService;
-use crate::application::service::planning::{PlanningApplicationProjection, PlanningServices};
+use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeRuntimeEventEntry, ParallelModeSupervisorSnapshot,
 };
+use anyhow::Result;
 use chrono::Utc;
 use serde::Serialize;
 
@@ -266,16 +267,13 @@ pub(super) struct GuildMetricsView {
 }
 
 pub(super) fn build_akra_dashboard_view(
-    workspace_dir: &str,
-    planning: &PlanningServices,
+    planning_admin: &PlanningAdminFacadeService,
     parallel_mode: &ParallelModeService,
-) -> AkraAdminDashboardView {
-    let planning_snapshot = planning
-        .runtime
-        .load_runtime_snapshot_or_invalid(workspace_dir);
-    let planning_projection =
-        PlanningApplicationProjection::from_runtime_snapshot(&planning_snapshot);
-    let readiness = parallel_mode.inspect_readiness(workspace_dir, &planning_snapshot);
+) -> Result<AkraAdminDashboardView> {
+    let workspace_dir = planning_admin.workspace_dir();
+    let planning_projection = planning_admin.load_runtime_application_projection()?;
+    let readiness = parallel_mode
+        .inspect_readiness_from_planning_projection(workspace_dir, &planning_projection);
     let supervisor = parallel_mode.build_supervisor_snapshot(workspace_dir, true, Some(&readiness));
     let events = parallel_mode.build_runtime_events_snapshot(
         workspace_dir,
@@ -310,7 +308,7 @@ pub(super) fn build_akra_dashboard_view(
     );
     let generated_at = Utc::now();
 
-    AkraAdminDashboardView {
+    Ok(AkraAdminDashboardView {
         workspace: AkraWorkspaceView {
             path: supervisor.workspace_path.clone(),
             branch: current_git_branch(workspace_dir),
@@ -355,7 +353,7 @@ pub(super) fn build_akra_dashboard_view(
         generated_at: generated_at.to_rfc3339(),
         generated_time_label: generated_at.format("%H:%M:%S").to_string(),
         automation_epoch,
-    }
+    })
 }
 
 fn map_pool(supervisor: &ParallelModeSupervisorSnapshot) -> PoolBoardView {

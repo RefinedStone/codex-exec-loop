@@ -2,7 +2,9 @@ use crate::application::port::outbound::github_automation_port::GithubAutomation
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::{
+    PlanningApplicationProjection, PlanningRuntimeSnapshot,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
     ParallelModeCapabilityState, ParallelModeDispatchCommandSnapshot,
@@ -60,7 +62,7 @@ use self::readiness::parse_https_remote;
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds, inspect_akra_branch,
     inspect_authority_store, inspect_gh_auth, inspect_gh_binary, inspect_git_worktree,
-    inspect_planning, inspect_push_remote, run_command,
+    inspect_planning, inspect_planning_projection, inspect_push_remote, run_command,
 };
 #[cfg(test)]
 use self::session_detail::{agent_session_detail_record_path, read_agent_session_detail_record};
@@ -220,6 +222,28 @@ impl ParallelModeService {
         workspace_dir: &str,
         planning_snapshot: &PlanningRuntimeSnapshot,
     ) -> ParallelModeReadinessSnapshot {
+        self.inspect_readiness_with_planning_capability(
+            workspace_dir,
+            inspect_planning(planning_snapshot),
+        )
+    }
+
+    pub fn inspect_readiness_from_planning_projection(
+        &self,
+        workspace_dir: &str,
+        planning_projection: &PlanningApplicationProjection,
+    ) -> ParallelModeReadinessSnapshot {
+        self.inspect_readiness_with_planning_capability(
+            workspace_dir,
+            inspect_planning_projection(planning_projection),
+        )
+    }
+
+    fn inspect_readiness_with_planning_capability(
+        &self,
+        workspace_dir: &str,
+        planning: ParallelModeCapabilitySnapshot,
+    ) -> ParallelModeReadinessSnapshot {
         let repo_root = self.parallel_runtime.detect_git_repo_root(workspace_dir);
         let git_repository = match &repo_root {
             Some(repo_root) => ParallelModeCapabilitySnapshot::new(
@@ -265,7 +289,6 @@ impl ParallelModeService {
             &gh_binary,
             repo_root.as_deref(),
         );
-        let planning = inspect_planning(planning_snapshot);
         let authority_store = inspect_authority_store(
             self.planning_authority.as_ref(),
             workspace_dir,
