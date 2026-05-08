@@ -44,6 +44,130 @@ impl ParallelModeControlPlaneWake {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelModeControlPlaneWorkerEventKind {
+    WorkerCompleted,
+    WorkerLaunchFailed,
+    WorkerStreamFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeControlPlaneWorkerEvent {
+    pub workspace_directory: String,
+    pub epoch_id: u64,
+    pub task_id: String,
+    pub task_title: String,
+    pub kind: ParallelModeControlPlaneWorkerEventKind,
+    pub notices: Vec<String>,
+}
+
+impl ParallelModeControlPlaneWorkerEvent {
+    pub fn new(
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+        task_id: impl Into<String>,
+        task_title: impl Into<String>,
+        kind: ParallelModeControlPlaneWorkerEventKind,
+        notices: Vec<String>,
+    ) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            epoch_id,
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+            kind,
+            notices,
+        }
+    }
+
+    pub fn reduce(
+        self,
+        current_workspace_directory: &str,
+        current_epoch_id: Option<u64>,
+        has_actionable_queue_head: bool,
+    ) -> ParallelModeControlPlaneWorkerEventOutcome {
+        if current_workspace_directory != self.workspace_directory {
+            return ParallelModeControlPlaneWorkerEventOutcome::stale(
+                self,
+                "worker event targets a different workspace",
+            );
+        }
+        if current_epoch_id != Some(self.epoch_id) {
+            return ParallelModeControlPlaneWorkerEventOutcome::stale(
+                self,
+                "worker event belongs to a stale epoch",
+            );
+        }
+
+        let event = match self.kind {
+            ParallelModeControlPlaneWorkerEventKind::WorkerCompleted => {
+                ParallelModeControlPlaneEvent::WorkerCompleted {
+                    workspace_directory: self.workspace_directory.clone(),
+                    epoch_id: self.epoch_id,
+                    task_id: self.task_id.clone(),
+                }
+            }
+            ParallelModeControlPlaneWorkerEventKind::WorkerLaunchFailed => {
+                ParallelModeControlPlaneEvent::WorkerLaunchFailed {
+                    workspace_directory: self.workspace_directory.clone(),
+                    epoch_id: self.epoch_id,
+                    task_id: self.task_id.clone(),
+                }
+            }
+            ParallelModeControlPlaneWorkerEventKind::WorkerStreamFailed => {
+                ParallelModeControlPlaneEvent::WorkerStreamFailed {
+                    workspace_directory: self.workspace_directory.clone(),
+                    epoch_id: self.epoch_id,
+                    task_id: self.task_id.clone(),
+                }
+            }
+        };
+        let wake = (self.kind == ParallelModeControlPlaneWorkerEventKind::WorkerCompleted
+            && has_actionable_queue_head)
+            .then(|| {
+                ParallelModeControlPlaneWake::new(
+                    self.workspace_directory.clone(),
+                    ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                    self.epoch_id,
+                    Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion),
+                )
+            });
+        ParallelModeControlPlaneWorkerEventOutcome {
+            event,
+            stale_drop_reason: None,
+            notices: self.notices,
+            refresh_supervisor: true,
+            wake,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeControlPlaneWorkerEventOutcome {
+    pub event: ParallelModeControlPlaneEvent,
+    pub stale_drop_reason: Option<String>,
+    pub notices: Vec<String>,
+    pub refresh_supervisor: bool,
+    pub wake: Option<ParallelModeControlPlaneWake>,
+}
+
+impl ParallelModeControlPlaneWorkerEventOutcome {
+    fn stale(event: ParallelModeControlPlaneWorkerEvent, reason: &str) -> Self {
+        Self {
+            event: ParallelModeControlPlaneEvent::StaleCommandDropped {
+                workspace_directory: event.workspace_directory,
+                epoch_id: event.epoch_id,
+                reason: reason.to_string(),
+            },
+            stale_drop_reason: Some(reason.to_string()),
+            notices: Vec::new(),
+            refresh_supervisor: false,
+            wake: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ParallelModeControlPlaneCommand {
@@ -91,6 +215,21 @@ pub enum ParallelModeControlPlaneEvent {
     OrchestratorWakeDequeued {
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
+    },
+    WorkerCompleted {
+        workspace_directory: String,
+        epoch_id: u64,
+        task_id: String,
+    },
+    WorkerLaunchFailed {
+        workspace_directory: String,
+        epoch_id: u64,
+        task_id: String,
+    },
+    WorkerStreamFailed {
+        workspace_directory: String,
+        epoch_id: u64,
+        task_id: String,
     },
     EffectCompleted {
         effect_id: ParallelModeControlPlaneEffectId,
@@ -674,5 +813,93 @@ mod tests {
             stale.events.as_slice(),
             [ParallelModeControlPlaneEvent::StaleCommandDropped { epoch_id: 1, .. }]
         ));
+    }
+
+    #[test]
+    fn worker_completed_event_refreshes_projection_and_wakes_when_queue_has_work() {
+        let event = ParallelModeControlPlaneWorkerEvent::new(
+            "/repo",
+            9,
+            "task-1",
+            "Task One",
+            ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+            vec!["official completion refreshed".to_string()],
+        );
+
+        let outcome = event.reduce("/repo", Some(9), true);
+
+        assert_eq!(
+            outcome.event,
+            ParallelModeControlPlaneEvent::WorkerCompleted {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 9,
+                task_id: "task-1".to_string(),
+            }
+        );
+        assert!(outcome.stale_drop_reason.is_none());
+        assert_eq!(outcome.notices, vec!["official completion refreshed"]);
+        assert!(outcome.refresh_supervisor);
+        assert_eq!(
+            outcome.wake,
+            Some(ParallelModeControlPlaneWake::new(
+                "/repo",
+                ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                9,
+                Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion),
+            ))
+        );
+    }
+
+    #[test]
+    fn worker_failure_event_refreshes_projection_without_waking_dispatch() {
+        let event = ParallelModeControlPlaneWorkerEvent::new(
+            "/repo",
+            9,
+            "task-1",
+            "Task One",
+            ParallelModeControlPlaneWorkerEventKind::WorkerLaunchFailed,
+            vec!["launch failed".to_string()],
+        );
+
+        let outcome = event.reduce("/repo", Some(9), true);
+
+        assert_eq!(
+            outcome.event,
+            ParallelModeControlPlaneEvent::WorkerLaunchFailed {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 9,
+                task_id: "task-1".to_string(),
+            }
+        );
+        assert_eq!(outcome.notices, vec!["launch failed"]);
+        assert!(outcome.refresh_supervisor);
+        assert!(outcome.wake.is_none());
+    }
+
+    #[test]
+    fn stale_worker_event_is_dropped_before_ui_effects() {
+        let event = ParallelModeControlPlaneWorkerEvent::new(
+            "/repo",
+            9,
+            "task-1",
+            "Task One",
+            ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+            vec!["late completion".to_string()],
+        );
+
+        let outcome = event.reduce("/repo", Some(10), true);
+
+        assert_eq!(
+            outcome.event,
+            ParallelModeControlPlaneEvent::StaleCommandDropped {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 9,
+                reason: "worker event belongs to a stale epoch".to_string(),
+            }
+        );
+        assert!(outcome.stale_drop_reason.is_some());
+        assert!(outcome.notices.is_empty());
+        assert!(!outcome.refresh_supervisor);
+        assert!(outcome.wake.is_none());
     }
 }

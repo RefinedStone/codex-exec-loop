@@ -210,6 +210,9 @@ impl ShellRuntime {
                         outcome,
                     );
                 }
+                BackgroundMessage::ParallelModeWorkerEvent(event) => {
+                    self.app.apply_parallel_mode_worker_event(event);
+                }
                 BackgroundMessage::ParallelModeOrchestratorTickCompleted {
                     workspace_directory,
                     blocked,
