@@ -356,7 +356,7 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
 
 ### PLAN-02. Planning Domain Decision And Projection
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -532,6 +532,7 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 
 소유 범위:
 
+- `new/docs/plan/tui-conversation-automation-split-plan.md`
 - `src/adapter/inbound/tui/app/conversation*`
 - `src/adapter/inbound/tui/app/turn_submission_runtime/*`
 - `src/application/service/*`
@@ -541,6 +542,24 @@ planning handoff, parallel handoff가 섞이는 부분을 줄인다.
 - conversation state와 automation state 분리
 - application event path
 - TUI가 projection 표시만 담당하는 handoff path
+
+작업 단위:
+
+- `TUI-01A`: conversation lifecycle과 post-turn automation lifecycle의 fan-in, ownership,
+  migration slice를 [tui-conversation-automation-split-plan.md](./tui-conversation-automation-split-plan.md)
+  에 고정한다. 완료.
+- `TUI-01B`: `shell_runtime.rs`와 `app_runtime.rs`에 흩어진 post-turn automation routing을
+  TUI-side automation router/controller로 추출한다. behavior 변경 없이 stale guard,
+  planning worker panel projection assignment, supervisor invalidation, reducer dispatch
+  ordering을 유지한다. 준비됨.
+- `TUI-01C`: conversation reducer vocabulary에서 stream lifecycle과 automation result를
+  분리한다. `EvaluateAutoFollow`는 더 넓은 post-turn automation effect로 낮추고,
+  auto-follow는 automation result action으로만 남긴다.
+- `TUI-01D`: queued auto prompt metadata, planning handoff, parallel handoff signal을
+  automation provenance로 묶고 pending task-intake flush와 parallel continuation의
+  ordering contract를 테스트로 고정한다.
+- `TUI-01E`: `conversation_state`의 `Hybrid` 분류를 제거하거나 남은 Runtime Bridge field의
+  유지 사유와 후속 migration owner를 문서화한다.
 
 금지:
 
