@@ -5,6 +5,9 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
+};
 use crate::application::service::planning::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolUpdateRequest, PlanningTaskUpdatePayload,
 };
@@ -1464,6 +1467,59 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
     assert!(
         !harness.runtime.app().parallel_mode_enabled,
         "late background enter result must not re-enable parallel mode after :parallel off"
+    );
+}
+
+#[test]
+fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-stale-worker-event");
+    harness.committed_ready_task("late worker completion should not wake dispatch");
+    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
+        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
+        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
+    );
+    harness.runtime.app_mut().parallel_mode_automation_epoch_id = Some(2);
+
+    harness
+        .runtime
+        .app
+        .tx
+        .send(BackgroundMessage::ParallelModeWorkerEvent(
+            ParallelModeControlPlaneWorkerEvent::new(
+                harness.workspace_dir.clone(),
+                1,
+                "task-stale-worker",
+                "Stale Worker",
+                ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+                vec!["late completion should be dropped".to_string()],
+            ),
+        ))
+        .expect("stale worker event should enqueue");
+    harness.runtime.poll_background_messages();
+
+    assert_eq!(harness.worker_port.launch_count(), 0);
+    assert!(
+        !harness
+            .runtime_notices()
+            .iter()
+            .any(|notice| notice.contains("late completion should be dropped")),
+        "stale worker event notice must not leak into the visible runtime"
+    );
+    assert!(
+        !harness
+            .runtime
+            .app()
+            .parallel_mode_supervisor_refresh_in_flight
+    );
+    assert!(
+        !harness
+            .runtime
+            .app()
+            .parallel_mode_orchestrator_wake_in_flight
     );
 }
 

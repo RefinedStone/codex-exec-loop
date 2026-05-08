@@ -5,7 +5,9 @@ use std::thread;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::{
+    ParallelModeService, control_plane::ParallelModeControlPlaneWorkerEvent,
+};
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -75,6 +77,7 @@ pub(super) enum BackgroundMessage {
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         outcome: ParallelModeDispatchOutcome,
     },
+    ParallelModeWorkerEvent(ParallelModeControlPlaneWorkerEvent),
     ParallelModeOrchestratorTickCompleted {
         workspace_directory: String,
         blocked: bool,

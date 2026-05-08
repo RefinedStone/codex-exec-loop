@@ -22,6 +22,9 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use super::ParallelModeService;
+use super::control_plane::{
+    ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
+};
 
 pub struct ParallelModeDispatchOrchestratorTickRequest {
     pub workspace_directory: String,
@@ -45,12 +48,7 @@ pub struct ParallelModeDispatchOrchestratorTickResult {
 #[derive(Debug, Clone)]
 pub enum ParallelModeOrchestratorLoopEvent {
     ConversationRuntimeNotice(String),
-    InvalidateSupervisorSnapshot,
-    WakeParallelModeOrchestrator {
-        workspace_directory: String,
-        trigger: ParallelModeAutomationTrigger,
-        epoch_id: u64,
-    },
+    WorkerEvent(ParallelModeControlPlaneWorkerEvent),
 }
 
 impl ParallelModeService {
@@ -504,7 +502,7 @@ struct ParallelDispatchTurnCompleted {
 
 struct ParallelDispatchWorkerRunResult {
     notices: Vec<String>,
-    official_completion_refresh_succeeded: bool,
+    worker_event_kind: ParallelModeControlPlaneWorkerEventKind,
 }
 
 struct ParallelDispatchOfficialCompletionOutcome {
@@ -528,6 +526,29 @@ impl ParallelDispatchOfficialCompletionOutcome {
     }
 }
 
+impl ParallelDispatchWorkerRunResult {
+    fn launch_failed(notices: Vec<String>) -> Self {
+        Self {
+            notices,
+            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::WorkerLaunchFailed,
+        }
+    }
+
+    fn stream_failed(notices: Vec<String>) -> Self {
+        Self {
+            notices,
+            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::WorkerStreamFailed,
+        }
+    }
+
+    fn completed(notices: Vec<String>) -> Self {
+        Self {
+            notices,
+            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+        }
+    }
+}
+
 fn spawn_parallel_dispatch_worker(
     request: ParallelDispatchWorkerRequest,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
@@ -543,6 +564,8 @@ fn spawn_parallel_dispatch_worker(
          */
         let workspace_directory = request.planning_workspace_directory.clone();
         let automation_epoch_id = request.automation_epoch_id;
+        let task_id = request.handoff_task.task_id.clone();
+        let task_title = request.handoff_task.task_title.clone();
         event_log::emit_lazy("parallel_worker_thread_started", || {
             serde_json::json!({
                 "planning_workspace": &request.planning_workspace_directory,
@@ -555,31 +578,17 @@ fn spawn_parallel_dispatch_worker(
                 "developer_instructions_chars": request.developer_instructions.chars().count(),
             })
         });
-        let result =
-            run_parallel_dispatch_worker(request, worker_port, turn_service, planning.clone());
-        for notice in result.notices {
-            let _ =
-                outer_tx.send(ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice));
-        }
-        /*
-         * 성공, 실패, panic 어느 경로든 supervisor snapshot을 다시 읽게 해야 slot lease와
-         * official completion marker가 화면에 남지 않는다.
-         */
-        let _ = outer_tx.send(ParallelModeOrchestratorLoopEvent::InvalidateSupervisorSnapshot);
-        let planning_snapshot = planning
-            .runtime
-            .load_runtime_snapshot_or_invalid(&workspace_directory);
-        if result.official_completion_refresh_succeeded
-            && planning_snapshot.has_actionable_queue_head()
-        {
-            let _ = outer_tx.send(
-                ParallelModeOrchestratorLoopEvent::WakeParallelModeOrchestrator {
-                    workspace_directory,
-                    trigger: ParallelModeAutomationTrigger::ParallelOfficialCompletion,
-                    epoch_id: automation_epoch_id,
-                },
-            );
-        }
+        let result = run_parallel_dispatch_worker(request, worker_port, turn_service, planning);
+        let _ = outer_tx.send(ParallelModeOrchestratorLoopEvent::WorkerEvent(
+            ParallelModeControlPlaneWorkerEvent::new(
+                workspace_directory,
+                automation_epoch_id,
+                task_id,
+                task_title,
+                result.worker_event_kind,
+                result.notices,
+            ),
+        ));
     });
 }
 
@@ -752,9 +761,10 @@ fn run_parallel_dispatch_worker(
             &request.worktree_directory,
             "parallel worker stream failed before official completion refresh",
         );
-        return ParallelDispatchWorkerRunResult {
-            notices,
-            official_completion_refresh_succeeded: false,
+        return if stream_state.saw_failed_before_turn_started {
+            ParallelDispatchWorkerRunResult::launch_failed(notices)
+        } else {
+            ParallelDispatchWorkerRunResult::stream_failed(notices)
         };
     }
 
@@ -768,10 +778,7 @@ fn run_parallel_dispatch_worker(
             &request.worktree_directory,
             "parallel worker stream ended without a completed turn",
         );
-        return ParallelDispatchWorkerRunResult {
-            notices,
-            official_completion_refresh_succeeded: false,
-        };
+        return ParallelDispatchWorkerRunResult::stream_failed(notices);
     };
 
     let official_completion = run_parallel_dispatch_official_completion(
@@ -782,10 +789,10 @@ fn run_parallel_dispatch_worker(
         stream_state.latest_main_reply.as_deref(),
     );
     notices.extend(official_completion.notices);
-    ParallelDispatchWorkerRunResult {
-        notices,
-        official_completion_refresh_succeeded: official_completion
-            .official_completion_refresh_succeeded,
+    if official_completion.official_completion_refresh_succeeded {
+        ParallelDispatchWorkerRunResult::completed(notices)
+    } else {
+        ParallelDispatchWorkerRunResult::stream_failed(notices)
     }
 }
 

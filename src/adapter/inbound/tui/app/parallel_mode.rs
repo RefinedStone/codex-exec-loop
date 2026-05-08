@@ -6,6 +6,7 @@ use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay}
 use crate::application::service::parallel_mode::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
     ParallelModeOrchestratorTrigger, ParallelModeService,
+    control_plane::ParallelModeControlPlaneWorkerEvent,
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
@@ -1059,6 +1060,53 @@ impl NativeTuiApp {
         self.maybe_spawn_parallel_mode_orchestrator_tick(workspace_directory);
     }
 
+    pub(super) fn apply_parallel_mode_worker_event(
+        &mut self,
+        event: ParallelModeControlPlaneWorkerEvent,
+    ) {
+        let current_workspace_directory = self.planning_workspace_directory();
+        let has_actionable_queue_head = if current_workspace_directory == event.workspace_directory
+        {
+            self.planning
+                .runtime
+                .load_runtime_snapshot_or_invalid(&event.workspace_directory)
+                .has_actionable_queue_head()
+        } else {
+            false
+        };
+        let outcome = event.reduce(
+            &current_workspace_directory,
+            self.parallel_mode_automation_epoch_id,
+            has_actionable_queue_head,
+        );
+        if let Some(reason) = outcome.stale_drop_reason {
+            event_log::emit_lazy("parallel_worker_event_dropped", || {
+                serde_json::json!({
+                    "workspace": current_workspace_directory,
+                    "epoch_id": self.parallel_mode_automation_epoch_id,
+                    "reason": reason,
+                })
+            });
+            return;
+        }
+
+        for notice in outcome.notices {
+            self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamExecutionObserved {
+                notice,
+            });
+        }
+        if outcome.refresh_supervisor {
+            self.invalidate_parallel_mode_supervisor_snapshot();
+        }
+        if let Some(wake) = outcome.wake {
+            self.apply_parallel_mode_orchestrator_wake_request(
+                wake.workspace_directory,
+                wake.trigger,
+                wake.epoch_id,
+            );
+        }
+    }
+
     pub(super) fn apply_parallel_mode_orchestrator_tick_completed(
         &mut self,
         workspace_directory: &str,
@@ -1134,18 +1182,9 @@ fn background_message_from_parallel_loop_event(
         ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
             BackgroundMessage::ConversationRuntimeNotice(notice)
         }
-        ParallelModeOrchestratorLoopEvent::InvalidateSupervisorSnapshot => {
-            BackgroundMessage::InvalidateParallelModeSupervisorSnapshot
+        ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => {
+            BackgroundMessage::ParallelModeWorkerEvent(event)
         }
-        ParallelModeOrchestratorLoopEvent::WakeParallelModeOrchestrator {
-            workspace_directory,
-            trigger,
-            epoch_id,
-        } => BackgroundMessage::WakeParallelModeOrchestrator {
-            workspace_directory,
-            trigger,
-            epoch_id,
-        },
     }
 }
 
