@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -66,6 +68,7 @@ use self::slot_inspection::summarize_pool_reconcile_status;
 use super::session_detail::agent_session_detail_record_path;
 
 const RECENT_LEASE_PROTECTION_SECS: i64 = 120;
+const POOL_RESET_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /*
 Git worktree inventory는 git porcelain 출력에서 얻은 최소 read model이다. 이 타입은
@@ -327,7 +330,7 @@ pub(super) fn reset_pool_for_parallel_enable(
                 "baseline_branch": POOL_BASELINE_BRANCH,
             })
         });
-        let reset_report = reset_slot_worktree_to_akra(&slot_path);
+        let reset_report = reset_slot_worktree_to_akra_with_retry(&slot_path);
         if reset_report.succeeded() {
             collect_reset_projection_keys(&mut report, &context, &slot_id);
             report
@@ -385,6 +388,18 @@ pub(super) fn reset_pool_for_parallel_enable(
     }
 
     Ok(report)
+}
+
+fn reset_slot_worktree_to_akra_with_retry(
+    slot_path: &Path,
+) -> super::git_sequence::GitCommandSequenceReport {
+    let first_report = reset_slot_worktree_to_akra(slot_path);
+    if first_report.succeeded() {
+        return first_report;
+    }
+
+    thread::sleep(POOL_RESET_RETRY_DELAY);
+    reset_slot_worktree_to_akra(slot_path)
 }
 
 fn live_lease_blocks_parallel_entry_reset(
