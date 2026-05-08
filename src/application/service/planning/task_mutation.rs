@@ -3,9 +3,10 @@ use crate::application::port::outbound::planning_task_repository_port::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningActiveDirectionPolicy,
-    PlanningTaskIdPolicy, PlanningTaskMutationPolicy, PriorityQueueProjection,
-    PriorityQueueService, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
-    TaskDescriptionUpdateDecision, TaskMutationProvenance, TaskStatus,
+    PlanningTaskIdPolicy, PlanningTaskMutationPolicy, PlanningTaskReferencePolicy,
+    PriorityQueueProjection, PriorityQueueService, PriorityQueueTask, TaskActor,
+    TaskAuthorityDocument, TaskDefinition, TaskDescriptionUpdateDecision, TaskMutationProvenance,
+    TaskStatus,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -22,8 +23,7 @@ pub use self::commands::{
     PlanningTaskUpdateInput, extract_planning_task_commands,
 };
 use self::helpers::{
-    direction_title, find_direction, format_timestamp, normalize_references, required_id,
-    required_text, task_id_exists,
+    direction_title, find_direction, format_timestamp, required_id, required_text, task_id_exists,
 };
 
 /*
@@ -97,6 +97,7 @@ pub struct PlanningTaskMutationService {
     task_mutation_policy: PlanningTaskMutationPolicy,
     active_direction_policy: PlanningActiveDirectionPolicy,
     task_id_policy: PlanningTaskIdPolicy,
+    task_reference_policy: PlanningTaskReferencePolicy,
 }
 impl PlanningTaskMutationService {
     pub fn new(
@@ -109,6 +110,7 @@ impl PlanningTaskMutationService {
             task_mutation_policy: PlanningTaskMutationPolicy::new(),
             active_direction_policy: PlanningActiveDirectionPolicy::new(),
             task_id_policy: PlanningTaskIdPolicy::new(),
+            task_reference_policy: PlanningTaskReferencePolicy::new(),
         }
     }
     pub fn preview_create_task(
@@ -469,8 +471,12 @@ impl PlanningTaskMutationService {
             base_priority: input.base_priority.unwrap_or(DEFAULT_TASK_PRIORITY),
             dynamic_priority_delta,
             priority_reason,
-            depends_on: normalize_references(&input.depends_on),
-            blocked_by: normalize_references(&input.blocked_by),
+            depends_on: self
+                .task_reference_policy
+                .normalize_references(&input.depends_on),
+            blocked_by: self
+                .task_reference_policy
+                .normalize_references(&input.blocked_by),
             created_by: actor,
             last_updated_by: actor,
             source_turn_id: audit_context
@@ -546,10 +552,10 @@ impl PlanningTaskMutationService {
             task.priority_reason = priority_reason.trim().to_string();
         }
         if let Some(depends_on) = input.depends_on.as_ref() {
-            task.depends_on = normalize_references(depends_on);
+            task.depends_on = self.task_reference_policy.normalize_references(depends_on);
         }
         if let Some(blocked_by) = input.blocked_by.as_ref() {
-            task.blocked_by = normalize_references(blocked_by);
+            task.blocked_by = self.task_reference_policy.normalize_references(blocked_by);
         }
         if task.dynamic_priority_delta != 0 && task.priority_reason.trim().is_empty() {
             bail!(

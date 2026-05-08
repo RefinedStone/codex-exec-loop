@@ -21,6 +21,7 @@ pub(crate) mod queue_follow;
 #[cfg(test)]
 pub(crate) mod repair_candidate;
 pub(crate) mod task_id;
+pub(crate) mod task_references;
 mod validation;
 
 pub(crate) use direction_policy::{
@@ -34,6 +35,7 @@ pub(crate) use queue_follow::{
     PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode,
 };
 pub(crate) use task_id::PlanningTaskIdPolicy;
+pub(crate) use task_references::PlanningTaskReferencePolicy;
 pub use validation::PlanningSemanticValidationService;
 
 // planning authority 문서의 schema version이다. adapter와 validation은 이 값을 기준으로 호환성을 판단한다.

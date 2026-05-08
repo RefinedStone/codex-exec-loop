@@ -395,6 +395,8 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
   fallback을 domain `PlanningActiveDirectionPolicy`로 일원화한다. 완료.
 - `PLAN-02G`: task mutation/runtime intake의 stable task-id allocation과 collision suffix
   전진 규칙을 domain `PlanningTaskIdPolicy`로 일원화한다. 완료.
+- `PLAN-02H`: task mutation create/update의 `depends_on`/`blocked_by` reference
+  normalization을 domain `PlanningTaskReferencePolicy`로 일원화한다. 완료.
 
 금지:
 
