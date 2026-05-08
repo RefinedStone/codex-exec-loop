@@ -11,6 +11,8 @@ use super::{
     ConversationRuntimeEvent, ConversationState, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
 };
 
+const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
+
 /* ShellRuntime is the thin event-loop owner around NativeTuiApp. It drains
  * background work, applies terminal input in priority order, and only exposes
  * redraw timing through TuiFrameScheduler so rendering remains pull-driven.
@@ -22,6 +24,7 @@ pub(super) struct ShellRuntime {
     last_live_activity_pulse: Option<u64>,
     last_parallel_supervisor_refresh_at: Option<Instant>,
     last_parallel_orchestrator_wake_poll_at: Option<Instant>,
+    background_drain_limited: bool,
 }
 
 impl ShellRuntime {
@@ -34,6 +37,7 @@ impl ShellRuntime {
             last_live_activity_pulse: None,
             last_parallel_supervisor_refresh_at: None,
             last_parallel_orchestrator_wake_poll_at: None,
+            background_drain_limited: false,
         }
     }
     pub(super) fn app_mut(&mut self) -> &mut NativeTuiApp {
@@ -58,6 +62,9 @@ impl ShellRuntime {
         now: Instant,
         default_timeout: Duration,
     ) -> Duration {
+        if self.frame_scheduler.focused && self.background_drain_limited {
+            return Duration::ZERO;
+        }
         self.frame_scheduler.next_poll_timeout(now, default_timeout)
     }
     fn request_redraw_at(&mut self, now: Instant) {
@@ -69,10 +76,18 @@ impl ShellRuntime {
 
     fn poll_background_messages_at(&mut self, now: Instant) {
         let mut redraw_requested = false;
+        let mut drained_background_messages = 0usize;
+        self.background_drain_limited = false;
 
-        // The receiver is drained before drawing so a burst of startup, stream, and
-        // post-turn messages settles into one coherent app state for the next frame.
-        while let Ok(message) = self.app.rx.try_recv() {
+        // Process a bounded background batch before drawing. Streaming providers can
+        // enqueue faster than the terminal paints, so this must yield often enough
+        // for already-buffered keyboard input to update the prompt without waiting
+        // behind the whole stream backlog.
+        while drained_background_messages < BACKGROUND_MESSAGE_DRAIN_BUDGET {
+            let Ok(message) = self.app.rx.try_recv() else {
+                break;
+            };
+            drained_background_messages += 1;
             redraw_requested = true;
             match message {
                 BackgroundMessage::StartupLoaded(result) => {
@@ -235,6 +250,8 @@ impl ShellRuntime {
                 }
             }
         }
+        self.background_drain_limited =
+            drained_background_messages == BACKGROUND_MESSAGE_DRAIN_BUDGET;
 
         redraw_requested |= self.app.maybe_start_github_review_poll(now);
         let live_activity_pulse = self.app.live_activity_pulse(now);

@@ -4,7 +4,10 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::Event;
 
-use super::{ShellOverlay, TuiFrameScheduler, make_test_runtime};
+use super::{
+    BACKGROUND_MESSAGE_DRAIN_BUDGET, BackgroundMessage, ConversationState, ShellOverlay,
+    TuiFrameScheduler, make_test_runtime,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
     ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
@@ -60,6 +63,44 @@ fn scheduler_reports_zero_timeout_when_draw_is_due() {
         scheduler.next_poll_timeout(now, Duration::from_millis(100)),
         Duration::ZERO
     );
+}
+
+#[test]
+fn background_message_burst_yields_after_budget() {
+    let mut runtime = make_test_runtime();
+    runtime.take_redraw_request();
+    let queued_message_count = BACKGROUND_MESSAGE_DRAIN_BUDGET + 3;
+    for index in 0..queued_message_count {
+        runtime
+            .app
+            .tx
+            .send(BackgroundMessage::ConversationRuntimeNotice(format!(
+                "notice {index}"
+            )))
+            .expect("background message should enqueue");
+    }
+    let now = Instant::now();
+
+    runtime.poll_background_messages_at(now);
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(
+        conversation.runtime_notices.len(),
+        BACKGROUND_MESSAGE_DRAIN_BUDGET
+    );
+    assert_eq!(
+        runtime.next_event_poll_timeout(now, Duration::from_millis(100)),
+        Duration::ZERO
+    );
+
+    runtime.poll_background_messages_at(now + Duration::from_millis(1));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.runtime_notices.len(), queued_message_count);
 }
 
 // Focus loss gates drawing but keeps pending layout work; focus return must redraw immediately to resync the terminal.

@@ -14,6 +14,8 @@ use super::inline_terminal_adapter::{
 };
 use super::shell_runtime::ShellRuntime;
 
+const READY_EVENT_DRAIN_LIMIT: usize = 64;
+
 /*
  * 이 모듈은 TUI의 concrete terminal boundary다. ShellRuntime은 app state, background
  * message reduction, draw scheduling, key/focus/resize semantics를 소유하고, 이 파일은
@@ -91,8 +93,24 @@ fn run_event_loop(
          * reducer, draw scheduler, overlay state가 한곳에서 동일한 정책으로 반응할 수 있다.
          */
         runtime.handle_terminal_event(event::read()?);
+        drain_ready_terminal_events(runtime)?;
     }
 
+    Ok(())
+}
+
+fn drain_ready_terminal_events(runtime: &mut ShellRuntime) -> Result<()> {
+    /*
+     * Terminal emulators can queue several key presses while a frame is being
+     * rendered. Draining the events that are already ready lets the scheduler
+     * coalesce them into one redraw instead of painting once per character.
+     */
+    for _ in 0..READY_EVENT_DRAIN_LIMIT {
+        if runtime.should_quit() || !event::poll(Duration::ZERO)? {
+            break;
+        }
+        runtime.handle_terminal_event(event::read()?);
+    }
     Ok(())
 }
 
