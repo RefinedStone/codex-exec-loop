@@ -391,6 +391,8 @@ runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 
   `PlanningQueueFollowPolicy`로 이동하고, runtime policy service는 snapshot fact mapping만 맡는다. 완료.
 - `PLAN-02E`: repair candidate stale/queue-advancement eligibility regression을 domain
   `PlanningRepairCandidatePolicy` test guard로 이동하고, reconciliation regression은 같은 policy를 검증한다. 완료.
+- `PLAN-02F`: task creation/runtime intake의 active direction selection과 relation-note
+  fallback을 domain `PlanningActiveDirectionPolicy`로 일원화한다. 완료.
 
 금지:
 

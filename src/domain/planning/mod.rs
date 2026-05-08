@@ -13,6 +13,7 @@
  */
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod direction_policy;
 pub(crate) mod mutation;
 pub(crate) mod promotion;
 mod queue;
@@ -21,6 +22,9 @@ pub(crate) mod queue_follow;
 pub(crate) mod repair_candidate;
 mod validation;
 
+pub(crate) use direction_policy::{
+    PlanningActiveDirectionPolicy, PlanningActiveDirectionSelectionError,
+};
 pub(crate) use mutation::{PlanningTaskMutationPolicy, TaskDescriptionUpdateDecision};
 pub(crate) use promotion::{PlanningProposalPromotionDecision, PlanningProposalPromotionPolicy};
 pub use queue::PriorityQueueService;

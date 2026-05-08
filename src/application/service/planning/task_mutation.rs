@@ -2,10 +2,10 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::domain::planning::{
-    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningTaskMutationPolicy,
-    PriorityQueueProjection, PriorityQueueService, PriorityQueueTask, TaskActor,
-    TaskAuthorityDocument, TaskDefinition, TaskDescriptionUpdateDecision, TaskMutationProvenance,
-    TaskStatus,
+    DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningActiveDirectionPolicy,
+    PlanningTaskMutationPolicy, PriorityQueueProjection, PriorityQueueService, PriorityQueueTask,
+    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskDescriptionUpdateDecision,
+    TaskMutationProvenance, TaskStatus,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -23,9 +23,8 @@ pub use self::commands::{
     PlanningTaskUpdateInput, extract_planning_task_commands,
 };
 use self::helpers::{
-    build_task_id, default_relation_note, direction_title, find_direction, format_timestamp,
-    increment_suffix, normalize_references, required_id, required_text, select_direction,
-    task_id_exists,
+    build_task_id, direction_title, find_direction, format_timestamp, increment_suffix,
+    normalize_references, required_id, required_text, task_id_exists,
 };
 
 /*
@@ -104,6 +103,7 @@ pub struct PlanningTaskMutationService {
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     priority_queue_service: PriorityQueueService,
     task_mutation_policy: PlanningTaskMutationPolicy,
+    active_direction_policy: PlanningActiveDirectionPolicy,
 }
 impl PlanningTaskMutationService {
     pub fn new(
@@ -114,6 +114,7 @@ impl PlanningTaskMutationService {
             planning_task_repository_port,
             priority_queue_service,
             task_mutation_policy: PlanningTaskMutationPolicy::new(),
+            active_direction_policy: PlanningActiveDirectionPolicy::new(),
         }
     }
     pub fn preview_create_task(
@@ -442,7 +443,9 @@ impl PlanningTaskMutationService {
             .filter(|value| !value.is_empty())
             .unwrap_or(title.as_str())
             .to_string();
-        let direction = select_direction(input.direction_id.as_deref(), directions)?;
+        let direction = self
+            .active_direction_policy
+            .select_direction(input.direction_id.as_deref(), directions)?;
         let actor = audit_context.source.actor();
         let dynamic_priority_delta = input.dynamic_priority_delta.unwrap_or(0);
         let priority_reason = input
@@ -461,10 +464,9 @@ impl PlanningTaskMutationService {
         Ok(TaskDefinition {
             id: build_task_id(audit_context.source, generated_at, &title, collision_suffix),
             direction_id: direction.id.trim().to_string(),
-            direction_relation_note: default_relation_note(
-                input.direction_relation_note.as_deref(),
-                direction,
-            ),
+            direction_relation_note: self
+                .active_direction_policy
+                .default_relation_note(input.direction_relation_note.as_deref(), direction),
             title,
             description,
             status: input.status.unwrap_or(TaskStatus::Ready),
@@ -519,7 +521,9 @@ impl PlanningTaskMutationService {
             {
                 // direction move의 default relation note는 caller가 note를 제공하지 않았고 현재 note가
                 // blank일 때만 채운다. 기존 audit 설명을 불필요하게 덮어쓰지 않기 위해서다.
-                task.direction_relation_note = default_relation_note(None, direction);
+                task.direction_relation_note = self
+                    .active_direction_policy
+                    .default_relation_note(None, direction);
             }
         }
         if let Some(direction_relation_note) = input.direction_relation_note.as_deref() {

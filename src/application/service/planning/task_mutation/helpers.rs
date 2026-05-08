@@ -5,8 +5,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 
 use super::{PlanningTaskMutationSource, TASK_ID_HASH_CHARS};
 use crate::domain::planning::{
-    DirectionCatalogDocument, DirectionDefinition, DirectionState, PlanningFileKind,
-    PlanningValidationReport, TaskAuthorityDocument,
+    DirectionCatalogDocument, DirectionDefinition, PlanningFileKind, PlanningValidationReport,
+    TaskAuthorityDocument,
 };
 
 /*
@@ -15,39 +15,6 @@ use crate::domain::planning::{
  * 필요한 application-side normalization을 한곳에 둔다. active direction 선택, stable task id,
  * user input normalization이 여기서 정리된 뒤 domain semantic validation으로 넘어간다.
  */
-pub(super) fn select_direction<'a>(
-    requested_direction_id: Option<&str>,
-    directions: &'a DirectionCatalogDocument,
-) -> Result<&'a DirectionDefinition> {
-    // 명시 direction은 권위 있는 선택이지만 paused/done direction을 target할 수 없다.
-    // 명시값이 없으면 default lane을 먼저 쓰고, 그 lane이 없는 오래된 catalog를 위해 임의의
-    // active lane으로 후퇴한다.
-    if let Some(requested_direction_id) = requested_direction_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let direction = find_direction(requested_direction_id, directions)?;
-        if direction.state != DirectionState::Active {
-            bail!(
-                "direction `{}` is not active; task mutations can only create tasks for active directions",
-                direction.id.trim()
-            );
-        }
-        return Ok(direction);
-    }
-    if let Some(direction) = directions.directions.iter().find(|direction| {
-        direction.id.trim() == "general-workstream" && direction.state == DirectionState::Active
-    }) {
-        return Ok(direction);
-    }
-
-    directions
-        .directions
-        .iter()
-        .find(|direction| direction.state == DirectionState::Active)
-        .ok_or_else(|| anyhow!("task mutation requires an active planning direction"))
-}
-
 pub(super) fn find_direction<'a>(
     direction_id: &str,
     directions: &'a DirectionCatalogDocument,
@@ -71,26 +38,6 @@ pub(super) fn direction_title(
         .iter()
         .find(|direction| direction.id.trim() == direction_id.trim())
         .map(|direction| direction.title.trim().to_string())
-}
-
-pub(super) fn default_relation_note(
-    raw_note: Option<&str>,
-    direction: &DirectionDefinition,
-) -> String {
-    // relation note는 authority schema의 audit field다. caller가 더 강한 설명을 주지 않으면
-    // direction summary에 task를 묶어, 나중에 operator가 왜 이 task가 해당 lane에 속하는지
-    // 최소한의 근거를 볼 수 있게 한다.
-    raw_note
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            format!(
-                "Task supports direction `{}`: {}",
-                direction.id.trim(),
-                direction.summary.trim()
-            )
-        })
 }
 
 pub(super) fn reject_task_validation_errors(report: &PlanningValidationReport) -> Result<()> {
