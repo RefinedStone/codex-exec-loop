@@ -78,6 +78,45 @@ fn build_dispatch_plan_fills_idle_slots_with_distinct_active_tasks() {
     );
 }
 
+// 일부 worktree가 blocked 상태여도 남은 idle slot까지 dispatcher가 멈추면 안 된다.
+// blocked slot은 capacity만 줄이고, ready queue의 다음 작업은 사용 가능한 slot 수만큼
+// 계속 후보로 올라와야 한다.
+#[test]
+fn build_dispatch_plan_uses_remaining_idle_capacity_when_other_worktrees_are_blocked() {
+    let repo = TempGitRepo::new("dispatch-with-blocked-slots");
+    let service = test_parallel_mode_service();
+    repo.create_detached_slot(1);
+    let blocked_slot_two = repo.create_agent_slot(2, "blocked-task-two");
+    let blocked_slot_three = repo.create_agent_slot(3, "blocked-task-three");
+    repo.commit_file_in_slot(
+        &blocked_slot_two,
+        "slot-two.txt",
+        "blocked slot two\n",
+        "blocked slot two work",
+    );
+    repo.commit_file_in_slot(
+        &blocked_slot_three,
+        "slot-three.txt",
+        "blocked slot three\n",
+        "blocked slot three work",
+    );
+    let planning_snapshot =
+        planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
+
+    let plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .expect("dispatch plan should build with blocked slots");
+
+    assert_eq!(plan.idle_slot_count, 1);
+    assert_eq!(
+        plan.candidates
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-1"]
+    );
+}
+
 // slot lease와 distributor queue는 이미 작업이 진행 중인 task를 나타내는 두
 // 소스다. dispatch plan은 둘을 함께 제외해야 같은 task가 새 slot과 integration
 // queue 양쪽에서 중복 처리되지 않는다.

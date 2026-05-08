@@ -56,12 +56,16 @@ fn bootstrap_planning_workspace(planning: &PlanningServices, workspace_dir: &str
     assert!(promote_result.promoted_file_count > 0);
 }
 
-fn commit_ready_queue_task(planning: &PlanningServices, workspace_dir: &str) {
+fn commit_ready_queue_task_with_prompt(
+    planning: &PlanningServices,
+    workspace_dir: &str,
+    raw_prompt: &str,
+) {
     let proposal = planning
         .runtime
         .prepare_task_intake(PlanningTaskIntakeRequest {
             workspace_directory: workspace_dir.to_string(),
-            raw_prompt: "Only one loop should claim this dispatch task".to_string(),
+            raw_prompt: raw_prompt.to_string(),
             legacy_source_turn_id: None,
             provenance: Default::default(),
             requested_direction_id: None,
@@ -72,6 +76,24 @@ fn commit_ready_queue_task(planning: &PlanningServices, workspace_dir: &str) {
         .runtime
         .commit_task_intake(&proposal)
         .expect("task intake should commit");
+}
+
+fn commit_ready_queue_task(planning: &PlanningServices, workspace_dir: &str) {
+    commit_ready_queue_task_with_prompt(
+        planning,
+        workspace_dir,
+        "Only one loop should claim this dispatch task",
+    );
+}
+
+fn commit_ready_queue_tasks(planning: &PlanningServices, workspace_dir: &str, count: usize) {
+    for index in 1..=count {
+        commit_ready_queue_task_with_prompt(
+            planning,
+            workspace_dir,
+            &format!("Dispatch continuation task {index}"),
+        );
+    }
 }
 
 #[test]
@@ -148,6 +170,99 @@ fn dispatch_orchestrator_loop_claims_one_durable_command_across_two_ticks() {
             .sum::<usize>(),
         1
     );
+    for _ in 0..100 {
+        if worker_port.launch_count() >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(worker_port.launch_count(), 1);
+
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
+    );
+}
+
+#[test]
+fn slot_capacity_available_event_dispatches_next_ready_task_when_only_one_slot_is_idle() {
+    let repo = TempGitRepo::new("orchestrator-capacity-continuation");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        authority.clone(),
+        authority.clone(),
+        Arc::new(NoopPlanningWorkerPort),
+    );
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_tasks(&planning, &workspace_dir, DEFAULT_POOL_SIZE + 1);
+
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    service
+        .acquire_slot_lease(
+            &workspace_dir,
+            sample_lease_request(
+                "already-running-1",
+                "Already Running 1",
+                "agent-already-running-1",
+                "already-running-1",
+            ),
+        )
+        .expect("first occupied slot should be leased");
+    service
+        .acquire_slot_lease(
+            &workspace_dir,
+            sample_lease_request(
+                "already-running-2",
+                "Already Running 2",
+                "agent-already-running-2",
+                "already-running-2",
+            ),
+        )
+        .expect("second occupied slot should be leased");
+
+    let planning_snapshot = planning
+        .runtime
+        .load_runtime_snapshot_or_invalid(&workspace_dir);
+    assert!(planning_snapshot.has_actionable_queue_head());
+    assert_eq!(
+        service
+            .enqueue_dispatch_commands_for_event(
+                &workspace_dir,
+                ParallelModeRuntimeEvent::SlotCapacityAvailable,
+                &planning_snapshot,
+                Some(9),
+            )
+            .expect("capacity event should enqueue dispatch command"),
+        1
+    );
+
+    let service = Arc::new(service);
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, _event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 9,
+            enqueue_trigger: None,
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(result.outcome.idle_slot_count, 1);
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
     for _ in 0..100 {
         if worker_port.launch_count() >= 1 {
             break;

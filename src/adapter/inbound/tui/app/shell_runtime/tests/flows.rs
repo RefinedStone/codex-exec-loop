@@ -968,6 +968,32 @@ fn parallel_entry_without_prompt_dispatches_ready_tasks_but_keeps_authority_stat
 }
 
 #[test]
+fn repeated_parallel_entry_while_enabled_does_not_duplicate_worker_for_same_ready_task() {
+    let _guard = flow_test_guard();
+    let mut harness = NativeFlowHarness::new("flow-parallel-entry-duplicate-guard");
+    harness.committed_ready_task("same ready task should not launch twice on repeated parallel");
+    let _release_guard = harness.worker_port.hold_worker_streams();
+
+    harness.enter_parallel();
+    harness.poll_until_worker_streams_active(1);
+
+    harness.enter_parallel();
+    harness.poll_until_status_contains("control tower ready");
+    for _ in 0..25 {
+        harness.runtime.poll_background_messages();
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    assert_eq!(
+        harness.worker_port.launch_count(),
+        1,
+        "repeating :parallel while enabled must refresh state without dispatching the same task twice"
+    );
+    drop(_release_guard);
+    harness.poll_until_worker_streams_terminal(1);
+}
+
+#[test]
 fn parallel_reentry_while_enabled_refreshes_without_reset_or_dispatch() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-parallel-reentry");
