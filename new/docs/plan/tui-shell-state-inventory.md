@@ -77,7 +77,8 @@
 - Runtime Bridge: auto-follow submission provenance, queued prompt context, post-turn state transition
 
 `TUI-00B`는 `ConversationState`와 `BackgroundMessage`를 함께 감사해 background event가
-어느 reducer 또는 application command로 들어가야 하는지 표로 고정한다.
+어느 reducer 또는 application command로 들어가야 하는지 표로 고정했다. 완료 문서는
+[tui-background-message-inventory.md](./tui-background-message-inventory.md)이다.
 
 ## Immediate Migration Guard
 
@@ -90,6 +91,6 @@
 
 ## 다음 Slice
 
-- `TUI-00B`: `BackgroundMessage`별 target boundary inventory와 최소 shell runtime regression.
+- `TUI-00B`: `BackgroundMessage`별 target boundary inventory와 최소 shell runtime regression. 완료.
 - `TUI-00C`: prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는 input/rendering regression.
 - `TUI-01`: `TUI-00` regression 이후 conversation lifecycle과 automation lifecycle 분리.
