@@ -29,9 +29,10 @@ use super::parallel_mode_shell_command::{
     PARALLEL_MODE_SHELL_USAGE_TEXT, ParsedParallelModeShellCommand,
     parse_parallel_mode_shell_argument,
 };
+use super::post_turn_automation::TuiPostTurnQueueContinuationTarget;
 use super::{
-    ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState,
-    NativeTuiApp, ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
+    ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent, NativeTuiApp,
+    ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
 };
 
 impl NativeTuiApp {
@@ -396,31 +397,16 @@ impl NativeTuiApp {
         effects: &mut Vec<ConversationRuntimeEffect>,
         event_signal: Option<ParallelModePostTurnQueueSignal>,
     ) {
-        let effect_signal = effects
-            .iter()
-            .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
-            .then_some(ParallelModePostTurnQueueSignal::AutoFollowQueued);
-        let auto_follow_prompt_queued = effect_signal.is_some();
         let workspace_directory = self.planning_workspace_directory();
-        let result = self
-            .parallel_mode_control_plane
-            .handle_post_turn_queue_continuation(
-                workspace_directory,
-                event_signal,
-                auto_follow_prompt_queued,
-            );
-
-        if result.consume_auto_follow_prompt {
-            effects.retain(|effect| {
-                !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
-            });
-        }
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state
-            && result.consume_auto_follow_prompt
-        {
-            conversation.record_auto_follow_parallel_dispatch();
-        }
-        self.apply_parallel_mode_control_plane_presentation_events(result.presentation_events);
+        let control_plane = self.parallel_mode_control_plane.clone();
+        let mut continuation_target =
+            TuiPostTurnQueueContinuationTarget::new(effects, &mut self.conversation_state);
+        let events = control_plane.continue_post_turn_queue(
+            workspace_directory,
+            event_signal,
+            &mut continuation_target,
+        );
+        self.apply_parallel_mode_control_plane_presentation_events(events);
     }
 
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {

@@ -223,6 +223,28 @@ fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
     assert!(APP_RUNTIME_RS.contains("from_composition"));
 }
 
+#[test]
+fn parallel_post_turn_continuation_is_driven_by_control_plane_target() {
+    /*
+     * The parallel-mode TUI entrypoint must not inspect or consume
+     * QueueAutoPrompt directly. The adapter exposes its local effect storage
+     * through the application control-plane target, then the handle drives the
+     * continuation command and the returned presentation events.
+     */
+    const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
+    const POST_TURN_AUTOMATION_RS: &str = include_str!("../post_turn_automation.rs");
+    const CONTROL_PLANE_HOST_RS: &str =
+        include_str!("../../../../../application/service/parallel_mode/control_plane/host.rs");
+
+    assert!(PARALLEL_MODE_RS.contains("continue_post_turn_queue("));
+    assert!(!PARALLEL_MODE_RS.contains("QueueAutoPrompt"));
+    assert!(!PARALLEL_MODE_RS.contains("record_auto_follow_parallel_dispatch"));
+    assert!(!PARALLEL_MODE_RS.contains("handle_post_turn_queue_continuation"));
+    assert!(POST_TURN_AUTOMATION_RS.contains("impl ParallelModePostTurnQueueContinuationTarget"));
+    assert!(CONTROL_PLANE_HOST_RS.contains("pub fn continue_post_turn_queue"));
+    assert!(!CONTROL_PLANE_HOST_RS.contains("pub fn handle_post_turn_queue_continuation"));
+}
+
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
     let workspace_dir = create_temp_git_repo(prefix);
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());

@@ -1,4 +1,5 @@
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::parallel_mode::control_plane::ParallelModePostTurnQueueContinuationTarget;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 
 use super::conversation_runtime::ConversationPostTurnEvaluation;
@@ -18,6 +19,42 @@ pub(super) struct ConversationRuntimeAutomationContext {
     clear_turn_snapshot: bool,
     route_after_reduction: bool,
     parallel_mode_post_turn_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+}
+
+pub(super) struct TuiPostTurnQueueContinuationTarget<'a> {
+    effects: &'a mut Vec<ConversationRuntimeEffect>,
+    conversation_state: &'a mut ConversationState,
+}
+
+impl<'a> TuiPostTurnQueueContinuationTarget<'a> {
+    pub(super) fn new(
+        effects: &'a mut Vec<ConversationRuntimeEffect>,
+        conversation_state: &'a mut ConversationState,
+    ) -> Self {
+        Self {
+            effects,
+            conversation_state,
+        }
+    }
+}
+
+impl ParallelModePostTurnQueueContinuationTarget for TuiPostTurnQueueContinuationTarget<'_> {
+    fn auto_follow_prompt_queued(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
+    }
+
+    fn consume_auto_follow_prompt(&mut self) {
+        self.effects
+            .retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
+    }
+
+    fn record_auto_follow_parallel_dispatch(&mut self) {
+        if let ConversationState::Ready(conversation) = self.conversation_state {
+            conversation.record_auto_follow_parallel_dispatch();
+        }
+    }
 }
 
 impl NativeTuiApp {

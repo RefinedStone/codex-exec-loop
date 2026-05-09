@@ -103,9 +103,15 @@ where
     }
 }
 
-pub struct ParallelModePostTurnQueueContinuationResult {
-    pub consume_auto_follow_prompt: bool,
-    pub presentation_events: Vec<ParallelModeControlPlanePresentationEvent>,
+pub trait ParallelModePostTurnQueueContinuationTarget {
+    fn auto_follow_prompt_queued(&self) -> bool;
+    fn consume_auto_follow_prompt(&mut self);
+    fn record_auto_follow_parallel_dispatch(&mut self);
+}
+
+struct ParallelModePostTurnQueueContinuationResult {
+    consume_auto_follow_prompt: bool,
+    presentation_events: Vec<ParallelModeControlPlanePresentationEvent>,
 }
 
 impl<S> ParallelModeControlPlaneController<S>
@@ -167,7 +173,28 @@ where
         self.last_dispatch_withheld_reason = None;
     }
 
-    pub fn handle_post_turn_queue_continuation(
+    pub fn continue_post_turn_queue<T>(
+        &mut self,
+        workspace_directory: String,
+        signal: Option<ParallelModePostTurnQueueSignal>,
+        continuation_target: &mut T,
+    ) -> Vec<ParallelModeControlPlanePresentationEvent>
+    where
+        T: ParallelModePostTurnQueueContinuationTarget,
+    {
+        let result = self.handle_post_turn_queue_continuation(
+            workspace_directory,
+            signal,
+            continuation_target.auto_follow_prompt_queued(),
+        );
+        if result.consume_auto_follow_prompt {
+            continuation_target.consume_auto_follow_prompt();
+            continuation_target.record_auto_follow_parallel_dispatch();
+        }
+        result.presentation_events
+    }
+
+    fn handle_post_turn_queue_continuation(
         &mut self,
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
