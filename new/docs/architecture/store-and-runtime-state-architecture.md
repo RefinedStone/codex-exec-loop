@@ -1,5 +1,9 @@
 # Store And Runtime State Architecture
 
+> 상태: 배경 기준 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](../plan/repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 분류는 roadmap의 현재 판정으로 재검증되어야 한다.
+
 ## 목적
 
 이 문서는 repository-wide rebuild에서 모든 저장 상태를 같은 언어로 분류하기 위한

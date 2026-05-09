@@ -1,5 +1,9 @@
 # Repository-Wide Test Contract Taxonomy
 
+> 상태: 과거 test taxonomy 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](./repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서는 검증 참고 자료이며 완료 판정 authority가 아니다.
+
 ## 목적
 
 이 문서는 `TEST-00`의 산출물이다. 기준 문서는

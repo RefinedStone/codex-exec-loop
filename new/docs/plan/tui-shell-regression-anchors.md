@@ -1,5 +1,9 @@
 # TUI Shell Regression Anchors
 
+> 상태: 과거 regression anchor 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](./repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서는 테스트 참고 자료이며 완료 판정 authority가 아니다.
+
 ## 목적
 
 이 문서는 `TUI-00C`의 산출물이다. `TUI-00A`와 `TUI-00B`가 state/background message

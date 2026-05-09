@@ -1,5 +1,9 @@
 # Planning Control Plane Architecture
 
+> 상태: 배경 기준 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](../plan/repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 계획/완료 표현은 현재 완료 판정이 아니다.
+
 ## 목적
 
 이 문서는 planning 영역을 repository-wide rebuild 기준에 맞춰 다시 세우기 위한
