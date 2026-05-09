@@ -37,6 +37,13 @@ struct TemporaryDebt {
     reason: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct PatternDebtRule {
+    path_suffix: &'static str,
+    pattern: &'static str,
+    reason: &'static str,
+}
+
 const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[
     TemporaryAllowance {
         path_suffix: "src/adapter/inbound/cli.rs",
@@ -62,6 +69,52 @@ const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[
         path_suffix: "src/adapter/inbound/tui/app/github_polling.rs",
         pattern: "crate::adapter::outbound::",
         reason: "GitHub review polling still builds its adapter from the TUI edge.",
+    },
+];
+
+const PARALLEL_CONTROL_PLANE_HOST_EVENT_LOOP_DEBTS: &[PatternDebtRule] = &[
+    PatternDebtRule {
+        path_suffix: "src/application/service/parallel_mode/control_plane/host.rs",
+        pattern: "Mutex<ParallelModeControlPlaneService",
+        reason: "control-plane host still protects a mutable service with a mutex instead of owning a mailbox/event loop.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/application/service/parallel_mode/control_plane/host.rs",
+        pattern: "MutexGuard<'_, ParallelModeControlPlaneService",
+        reason: "handle calls still borrow the raw service synchronously instead of enqueueing commands.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/application/service/parallel_mode/control_plane/host.rs",
+        pattern: ".lock()",
+        reason: "command processing is still caller-thread locking, not single loop ownership.",
+    },
+];
+
+const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
+    PatternDebtRule {
+        path_suffix: "src/application/service/parallel_mode/control_plane/composition.rs",
+        pattern: "pub fn parallel_mode_service(",
+        reason: "composition still exposes the raw ParallelModeService, allowing callers to bypass the control-plane handle.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/application/service/parallel_mode/control_plane/composition.rs",
+        pattern: ".run_orchestrator_tick(",
+        reason: "manual orchestrator ticks still call ParallelModeService directly instead of enqueueing a control-plane command.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/application/service/parallel_mode/control_plane/controller.rs",
+        pattern: ".has_actionable_queue_head(",
+        reason: "controller still queries queue state while building a command instead of receiving all state through loop events/effects.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app/app_runtime.rs",
+        pattern: "parallel_mode_service: composition.parallel_mode_service().clone()",
+        reason: "TUI runtime still receives a raw ParallelModeService clone alongside the control-plane binding.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app/parallel_mode.rs",
+        pattern: "fn parallel_mode_service(",
+        reason: "TUI parallel binding still exposes raw service access, which should disappear behind the event-loop handle.",
     },
 ];
 
@@ -148,6 +201,43 @@ fn outbound_port_modules_follow_port_naming_contract() {
         violations.is_empty(),
         "outbound port naming contract violations:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn temporary_parallel_control_plane_host_has_been_moved_to_mailbox_event_loop() {
+    let debts = collect_pattern_debts(PARALLEL_CONTROL_PLANE_HOST_EVENT_LOOP_DEBTS);
+
+    assert!(
+        debts.is_empty(),
+        "temporary parallel event-loop debt remains. Control-plane host should become a mailbox-owned event loop:\n{}",
+        format_temporary_debts(&debts)
+    );
+}
+
+#[test]
+fn temporary_parallel_runtime_store_has_been_made_private_to_single_writer() {
+    let debts = collect_public_fields_in_struct(
+        "src/application/service/parallel_mode/control_plane/mod.rs",
+        "ParallelModeControlPlaneRuntimeStore",
+        "runtime store fields are still public; single-writer event-loop state should be private and mutated only by the loop/runtime.",
+    );
+
+    assert!(
+        debts.is_empty(),
+        "temporary parallel single-writer debt remains. Runtime store should not expose mutable state shape as public fields:\n{}",
+        format_temporary_debts(&debts)
+    );
+}
+
+#[test]
+fn temporary_parallel_control_surfaces_no_longer_bypass_event_loop() {
+    let debts = collect_pattern_debts(PARALLEL_CONTROL_PLANE_BYPASS_DEBTS);
+
+    assert!(
+        debts.is_empty(),
+        "temporary parallel control-surface debt remains. Parallel control should enter through commands and loop-owned effects only:\n{}",
+        format_temporary_debts(&debts)
     );
 }
 
@@ -251,6 +341,85 @@ fn collect_temporarily_allowed_references(rule: BoundaryRule) -> Vec<TemporaryDe
                     });
                 }
             }
+        }
+    }
+
+    debts
+}
+
+fn collect_pattern_debts(rules: &[PatternDebtRule]) -> Vec<TemporaryDebt> {
+    let repo_root = repo_root();
+    let mut debts = Vec::new();
+
+    for rule in rules {
+        let path = repo_root.join(rule.path_suffix);
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        let relative_path = relative_path(&repo_root, &path);
+
+        for source_line in production_lines(&source) {
+            if is_comment_only_line(&source_line.text) {
+                continue;
+            }
+            if source_line.text.contains(rule.pattern) {
+                debts.push(TemporaryDebt {
+                    path: relative_path.clone(),
+                    line: source_line.number,
+                    pattern: rule.pattern,
+                    text: source_line.text.trim().to_string(),
+                    reason: rule.reason,
+                });
+            }
+        }
+    }
+
+    debts
+}
+
+fn collect_public_fields_in_struct(
+    path_suffix: &'static str,
+    struct_name: &'static str,
+    reason: &'static str,
+) -> Vec<TemporaryDebt> {
+    let repo_root = repo_root();
+    let path = repo_root.join(path_suffix);
+    let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", path.display());
+    });
+    let relative_path = relative_path(&repo_root, &path);
+    let mut debts = Vec::new();
+    let mut inside_struct = false;
+    let mut brace_depth = 0isize;
+    let struct_marker = format!("struct {struct_name}");
+
+    for source_line in production_lines(&source) {
+        if is_comment_only_line(&source_line.text) {
+            continue;
+        }
+
+        let trimmed = source_line.text.trim();
+        if !inside_struct {
+            if trimmed.contains(&struct_marker) {
+                inside_struct = true;
+                brace_depth = brace_delta(&source_line.text);
+            }
+            continue;
+        }
+
+        if (trimmed.starts_with("pub ") || trimmed.starts_with("pub(")) && trimmed.contains(':') {
+            debts.push(TemporaryDebt {
+                path: relative_path.clone(),
+                line: source_line.number,
+                pattern: "pub... <field>:",
+                text: trimmed.to_string(),
+                reason,
+            });
+        }
+
+        brace_depth += brace_delta(&source_line.text);
+        if brace_depth <= 0 {
+            break;
         }
     }
 
