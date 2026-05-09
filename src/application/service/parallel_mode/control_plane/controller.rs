@@ -6,9 +6,8 @@ use crate::application::service::parallel_mode::control_plane::effect_runner::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchOutcome,
-    ParallelModeOrchestratorStateMachine, ParallelModePostTurnQueueDecision,
-    ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeAutomationTrigger, ParallelModeDispatchOutcome, ParallelModePostTurnQueueSignal,
+    ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
 };
 
 use super::{
@@ -42,6 +41,7 @@ pub enum ParallelModeControlPlanePresentationEvent {
     ConversationRuntimeNotice {
         notice: String,
     },
+    PostTurnAutoFollowPromptConsumed,
     PlanningRuntimeRefreshRequested {
         workspace_directory: String,
     },
@@ -61,6 +61,49 @@ where
     last_dispatch_withheld_reason: Option<String>,
     last_supervisor_refresh_at: Option<Instant>,
     last_orchestrator_wake_poll_at: Option<Instant>,
+}
+
+pub struct ParallelModeControlPlaneService<S>
+where
+    S: ParallelModeControlPlaneEventSink,
+{
+    controller: ParallelModeControlPlaneController<S>,
+}
+
+impl<S> ParallelModeControlPlaneService<S>
+where
+    S: ParallelModeControlPlaneEventSink,
+{
+    pub fn new(effect_runner: ParallelModeControlPlaneEffectRunner<S>) -> Self {
+        Self {
+            controller: ParallelModeControlPlaneController::new(effect_runner),
+        }
+    }
+}
+
+impl<S> std::ops::Deref for ParallelModeControlPlaneService<S>
+where
+    S: ParallelModeControlPlaneEventSink,
+{
+    type Target = ParallelModeControlPlaneController<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.controller
+    }
+}
+
+impl<S> std::ops::DerefMut for ParallelModeControlPlaneService<S>
+where
+    S: ParallelModeControlPlaneEventSink,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.controller
+    }
+}
+
+pub struct ParallelModePostTurnQueueContinuationResult {
+    pub consume_auto_follow_prompt: bool,
+    pub presentation_events: Vec<ParallelModeControlPlanePresentationEvent>,
 }
 
 impl<S> ParallelModeControlPlaneController<S>
@@ -130,12 +173,43 @@ where
         self.runtime.reset_orchestrator_tick_signature();
     }
 
-    pub fn decide_post_turn_queue_continuation(
+    pub fn handle_post_turn_queue_continuation(
+        &mut self,
+        workspace_directory: String,
+        signal: Option<ParallelModePostTurnQueueSignal>,
+        auto_follow_prompt_queued: bool,
+    ) -> ParallelModePostTurnQueueContinuationResult {
+        let has_actionable_queue_head = self
+            .effect_runner
+            .has_actionable_queue_head(&workspace_directory);
+        let outcome = self
+            .runtime
+            .handle(ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
+                workspace_directory,
+                signal,
+                auto_follow_prompt_queued,
+                has_actionable_queue_head,
+            });
+        let consume_auto_follow_prompt = outcome.events.iter().any(|event| {
+            matches!(
+                event,
+                ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed
+            )
+        });
+        let presentation_events = self.drain_outcome(outcome);
+        ParallelModePostTurnQueueContinuationResult {
+            consume_auto_follow_prompt,
+            presentation_events,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn decide_post_turn_queue_continuation_for_test(
         &self,
         signal: Option<ParallelModePostTurnQueueSignal>,
         has_actionable_queue_head: bool,
-    ) -> ParallelModePostTurnQueueDecision {
-        ParallelModeOrchestratorStateMachine::post_turn_queue_continuation(
+    ) -> crate::domain::parallel_mode::ParallelModePostTurnQueueDecision {
+        crate::domain::parallel_mode::ParallelModeControlPlaneAggregate::post_turn_queue_continuation(
             self.mode_enabled(),
             signal,
             has_actionable_queue_head,
@@ -654,6 +728,24 @@ where
                         })
                     });
                 }
+                ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed => {
+                    presentation_events.push(
+                        ParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed,
+                    );
+                }
+                ParallelModeControlPlaneEvent::PostTurnDispatchRequested {
+                    workspace_directory: _,
+                    epoch_id,
+                } => {
+                    self.clear_dispatch_withheld_reason();
+                    presentation_events.push(
+                        ParallelModeControlPlanePresentationEvent::StatusShown {
+                            status_text: format!(
+                                "parallel mode: automation epoch {epoch_id} opened / dispatching accepted queue"
+                            ),
+                        },
+                    );
+                }
                 ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice } => {
                     presentation_events.push(
                         ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
@@ -722,6 +814,36 @@ where
                     effect_id,
                 );
                 Vec::new()
+            }
+            ParallelModeControlPlaneEffect::InspectSupervisor {
+                workspace_directory,
+                mode_enabled,
+                reconcile_pool,
+                show_status,
+            } => {
+                let (readiness_snapshot, supervisor_snapshot) = self
+                    .effect_runner
+                    .inspect_supervisor(&workspace_directory, mode_enabled, reconcile_pool);
+                self.readiness_snapshot = Some(readiness_snapshot.clone());
+                let mut events = vec![
+                    ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
+                        workspace_directory: workspace_directory.clone(),
+                        snapshot: readiness_snapshot.clone(),
+                    },
+                    ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
+                        workspace_directory,
+                        snapshot: Box::new(supervisor_snapshot),
+                    },
+                ];
+                if show_status {
+                    events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
+                        status_text: format!(
+                            "parallel readiness refreshed / state: {}",
+                            readiness_snapshot.readiness_label()
+                        ),
+                    });
+                }
+                events
             }
             ParallelModeControlPlaneEffect::RunOrchestrator { effect_id, wake } => {
                 if wake.enqueue_trigger.is_some() || self.last_automation_trigger.is_none() {

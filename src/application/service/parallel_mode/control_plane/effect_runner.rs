@@ -454,6 +454,46 @@ where
             .cancel_dispatch_commands(workspace_directory, reason);
     }
 
+    pub fn inspect_supervisor(
+        &self,
+        workspace_directory: &str,
+        mode_enabled: bool,
+        reconcile_pool: bool,
+    ) -> (
+        ParallelModeReadinessSnapshot,
+        ParallelModeSupervisorSnapshot,
+    ) {
+        let planning_snapshot = self
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(workspace_directory);
+        let readiness_snapshot = self
+            .parallel_mode_service
+            .inspect_readiness(workspace_directory, &planning_snapshot);
+        let supervisor_snapshot = if reconcile_pool {
+            self.parallel_mode_service.reconcile_supervisor_snapshot(
+                workspace_directory,
+                mode_enabled,
+                Some(&readiness_snapshot),
+            )
+        } else {
+            self.parallel_mode_service.build_supervisor_snapshot(
+                workspace_directory,
+                mode_enabled,
+                Some(&readiness_snapshot),
+            )
+        };
+
+        (readiness_snapshot, supervisor_snapshot)
+    }
+
+    pub fn has_actionable_queue_head(&self, workspace_directory: &str) -> bool {
+        self.planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(workspace_directory)
+            .has_actionable_queue_head()
+    }
+
     pub fn pending_dispatch_wake(
         &self,
         workspace_directory: &str,

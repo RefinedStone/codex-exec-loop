@@ -1,4 +1,7 @@
-use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
+use crate::domain::parallel_mode::{
+    ParallelModeAutomationTrigger, ParallelModeControlPlaneAggregate,
+    ParallelModePostTurnQueueSignal,
+};
 use serde::{Deserialize, Serialize};
 
 mod controller;
@@ -6,6 +9,7 @@ mod effect_runner;
 
 pub use controller::{
     ParallelModeControlPlaneController, ParallelModeControlPlanePresentationEvent,
+    ParallelModeControlPlaneService, ParallelModePostTurnQueueContinuationResult,
 };
 #[cfg(test)]
 pub(crate) use effect_runner::parallel_mode_distributor_tick_signature;
@@ -195,6 +199,11 @@ pub enum ParallelModeControlPlaneCommand {
     Disable {
         workspace_directory: String,
     },
+    InspectSupervisor {
+        workspace_directory: String,
+        reconcile_pool: bool,
+        show_status: bool,
+    },
     RefreshSupervisor {
         workspace_directory: String,
     },
@@ -206,13 +215,17 @@ pub enum ParallelModeControlPlaneCommand {
     RequestDispatch {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
-        projection_ready: bool,
     },
     RequestDispatchForEpoch {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
-        projection_ready: bool,
+    },
+    ContinuePostTurnQueue {
+        workspace_directory: String,
+        signal: Option<ParallelModePostTurnQueueSignal>,
+        auto_follow_prompt_queued: bool,
+        has_actionable_queue_head: bool,
     },
     PollPendingDispatchWake {
         workspace_directory: String,
@@ -308,6 +321,11 @@ pub enum ParallelModeControlPlaneEvent {
         trigger: ParallelModeAutomationTrigger,
         inserted_count: usize,
     },
+    PostTurnAutoFollowPromptConsumed,
+    PostTurnDispatchRequested {
+        workspace_directory: String,
+        epoch_id: u64,
+    },
     ConversationRuntimeNotice {
         notice: String,
     },
@@ -351,6 +369,12 @@ pub enum ParallelModeControlPlaneEffect {
         workspace_directory: String,
         epoch_id: u64,
     },
+    InspectSupervisor {
+        workspace_directory: String,
+        mode_enabled: bool,
+        reconcile_pool: bool,
+        show_status: bool,
+    },
     RunOrchestrator {
         effect_id: ParallelModeControlPlaneEffectId,
         wake: ParallelModeControlPlaneWake,
@@ -389,7 +413,8 @@ impl ParallelModeControlPlaneEffect {
             | Self::RefreshSupervisor { effect_id, .. }
             | Self::RunOrchestrator { effect_id, .. }
             | Self::RunOrchestratorTick { effect_id, .. } => Some(*effect_id),
-            Self::PollPendingDispatchWake { .. }
+            Self::InspectSupervisor { .. }
+            | Self::PollPendingDispatchWake { .. }
             | Self::EnqueueSlotCapacityDispatch { .. }
             | Self::EnqueueDispatchForTrigger { .. }
             | Self::CancelDispatchCommands { .. } => None,
@@ -541,6 +566,16 @@ impl ParallelModeControlPlaneRuntime {
             ParallelModeControlPlaneCommand::Disable {
                 workspace_directory,
             } => self.disable(workspace_directory, &mut outcome),
+            ParallelModeControlPlaneCommand::InspectSupervisor {
+                workspace_directory,
+                reconcile_pool,
+                show_status,
+            } => self.inspect_supervisor(
+                workspace_directory,
+                reconcile_pool,
+                show_status,
+                &mut outcome,
+            ),
             ParallelModeControlPlaneCommand::RefreshSupervisor {
                 workspace_directory,
             } => self.refresh_supervisor(workspace_directory, &mut outcome),
@@ -554,24 +589,22 @@ impl ParallelModeControlPlaneRuntime {
             ParallelModeControlPlaneCommand::RequestDispatch {
                 workspace_directory,
                 trigger,
-                projection_ready,
-            } => self.request_dispatch(
-                workspace_directory,
-                trigger,
-                None,
-                projection_ready,
-                &mut outcome,
-            ),
+            } => self.request_dispatch(workspace_directory, trigger, None, &mut outcome),
             ParallelModeControlPlaneCommand::RequestDispatchForEpoch {
                 workspace_directory,
                 trigger,
                 epoch_id,
-                projection_ready,
-            } => self.request_dispatch(
+            } => self.request_dispatch(workspace_directory, trigger, Some(epoch_id), &mut outcome),
+            ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
                 workspace_directory,
-                trigger,
-                Some(epoch_id),
-                projection_ready,
+                signal,
+                auto_follow_prompt_queued,
+                has_actionable_queue_head,
+            } => self.continue_post_turn_queue(
+                workspace_directory,
+                signal,
+                auto_follow_prompt_queued,
+                has_actionable_queue_head,
                 &mut outcome,
             ),
             ParallelModeControlPlaneCommand::PollPendingDispatchWake {
@@ -753,6 +786,25 @@ impl ParallelModeControlPlaneRuntime {
             .push(ParallelModeControlPlaneEffect::CancelDispatchCommands {
                 workspace_directory,
                 reason: "parallel mode disabled".to_string(),
+            });
+    }
+
+    fn inspect_supervisor(
+        &mut self,
+        workspace_directory: String,
+        reconcile_pool: bool,
+        show_status: bool,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let mode_enabled = self.store.mode_enabled
+            && self.store.workspace_directory.as_deref() == Some(workspace_directory.as_str());
+        outcome
+            .effects
+            .push(ParallelModeControlPlaneEffect::InspectSupervisor {
+                workspace_directory,
+                mode_enabled,
+                reconcile_pool: reconcile_pool && mode_enabled,
+                show_status,
             });
     }
 
@@ -1230,7 +1282,6 @@ impl ParallelModeControlPlaneRuntime {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         expected_epoch_id: Option<u64>,
-        projection_ready: bool,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
         let Some(epoch_id) = self.current_epoch_for_workspace(&workspace_directory, outcome) else {
@@ -1253,15 +1304,19 @@ impl ParallelModeControlPlaneRuntime {
             );
             return;
         }
-        if !projection_ready || !self.store.projection_ready || self.has_in_flight_effect() {
+        if let Some(reason) = ParallelModeControlPlaneAggregate::dispatch_readiness(
+            self.store.projection_ready,
+            self.has_in_flight_effect(),
+        )
+        .deferred_reason()
+        {
             outcome
                 .effects
                 .push(ParallelModeControlPlaneEffect::EnqueueDispatchForTrigger {
                     workspace_directory,
                     trigger,
                     epoch_id,
-                    reason: "entry loading or control-plane refresh is still in progress"
-                        .to_string(),
+                    reason: reason.to_string(),
                 });
             return;
         }
@@ -1274,6 +1329,45 @@ impl ParallelModeControlPlaneRuntime {
             ),
             outcome,
         );
+    }
+
+    fn continue_post_turn_queue(
+        &mut self,
+        workspace_directory: String,
+        signal: Option<ParallelModePostTurnQueueSignal>,
+        auto_follow_prompt_queued: bool,
+        has_actionable_queue_head: bool,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let signal = if auto_follow_prompt_queued {
+            Some(ParallelModePostTurnQueueSignal::AutoFollowQueued)
+        } else {
+            signal
+        };
+        let mode_enabled = self.store.mode_enabled
+            && self.store.workspace_directory.as_deref() == Some(workspace_directory.as_str());
+        let decision = ParallelModeControlPlaneAggregate::post_turn_queue_continuation(
+            mode_enabled,
+            signal,
+            has_actionable_queue_head,
+        );
+        let Some(trigger) = decision.dispatch_trigger() else {
+            return;
+        };
+
+        if decision.should_consume_auto_follow_prompt() {
+            outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed);
+        }
+        let epoch_id = self.ensure_epoch(workspace_directory.clone(), outcome);
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::PostTurnDispatchRequested {
+                workspace_directory: workspace_directory.clone(),
+                epoch_id,
+            });
+        self.request_dispatch(workspace_directory, trigger, Some(epoch_id), outcome);
     }
 
     fn poll_pending_dispatch_wake(
@@ -1535,9 +1629,12 @@ impl ParallelModeControlPlaneRuntime {
         epoch_id: u64,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) -> bool {
-        if self.store.workspace_directory.as_deref() == Some(workspace_directory)
-            && self.store.current_epoch_id == Some(epoch_id)
-        {
+        if ParallelModeControlPlaneAggregate::command_targets_current_epoch(
+            workspace_directory,
+            epoch_id,
+            self.store.workspace_directory.as_deref(),
+            self.store.current_epoch_id,
+        ) {
             return true;
         }
         self.stale_command(
@@ -1550,8 +1647,12 @@ impl ParallelModeControlPlaneRuntime {
     }
 
     fn wake_epoch_is_current(&self, wake: &ParallelModeControlPlaneWake) -> bool {
-        self.store.workspace_directory.as_deref() == Some(wake.workspace_directory.as_str())
-            && self.store.current_epoch_id == Some(wake.epoch_id)
+        ParallelModeControlPlaneAggregate::command_targets_current_epoch(
+            &wake.workspace_directory,
+            wake.epoch_id,
+            self.store.workspace_directory.as_deref(),
+            self.store.current_epoch_id,
+        )
     }
 
     fn stale_command(
@@ -1898,7 +1999,6 @@ mod tests {
         let requested = runtime.handle(ParallelModeControlPlaneCommand::RequestDispatch {
             workspace_directory: "/repo".to_string(),
             trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
-            projection_ready: false,
         });
 
         assert!(matches!(
@@ -1908,6 +2008,37 @@ mod tests {
                 epoch_id: 1,
                 ..
             }]
+        ));
+    }
+
+    #[test]
+    fn post_turn_queue_continuation_opens_epoch_and_requests_dispatch() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.force_mode_for_test("/repo", true);
+
+        let requested = runtime.handle(ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
+            workspace_directory: "/repo".to_string(),
+            signal: Some(ParallelModePostTurnQueueSignal::AutoFollowQueued),
+            auto_follow_prompt_queued: true,
+            has_actionable_queue_head: false,
+        });
+
+        assert!(requested.events.iter().any(|event| {
+            matches!(
+                event,
+                ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed
+            )
+        }));
+        assert!(requested.events.iter().any(|event| {
+            matches!(
+                event,
+                ParallelModeControlPlaneEvent::PostTurnDispatchRequested { epoch_id: 1, .. }
+            )
+        }));
+        assert!(matches!(
+            requested.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::RunOrchestrator { wake, .. }]
+                if wake.trigger == ParallelModeAutomationTrigger::MainTurnPostEvaluation
         ));
     }
 
