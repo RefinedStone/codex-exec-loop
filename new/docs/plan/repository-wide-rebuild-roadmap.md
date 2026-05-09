@@ -61,7 +61,7 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P3 | `INBOUND-00` | done | CLI/admin/Telegram command surface 통일 |
 | P4 | `DOC-STORE-00` | done | store/runtime-state architecture 작성 |
 | P4 | `STORE-00` | done | durable store와 runtime store 경계 정리 |
-| P5 | `TEST-00` | ready | test/doc contract taxonomy 정리 |
+| P5 | `TEST-00` | done | test/doc contract taxonomy 정리 |
 
 ## P0. Parallel Control-Plane Slices
 
@@ -836,7 +836,7 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 
 ### TEST-00. Contract Taxonomy
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -873,16 +873,25 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 - 문서 링크 확인
 - 기존 test command 목록이 재현 가능해야 한다.
 
+완료 근거:
+
+- [repository-wide-test-contract-taxonomy.md](./repository-wide-test-contract-taxonomy.md)를 추가해
+  domain decision, application ordering, outbound store/recovery, inbound mapping, TUI runtime,
+  TUI rendering, source-level guard, journey validation test layer를 정의했다.
+- major context별 현재 anchor와 우선 실행 명령을 정리했다.
+- source-level guard, fake port, process-lifetime runtime state reset 기준을 문서화했다.
+
 ## 병렬 작업 가능 조합
 
 현재 바로 시작 가능한 조합:
 
-- `TEST-00`
+- 없음. 새 slice를 추가할 때는 이 roadmap에 priority, owner, verification matrix를 먼저 추가한다.
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- 현재는 병렬 조합보다 `TEST-00` taxonomy를 먼저 작성해 이후 worker 검증 matrix를
-  통일하는 것이 우선이다.
+- 현재 P0-P5 parent slice는 모두 완료됐다. 후속 work는
+  [repository-wide-test-contract-taxonomy.md](./repository-wide-test-contract-taxonomy.md)의
+  contract layer 기준으로 새 slice를 분해한 뒤 병렬 가능 여부를 판단한다.
 
 동시에 진행하면 안 되는 조합:
 
