@@ -1,12 +1,15 @@
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeControlPlaneAggregate,
-    ParallelModePostTurnQueueSignal,
+    ParallelModeEffectStartDecision, ParallelModeOrchestratorTickDecision,
+    ParallelModePostTurnQueueSignal, ParallelModeProjectionReadyContinuation,
 };
 use serde::{Deserialize, Serialize};
 
+mod composition;
 mod controller;
 mod effect_runner;
 
+pub use composition::ParallelModeControlPlaneComposition;
 pub use controller::{
     ParallelModeControlPlaneController, ParallelModeControlPlanePresentationEvent,
     ParallelModeControlPlaneService, ParallelModePostTurnQueueContinuationResult,
@@ -723,10 +726,12 @@ impl ParallelModeControlPlaneRuntime {
         workspace_directory: String,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        let mode_was_enabled = self.store.mode_enabled
-            && self.store.workspace_directory.as_deref() == Some(workspace_directory.as_str());
-        let initial_pool_reset_required =
-            !mode_was_enabled && !self.store.initial_pool_reset_completed;
+        let entry_decision = ParallelModeControlPlaneAggregate::enable_entry(
+            self.store.mode_enabled,
+            self.store.workspace_directory.as_deref(),
+            &workspace_directory,
+            self.store.initial_pool_reset_completed,
+        );
         let epoch_id = self.ensure_epoch(workspace_directory.clone(), outcome);
         self.store.mode_enabled = true;
         self.store.workspace_directory = Some(workspace_directory.clone());
@@ -741,8 +746,8 @@ impl ParallelModeControlPlaneRuntime {
         self.start_parallel_entry(
             workspace_directory,
             epoch_id,
-            mode_was_enabled,
-            initial_pool_reset_required,
+            entry_decision.mode_was_enabled,
+            entry_decision.initial_pool_reset_required,
             outcome,
         );
     }
@@ -796,8 +801,11 @@ impl ParallelModeControlPlaneRuntime {
         show_status: bool,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        let mode_enabled = self.store.mode_enabled
-            && self.store.workspace_directory.as_deref() == Some(workspace_directory.as_str());
+        let mode_enabled = ParallelModeControlPlaneAggregate::mode_enabled_for_workspace(
+            self.store.mode_enabled,
+            self.store.workspace_directory.as_deref(),
+            &workspace_directory,
+        );
         outcome
             .effects
             .push(ParallelModeControlPlaneEffect::InspectSupervisor {
@@ -827,17 +835,21 @@ impl ParallelModeControlPlaneRuntime {
         if !self.command_epoch_is_current(&wake.workspace_directory, wake.epoch_id, outcome) {
             return;
         }
-        if self.has_in_flight_effect() {
-            self.store.pending_orchestrator_wake = Some(wake.clone());
-            outcome
-                .events
-                .push(ParallelModeControlPlaneEvent::OrchestratorWakeQueued {
-                    trigger: wake.trigger,
-                    epoch_id: wake.epoch_id,
-                });
-            return;
+        match ParallelModeControlPlaneAggregate::effect_start_decision(self.has_in_flight_effect())
+        {
+            ParallelModeEffectStartDecision::StartNow => {
+                self.start_orchestrator_wake(wake, outcome)
+            }
+            ParallelModeEffectStartDecision::QueueUntilIdle => {
+                self.store.pending_orchestrator_wake = Some(wake.clone());
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::OrchestratorWakeQueued {
+                        trigger: wake.trigger,
+                        epoch_id: wake.epoch_id,
+                    });
+            }
         }
-        self.start_orchestrator_wake(wake, outcome);
     }
 
     fn effect_completed(
@@ -1169,27 +1181,32 @@ impl ParallelModeControlPlaneRuntime {
         initial_pool_reset_required: bool,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if self.has_in_flight_effect() {
-            outcome
-                .events
-                .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
-            self.store.pending_supervisor_refresh = true;
-            return;
+        match ParallelModeControlPlaneAggregate::effect_start_decision(self.has_in_flight_effect())
+        {
+            ParallelModeEffectStartDecision::StartNow => {
+                let effect_id =
+                    self.next_effect_id(ParallelModeControlPlaneEffectKind::EnterParallelMode);
+                self.store.parallel_entry_in_flight = Some(effect_id);
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::EffectStarted { effect_id });
+                outcome
+                    .effects
+                    .push(ParallelModeControlPlaneEffect::EnterParallelMode {
+                        effect_id,
+                        workspace_directory,
+                        epoch_id,
+                        mode_was_enabled,
+                        initial_pool_reset_required,
+                    });
+            }
+            ParallelModeEffectStartDecision::QueueUntilIdle => {
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
+                self.store.pending_supervisor_refresh = true;
+            }
         }
-        let effect_id = self.next_effect_id(ParallelModeControlPlaneEffectKind::EnterParallelMode);
-        self.store.parallel_entry_in_flight = Some(effect_id);
-        outcome
-            .events
-            .push(ParallelModeControlPlaneEvent::EffectStarted { effect_id });
-        outcome
-            .effects
-            .push(ParallelModeControlPlaneEffect::EnterParallelMode {
-                effect_id,
-                workspace_directory,
-                epoch_id,
-                mode_was_enabled,
-                initial_pool_reset_required,
-            });
     }
 
     fn start_or_queue_supervisor_refresh(
@@ -1198,14 +1215,18 @@ impl ParallelModeControlPlaneRuntime {
         epoch_id: u64,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if self.has_in_flight_effect() {
-            self.store.pending_supervisor_refresh = true;
-            outcome
-                .events
-                .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
-            return;
+        match ParallelModeControlPlaneAggregate::effect_start_decision(self.has_in_flight_effect())
+        {
+            ParallelModeEffectStartDecision::StartNow => {
+                self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            }
+            ParallelModeEffectStartDecision::QueueUntilIdle => {
+                self.store.pending_supervisor_refresh = true;
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
+            }
         }
-        self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
     }
 
     fn start_supervisor_refresh(
@@ -1253,10 +1274,12 @@ impl ParallelModeControlPlaneRuntime {
         let Some(epoch_id) = self.current_epoch_for_workspace(&workspace_directory, outcome) else {
             return;
         };
-        if self.has_in_flight_effect() {
-            return;
-        }
-        if self.store.last_orchestrator_tick_signature.as_deref() == Some(signature.as_str()) {
+        if ParallelModeControlPlaneAggregate::orchestrator_tick_decision(
+            self.has_in_flight_effect(),
+            self.store.last_orchestrator_tick_signature.as_deref(),
+            &signature,
+        ) == ParallelModeOrchestratorTickDecision::Skip
+        {
             return;
         }
 
@@ -1344,8 +1367,11 @@ impl ParallelModeControlPlaneRuntime {
         } else {
             signal
         };
-        let mode_enabled = self.store.mode_enabled
-            && self.store.workspace_directory.as_deref() == Some(workspace_directory.as_str());
+        let mode_enabled = ParallelModeControlPlaneAggregate::mode_enabled_for_workspace(
+            self.store.mode_enabled,
+            self.store.workspace_directory.as_deref(),
+            &workspace_directory,
+        );
         let decision = ParallelModeControlPlaneAggregate::post_turn_queue_continuation(
             mode_enabled,
             signal,
@@ -1427,13 +1453,21 @@ impl ParallelModeControlPlaneRuntime {
         follow_up_tick_signature: Option<String>,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if self.store.pending_supervisor_refresh {
-            self.store.pending_supervisor_refresh = false;
-            self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
-            return;
-        }
-        if self.drain_pending_orchestrator_wake(outcome) {
-            return;
+        match ParallelModeControlPlaneAggregate::projection_ready_continuation(
+            self.store.pending_supervisor_refresh,
+            self.store.pending_orchestrator_wake.is_some(),
+        ) {
+            ParallelModeProjectionReadyContinuation::RefreshSupervisor => {
+                self.store.pending_supervisor_refresh = false;
+                self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+                return;
+            }
+            ParallelModeProjectionReadyContinuation::DrainPendingWake => {
+                if self.drain_pending_orchestrator_wake(outcome) {
+                    return;
+                }
+            }
+            ParallelModeProjectionReadyContinuation::PollPendingDispatchWake => {}
         }
         outcome
             .effects
@@ -1602,16 +1636,13 @@ impl ParallelModeControlPlaneRuntime {
         workspace_directory: &str,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) -> Option<u64> {
-        match (
+        match ParallelModeControlPlaneAggregate::current_epoch_for_workspace(
+            workspace_directory,
             self.store.workspace_directory.as_deref(),
             self.store.current_epoch_id,
         ) {
-            (Some(current_workspace), Some(epoch_id))
-                if current_workspace == workspace_directory =>
-            {
-                Some(epoch_id)
-            }
-            _ => {
+            Some(epoch_id) => Some(epoch_id),
+            None => {
                 self.stale_command(
                     workspace_directory.to_string(),
                     0,

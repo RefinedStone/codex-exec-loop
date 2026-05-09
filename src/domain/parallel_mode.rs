@@ -21,6 +21,8 @@ use self::agent_session::{roster_recency_key, roster_state_priority};
 #[allow(unused_imports)]
 pub use self::control_plane::{
     ParallelModeControlPlaneAggregate, ParallelModeDispatchReadinessDecision,
+    ParallelModeEffectStartDecision, ParallelModeEnableEntryDecision,
+    ParallelModeOrchestratorTickDecision, ParallelModeProjectionReadyContinuation,
 };
 pub use self::distributor::{
     ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,

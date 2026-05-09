@@ -7,11 +7,15 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
+use crate::application::port::outbound::parallel_agent_worker_port::{
+    NoopParallelAgentWorkerPort, ParallelAgentWorkerPort,
+};
 use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -229,6 +233,24 @@ impl GithubAutomationPort for TestGithubAutomationPort {
 pub(crate) fn test_parallel_mode_service() -> ParallelModeService {
     // Default service uses the ready fake GitHub port for tests that are not about GitHub failures.
     test_parallel_mode_service_with_github(Arc::new(TestGithubAutomationPort))
+}
+
+pub(crate) fn test_parallel_mode_control_plane_composition(
+    planning: PlanningServices,
+) -> ParallelModeControlPlaneComposition {
+    test_parallel_mode_control_plane_composition_with_worker(
+        test_parallel_mode_service(),
+        planning,
+        Arc::new(NoopParallelAgentWorkerPort),
+    )
+}
+
+pub(crate) fn test_parallel_mode_control_plane_composition_with_worker(
+    parallel_mode_service: ParallelModeService,
+    planning: PlanningServices,
+    worker_port: Arc<dyn ParallelAgentWorkerPort>,
+) -> ParallelModeControlPlaneComposition {
+    ParallelModeControlPlaneComposition::new(parallel_mode_service, planning, worker_port)
 }
 
 pub(crate) fn test_parallel_mode_service_with_github(

@@ -121,17 +121,16 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
      * fixture then normalizes volatile UI state such as cwd, ASCII art, and planning runtime.
      */
     let codex_port = Arc::new(FakeAppServerPort);
+    let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+    );
+    let parallel_mode_control_plane_composition =
+        test_helpers::test_parallel_mode_control_plane_composition(planning);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        Arc::new(
-            crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
-        ),
-        test_helpers::test_parallel_mode_service(),
-        crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        )),
+        parallel_mode_control_plane_composition,
     );
     app.show_startup_ascii_art = false;
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {

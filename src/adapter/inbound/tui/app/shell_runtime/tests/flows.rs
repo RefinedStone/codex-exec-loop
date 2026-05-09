@@ -220,13 +220,17 @@ impl NativeFlowHarness {
         bootstrap_active_planning_workspace_with_services(&planning, &workspace_dir);
         let worker_port = Arc::new(FlowParallelAgentWorkerPort::default());
         let codex_port = Arc::new(FakeAppServerPort);
+        let parallel_mode_control_plane_composition =
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_control_plane_composition_with_worker(
+                crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+                planning,
+                worker_port.clone(),
+            );
         let mut app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
-            worker_port.clone(),
-            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            planning,
+            parallel_mode_control_plane_composition,
         );
         app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
         app.sync_draft_shell_workspace(&workspace_dir);
