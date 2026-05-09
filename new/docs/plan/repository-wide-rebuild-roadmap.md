@@ -58,10 +58,10 @@ slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는
 | P2 | `TUI-00` | done | TUI shell state inventory와 regression |
 | P2 | `TUI-01` | done | conversation lifecycle와 automation lifecycle 분리 |
 | P3 | `DOC-INBOUND-00` | done | inbound surface unification architecture 작성 |
-| P3 | `INBOUND-00` | ready | CLI/admin/Telegram command surface 통일 |
+| P3 | `INBOUND-00` | done | CLI/admin/Telegram command surface 통일 |
 | P4 | `DOC-STORE-00` | done | store/runtime-state architecture 작성 |
-| P4 | `STORE-00` | ready | durable store와 runtime store 경계 정리 |
-| P5 | `TEST-00` | blocked | test/doc contract taxonomy 정리 |
+| P4 | `STORE-00` | done | durable store와 runtime store 경계 정리 |
+| P5 | `TEST-00` | ready | test/doc contract taxonomy 정리 |
 
 ## P0. Parallel Control-Plane Slices
 
@@ -619,7 +619,7 @@ application command/use case를 공유해야 한다.
 
 ### INBOUND-00. Shared Command Surface
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -674,6 +674,15 @@ application command/use case를 공유해야 한다.
 - `INBOUND-00E`: parallel TUI/admin/CLI entrypoint를 control-plane runtime command/event
   vocabulary로 정렬한다. 완료.
 
+완료 근거:
+
+- CLI/Telegram planning control은 `PlanningControlRequest`/`PlanningControlResponse`를 공유한다.
+- Admin HTML/JSON mutation route pair는 같은 `PlanningAdmin*Request` DTO와 facade method를 통과한다.
+- TUI planning shell grammar는 execution path와 inline hint path가 같은 parser를 공유하고,
+  editor keymap은 UI-only vocabulary와 `PlanningServices` mutation delegation으로 분리했다.
+- CLI manual tick, TUI `:parallel`, admin Akra dashboard/API는 control-plane runtime command/event
+  vocabulary 기준으로 정렬했다.
+
 금지:
 
 - admin API용 domain rule, CLI용 domain rule을 따로 만들기
@@ -724,7 +733,7 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 
 ### STORE-00. Durable Store Boundary Audit
 
-상태: `ready`
+상태: `done`
 
 선행:
 
@@ -773,6 +782,13 @@ Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, t
 - `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact,
   repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. 완료.
 
+`STORE-00` 완료 근거:
+
+- durable authority, durable runtime projection, process-lifetime runtime store, UI-only state를
+  inventory와 regression으로 분리했다.
+- SQLite runtime projection, pool-local mirror I/O, parallel runtime state, planning workspace
+  artifact reset/sync contract의 owner와 recovery boundary를 고정했다.
+
 `STORE-00A` 완료 근거:
 
 - `STORE-00A`에서 durable/process runtime state inventory와 adapter mapping versus application
@@ -820,7 +836,7 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 
 ### TEST-00. Contract Taxonomy
 
-상태: `blocked`
+상태: `ready`
 
 선행:
 
@@ -828,6 +844,8 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 - `DOC-PLAN-00`
 - `DOC-TUI-00`
 - `DOC-STORE-00`
+- `INBOUND-00`
+- `STORE-00`
 
 목적:
 
@@ -859,12 +877,12 @@ worker가 변경 범위를 안전하게 잡을 수 없다.
 
 현재 바로 시작 가능한 조합:
 
-- `INBOUND-00`
-- `TEST-00` (`INBOUND-00` 병합 이후 우선)
+- `TEST-00`
 
 서로 같은 production file을 건드리지 않는 조합:
 
-- 현재는 병렬 조합보다 `INBOUND-00` parent closure와 `TEST-00` taxonomy 순서화가 우선이다.
+- 현재는 병렬 조합보다 `TEST-00` taxonomy를 먼저 작성해 이후 worker 검증 matrix를
+  통일하는 것이 우선이다.
 
 동시에 진행하면 안 되는 조합:
 
