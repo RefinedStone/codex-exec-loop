@@ -290,14 +290,26 @@ pub(super) fn reset_pool_for_parallel_enable(
             .iter()
             .find(|record| record.path == slot_path)
         else {
-            report
-                .slot_reports
-                .push(ParallelModePoolResetSlotReport::new(
-                    slot_id,
-                    ParallelModePoolResetSlotAction::SkipMissing,
-                    ParallelModePoolResetSlotOutcome::Skipped,
-                    "slot worktree is not registered",
-                ));
+            if policy == ParallelModePoolResetPolicy::ForceDisposable {
+                collect_reset_projection_keys(&mut report, &context, &slot_id);
+                report
+                    .slot_reports
+                    .push(ParallelModePoolResetSlotReport::new(
+                        slot_id,
+                        ParallelModePoolResetSlotAction::Reset,
+                        ParallelModePoolResetSlotOutcome::Succeeded,
+                        "slot worktree is missing; stale runtime projection will be cleared",
+                    ));
+            } else {
+                report
+                    .slot_reports
+                    .push(ParallelModePoolResetSlotReport::new(
+                        slot_id,
+                        ParallelModePoolResetSlotAction::SkipMissing,
+                        ParallelModePoolResetSlotOutcome::Skipped,
+                        "slot worktree is not registered",
+                    ));
+            }
             continue;
         };
 
@@ -421,9 +433,22 @@ pub(super) fn reset_pool_for_parallel_enable(
     }
 
     if report.succeeded_reset_slot_count() > 0 {
-        planning_authority
-            .apply_parallel_pool_reset_report(&repo_root, &report)
-            .map_err(|error| format!("parallel runtime projection reset report failed: {error}"))?;
+        if policy == ParallelModePoolResetPolicy::ForceDisposable && !report.has_reset_failures() {
+            planning_authority
+                .clear_parallel_runtime_projections(
+                    &repo_root,
+                    "force-disposable initial pool reset completed",
+                )
+                .map_err(|error| {
+                    format!("parallel runtime projection clear failed after initial reset: {error}")
+                })?;
+        } else {
+            planning_authority
+                .apply_parallel_pool_reset_report(&repo_root, &report)
+                .map_err(|error| {
+                    format!("parallel runtime projection reset report failed: {error}")
+                })?;
+        }
         clear_pool_runtime_mirrors_for_report(runtime, &pool_root, &report)?;
     }
 

@@ -391,6 +391,112 @@ fn parallel_initial_setup_forces_live_running_slots_back_to_baseline() {
     );
 }
 
+// 초기 설정 전에 사용자가 pool worktree를 수동 삭제했더라도 durable runtime projection은
+// 같은 repo authority DB에 남을 수 있다. 첫 `:parallel`은 missing slot을 새로 만들기 전에
+// 이 stale lease/session/queue/dispatch command를 버려야 한다.
+#[test]
+fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing() {
+    let repo = TempGitRepo::new("parallel-initial-clears-missing-runtime");
+    let service = test_parallel_mode_service();
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    record_assigned_session_detail(
+        &adapter,
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("stale session detail should be recorded");
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &PlanningAuthorityDistributorQueueRecord {
+            queue_item_id: "stale-queue-1".to_string(),
+            queue_order_key: 1,
+            session_key: lease.session_key(),
+            slot_id: lease.slot_id.clone(),
+            agent_id: lease.agent_id.clone(),
+            task_id: lease.task_id.clone(),
+            task_title: lease.task_title.clone(),
+            source_branch: "prerelease".to_string(),
+            source_commit_sha: repo.head_sha(),
+            branch_name: lease.branch_name.clone(),
+            worktree_path: lease.worktree_path.clone(),
+            commit_sha: repo.head_sha(),
+            original_commit_sha: None,
+            planning_refresh_state: "failed".to_string(),
+            integration_state: "blocked".to_string(),
+            conflict_files: Vec::new(),
+            recovery_note: Some("stale queue from previous runtime".to_string()),
+            validation_summary: "stale validation".to_string(),
+            authority_refresh_outcome: "stale official refresh".to_string(),
+            github_capabilities: None,
+            pull_request_number: None,
+            pull_request_url: None,
+            queue_state: ParallelModeQueueItemState::Blocked,
+            integration_note: "stale blocked queue".to_string(),
+            enqueued_at: "2026-05-08T08:55:15.467459643+00:00".to_string(),
+            updated_at: "2026-05-08T09:10:40.820469463+00:00".to_string(),
+        },
+    )
+    .expect("stale distributor queue should persist");
+    SqlitePlanningAuthorityAdapter::enqueue_runtime_dispatch_command(
+        &repo.workspace_dir(),
+        &ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            Some("stale-head".to_string()),
+            Some(1),
+            "2026-05-08T09:10:40.820469463+00:00",
+        ),
+    )
+    .expect("stale dispatch command should persist");
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            lease.worktree_path.as_str(),
+        ],
+    );
+
+    let report = service
+        .reset_pool_on_parallel_initial_setup_report(&repo.workspace_dir())
+        .expect("initial setup reset should clear stale runtime for missing slots");
+    let snapshot = service.reconcile_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projections should load");
+
+    assert_eq!(report.policy, ParallelModePoolResetPolicy::ForceDisposable);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE);
+    assert_eq!(snapshot.roster.active_count(), 0);
+    assert_eq!(snapshot.pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert!(runtime_projection.slot_leases.is_empty());
+    assert!(runtime_projection.session_details.is_empty());
+    assert!(runtime_projection.distributor_queue_records.is_empty());
+    assert!(runtime_projection.dispatch_commands.is_empty());
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.session_detail_path(&lease.session_key()).exists());
+}
+
 // Dirty tracked files in no-lease reusable slots must not stop off -> on pool reset. Git checkout
 // without --force can fail before reset --hard runs when a slot has committed and uncommitted edits
 // to the same tracked file, which leaves the slot detached at stale work.
