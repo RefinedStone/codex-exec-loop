@@ -12,9 +12,10 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorSnapshot,
 };
 
+use super::controller::ParallelModeControlPlaneService;
 use super::{
     ParallelModeControlPlaneEffectRunner, ParallelModeControlPlaneEventSink,
-    ParallelModeControlPlaneService,
+    ParallelModeControlPlaneHandle,
 };
 
 #[derive(Clone)]
@@ -110,16 +111,18 @@ impl ParallelModeControlPlaneComposition {
         )
     }
 
-    pub fn bind_event_sink<S>(&self, event_sink: S) -> ParallelModeControlPlaneService<S>
+    pub fn bind_event_sink<S>(&self, event_sink: S) -> ParallelModeControlPlaneHandle<S>
     where
         S: ParallelModeControlPlaneEventSink,
     {
-        ParallelModeControlPlaneService::new(ParallelModeControlPlaneEffectRunner::new(
-            self.parallel_mode_service.clone(),
-            self.planning.clone(),
-            self.worker_port.clone(),
-            ParallelModeTurnService::new(self.parallel_mode_service.clone()),
-            event_sink,
-        ))
+        let service =
+            ParallelModeControlPlaneService::new(ParallelModeControlPlaneEffectRunner::new(
+                self.parallel_mode_service.clone(),
+                self.planning.clone(),
+                self.worker_port.clone(),
+                ParallelModeTurnService::new(self.parallel_mode_service.clone()),
+                event_sink,
+            ));
+        ParallelModeControlPlaneHandle::new(service)
     }
 }

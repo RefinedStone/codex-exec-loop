@@ -150,10 +150,8 @@ impl NativeTuiApp {
     #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
         let workspace_directory = self.planning_workspace_directory();
-        let store = self.parallel_mode_control_plane.store();
-        (store.workspace_directory.as_deref() == Some(workspace_directory.as_str()))
-            .then_some(store.current_epoch_id)
-            .flatten()
+        self.parallel_mode_control_plane
+            .current_epoch_id_for_workspace(&workspace_directory)
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_supervisor_refresh_in_flight(&self) -> bool {
@@ -201,7 +199,7 @@ impl NativeTuiApp {
     ) -> Option<ParallelModeAutomationTrigger> {
         self.parallel_mode_control_plane.last_automation_trigger()
     }
-    pub(crate) fn last_parallel_mode_dispatch_withheld_reason(&self) -> Option<&str> {
+    pub(crate) fn last_parallel_mode_dispatch_withheld_reason(&self) -> Option<String> {
         self.parallel_mode_control_plane
             .last_dispatch_withheld_reason()
     }
@@ -427,13 +425,13 @@ impl NativeTuiApp {
 
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {
         let (workspace_directory, epoch_id) = {
-            let store = self.parallel_mode_control_plane.store();
+            let snapshot = self.parallel_mode_control_plane.epoch_snapshot();
             (
-                store
+                snapshot
                     .workspace_directory
                     .clone()
                     .unwrap_or_else(|| self.planning_workspace_directory()),
-                store.current_epoch_id,
+                snapshot.current_epoch_id,
             )
         };
         self.apply_parallel_mode_control_plane_command(ParallelModeControlPlaneCommand::Disable {

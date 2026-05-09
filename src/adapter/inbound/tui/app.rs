@@ -6,7 +6,7 @@ use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneService,
+    ParallelModeService, control_plane::ParallelModeControlPlaneHandle,
 };
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
@@ -148,6 +148,7 @@ mod turn_submission_runtime;
 // composition root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
+pub(super) use app_runtime::NativeTuiParallelModeBinding;
 use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
 use auto_follow_controls::{
     AutoFollowControlEffect, AutoFollowControlEvent, reduce_auto_follow_controls,
@@ -309,7 +310,7 @@ struct NativeTuiApp {
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_mode_control_plane:
-        ParallelModeControlPlaneService<TuiParallelModeControlPlaneEventSink>,
+        ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,

@@ -52,7 +52,7 @@ pub enum ParallelModeControlPlanePresentationEvent {
     },
 }
 
-pub struct ParallelModeControlPlaneController<S>
+pub(crate) struct ParallelModeControlPlaneController<S>
 where
     S: ParallelModeControlPlaneEventSink,
 {
@@ -65,7 +65,7 @@ where
     last_orchestrator_wake_poll_at: Option<Instant>,
 }
 
-pub struct ParallelModeControlPlaneService<S>
+pub(crate) struct ParallelModeControlPlaneService<S>
 where
     S: ParallelModeControlPlaneEventSink,
 {
@@ -167,14 +167,6 @@ where
         self.last_dispatch_withheld_reason = None;
     }
 
-    pub fn set_readiness_snapshot(&mut self, snapshot: ParallelModeReadinessSnapshot) {
-        self.readiness_snapshot = Some(snapshot);
-    }
-
-    pub fn reset_orchestrator_tick_signature(&mut self) {
-        self.runtime.reset_orchestrator_tick_signature();
-    }
-
     pub fn handle_post_turn_queue_continuation(
         &mut self,
         workspace_directory: String,
@@ -203,19 +195,6 @@ where
             consume_auto_follow_prompt,
             presentation_events,
         }
-    }
-
-    #[cfg(test)]
-    pub fn decide_post_turn_queue_continuation_for_test(
-        &self,
-        signal: Option<ParallelModePostTurnQueueSignal>,
-        has_actionable_queue_head: bool,
-    ) -> crate::domain::parallel_mode::ParallelModePostTurnQueueDecision {
-        crate::domain::parallel_mode::ParallelModeControlPlaneAggregate::post_turn_queue_continuation(
-            self.mode_enabled(),
-            signal,
-            has_actionable_queue_head,
-        )
     }
 
     pub fn handle_command(

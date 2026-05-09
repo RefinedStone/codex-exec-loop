@@ -6,7 +6,7 @@ use anyhow::Result;
 use super::github_polling::GithubReviewPollingBootstrap;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
-use super::{NativeTuiApp, ShellChromeEvent};
+use super::{NativeTuiApp, NativeTuiParallelModeBinding, ShellChromeEvent};
 use crate::adapter::outbound::app_server::AppServerPlanningWorkerAdapter;
 use crate::adapter::outbound::app_server::CodexAppServerAdapter;
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -86,11 +86,13 @@ fn build_default_app() -> NativeTuiApp {
         planning,
         parallel_agent_worker_port,
     );
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
     let mut app = NativeTuiApp::new(
         startup_service,
         session_service,
         conversation_service,
-        parallel_mode_control_plane_composition,
+        parallel_mode_binding,
     );
     let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
     /*
@@ -221,11 +223,13 @@ mod tests {
                 crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
             ),
         );
+        let parallel_mode_binding =
+            NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
         NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
-            parallel_mode_control_plane_composition,
+            parallel_mode_binding,
         )
     }
 

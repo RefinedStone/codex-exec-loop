@@ -4,8 +4,8 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
 };
 use crate::adapter::inbound::tui::app::{
-    ConversationInputState, ConversationState, InlineShellCommand, PlanningWorkerPanelState,
-    PlanningWorkerStatus, test_helpers,
+    ConversationInputState, ConversationState, InlineShellCommand, NativeTuiParallelModeBinding,
+    PlanningWorkerPanelState, PlanningWorkerStatus, test_helpers,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay, StartupState};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -176,11 +176,13 @@ fn make_test_runtime() -> ShellRuntime {
         test_helpers::test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
     let parallel_mode_control_plane_composition =
         test_helpers::test_parallel_mode_control_plane_composition(planning);
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
     let app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        parallel_mode_control_plane_composition,
+        parallel_mode_binding,
     );
     ShellRuntime::new(app)
 }
@@ -190,14 +192,37 @@ fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>
         test_helpers::test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
     let parallel_mode_control_plane_composition =
         test_helpers::test_parallel_mode_control_plane_composition(planning);
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
     let app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(session_port),
         ConversationService::new(codex_port),
-        parallel_mode_control_plane_composition,
+        parallel_mode_binding,
     );
     ShellRuntime::new(app)
 }
+
+#[test]
+fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
+    /*
+     * This guards the architecture boundary from regressing back to a TUI-owned
+     * controller. The app stores the application handle; app_runtime performs
+     * the TUI event-sink binding from the shared control-plane composition.
+     */
+    const APP_RS: &str = include_str!("../../app.rs");
+    const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
+
+    assert!(
+        APP_RS.contains("ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>")
+    );
+    assert!(
+        !APP_RS.contains("ParallelModeControlPlaneService<TuiParallelModeControlPlaneEventSink>")
+    );
+    assert!(APP_RUNTIME_RS.contains("NativeTuiParallelModeBinding"));
+    assert!(APP_RUNTIME_RS.contains("from_composition"));
+}
+
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
     let workspace_dir = create_temp_git_repo(prefix);
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
@@ -235,11 +260,13 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
             planning,
             worker_port,
         );
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        parallel_mode_control_plane_composition,
+        parallel_mode_binding,
     );
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
     app.sync_draft_shell_workspace(&workspace_dir);

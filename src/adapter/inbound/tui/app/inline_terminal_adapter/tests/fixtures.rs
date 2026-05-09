@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::adapter::inbound::tui::app::{ConversationState, NativeTuiApp};
+use crate::adapter::inbound::tui::app::{
+    ConversationState, NativeTuiApp, NativeTuiParallelModeBinding,
+};
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
@@ -112,11 +114,13 @@ pub(super) fn make_test_app() -> NativeTuiApp {
         crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_control_plane_composition(
             planning,
         );
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        parallel_mode_control_plane_composition,
+        parallel_mode_binding,
     );
     // Inline rendering fixtures assume the app opens on an editable draft; fail loudly if constructor semantics change.
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {

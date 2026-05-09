@@ -226,11 +226,13 @@ impl NativeFlowHarness {
                 planning,
                 worker_port.clone(),
             );
+        let parallel_mode_binding =
+            NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
         let mut app = NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
-            parallel_mode_control_plane_composition,
+            parallel_mode_binding,
         );
         app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
         app.sync_draft_shell_workspace(&workspace_dir);

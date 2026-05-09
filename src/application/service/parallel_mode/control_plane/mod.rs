@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 mod composition;
 mod controller;
 mod effect_runner;
+mod host;
 
 pub use composition::{
     ParallelModeControlPlaneComposition, ParallelModeControlPlaneDashboardSnapshot,
 };
 pub use controller::{
-    ParallelModeControlPlaneController, ParallelModeControlPlanePresentationEvent,
-    ParallelModeControlPlaneService, ParallelModePostTurnQueueContinuationResult,
+    ParallelModeControlPlanePresentationEvent, ParallelModePostTurnQueueContinuationResult,
 };
 #[cfg(test)]
 pub(crate) use effect_runner::parallel_mode_distributor_tick_signature;
@@ -26,6 +26,7 @@ pub use effect_runner::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEffectRunner,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneLoadingStage,
 };
+pub use host::{ParallelModeControlPlaneEpochSnapshot, ParallelModeControlPlaneHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

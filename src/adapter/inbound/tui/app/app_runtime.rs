@@ -3,10 +3,12 @@ use std::thread;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
-    ParallelModeControlPlaneEventSink,
+    ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
+use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
@@ -67,20 +69,61 @@ impl ParallelModeControlPlaneEventSink for TuiParallelModeControlPlaneEventSink 
     }
 }
 
+pub(super) struct NativeTuiAppRuntimeChannels {
+    tx: mpsc::Sender<BackgroundMessage>,
+    rx: mpsc::Receiver<BackgroundMessage>,
+}
+
+impl NativeTuiAppRuntimeChannels {
+    pub(super) fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self { tx, rx }
+    }
+
+    pub(super) fn parallel_mode_event_sink(&self) -> TuiParallelModeControlPlaneEventSink {
+        TuiParallelModeControlPlaneEventSink {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+pub(crate) struct NativeTuiParallelModeBinding {
+    parallel_mode_service: ParallelModeService,
+    planning: PlanningServices,
+    parallel_mode_control_plane:
+        ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
+    runtime_channels: NativeTuiAppRuntimeChannels,
+}
+
+impl NativeTuiParallelModeBinding {
+    pub(crate) fn from_composition(
+        composition: ParallelModeControlPlaneComposition,
+    ) -> NativeTuiParallelModeBinding {
+        let runtime_channels = NativeTuiAppRuntimeChannels::new();
+        let parallel_mode_control_plane =
+            composition.bind_event_sink(runtime_channels.parallel_mode_event_sink());
+        NativeTuiParallelModeBinding {
+            parallel_mode_service: composition.parallel_mode_service().clone(),
+            planning: composition.planning().clone(),
+            parallel_mode_control_plane,
+            runtime_channels,
+        }
+    }
+}
+
 impl NativeTuiApp {
     pub(super) fn new(
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
-        parallel_mode_control_plane_composition: ParallelModeControlPlaneComposition,
+        parallel_mode_binding: NativeTuiParallelModeBinding,
     ) -> Self {
-        let (tx, rx) = mpsc::channel();
-        let parallel_mode_service = parallel_mode_control_plane_composition
-            .parallel_mode_service()
-            .clone();
-        let planning = parallel_mode_control_plane_composition.planning().clone();
-        let parallel_mode_control_plane = parallel_mode_control_plane_composition
-            .bind_event_sink(TuiParallelModeControlPlaneEventSink { tx: tx.clone() });
+        let NativeTuiParallelModeBinding {
+            parallel_mode_service,
+            planning,
+            parallel_mode_control_plane,
+            runtime_channels,
+        } = parallel_mode_binding;
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
@@ -131,8 +174,8 @@ impl NativeTuiApp {
             inline_history_render_mode: super::InlineHistoryRenderMode::from_environment(),
             history_insert_mode: super::HistoryInsertionMode::from_environment(),
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
-            tx,
-            rx,
+            tx: runtime_channels.tx,
+            rx: runtime_channels.rx,
         }
     }
 
