@@ -2,13 +2,14 @@ use std::any::Any;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::adapter::inbound::tui::app::{
-    ActiveTurnExecutionSnapshotCapture, BackgroundMessage, ConversationState, NativeTuiApp,
-};
+use crate::adapter::inbound::tui::app::{BackgroundMessage, ConversationState, NativeTuiApp};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelTurnSlotLeaseHandoff, ParallelTurnStreamLaunchRequest,
+};
+use crate::application::service::planning::{
+    PlanningTurnExecutionSnapshotCapture, PlanningTurnExecutionSnapshotCaptureRequest,
 };
 
 /* This module is the TUI-side bridge from a submitted prompt to the streaming
@@ -60,10 +61,10 @@ impl NativeTuiApp {
 
         // The stream may run against a slot worktree instead of the shell's current
         // workspace. Capture the execution snapshot before the worker can emit
-        // TurnStarted and before post-turn reconciliation compares protected files.
+        // TurnStarted and carry it with the terminal completion event.
         self.sync_active_turn_workspace_directory(&request.workspace_directory);
-        self.active_turn_execution_snapshot_capture =
-            Some(self.capture_active_turn_execution_snapshot(&request.workspace_directory));
+        let execution_snapshot_capture =
+            self.capture_turn_execution_snapshot(&request.workspace_directory);
 
         if invalidate_supervisor_snapshot {
             self.invalidate_parallel_mode_supervisor_snapshot();
@@ -75,31 +76,20 @@ impl NativeTuiApp {
         }
         spawn_conversation_stream_worker(
             request,
+            execution_snapshot_capture,
             self.conversation_service.clone(),
             self.parallel_mode_turn_service(),
             self.tx.clone(),
         );
     }
 
-    fn capture_active_turn_execution_snapshot(
+    fn capture_turn_execution_snapshot(
         &self,
         workspace_directory: &str,
-    ) -> ActiveTurnExecutionSnapshotCapture {
-        match self
-            .planning
-            .runtime
-            .load_execution_snapshot(workspace_directory)
-        {
-            Ok(snapshot) => {
-                ActiveTurnExecutionSnapshotCapture::ready(workspace_directory, snapshot)
-            }
-            Err(error) => ActiveTurnExecutionSnapshotCapture::capture_failed(
-                workspace_directory,
-                format!(
-                    "planning reconciliation could not capture the execution snapshot before the turn started: {error}"
-                ),
-            ),
-        }
+    ) -> PlanningTurnExecutionSnapshotCapture {
+        self.planning.runtime.capture_turn_execution_snapshot(
+            PlanningTurnExecutionSnapshotCaptureRequest::new(workspace_directory),
+        )
     }
 
     fn sync_active_turn_workspace_directory(&mut self, workspace_directory: &str) {
@@ -137,6 +127,7 @@ fn resolve_stream_launch_request(
 
 fn spawn_conversation_stream_worker(
     request: PreparedTurnStreamRequest,
+    execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
     service: ConversationService,
     parallel_mode_turn_service: ParallelModeTurnService,
     outer_tx: std::sync::mpsc::Sender<BackgroundMessage>,
@@ -167,7 +158,10 @@ fn spawn_conversation_stream_worker(
             if lifecycle_outcome.should_stop_stream_forwarding {
                 saw_terminal_event = true;
             }
-            let _ = outer_tx.send(BackgroundMessage::ConversationStream(event));
+            let _ = outer_tx.send(conversation_stream_background_message(
+                event,
+                &execution_snapshot_capture,
+            ));
             if lifecycle_outcome.should_stop_stream_forwarding {
                 break;
             }
@@ -201,6 +195,23 @@ fn spawn_conversation_stream_worker(
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }
     });
+}
+
+fn conversation_stream_background_message(
+    event: ConversationStreamEvent,
+    execution_snapshot_capture: &PlanningTurnExecutionSnapshotCapture,
+) -> BackgroundMessage {
+    match event {
+        ConversationStreamEvent::TurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+        } => BackgroundMessage::ConversationTurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+            execution_snapshot_capture: execution_snapshot_capture.clone(),
+        },
+        event => BackgroundMessage::ConversationStream(event),
+    }
 }
 
 fn run_stream_request(
@@ -304,6 +315,9 @@ fn panic_payload_summary(payload: Box<dyn Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::service::planning::{
+        PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
+    };
 
     fn sample_request() -> PreparedTurnStreamRequest {
         PreparedTurnStreamRequest {
@@ -344,5 +358,36 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn turn_completed_background_message_carries_execution_snapshot_capture() {
+        let snapshot_capture = PlanningTurnExecutionSnapshotCapture::ready(
+            "/tmp/workspace",
+            PlanningExecutionSnapshot::default(),
+        );
+
+        let message = conversation_stream_background_message(
+            ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+            },
+            &snapshot_capture,
+        );
+
+        let BackgroundMessage::ConversationTurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+            execution_snapshot_capture,
+        } = message
+        else {
+            panic!("turn completion should use the completion-specific background message");
+        };
+        assert_eq!(turn_id, "turn-1");
+        assert_eq!(
+            changed_planning_file_paths,
+            vec!["new/docs/plan.md".to_string()]
+        );
+        assert_eq!(execution_snapshot_capture, snapshot_capture);
     }
 }

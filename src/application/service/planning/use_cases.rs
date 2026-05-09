@@ -179,6 +179,45 @@ pub struct PlanningRuntimeUseCases {
     task_intake: PlanningTaskIntakeService,
     manual_intake: ManualPromptIntakeService,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningTurnExecutionSnapshotCaptureRequest {
+    pub workspace_directory: String,
+}
+impl PlanningTurnExecutionSnapshotCaptureRequest {
+    pub fn new(workspace_directory: impl Into<String>) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningTurnExecutionSnapshotCapture {
+    pub workspace_directory: String,
+    pub state: PlanningTurnExecutionSnapshotCaptureState,
+}
+impl PlanningTurnExecutionSnapshotCapture {
+    pub fn ready(
+        workspace_directory: impl Into<String>,
+        snapshot: PlanningExecutionSnapshot,
+    ) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            state: PlanningTurnExecutionSnapshotCaptureState::Ready(snapshot),
+        }
+    }
+
+    pub fn capture_failed(workspace_directory: impl Into<String>, message: String) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            state: PlanningTurnExecutionSnapshotCaptureState::CaptureFailed(message),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningTurnExecutionSnapshotCaptureState {
+    Ready(PlanningExecutionSnapshot),
+    CaptureFailed(String),
+}
 impl PlanningRuntimeUseCases {
     pub(crate) fn new(
         runtime_facade: PlanningRuntimeFacadeService,
@@ -278,6 +317,22 @@ impl PlanningRuntimeUseCases {
         workspace_dir: &str,
     ) -> anyhow::Result<PlanningExecutionSnapshot> {
         self.runtime_facade.load_execution_snapshot(workspace_dir)
+    }
+    pub fn capture_turn_execution_snapshot(
+        &self,
+        request: PlanningTurnExecutionSnapshotCaptureRequest,
+    ) -> PlanningTurnExecutionSnapshotCapture {
+        match self.load_execution_snapshot(&request.workspace_directory) {
+            Ok(snapshot) => {
+                PlanningTurnExecutionSnapshotCapture::ready(request.workspace_directory, snapshot)
+            }
+            Err(error) => PlanningTurnExecutionSnapshotCapture::capture_failed(
+                request.workspace_directory,
+                format!(
+                    "planning reconciliation could not capture the execution snapshot before the turn started: {error}"
+                ),
+            ),
+        }
     }
     pub fn reconcile_after_turn(
         &self,

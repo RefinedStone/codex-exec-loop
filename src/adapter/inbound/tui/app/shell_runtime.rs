@@ -137,6 +137,19 @@ impl ShellRuntime {
                         ConversationRuntimeEvent::StreamUpdated(event),
                     );
                 }
+                BackgroundMessage::ConversationTurnCompleted {
+                    turn_id,
+                    changed_planning_file_paths,
+                    execution_snapshot_capture,
+                } => {
+                    self.app.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::StreamTurnCompleted {
+                            turn_id,
+                            changed_planning_file_paths,
+                            execution_snapshot_capture: Some(execution_snapshot_capture),
+                        },
+                    );
+                }
                 BackgroundMessage::ConversationRuntimeNotice(notice) => {
                     self.app.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::StreamExecutionObserved { notice },

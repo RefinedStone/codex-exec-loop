@@ -16,7 +16,6 @@ pub(super) struct PostTurnAutomationBackgroundResult {
 }
 
 pub(super) struct ConversationRuntimeAutomationContext {
-    clear_turn_snapshot: bool,
     route_after_reduction: bool,
     parallel_mode_post_turn_queue_signal: Option<ParallelModePostTurnQueueSignal>,
 }
@@ -79,10 +78,6 @@ impl NativeTuiApp {
         event: &ConversationRuntimeEvent,
     ) -> ConversationRuntimeAutomationContext {
         ConversationRuntimeAutomationContext {
-            clear_turn_snapshot: matches!(
-                event,
-                ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::Failed { .. })
-            ),
             route_after_reduction: matches!(
                 event,
                 ConversationRuntimeEvent::PostTurnAutomationEvaluated { .. }
@@ -99,9 +94,6 @@ impl NativeTuiApp {
         context: ConversationRuntimeAutomationContext,
         effects: &mut Vec<ConversationRuntimeEffect>,
     ) {
-        if context.clear_turn_snapshot {
-            self.active_turn_execution_snapshot_capture = None;
-        }
         if !context.route_after_reduction {
             return;
         }

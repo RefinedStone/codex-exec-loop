@@ -84,10 +84,12 @@ impl NativeTuiApp {
                 workspace_directory,
                 completed_turn_id,
                 changed_planning_file_paths,
+                execution_snapshot_capture,
             } => self.execute_post_turn_evaluation(PostTurnEvaluationRequest {
                 workspace_directory,
                 completed_turn_id,
                 changed_planning_file_paths,
+                execution_snapshot_capture,
             }),
             ConversationRuntimeEffect::QueueAutoPrompt {
                 prompt,
@@ -417,6 +419,17 @@ fn prompt_origin_label(prompt_origin: &PromptOrigin) -> &'static str {
     }
 }
 
+fn append_debug_detail_preview_block(lines: &mut Vec<String>, label: &str, block: Option<&str>) {
+    let Some(block) = block.filter(|block| !block.trim().is_empty()) else {
+        return;
+    };
+
+    lines.push(label.to_string());
+    for line in build_debug_preview_lines(block, AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES) {
+        lines.push(format!("  {line}"));
+    }
+}
+
 #[cfg(test)]
 mod prompt_submit_diagnostics_tests {
     use super::{PromptOrigin, user_prompt_submit_detail};
@@ -436,16 +449,5 @@ mod prompt_submit_diagnostics_tests {
         assert_eq!(detail["prompt"], "final wrapper\noperator text");
         assert_eq!(detail["prompt_len"], 27);
         assert_eq!(detail["parallel_mode_enabled"], true);
-    }
-}
-
-fn append_debug_detail_preview_block(lines: &mut Vec<String>, label: &str, block: Option<&str>) {
-    let Some(block) = block.filter(|block| !block.trim().is_empty()) else {
-        return;
-    };
-
-    lines.push(label.to_string());
-    for line in build_debug_preview_lines(block, AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES) {
-        lines.push(format!("  {line}"));
     }
 }

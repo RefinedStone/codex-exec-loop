@@ -8,7 +8,9 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
-use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::{
+    PlanningServices, PlanningTurnExecutionSnapshotCapture,
+};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
@@ -43,6 +45,11 @@ pub(super) enum BackgroundMessage {
     SessionsLoaded(Result<SessionCatalog, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
+    ConversationTurnCompleted {
+        turn_id: String,
+        changed_planning_file_paths: Vec<String>,
+        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
+    },
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
@@ -166,7 +173,6 @@ impl NativeTuiApp {
             turn_control_truth,
             parallel_mode_service,
             planning,
-            active_turn_execution_snapshot_capture: None,
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,

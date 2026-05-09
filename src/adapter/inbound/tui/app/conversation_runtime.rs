@@ -15,7 +15,9 @@ use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningTaskHandoff};
+use crate::application::service::planning::{
+    PlanningRuntimeSnapshot, PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
+};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use crate::domain::operator_alert::OperatorAlert;
@@ -35,6 +37,11 @@ pub(super) enum ConversationRuntimeEvent {
         origin: PromptOrigin,
     },
     StreamUpdated(ConversationStreamEvent),
+    StreamTurnCompleted {
+        turn_id: String,
+        changed_planning_file_paths: Vec<String>,
+        execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
+    },
     StreamExecutionObserved {
         notice: String,
     },
@@ -59,6 +66,7 @@ pub(super) enum ConversationRuntimeEffect {
         workspace_directory: String,
         completed_turn_id: String,
         changed_planning_file_paths: Vec<String>,
+        execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
     },
     QueueAutoPrompt {
         prompt: String,
@@ -355,24 +363,13 @@ pub(super) fn reduce_conversation_runtime(
                 // whether to auto-follow. That policy needs fresh planning state,
                 // so it is emitted as an effect after the model enters evaluating
                 // state.
-                let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
-                state.begin_auto_follow_evaluation();
-                event_log::emit_lazy("post_turn_evaluation_queued", || {
-                    json!({
-                        "thread_id": state.thread_id.as_str(),
-                        "completed_turn_id": turn_id,
-                        "workspace_directory": workspace_directory,
-                        "operation": "post_turn",
-                        "phase": "queued",
-                        "decision": "evaluate",
-                        "changed_planning_file_count": changed_planning_file_paths.len(),
-                    })
-                });
-                effects.push(ConversationRuntimeEffect::EvaluatePostTurnAutomation {
-                    workspace_directory,
-                    completed_turn_id: turn_id,
+                queue_post_turn_evaluation(
+                    &mut state,
+                    &mut effects,
+                    turn_id,
                     changed_planning_file_paths,
-                });
+                    None,
+                );
             }
             ConversationStreamEvent::Failed { message } => {
                 // Failure ends the active turn locally. No post-turn evaluation
@@ -380,6 +377,19 @@ pub(super) fn reduce_conversation_runtime(
                 state.fail_turn(message);
             }
         },
+        ConversationRuntimeEvent::StreamTurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+            execution_snapshot_capture,
+        } => {
+            queue_post_turn_evaluation(
+                &mut state,
+                &mut effects,
+                turn_id,
+                changed_planning_file_paths,
+                execution_snapshot_capture,
+            );
+        }
         ConversationRuntimeEvent::StreamExecutionObserved { notice } => {
             // Execution-layer notices come from effect runners, not provider
             // stream events. They are still runtime notices so the user can see
@@ -453,10 +463,42 @@ fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
     }
 }
 
+fn queue_post_turn_evaluation(
+    state: &mut ConversationViewModel,
+    effects: &mut Vec<ConversationRuntimeEffect>,
+    turn_id: String,
+    changed_planning_file_paths: Vec<String>,
+    execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
+) {
+    let changed_planning_file_count = changed_planning_file_paths.len();
+    let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
+    state.begin_auto_follow_evaluation();
+    event_log::emit_lazy("post_turn_evaluation_queued", || {
+        json!({
+            "thread_id": state.thread_id.as_str(),
+            "completed_turn_id": turn_id,
+            "workspace_directory": workspace_directory,
+            "operation": "post_turn",
+            "phase": "queued",
+            "decision": "evaluate",
+            "changed_planning_file_count": changed_planning_file_count,
+        })
+    });
+    effects.push(ConversationRuntimeEffect::EvaluatePostTurnAutomation {
+        workspace_directory,
+        completed_turn_id: turn_id,
+        changed_planning_file_paths,
+        execution_snapshot_capture,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{AutoFollowSubmitContext, PromptOrigin};
+    use crate::application::service::planning::{
+        PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
+    };
 
     #[test]
     fn auto_follow_turn_completion_advances_done_progress() {
@@ -503,6 +545,39 @@ mod tests {
             !reduction.state.auto_follow_state.has_live_activity(),
             "completed auto turn should not leave a stale running phase"
         );
+    }
+
+    #[test]
+    fn stream_turn_completion_carries_execution_snapshot_to_post_turn_effect() {
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.thread_id = "thread-1".to_string();
+        state.replace_active_turn_workspace_directory("/tmp/workspace".to_string());
+        let snapshot_capture = PlanningTurnExecutionSnapshotCapture::ready(
+            "/tmp/workspace",
+            PlanningExecutionSnapshot::default(),
+        );
+
+        let reduction = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamTurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+                execution_snapshot_capture: Some(snapshot_capture.clone()),
+            },
+        );
+
+        let post_turn_effect = reduction
+            .effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                ConversationRuntimeEffect::EvaluatePostTurnAutomation {
+                    execution_snapshot_capture,
+                    ..
+                } => execution_snapshot_capture,
+                _ => None,
+            })
+            .expect("turn completion should queue post-turn evaluation with the snapshot capture");
+        assert_eq!(post_turn_effect, snapshot_capture);
     }
 
     #[test]

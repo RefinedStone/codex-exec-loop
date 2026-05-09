@@ -7,9 +7,8 @@ use super::super::conversation_runtime::{
     QueuedAutoPrompt,
 };
 use super::super::{
-    ActiveTurnExecutionSnapshotCapture, ActiveTurnExecutionSnapshotState, AutoFollowDecision,
-    AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
-    PlanningWorkerPanelState, PlanningWorkerStatus,
+    AutoFollowDecision, AutoFollowSkipReason, ConversationState, ConversationViewModel,
+    NativeTuiApp, PlanningWorkerPanelState, PlanningWorkerStatus,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningProposalPromotionRequest;
@@ -22,6 +21,9 @@ use crate::application::service::planning::{
 };
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+};
+use crate::application::service::planning::{
+    PlanningTurnExecutionSnapshotCapture, PlanningTurnExecutionSnapshotCaptureState,
 };
 use crate::application::service::post_turn_decision::{
     PostTurnAutoFollowStopReason, PostTurnDecision as ApplicationPostTurnDecision,
@@ -65,6 +67,7 @@ pub(super) struct PostTurnEvaluationRequest {
     pub workspace_directory: String,
     pub completed_turn_id: String,
     pub changed_planning_file_paths: Vec<String>,
+    pub execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
 }
 #[derive(Debug, Clone)]
 struct HiddenPlanningRepairOutcome {
@@ -134,20 +137,17 @@ struct PostTurnEvaluationExecution {
 struct PostTurnEvaluationExecutor {
     planning: PlanningServices,
     parallel_mode_turn_service: ParallelModeTurnService,
-    active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
     planning_worker_panel_state: PlanningWorkerPanelState,
 }
 impl PostTurnEvaluationExecutor {
     fn new(
         planning: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
-        active_turn_execution_snapshot_capture: Option<ActiveTurnExecutionSnapshotCapture>,
         planning_worker_panel_state: PlanningWorkerPanelState,
     ) -> Self {
         Self {
             planning,
             parallel_mode_turn_service,
-            active_turn_execution_snapshot_capture,
             planning_worker_panel_state,
         }
     }
@@ -325,10 +325,9 @@ impl PostTurnEvaluationExecutor {
             .iter()
             .any(|path| PlanningExecutionSnapshot::captures_path(path));
         if !requires_execution_snapshot {
-            self.active_turn_execution_snapshot_capture = None;
             return PlanningReconciliationResult::default();
         }
-        let Some(capture) = self.active_turn_execution_snapshot_capture.take() else {
+        let Some(capture) = request.execution_snapshot_capture.as_ref() else {
             return blocked_reconciliation_result(
                 "planning reconciliation could not restore protected planning files because the execution snapshot was unavailable"
                     .to_string(),
@@ -340,17 +339,17 @@ impl PostTurnEvaluationExecutor {
                 capture.workspace_directory, request.workspace_directory
             ));
         }
-        let execution_snapshot = match capture.snapshot {
-            ActiveTurnExecutionSnapshotState::Ready(snapshot) => snapshot,
-            ActiveTurnExecutionSnapshotState::CaptureFailed(error_message) => {
-                return blocked_reconciliation_result(error_message);
+        let execution_snapshot = match &capture.state {
+            PlanningTurnExecutionSnapshotCaptureState::Ready(snapshot) => snapshot,
+            PlanningTurnExecutionSnapshotCaptureState::CaptureFailed(error_message) => {
+                return blocked_reconciliation_result(error_message.clone());
             }
         };
         match self.planning.runtime.reconcile_after_turn(
             &request.workspace_directory,
             &request.completed_turn_id,
             &request.changed_planning_file_paths,
-            &execution_snapshot,
+            execution_snapshot,
         ) {
             Ok(result) => result,
             Err(error) => PlanningReconciliationResult {
@@ -928,7 +927,6 @@ impl NativeTuiApp {
         let executor = PostTurnEvaluationExecutor::new(
             self.planning.clone(),
             self.parallel_mode_turn_service(),
-            self.active_turn_execution_snapshot_capture.take(),
             self.planning_worker_panel_state.clone(),
         );
         #[cfg(test)]
