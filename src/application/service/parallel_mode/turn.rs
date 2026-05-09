@@ -70,6 +70,90 @@ pub struct ParallelTurnStreamCompletionOutcome {
     pub runtime_notice: Option<String>,
     pub invalidate_supervisor_snapshot: bool,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelTurnStreamLifecycleEventOutcome {
+    pub runtime_notice: Option<String>,
+    pub invalidate_supervisor_snapshot: bool,
+    pub should_stop_stream_forwarding: bool,
+}
+#[derive(Clone)]
+/*
+Stream lifecycle keeps the per-turn evidence needed to reconcile a parallel slot
+after the conversation stream closes. Inbound adapters forward stream events and
+map outcomes to UI messages; they do not own the lease state flags.
+*/
+pub struct ParallelTurnStreamLifecycle {
+    turn_service: ParallelModeTurnService,
+    workspace_directory: String,
+    saw_turn_started: bool,
+    saw_failed_before_turn_started: bool,
+    saw_failed_event: bool,
+}
+impl std::fmt::Debug for ParallelTurnStreamLifecycle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ParallelTurnStreamLifecycle")
+            .field("workspace_directory", &self.workspace_directory)
+            .field("saw_turn_started", &self.saw_turn_started)
+            .field(
+                "saw_failed_before_turn_started",
+                &self.saw_failed_before_turn_started,
+            )
+            .field("saw_failed_event", &self.saw_failed_event)
+            .finish()
+    }
+}
+impl ParallelTurnStreamLifecycle {
+    fn new(turn_service: ParallelModeTurnService, workspace_directory: impl Into<String>) -> Self {
+        Self {
+            turn_service,
+            workspace_directory: workspace_directory.into(),
+            saw_turn_started: false,
+            saw_failed_before_turn_started: false,
+            saw_failed_event: false,
+        }
+    }
+
+    pub fn observe_event(
+        &mut self,
+        event: &ConversationStreamEvent,
+    ) -> ParallelTurnStreamLifecycleEventOutcome {
+        let outcome = self
+            .turn_service
+            .sync_stream_event(&self.workspace_directory, event);
+        self.saw_turn_started |= outcome.turn_started_observed;
+
+        let should_stop_stream_forwarding = matches!(
+            event,
+            ConversationStreamEvent::TurnCompleted { .. } | ConversationStreamEvent::Failed { .. }
+        );
+        if matches!(event, ConversationStreamEvent::Failed { .. }) {
+            self.saw_failed_event = true;
+            if !self.saw_turn_started {
+                self.saw_failed_before_turn_started = true;
+            }
+        }
+
+        ParallelTurnStreamLifecycleEventOutcome {
+            runtime_notice: outcome.runtime_notice,
+            invalidate_supervisor_snapshot: outcome.invalidate_supervisor_snapshot,
+            should_stop_stream_forwarding,
+        }
+    }
+
+    pub fn finalize_after_stream_completion(
+        &self,
+        terminal_failure_observed: bool,
+    ) -> ParallelTurnStreamCompletionOutcome {
+        self.turn_service.finalize_stream_completion(
+            &self.workspace_directory,
+            self.saw_turn_started,
+            self.saw_failed_before_turn_started,
+            self.saw_failed_event,
+            terminal_failure_observed,
+        )
+    }
+}
 #[derive(Clone)]
 /*
 이 서비스는 TUI의 conversation stream lifecycle과 `ParallelModeService`의 slot lease 상태 기계를
@@ -92,6 +176,13 @@ impl ParallelModeTurnService {
         Self {
             parallel_mode_service,
         }
+    }
+
+    pub fn stream_lifecycle(
+        &self,
+        workspace_directory: impl Into<String>,
+    ) -> ParallelTurnStreamLifecycle {
+        ParallelTurnStreamLifecycle::new(self.clone(), workspace_directory)
     }
 
     /*
@@ -481,6 +572,7 @@ mod tests {
     use crate::adapter::outbound::github::GithubAutomationAdapter;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
     use std::fs;
     use std::process::Command;
     use std::sync::Arc;
@@ -503,6 +595,12 @@ mod tests {
                 .expect("temp git workspace seed file should write");
             run_git(&root, &["add", "README.md"]);
             run_git(&root, &["commit", "-m", "Initial commit"]);
+            run_git(&root, &["branch", "akra"]);
+            run_git(&root, &["branch", "prerelease"]);
+            run_git(
+                &root,
+                &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
+            );
 
             Self {
                 root: root.display().to_string(),
@@ -580,6 +678,40 @@ mod tests {
         assert_eq!(request.task_title, "Move slot lease request out of TUI");
         assert_eq!(request.agent_id, "agent-task-r1-turn-bridge");
         assert_eq!(request.task_slug, "task-r1-turn-bridge");
+    }
+    #[test]
+    fn stream_lifecycle_releases_unstarted_slot_after_terminal_failure() {
+        let workspace = TempGitWorkspace::new("parallel-stream-lifecycle-release");
+        let parallel_service = test_parallel_mode_service();
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+            .expect("pool should initialize for stream lifecycle test");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                &workspace.root,
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-stream-lifecycle",
+                    "Stream lifecycle release",
+                ),
+            )
+            .expect("slot lease should be acquired");
+        let turn_service = ParallelModeTurnService::new(parallel_service.clone());
+        let mut lifecycle = turn_service.stream_lifecycle(lease.worktree_path);
+
+        let event_outcome = lifecycle.observe_event(&ConversationStreamEvent::Failed {
+            message: "startup failed".to_string(),
+        });
+        assert!(event_outcome.should_stop_stream_forwarding);
+        assert!(!event_outcome.invalidate_supervisor_snapshot);
+        assert!(event_outcome.runtime_notice.is_none());
+
+        let completion = lifecycle.finalize_after_stream_completion(true);
+        assert!(completion.invalidate_supervisor_snapshot);
+        assert!(completion.runtime_notice.as_deref().is_some_and(|notice| {
+            notice.contains("slot lease released after startup failure")
+        }));
+        let supervisor = parallel_service.build_supervisor_snapshot(&workspace.root, true, None);
+        assert_eq!(supervisor.pool.leased_slots, 0);
     }
     #[test]
     fn turn_started_without_slot_lease_keeps_snapshot_steady() {

@@ -147,45 +147,28 @@ fn spawn_conversation_stream_worker(
         let request_for_service = request.clone();
         let service_thread =
             thread::spawn(move || run_stream_request(service, request_for_service, event_tx));
+        let mut stream_lifecycle =
+            parallel_mode_turn_service.stream_lifecycle(request.workspace_directory.clone());
 
         let mut saw_terminal_event = false;
-        let mut saw_turn_started = false;
-        let mut saw_failed_before_turn_started = false;
-        let mut saw_failed_event = false;
 
         // Forward events as they arrive, but let the parallel turn service observe
         // them first so slot state and operator notices stay synchronized with the
         // visible stream.
         while let Ok(event) = event_rx.recv() {
-            let (notice, invalidate_supervisor_snapshot) = sync_slot_lease_for_stream_event(
-                &parallel_mode_turn_service,
-                &request,
-                &event,
-                &mut saw_turn_started,
-            );
-            if invalidate_supervisor_snapshot {
+            let lifecycle_outcome = stream_lifecycle.observe_event(&event);
+            if lifecycle_outcome.invalidate_supervisor_snapshot {
                 let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
             }
-            if let Some(notice) = notice {
+            if let Some(notice) = lifecycle_outcome.runtime_notice {
                 let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
             }
-            let should_stop = matches!(
-                event,
-                ConversationStreamEvent::TurnCompleted { .. }
-                    | ConversationStreamEvent::Failed { .. }
-            );
 
-            if matches!(&event, ConversationStreamEvent::Failed { .. }) {
-                saw_failed_event = true;
-                if !saw_turn_started {
-                    saw_failed_before_turn_started = true;
-                }
-            }
-            if should_stop {
+            if lifecycle_outcome.should_stop_stream_forwarding {
                 saw_terminal_event = true;
             }
             let _ = outer_tx.send(BackgroundMessage::ConversationStream(event));
-            if should_stop {
+            if lifecycle_outcome.should_stop_stream_forwarding {
                 break;
             }
         }
@@ -205,18 +188,12 @@ fn spawn_conversation_stream_worker(
             ));
         }
 
-        let (notice, invalidate_supervisor_snapshot) = finalize_slot_lease_after_stream_completion(
-            &parallel_mode_turn_service,
-            &request,
-            saw_turn_started,
-            saw_failed_before_turn_started,
-            saw_failed_event,
-            &observation,
-        );
-        if invalidate_supervisor_snapshot {
+        let completion_outcome = stream_lifecycle
+            .finalize_after_stream_completion(observation.terminal_failure_message.is_some());
+        if completion_outcome.invalidate_supervisor_snapshot {
             let _ = outer_tx.send(BackgroundMessage::InvalidateParallelModeSupervisorSnapshot);
         }
-        if let Some(notice) = notice {
+        if let Some(notice) = completion_outcome.runtime_notice {
             let _ = outer_tx.send(BackgroundMessage::ConversationRuntimeNotice(notice));
         }
 
@@ -239,41 +216,6 @@ fn run_stream_request(
             .run_new_thread_stream(&request.workspace_directory, &request.prompt, event_sender)
             .map_err(|error: anyhow::Error| error.to_string()),
     }
-}
-
-fn sync_slot_lease_for_stream_event(
-    parallel_mode_turn_service: &ParallelModeTurnService,
-    request: &PreparedTurnStreamRequest,
-    event: &ConversationStreamEvent,
-    saw_turn_started: &mut bool,
-) -> (Option<String>, bool) {
-    let outcome = parallel_mode_turn_service.sync_stream_event(&request.workspace_directory, event);
-    *saw_turn_started |= outcome.turn_started_observed;
-    (
-        outcome.runtime_notice,
-        outcome.invalidate_supervisor_snapshot,
-    )
-}
-
-fn finalize_slot_lease_after_stream_completion(
-    parallel_mode_turn_service: &ParallelModeTurnService,
-    request: &PreparedTurnStreamRequest,
-    saw_turn_started: bool,
-    saw_failed_before_turn_started: bool,
-    saw_failed_event: bool,
-    observation: &StreamExecutionObservation,
-) -> (Option<String>, bool) {
-    let outcome = parallel_mode_turn_service.finalize_stream_completion(
-        &request.workspace_directory,
-        saw_turn_started,
-        saw_failed_before_turn_started,
-        saw_failed_event,
-        observation.terminal_failure_message.is_some(),
-    );
-    (
-        outcome.runtime_notice,
-        outcome.invalidate_supervisor_snapshot,
-    )
 }
 
 fn observe_stream_completion(
