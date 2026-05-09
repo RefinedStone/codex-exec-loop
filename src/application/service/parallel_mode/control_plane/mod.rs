@@ -18,7 +18,7 @@ pub use composition::{
     ParallelModeControlPlaneComposition, ParallelModeControlPlaneDashboardSnapshot,
 };
 pub use controller::{
-    ParallelModeControlPlanePresentationEvent, ParallelModePostTurnQueueContinuationTarget,
+    ParallelModeControlPlanePresentationEvent, ParallelModePostTurnQueueContinuationOutcome,
 };
 #[cfg(test)]
 pub(crate) use effect_runner::parallel_mode_distributor_tick_signature;

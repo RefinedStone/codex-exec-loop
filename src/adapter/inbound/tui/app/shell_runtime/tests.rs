@@ -224,12 +224,12 @@ fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
 }
 
 #[test]
-fn parallel_post_turn_continuation_is_driven_by_control_plane_target() {
+fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
     /*
      * The parallel-mode TUI entrypoint must not inspect or consume
-     * QueueAutoPrompt directly. The adapter exposes its local effect storage
-     * through the application control-plane target, then the handle drives the
-     * continuation command and the returned presentation events.
+     * QueueAutoPrompt directly. The adapter asks application services for a
+     * continuation outcome, then maps that outcome onto local effects and
+     * presentation events.
      */
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
     const POST_TURN_AUTOMATION_RS: &str = include_str!("../post_turn_automation.rs");
@@ -240,7 +240,9 @@ fn parallel_post_turn_continuation_is_driven_by_control_plane_target() {
     assert!(!PARALLEL_MODE_RS.contains("QueueAutoPrompt"));
     assert!(!PARALLEL_MODE_RS.contains("record_auto_follow_parallel_dispatch"));
     assert!(!PARALLEL_MODE_RS.contains("handle_post_turn_queue_continuation"));
-    assert!(POST_TURN_AUTOMATION_RS.contains("impl ParallelModePostTurnQueueContinuationTarget"));
+    assert!(POST_TURN_AUTOMATION_RS.contains("decide_post_turn_auto_prompt_route"));
+    assert!(!POST_TURN_AUTOMATION_RS.contains("QueueAutoPrompt"));
+    assert!(!POST_TURN_AUTOMATION_RS.contains(".retain("));
     assert!(CONTROL_PLANE_HOST_RS.contains("pub fn continue_post_turn_queue"));
     assert!(!CONTROL_PLANE_HOST_RS.contains("pub fn handle_post_turn_queue_continuation"));
 }

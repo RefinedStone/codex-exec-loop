@@ -455,6 +455,20 @@ pub(super) fn reduce_conversation_runtime(
     ConversationRuntimeReduction { state, effects }
 }
 
+pub(super) fn conversation_runtime_auto_prompt_queued(
+    effects: &[ConversationRuntimeEffect],
+) -> bool {
+    effects
+        .iter()
+        .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
+}
+
+pub(super) fn suppress_conversation_runtime_auto_prompt(
+    effects: &mut Vec<ConversationRuntimeEffect>,
+) {
+    effects.retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
+}
+
 fn prompt_origin_label(origin: &PromptOrigin) -> &'static str {
     match origin {
         PromptOrigin::Manual => "manual",

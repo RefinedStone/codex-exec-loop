@@ -103,15 +103,10 @@ where
     }
 }
 
-pub trait ParallelModePostTurnQueueContinuationTarget {
-    fn auto_follow_prompt_queued(&self) -> bool;
-    fn consume_auto_follow_prompt(&mut self);
-    fn record_auto_follow_parallel_dispatch(&mut self);
-}
-
-struct ParallelModePostTurnQueueContinuationResult {
-    consume_auto_follow_prompt: bool,
-    presentation_events: Vec<ParallelModeControlPlanePresentationEvent>,
+#[derive(Debug, Clone)]
+pub struct ParallelModePostTurnQueueContinuationOutcome {
+    pub auto_follow_prompt_consumed: bool,
+    pub presentation_events: Vec<ParallelModeControlPlanePresentationEvent>,
 }
 
 impl<S> ParallelModeControlPlaneController<S>
@@ -173,25 +168,17 @@ where
         self.last_dispatch_withheld_reason = None;
     }
 
-    pub fn continue_post_turn_queue<T>(
+    pub fn continue_post_turn_queue(
         &mut self,
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
-        continuation_target: &mut T,
-    ) -> Vec<ParallelModeControlPlanePresentationEvent>
-    where
-        T: ParallelModePostTurnQueueContinuationTarget,
-    {
-        let result = self.handle_post_turn_queue_continuation(
+        auto_follow_prompt_queued: bool,
+    ) -> ParallelModePostTurnQueueContinuationOutcome {
+        self.handle_post_turn_queue_continuation(
             workspace_directory,
             signal,
-            continuation_target.auto_follow_prompt_queued(),
-        );
-        if result.consume_auto_follow_prompt {
-            continuation_target.consume_auto_follow_prompt();
-            continuation_target.record_auto_follow_parallel_dispatch();
-        }
-        result.presentation_events
+            auto_follow_prompt_queued,
+        )
     }
 
     fn handle_post_turn_queue_continuation(
@@ -199,7 +186,7 @@ where
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
         auto_follow_prompt_queued: bool,
-    ) -> ParallelModePostTurnQueueContinuationResult {
+    ) -> ParallelModePostTurnQueueContinuationOutcome {
         let has_actionable_queue_head = self
             .effect_runner
             .has_actionable_queue_head(&workspace_directory);
@@ -218,8 +205,8 @@ where
             )
         });
         let presentation_events = self.drain_outcome(outcome);
-        ParallelModePostTurnQueueContinuationResult {
-            consume_auto_follow_prompt,
+        ParallelModePostTurnQueueContinuationOutcome {
+            auto_follow_prompt_consumed: consume_auto_follow_prompt,
             presentation_events,
         }
     }

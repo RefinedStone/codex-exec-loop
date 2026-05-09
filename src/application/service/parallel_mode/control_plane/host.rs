@@ -11,7 +11,7 @@ use super::controller::ParallelModeControlPlaneService;
 use super::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlanePresentationEvent,
-    ParallelModePostTurnQueueContinuationTarget,
+    ParallelModePostTurnQueueContinuationOutcome,
 };
 
 struct ParallelModeControlPlaneHost<S>
@@ -70,17 +70,17 @@ where
         self.service().handle_background_event(event)
     }
 
-    pub fn continue_post_turn_queue<T>(
+    pub fn continue_post_turn_queue(
         &self,
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
-        continuation_target: &mut T,
-    ) -> Vec<ParallelModeControlPlanePresentationEvent>
-    where
-        T: ParallelModePostTurnQueueContinuationTarget,
-    {
-        self.service()
-            .continue_post_turn_queue(workspace_directory, signal, continuation_target)
+        auto_follow_prompt_queued: bool,
+    ) -> ParallelModePostTurnQueueContinuationOutcome {
+        self.service().continue_post_turn_queue(
+            workspace_directory,
+            signal,
+            auto_follow_prompt_queued,
+        )
     }
 
     pub fn tick(

@@ -29,10 +29,9 @@ use super::parallel_mode_shell_command::{
     PARALLEL_MODE_SHELL_USAGE_TEXT, ParsedParallelModeShellCommand,
     parse_parallel_mode_shell_argument,
 };
-use super::post_turn_automation::TuiPostTurnQueueContinuationTarget;
 use super::{
-    ConversationInputEvent, ConversationRuntimeEffect, ConversationRuntimeEvent, NativeTuiApp,
-    ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
+    ConversationInputEvent, ConversationRuntimeEvent, NativeTuiApp, ParallelPanelStateController,
+    ParallelPanelUiEvent, ParallelPanelUiState,
 };
 
 impl NativeTuiApp {
@@ -394,19 +393,18 @@ impl NativeTuiApp {
 
     pub(super) fn apply_parallel_mode_post_turn_queue_continuation(
         &mut self,
-        effects: &mut Vec<ConversationRuntimeEffect>,
+        auto_follow_prompt_queued: bool,
         event_signal: Option<ParallelModePostTurnQueueSignal>,
-    ) {
+    ) -> bool {
         let workspace_directory = self.planning_workspace_directory();
         let control_plane = self.parallel_mode_control_plane.clone();
-        let mut continuation_target =
-            TuiPostTurnQueueContinuationTarget::new(effects, &mut self.conversation_state);
-        let events = control_plane.continue_post_turn_queue(
+        let outcome = control_plane.continue_post_turn_queue(
             workspace_directory,
             event_signal,
-            &mut continuation_target,
+            auto_follow_prompt_queued,
         );
-        self.apply_parallel_mode_control_plane_presentation_events(events);
+        self.apply_parallel_mode_control_plane_presentation_events(outcome.presentation_events);
+        outcome.auto_follow_prompt_consumed
     }
 
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {

@@ -1,8 +1,14 @@
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::parallel_mode::control_plane::ParallelModePostTurnQueueContinuationTarget;
+use crate::application::service::post_turn_decision::{
+    PostTurnAutoPromptRoute, PostTurnAutoPromptRouteRequest, PostTurnAutoPromptSuppressionReason,
+    decide_post_turn_auto_prompt_route,
+};
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 
-use super::conversation_runtime::ConversationPostTurnEvaluation;
+use super::conversation_runtime::{
+    ConversationPostTurnEvaluation, conversation_runtime_auto_prompt_queued,
+    suppress_conversation_runtime_auto_prompt,
+};
 use super::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, NativeTuiApp,
     PlanningWorkerPanelState,
@@ -18,42 +24,6 @@ pub(super) struct PostTurnAutomationBackgroundResult {
 pub(super) struct ConversationRuntimeAutomationContext {
     route_after_reduction: bool,
     parallel_mode_post_turn_queue_signal: Option<ParallelModePostTurnQueueSignal>,
-}
-
-pub(super) struct TuiPostTurnQueueContinuationTarget<'a> {
-    effects: &'a mut Vec<ConversationRuntimeEffect>,
-    conversation_state: &'a mut ConversationState,
-}
-
-impl<'a> TuiPostTurnQueueContinuationTarget<'a> {
-    pub(super) fn new(
-        effects: &'a mut Vec<ConversationRuntimeEffect>,
-        conversation_state: &'a mut ConversationState,
-    ) -> Self {
-        Self {
-            effects,
-            conversation_state,
-        }
-    }
-}
-
-impl ParallelModePostTurnQueueContinuationTarget for TuiPostTurnQueueContinuationTarget<'_> {
-    fn auto_follow_prompt_queued(&self) -> bool {
-        self.effects
-            .iter()
-            .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
-    }
-
-    fn consume_auto_follow_prompt(&mut self) {
-        self.effects
-            .retain(|effect| !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }));
-    }
-
-    fn record_auto_follow_parallel_dispatch(&mut self) {
-        if let ConversationState::Ready(conversation) = self.conversation_state {
-            conversation.record_auto_follow_parallel_dispatch();
-        }
-    }
 }
 
 impl NativeTuiApp {
@@ -97,19 +67,40 @@ impl NativeTuiApp {
         if !context.route_after_reduction {
             return;
         }
-        // A task-intake command can become executable only after the stream or
-        // post-turn evaluation settles planning state. When it fires, suppress the
-        // reducer's generic auto prompt to avoid double-submitting.
-        if self.execute_pending_task_intake_command_if_ready() {
-            effects.retain(|effect| {
-                !matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })
-            });
-            return;
+        let queued_auto_prompt_available = conversation_runtime_auto_prompt_queued(effects);
+        let pending_task_intake_executed = self.execute_pending_task_intake_command_if_ready();
+        let parallel_dispatch_consumed_auto_prompt = if pending_task_intake_executed {
+            false
+        } else {
+            self.apply_parallel_mode_post_turn_queue_continuation(
+                queued_auto_prompt_available,
+                context.parallel_mode_post_turn_queue_signal,
+            )
+        };
+        let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
+            queued_auto_prompt_available,
+            pending_task_intake_executed,
+            parallel_dispatch_consumed_auto_prompt,
+        });
+        self.apply_post_turn_auto_prompt_route(route, effects);
+    }
+
+    fn apply_post_turn_auto_prompt_route(
+        &mut self,
+        route: PostTurnAutoPromptRoute,
+        effects: &mut Vec<ConversationRuntimeEffect>,
+    ) {
+        if route.should_suppress_prompt() {
+            suppress_conversation_runtime_auto_prompt(effects);
         }
-        self.apply_parallel_mode_post_turn_queue_continuation(
-            effects,
-            context.parallel_mode_post_turn_queue_signal,
-        );
+        if matches!(
+            route,
+            PostTurnAutoPromptRoute::Suppress(
+                PostTurnAutoPromptSuppressionReason::ParallelDispatch
+            )
+        ) {
+            self.record_auto_follow_parallel_dispatch();
+        }
     }
 
     fn should_apply_post_turn_evaluation(&self, thread_id: &str, completed_turn_id: &str) -> bool {
@@ -124,6 +115,12 @@ impl NativeTuiApp {
     fn record_post_turn_evaluation_applied(&mut self, completed_turn_id: &str) {
         if let ConversationState::Ready(conversation) = &mut self.conversation_state {
             conversation.record_post_turn_evaluation_applied(completed_turn_id);
+        }
+    }
+
+    fn record_auto_follow_parallel_dispatch(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.record_auto_follow_parallel_dispatch();
         }
     }
 }

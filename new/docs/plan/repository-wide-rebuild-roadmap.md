@@ -42,51 +42,14 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 현재 구현된 것 | 아직 안 된 것 |
 | --- | --- | --- |
-| Parallel control-plane | TUI에서 `projection_ready`, refresh/reconcile, dispatch readiness, stale epoch 판단을 대부분 제거했다. | post-turn bridge에 auto-follow ownership이 남아 있다. control-plane은 queue actor가 아니라 mutex facade다. |
-| TUI boundary | shell state 일부와 parallel panel은 controller/projection으로 나뉘었다. | `NativeTuiApp`이 service wiring과 runtime bridge를 많이 들고 있다. `QueueAutoPrompt` ownership이 TUI에 남아 있다. |
+| Parallel control-plane | TUI에서 `projection_ready`, refresh/reconcile, dispatch readiness, stale epoch 판단을 대부분 제거했다. | control-plane은 queue actor가 아니라 mutex facade다. |
+| TUI boundary | shell state 일부와 parallel panel은 controller/projection으로 나뉘었다. | `NativeTuiApp`이 service wiring과 runtime bridge를 많이 들고 있다. |
 | Planning | projection/facade/domain policy seed가 있다. | post-turn executor와 TUI runtime bridge가 planning workflow를 직접 조합한다. 모든 route가 하나의 application command로 통일되지는 않았다. |
 | Inbound surfaces | CLI/admin/Telegram 일부 vocabulary가 공유된다. | route별로 같은 기능이 같은 application request/result를 쓰는지 재감사가 필요하다. |
 | Store/runtime | SQLite authority, runtime projection, mirror I/O boundary 일부가 정리됐다. | process-lifetime state와 durable recovery requirement를 기능별로 다시 판정해야 한다. |
 | Tests | regression anchor가 여럿 있다. | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
-
-### R2. Post-Turn Automation Effect Ownership 정리
-
-상태: `ready`
-
-대상:
-
-- `src/adapter/inbound/tui/app/post_turn_automation.rs`
-- `src/adapter/inbound/tui/app/conversation_runtime.rs`
-- `src/application/service/post_turn_decision.rs`
-- 필요 시 `src/application/service/parallel_mode/control_plane/*`
-
-문제:
-
-- TUI target이 `ConversationRuntimeEffect::QueueAutoPrompt`를 직접 검사하고 제거한다.
-- pending task-intake path도 generic auto prompt를 TUI에서 suppress한다.
-- post-turn continuation은 control-plane으로 올라갔지만 effect vector ownership은 TUI adapter에 있다.
-
-해야 할 일:
-
-- post-turn result를 application-level outcome으로 낮춘다.
-- TUI는 outcome을 local effect/rendering으로만 매핑한다.
-- auto prompt consume 여부와 parallel dispatch 기록을 application command/outcome으로 표현한다.
-
-완료 조건:
-
-- `post_turn_automation.rs`가 `QueueAutoPrompt` variant를 직접 retain/filter하지 않는다.
-- parallel continuation과 task-intake suppression이 같은 application outcome vocabulary를 사용한다.
-- duplicate submit 방지 regression이 통과한다.
-
-검증:
-
-```bash
-cargo test conversation_runtime
-cargo test post_turn
-cargo test shell_runtime
-```
 
 ### R3. NativeTuiApp Service Wiring 축소
 
@@ -207,7 +170,6 @@ cargo test planning
 
 선행:
 
-- R2
 - R3
 
 현재 판단:
@@ -217,7 +179,7 @@ cargo test planning
 
 해야 할 일:
 
-- R2-R3 이후에도 background completion ordering, backpressure, shutdown, stale event
+- R3 이후에도 background completion ordering, backpressure, shutdown, stale event
   문제가 남는지 측정한다.
 - 문제가 남으면 queue-backed single consumer loop 설계를 별도 slice로 작성한다.
 - 문제가 충분히 제어되면 mutex facade를 명시적 설계 선택으로 문서화한다.
