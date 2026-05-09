@@ -18,8 +18,14 @@ struct ParallelModeControlPlaneHost<S>
 where
     S: ParallelModeControlPlaneEventSink,
 {
-    // The host keeps the mutable controller behind one application-owned gate.
-    // Inbound adapters hold handles and cannot reach the raw controller/service.
+    /*
+     * R6 decision: this is intentionally a synchronous mutex-serialized facade,
+     * not a mailbox-backed actor loop. Runtime behavior tests cover the current
+     * ordering contract: in-flight effects gate new work, wakes are coalesced,
+     * and stale completions are dropped by epoch before UI effects are emitted.
+     * Durable dispatch commands remain the backpressure boundary. Do not add a
+     * second queue actor unless those regressions stop covering real failures.
+     */
     service: Mutex<ParallelModeControlPlaneService<S>>,
 }
 

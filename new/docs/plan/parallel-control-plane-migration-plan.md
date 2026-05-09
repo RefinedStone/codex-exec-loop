@@ -13,10 +13,17 @@
 이 계획의 핵심 목표는 세 가지다.
 
 ```text
-1. parallel/supersession 상태 변경은 application single-writer loop로 모은다.
+1. parallel/supersession 상태 변경은 application single-writer gate로 모은다.
 2. dispatch, retry, stale epoch, capacity 판단은 domain decision으로 내린다.
 3. TUI는 operator intent와 presentation state만 가진다.
 ```
+
+R6 결정: 지금은 queue-backed actor loop로 전환하지 않는다. 현재 구조는
+`ParallelModeControlPlaneHandle`이 mutex로 `ParallelModeControlPlaneRuntime` 진입을
+직렬화하는 synchronous facade다. 이 선택은 임시 미완성이 아니라 현재 설계 선택이다.
+ordering, coalescing/backpressure, stale completion drop은 runtime regression으로
+유지한다. 별도 mailbox actor는 이 regression으로 제어되지 않는 실패가 확인될 때
+새 slice로 다시 설계한다.
 
 ## 현재 문제를 구현 관점에서 다시 정의
 
@@ -43,13 +50,13 @@
 ```text
 TUI / CLI / Admin / Telegram
   -> ParallelModeControlPlaneCommand
-  -> Application single-writer runtime
+  -> Application single-writer gate
   -> repository/load durable control-plane snapshot
   -> domain aggregate decision
   -> repository/save durable change
   -> effect runner
   -> ParallelModeControlPlaneEvent
-  -> same single-writer runtime
+  -> same single-writer gate
   -> projection update
   -> inbound adapter renders/returns response
 ```
@@ -62,7 +69,7 @@ TUI / CLI / Admin / Telegram
 | `ParallelModeControlPlaneEvent` | `src/application/service/parallel_mode` | worker/effect 완료 후 runtime으로 돌아오는 사실 |
 | `ParallelModeControlPlaneAggregate` | `src/domain/parallel_mode` | durable snapshot과 입력을 받아 decision 생성 |
 | `ParallelModeControlPlaneDecision` | `src/domain/parallel_mode` | 저장 변경과 실행할 effect를 구조화 |
-| `ParallelModeControlPlaneRuntime` | `src/application/service/parallel_mode` | command/event 직렬 처리, runtime store, effect scheduling |
+| `ParallelModeControlPlaneRuntime` | `src/application/service/parallel_mode` | command/event reduce, runtime store, effect scheduling |
 | `ParallelModeControlPlaneProjection` | `Application Projection` | TUI/Admin이 읽는 현재 상태 |
 | `ParallelPanelStateController` | `src/adapter/inbound/tui/app/parallel_mode` | overlay, cursor, prompt lock, loading 표시만 관리 |
 
@@ -88,7 +95,7 @@ TUI/Admin/CLI가 읽는 이름은 하나로 유지한다.
 | board selection/cursor | TUI app state | TUI controller | domain/application으로 올리지 않는다. |
 | prompt lock 표시 | TUI app state | TUI controller | lock 원인은 Application Projection에서 읽되, 표시 상태는 TUI가 가진다. |
 | dispatch command | SQLite authority runtime projection | durable repository/store | 기존 `PlanningAuthorityPort` 경로를 유지한다. |
-| slot lease | lease file + SQLite projection | durable repository/store | load/save 경로는 single-writer loop에서만 호출한다. |
+| slot lease | lease file + SQLite projection | durable repository/store | load/save 경로는 single-writer gate에서만 호출한다. |
 | session detail | runtime projection | durable repository/store | worker stream event가 직접 UI를 고치지 않게 한다. |
 | wake coalescing | `ParallelModeControlPlaneRuntime`, durable dispatch command poll bridge | application runtime store | process-lifetime state이므로 DB에 저장하지 않는다. durable dispatch command는 별도 authority projection이다. |
 | effect id/epoch | `ParallelModeControlPlaneRuntime` | application runtime store | `STORE-00D`에서 TUI field owner를 제거했다. stale completion drop의 기준이다. |
@@ -118,13 +125,16 @@ domain은 다음을 하면 안 된다.
 
 application runtime은 다음을 소유한다.
 
-- command/event inbox
-- single-writer loop
+- command/event entrypoint
+- single-writer gate
 - process-lifetime runtime store
 - durable repository load/save 순서
 - effect runner 호출
-- worker completion event 재주입
+- worker completion event 재진입
 - projection invalidation
+
+현재 single-writer gate는 mailbox inbox가 아니라 mutex facade다. 따라서 `mpsc` channel
+소유는 목표가 아니며, command queue가 필요해지는지는 별도 R-slice에서 다시 판단한다.
 
 application runtime은 business rule을 직접 키우면 안 된다. `if pending && idle > 0`
 같은 분기가 커지면 domain decision으로 내려야 한다.

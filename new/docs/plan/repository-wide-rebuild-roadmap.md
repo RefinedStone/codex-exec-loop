@@ -42,35 +42,105 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| Parallel control-plane | control-plane은 아직 queue actor가 아니라 mutex facade다. |
+| Control-plane bypass | 일부 surface가 아직 `ParallelModeService`를 직접 받아 control-plane gate를 우회할 수 있다. |
 | TUI boundary | TUI production state에 raw application service handle debt가 남아 있다. |
 | Inbound composition | CLI/admin/Telegram/TUI entrypoint가 production outbound adapter wiring을 아직 직접 들고 있다. |
 | Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
 
-### R6. Control-Plane Event Loop 전환 여부 결정
+### R7. Parallel Control-Plane Bypass 제거
 
 상태: `ready`
 
-현재 판단:
+결정:
 
-- 지금 구조는 queue-backed actor loop가 아니라 mutex-serialized synchronous facade다.
-- recoverable state와 process-lifetime state의 경계는 R5에서 확정했다.
-- 이제 남은 판단은 synchronous mutex facade를 유지할지, queue-backed single consumer loop로
-  바꿀지이다.
+- R6에서 queue-backed actor loop 전환은 보류했다.
+- 현재 선택은 mutex-serialized synchronous facade다.
+- 따라서 다음 문제는 actor loop 부재가 아니라 raw `ParallelModeService` bypass다.
+
+대상:
+
+- `src/application/service/parallel_mode/control_plane/composition.rs`
+- `src/application/service/parallel_mode/control_plane/controller.rs`
+- `src/adapter/inbound/tui/app/app_runtime.rs`
+- `src/adapter/inbound/tui/app/parallel_mode.rs`
 
 해야 할 일:
 
-- R3 이후에도 background completion ordering, backpressure, shutdown, stale event
-  문제가 남는지 측정한다.
-- 문제가 남으면 queue-backed single consumer loop 설계를 별도 slice로 작성한다.
-- 문제가 충분히 제어되면 mutex facade를 명시적 설계 선택으로 문서화한다.
+- production inbound surface가 parallel control-plane handle을 우회하지 못하게 한다.
+- manual orchestrator tick도 control-plane command/effect 경로로 들어가게 한다.
+- controller가 command 구성 중 low-level queue query를 직접 호출하는 지점을 좁힌다.
+- TUI parallel binding에서 raw service accessor를 제거한다.
 
 완료 조건:
 
-- actor loop 필요 여부가 구현 근거와 regression으로 결정된다.
-- 선택한 구조가 `parallel-control-plane-architecture.md`와 충돌하면 해당 parallel 기준 문서를 갱신한다.
+- `temporary_parallel_control_surfaces_no_longer_bypass_control_plane_gate`가 통과한다.
+- 기존 `parallel_mode` regression이 통과한다.
+
+### R8. TUI Raw Application Service Handle 축소
+
+상태: `ready`
+
+대상:
+
+- `src/adapter/inbound/tui/app.rs`
+- `src/adapter/inbound/tui/app/app_runtime.rs`
+- `src/adapter/inbound/tui/app/*controller*`
+
+해야 할 일:
+
+- TUI production state가 raw application service를 직접 들고 있는 범위를 좁힌다.
+- TUI가 필요한 것은 UI state, projection cache, narrow application handle뿐으로 만든다.
+- startup/session/conversation/planning/parallel 경계별로 작은 handle을 구성한다.
+
+완료 조건:
+
+- `temporary_tui_raw_application_services_have_been_wrapped`가 통과한다.
+- TUI flow regression이 통과한다.
+
+### R9. Production Composition Wiring 중앙화
+
+상태: `ready`
+
+대상:
+
+- `src/adapter/inbound/cli.rs`
+- `src/adapter/inbound/admin_api/mod.rs`
+- `src/adapter/inbound/telegram_bot/mod.rs`
+- `src/adapter/inbound/tui/app/shell_entrypoint.rs`
+- application composition module
+
+해야 할 일:
+
+- production outbound adapter wiring을 inbound entrypoint에서 application composition으로 올린다.
+- inbound adapter는 auth/context mapping과 command invocation만 남긴다.
+- GitHub polling처럼 TUI edge에 남은 adapter 생성도 application-facing handle로 감싼다.
+
+완료 조건:
+
+- `inbound_adapters_do_not_depend_on_outbound_implementations`의 temporary allowance를 줄이거나 제거한다.
+- CLI/admin/Telegram/TUI smoke regression이 통과한다.
+
+### R10. Architecture Guard를 Behavior Regression으로 보강
+
+상태: `ready`
+
+대상:
+
+- `tests/architecture_boundaries.rs`
+- parallel/planning/TUI flow tests
+
+해야 할 일:
+
+- source-string guard가 실제 behavior regression 없이 정책만 잡는 곳을 분류한다.
+- 새 구조 slice마다 behavior test를 먼저 추가하고 source guard는 보조 안전망으로 낮춘다.
+- 남길 source guard는 directory dependency, public field 노출, raw adapter import처럼 정적 검사가 더 정확한 항목으로 제한한다.
+
+완료 조건:
+
+- 남은 source guard마다 behavior test로 대체하지 않는 이유가 test 이름 또는 comment에 드러난다.
+- R7-R9에서 제거된 debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
 
 ## 문서 운영 규칙
 

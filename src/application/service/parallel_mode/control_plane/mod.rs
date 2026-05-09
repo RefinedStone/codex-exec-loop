@@ -1797,6 +1797,43 @@ mod tests {
     }
 
     #[test]
+    fn synchronous_mutex_facade_covers_ordering_backpressure_and_stale_completion() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        let enabled = runtime.handle(enable("/repo"));
+        let entry_id = only_effect(&enabled)
+            .effect_id()
+            .expect("entry effect should have id");
+
+        for _ in 0..3 {
+            assert!(runtime.handle(wake("/repo", 1)).effects.is_empty());
+        }
+
+        let run_after_entry = runtime.handle(completed("/repo", 1, entry_id));
+        let run_id = only_effect(&run_after_entry)
+            .effect_id()
+            .expect("run effect should have id");
+
+        for _ in 0..3 {
+            assert!(runtime.handle(wake("/repo", 1)).effects.is_empty());
+        }
+
+        let disabled = runtime.handle(ParallelModeControlPlaneCommand::Disable {
+            workspace_directory: "/repo".to_string(),
+        });
+        assert!(matches!(
+            disabled.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::CancelDispatchCommands { .. }]
+        ));
+
+        let stale_completion = runtime.handle(completed("/repo", 1, run_id));
+        assert!(stale_completion.effects.is_empty());
+        assert!(matches!(
+            stale_completion.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { epoch_id: 1, .. }]
+        ));
+    }
+
+    #[test]
     fn orchestrator_tick_tracks_signature_and_drains_queued_wake() {
         let mut runtime = ParallelModeControlPlaneRuntime::new();
         runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {

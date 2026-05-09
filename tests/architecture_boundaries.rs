@@ -72,39 +72,21 @@ const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[
     },
 ];
 
-const PARALLEL_CONTROL_PLANE_HOST_EVENT_LOOP_DEBTS: &[PatternDebtRule] = &[
-    PatternDebtRule {
-        path_suffix: "src/application/service/parallel_mode/control_plane/host.rs",
-        pattern: "Mutex<ParallelModeControlPlaneService",
-        reason: "control-plane host still protects a mutable service with a mutex instead of owning a mailbox/event loop.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/application/service/parallel_mode/control_plane/host.rs",
-        pattern: "MutexGuard<'_, ParallelModeControlPlaneService",
-        reason: "handle calls still borrow the raw service synchronously instead of enqueueing commands.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/application/service/parallel_mode/control_plane/host.rs",
-        pattern: ".lock()",
-        reason: "command processing is still caller-thread locking, not single loop ownership.",
-    },
-];
-
 const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     PatternDebtRule {
         path_suffix: "src/application/service/parallel_mode/control_plane/composition.rs",
         pattern: "pub fn parallel_mode_service(",
-        reason: "composition still exposes the raw ParallelModeService, allowing callers to bypass the control-plane handle.",
+        reason: "composition still exposes the raw ParallelModeService, allowing callers to bypass the control-plane gate.",
     },
     PatternDebtRule {
         path_suffix: "src/application/service/parallel_mode/control_plane/composition.rs",
         pattern: ".run_orchestrator_tick(",
-        reason: "manual orchestrator ticks still call ParallelModeService directly instead of enqueueing a control-plane command.",
+        reason: "manual orchestrator ticks still call ParallelModeService directly instead of entering through a control-plane command.",
     },
     PatternDebtRule {
         path_suffix: "src/application/service/parallel_mode/control_plane/controller.rs",
         pattern: ".has_actionable_queue_head(",
-        reason: "controller still queries queue state while building a command instead of receiving all state through loop events/effects.",
+        reason: "controller still queries queue state while building a command instead of receiving all state through control-plane effects.",
     },
     PatternDebtRule {
         path_suffix: "src/adapter/inbound/tui/app/app_runtime.rs",
@@ -114,7 +96,7 @@ const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     PatternDebtRule {
         path_suffix: "src/adapter/inbound/tui/app/parallel_mode.rs",
         pattern: "fn parallel_mode_service(",
-        reason: "TUI parallel binding still exposes raw service access, which should disappear behind the event-loop handle.",
+        reason: "TUI parallel binding still exposes raw service access, which should disappear behind the control-plane handle.",
     },
 ];
 
@@ -363,22 +345,11 @@ fn temporary_tui_raw_application_services_have_been_wrapped() {
 }
 
 #[test]
-fn temporary_parallel_control_plane_host_has_been_moved_to_mailbox_event_loop() {
-    let debts = collect_pattern_debts(PARALLEL_CONTROL_PLANE_HOST_EVENT_LOOP_DEBTS);
-
-    assert!(
-        debts.is_empty(),
-        "temporary parallel event-loop debt remains. Control-plane host should become a mailbox-owned event loop:\n{}",
-        format_temporary_debts(&debts)
-    );
-}
-
-#[test]
 fn temporary_parallel_runtime_store_has_been_made_private_to_single_writer() {
     let debts = collect_public_fields_in_struct(
         "src/application/service/parallel_mode/control_plane/mod.rs",
         "ParallelModeControlPlaneRuntimeStore",
-        "runtime store fields are still public; single-writer event-loop state should be private and mutated only by the loop/runtime.",
+        "runtime store fields are still public; single-writer gate state should be private and mutated only by the runtime.",
     );
 
     assert!(
@@ -389,12 +360,34 @@ fn temporary_parallel_runtime_store_has_been_made_private_to_single_writer() {
 }
 
 #[test]
-fn temporary_parallel_control_surfaces_no_longer_bypass_event_loop() {
+fn parallel_control_plane_host_uses_explicit_synchronous_single_writer_gate() {
+    let repo_root = repo_root();
+    let host_path = repo_root.join("src/application/service/parallel_mode/control_plane/host.rs");
+    let source = fs::read_to_string(&host_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", host_path.display());
+    });
+
+    assert!(
+        source.contains("R6 decision: this is intentionally a synchronous mutex-serialized facade"),
+        "control-plane host must document the R6 mutex-facade decision"
+    );
+    assert!(
+        source.contains("Mutex<ParallelModeControlPlaneService"),
+        "control-plane host must keep one application-owned synchronous gate"
+    );
+    assert!(
+        !source.contains("mpsc::") && !source.contains("tokio::sync::mpsc"),
+        "R6 keeps the control-plane host synchronous; do not add a mailbox actor in this slice"
+    );
+}
+
+#[test]
+fn temporary_parallel_control_surfaces_no_longer_bypass_control_plane_gate() {
     let debts = collect_pattern_debts(PARALLEL_CONTROL_PLANE_BYPASS_DEBTS);
 
     assert!(
         debts.is_empty(),
-        "temporary parallel control-surface debt remains. Parallel control should enter through commands and loop-owned effects only:\n{}",
+        "temporary parallel control-surface debt remains. Parallel control should enter through commands and gate-owned effects only:\n{}",
         format_temporary_debts(&debts)
     );
 }
