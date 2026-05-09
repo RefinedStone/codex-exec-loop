@@ -3,11 +3,10 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneRuntime,
+    ParallelModeService, control_plane::ParallelModeControlPlaneController,
 };
 use crate::application::service::planning::PlanningExecutionSnapshot;
 use crate::application::service::planning::PlanningServices;
@@ -18,9 +17,7 @@ use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
 };
-use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
-};
+use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
@@ -151,7 +148,7 @@ mod turn_submission_runtime;
 // composition root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
-use app_runtime::BackgroundMessage;
+use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
 use auto_follow_controls::{
     AutoFollowControlEffect, AutoFollowControlEvent, reduce_auto_follow_controls,
 };
@@ -311,9 +308,8 @@ struct NativeTuiApp {
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     supersession_mud_ui_state: SupersessionMudUiState,
-    parallel_mode_control_plane_runtime: ParallelModeControlPlaneRuntime,
-    last_parallel_mode_automation_trigger: Option<ParallelModeAutomationTrigger>,
-    last_parallel_mode_dispatch_withheld_reason: Option<String>,
+    parallel_mode_control_plane_controller:
+        ParallelModeControlPlaneController<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
@@ -327,7 +323,6 @@ struct NativeTuiApp {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
-    parallel_agent_worker_port: std::sync::Arc<dyn ParallelAgentWorkerPort>,
     turn_control_truth: ConversationRuntimeControlTruth,
     parallel_mode_service: ParallelModeService,
     planning: PlanningServices,

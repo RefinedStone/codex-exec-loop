@@ -23,8 +23,6 @@ pub(super) struct ShellRuntime {
     should_quit: bool,
     frame_scheduler: TuiFrameScheduler,
     last_live_activity_pulse: Option<u64>,
-    last_parallel_supervisor_refresh_at: Option<Instant>,
-    last_parallel_orchestrator_wake_poll_at: Option<Instant>,
     background_drain_limited: bool,
 }
 
@@ -36,8 +34,6 @@ impl ShellRuntime {
             should_quit: false,
             frame_scheduler: TuiFrameScheduler::new(now),
             last_live_activity_pulse: None,
-            last_parallel_supervisor_refresh_at: None,
-            last_parallel_orchestrator_wake_poll_at: None,
             background_drain_limited: false,
         }
     }
@@ -185,17 +181,7 @@ impl ShellRuntime {
             redraw_requested = true;
         }
         self.last_live_activity_pulse = live_activity_pulse;
-        if self.parallel_supervisor_refresh_due(now) {
-            self.app.invalidate_parallel_mode_supervisor_snapshot();
-            self.last_parallel_supervisor_refresh_at = Some(now);
-            redraw_requested = true;
-        }
-        if self.parallel_orchestrator_wake_poll_due(now) {
-            self.last_parallel_orchestrator_wake_poll_at = Some(now);
-            redraw_requested |= self
-                .app
-                .maybe_wake_parallel_mode_orchestrator_for_pending_command();
-        }
+        redraw_requested |= self.app.tick_parallel_mode_control_plane(now);
         if redraw_requested {
             self.request_redraw_at(now);
         } else if live_activity_pulse.is_some() {
@@ -211,27 +197,6 @@ impl ShellRuntime {
         }
         let mut stdout = std::io::stdout();
         let _ = execute!(stdout, Print("\x07"));
-    }
-
-    fn parallel_supervisor_refresh_due(&self, now: Instant) -> bool {
-        if self.app.parallel_mode_control_effect_in_flight() {
-            return false;
-        }
-        if !self.app.parallel_mode_activity_pulse_visible() {
-            return false;
-        }
-
-        self.last_parallel_supervisor_refresh_at
-            .is_none_or(|last_refresh| now.duration_since(last_refresh) >= Duration::from_secs(1))
-    }
-
-    fn parallel_orchestrator_wake_poll_due(&self, now: Instant) -> bool {
-        if self.app.parallel_mode_control_effect_in_flight() {
-            return false;
-        }
-
-        self.last_parallel_orchestrator_wake_poll_at
-            .is_none_or(|last_poll| now.duration_since(last_poll) >= Duration::from_secs(1))
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: Event) {

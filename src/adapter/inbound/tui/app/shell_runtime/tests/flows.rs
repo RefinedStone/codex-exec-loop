@@ -1068,7 +1068,10 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
             .is_some()
     );
     assert_eq!(
-        harness.runtime.app().last_parallel_mode_automation_trigger,
+        harness
+            .runtime
+            .app()
+            .last_parallel_mode_automation_trigger(),
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
     );
     assert_eq!(harness.worker_port.launch_count(), 1);

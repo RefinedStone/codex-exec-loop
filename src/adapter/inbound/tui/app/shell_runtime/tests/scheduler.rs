@@ -166,10 +166,22 @@ fn active_supersession_supervisor_refreshes_periodically() {
         ));
     let now = Instant::now();
 
-    assert!(runtime.parallel_supervisor_refresh_due(now));
+    assert!(
+        runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now)
+    );
     runtime.poll_background_messages_at(now);
-    assert!(!runtime.parallel_supervisor_refresh_due(now + Duration::from_millis(999)));
-    assert!(runtime.parallel_supervisor_refresh_due(now + Duration::from_secs(1)));
+    assert!(
+        !runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now + Duration::from_millis(999))
+    );
+    assert!(
+        runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now + Duration::from_secs(1))
+    );
 }
 
 #[test]
@@ -212,7 +224,11 @@ fn blocked_supersession_pool_refreshes_periodically() {
         ));
     let now = Instant::now();
 
-    assert!(runtime.parallel_supervisor_refresh_due(now));
+    assert!(
+        runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now)
+    );
     assert!(runtime.app().live_activity_pulse(now).is_some());
 }
 
@@ -248,8 +264,16 @@ fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
         ));
     let now = Instant::now();
 
-    assert!(!runtime.parallel_supervisor_refresh_due(now));
-    assert!(!runtime.parallel_supervisor_refresh_due(now + Duration::from_secs(5)));
+    assert!(
+        !runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now)
+    );
+    assert!(
+        !runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now + Duration::from_secs(5))
+    );
 }
 
 #[test]
@@ -270,5 +294,9 @@ fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
         ));
     let now = Instant::now();
 
-    assert!(!runtime.parallel_supervisor_refresh_due(now));
+    assert!(
+        !runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_for_test(now)
+    );
 }
