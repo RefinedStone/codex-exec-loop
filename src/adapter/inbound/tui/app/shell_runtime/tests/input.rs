@@ -6,6 +6,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
     QueuedAutoPrompt,
 };
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -74,7 +75,7 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -108,7 +109,7 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -146,7 +147,7 @@ fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finis
         &runtime.app().current_workspace_directory(),
     ));
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -235,7 +236,7 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
         None,
     );
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot = Some(snapshot.clone());
     runtime.take_redraw_request();
 
@@ -326,7 +327,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
         )
     };
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot = Some(build_snapshot("running"));
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
         KeyCode::Down,
@@ -340,12 +341,14 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
-            workspace_directory,
-            epoch_id,
-            effect_id,
-            supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
-        })
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+            ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
+            },
+        ))
         .expect("supervisor refresh should enqueue");
     runtime.poll_background_messages();
 
@@ -364,16 +367,16 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
 }
 
 #[test]
-fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
+fn parallel_task_update_after_enable_reuses_existing_epoch_for_dispatch() {
     /*
-     * Task intake before a successful :parallel entry is data-plane intake only.
-     * It can populate the accepted queue, but it must not start the first
-     * parallel automation epoch or queue a worker dispatch.
+     * Enable is the single application command for :parallel entry and opens the
+     * automation epoch before async readiness/pool work returns. Later task
+     * updates reuse that epoch instead of creating a second entry path.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_readiness_snapshot =
         Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
     runtime.app_mut().parallel_mode_supervisor_snapshot =
@@ -392,8 +395,8 @@ fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
         .refresh_parallel_mode_dispatch_after_task_update("task-added");
 
     assert!(
-        runtime.app().parallel_mode_automation_epoch_id().is_none(),
-        "task update must not open the first automation epoch"
+        runtime.app().parallel_mode_automation_epoch_id().is_some(),
+        "enabled parallel mode should already own the automation epoch"
     );
     assert_eq!(
         runtime.app().last_parallel_mode_automation_trigger,
@@ -403,8 +406,7 @@ fn parallel_task_update_before_epoch_is_withheld_without_launching_dispatch() {
         runtime
             .app()
             .last_parallel_mode_dispatch_withheld_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("before a parallel automation epoch opened"))
+            .is_none()
     );
 }
 
@@ -461,7 +463,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     let fixture = make_dispatch_ready_parallel_runtime("post-turn-parallel-dispatch");
     let mut runtime = fixture.runtime;
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_readiness_snapshot =
         Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
     runtime.app_mut().parallel_mode_supervisor_snapshot =
@@ -560,7 +562,7 @@ fn supersession_uses_planning_workspace_snapshot_after_loading_finishes() {
     conversation.draft_workspace_directory = planning_workspace.clone();
     conversation.cwd = planning_workspace.clone();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -596,7 +598,7 @@ fn supervisor_invalidation_keeps_cached_board_visible() {
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -631,7 +633,7 @@ fn supersession_active_worker_requests_live_pulse() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -677,7 +679,7 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -742,7 +744,7 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
         &runtime.app().current_workspace_directory(),
     ));
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,

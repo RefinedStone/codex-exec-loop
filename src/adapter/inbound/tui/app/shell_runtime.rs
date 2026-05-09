@@ -152,6 +152,10 @@ impl ShellRuntime {
                 BackgroundMessage::InvalidateParallelModeSupervisorSnapshot => {
                     self.app.invalidate_parallel_mode_supervisor_snapshot();
                 }
+                BackgroundMessage::ParallelModeControlPlaneEvent(event) => {
+                    self.app
+                        .apply_parallel_mode_control_plane_background_event(event);
+                }
                 BackgroundMessage::WakeParallelModeOrchestrator {
                     workspace_directory,
                     trigger,
@@ -161,80 +165,6 @@ impl ShellRuntime {
                         workspace_directory,
                         trigger,
                         epoch_id,
-                    );
-                }
-                BackgroundMessage::ParallelModeEnterProgress {
-                    workspace_directory,
-                    readiness_snapshot,
-                    supervisor_snapshot,
-                    status_text,
-                } => {
-                    self.app.apply_parallel_mode_enter_progress(
-                        &workspace_directory,
-                        readiness_snapshot,
-                        *supervisor_snapshot,
-                        status_text,
-                    );
-                }
-                BackgroundMessage::ParallelModeEntered {
-                    workspace_directory,
-                    readiness_snapshot,
-                    supervisor_snapshot,
-                    status_text,
-                    initial_pool_reset_completed,
-                } => {
-                    self.app.apply_parallel_mode_entered(
-                        &workspace_directory,
-                        readiness_snapshot,
-                        *supervisor_snapshot,
-                        status_text,
-                        initial_pool_reset_completed,
-                    );
-                }
-                BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {
-                    workspace_directory,
-                    epoch_id,
-                    effect_id,
-                    supervisor_snapshot,
-                } => {
-                    self.app.apply_parallel_mode_supervisor_snapshot_refreshed(
-                        &workspace_directory,
-                        epoch_id,
-                        effect_id,
-                        *supervisor_snapshot,
-                    );
-                }
-                BackgroundMessage::ParallelModeOrchestratorWakeCompleted {
-                    workspace_directory,
-                    effect_id,
-                    readiness_snapshot,
-                    supervisor_snapshot,
-                    outcome,
-                } => {
-                    self.app.apply_parallel_mode_orchestrator_wake_completed(
-                        &workspace_directory,
-                        effect_id,
-                        readiness_snapshot,
-                        *supervisor_snapshot,
-                        outcome,
-                    );
-                }
-                BackgroundMessage::ParallelModeWorkerEvent(event) => {
-                    self.app.apply_parallel_mode_worker_event(event);
-                }
-                BackgroundMessage::ParallelModeOrchestratorTickCompleted {
-                    workspace_directory,
-                    epoch_id,
-                    effect_id,
-                    blocked,
-                    notices,
-                } => {
-                    self.app.apply_parallel_mode_orchestrator_tick_completed(
-                        &workspace_directory,
-                        epoch_id,
-                        effect_id,
-                        blocked,
-                        notices,
                     );
                 }
                 BackgroundMessage::PostTurnEvaluated {

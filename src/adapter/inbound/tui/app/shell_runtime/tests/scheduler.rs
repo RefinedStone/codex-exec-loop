@@ -131,7 +131,7 @@ fn active_supersession_supervisor_refreshes_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -177,7 +177,7 @@ fn blocked_supersession_pool_refreshes_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
@@ -221,7 +221,7 @@ fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
         .app_mut()
         .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
@@ -257,7 +257,7 @@ fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().parallel_mode_enabled = true;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime.app_mut().parallel_mode_supervisor_snapshot =
         Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,

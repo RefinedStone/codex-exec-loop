@@ -7,10 +7,11 @@ use super::{
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandState, ParallelModeDispatchOutcome,
     ParallelModeDispatchTaskCandidate, ParallelModeLiveSessionDetailDefaults,
     ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetScope, ParallelModePoolSlotCleanupDecision, ParallelModePoolSlotState,
-    ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry, ParallelModeRuntimeEventsSnapshot,
-    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
+    ParallelModePoolResetPolicy, ParallelModePoolResetScope, ParallelModePoolSlotCleanupDecision,
+    ParallelModePoolSlotState, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorState,
 };
 
 // readiness 집계의 최우선 안전 규칙을 고정한다. 하나라도 Blocked가 있으면 다른
@@ -120,6 +121,45 @@ fn supervisor_state_recovers_when_enabled_readiness_blocks_parallel_mode() {
         ParallelModeSupervisorState::derive(false, Some(&readiness)),
         ParallelModeSupervisorState::Prepare
     );
+}
+
+#[test]
+fn control_plane_entry_decision_selects_initial_reset_policy_in_domain() {
+    let initial_entry =
+        ParallelModeOrchestratorStateMachine::decide_parallel_entry(false, true, true);
+    let guarded_reentry =
+        ParallelModeOrchestratorStateMachine::decide_parallel_entry(false, true, false);
+    let already_enabled =
+        ParallelModeOrchestratorStateMachine::decide_parallel_entry(true, true, false);
+    let readiness_blocked =
+        ParallelModeOrchestratorStateMachine::decide_parallel_entry(false, false, true);
+
+    assert_eq!(
+        initial_entry.plan.state,
+        ParallelModeOrchestratorState::PoolResetting
+    );
+    assert_eq!(
+        initial_entry.plan.reset_scope,
+        Some(ParallelModePoolResetScope::PoolOnly)
+    );
+    assert_eq!(
+        initial_entry.reset_policy,
+        Some(ParallelModePoolResetPolicy::ForceDisposable)
+    );
+    assert_eq!(
+        guarded_reentry.reset_policy,
+        Some(ParallelModePoolResetPolicy::ProtectLive)
+    );
+    assert_eq!(
+        already_enabled.plan.state,
+        ParallelModeOrchestratorState::Supervising
+    );
+    assert!(already_enabled.reset_policy.is_none());
+    assert_eq!(
+        readiness_blocked.plan.state,
+        ParallelModeOrchestratorState::ReadinessBlocked
+    );
+    assert!(readiness_blocked.reset_policy.is_none());
 }
 
 // parallel entry state machine은 `:parallel`을 off -> on으로 진입할 때만 pool reset을

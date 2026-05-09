@@ -1,4 +1,5 @@
 use super::*;
+use crate::adapter::inbound::tui::app::ConversationInputEvent;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
@@ -6,7 +7,9 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEffectKind,
     ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
 };
 use crate::application::service::planning::task_tool::{
@@ -511,13 +514,16 @@ impl NativeFlowHarness {
     }
 
     fn apply_ready_entered_snapshot(&mut self, status_text: &str) {
-        self.runtime.app_mut().apply_parallel_mode_entered(
-            &self.workspace_dir,
-            ready_parallel_mode_readiness_snapshot(&self.workspace_dir),
-            ready_parallel_mode_supervisor_snapshot(&self.workspace_dir),
-            status_text.to_string(),
-            false,
-        );
+        let readiness_snapshot = ready_parallel_mode_readiness_snapshot(&self.workspace_dir);
+        let supervisor_snapshot = ready_parallel_mode_supervisor_snapshot(&self.workspace_dir);
+        let app = self.runtime.app_mut();
+        app.set_parallel_mode_enabled_for_test(true);
+        app.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
+        app.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: status_text.to_string(),
+        });
+        app.maybe_wake_parallel_mode_orchestrator_for_pending_command();
     }
 
     fn poll_until_status_contains(&mut self, expected: &str) -> String {
@@ -854,7 +860,7 @@ fn parallel_command_from_initial_screen_enables_ready_mode() {
     harness.enter_parallel();
 
     let final_status = harness.poll_until_status_contains("control tower ready");
-    assert!(harness.runtime.app().parallel_mode_enabled);
+    assert!(harness.runtime.app().parallel_mode_enabled());
     assert!(final_status.contains("parallel mode: on"));
 }
 
@@ -986,7 +992,6 @@ fn repeated_parallel_entry_while_enabled_does_not_duplicate_worker_for_same_read
     harness.poll_until_worker_streams_active(1);
 
     harness.enter_parallel();
-    harness.poll_until_status_contains("control tower ready");
     for _ in 0..25 {
         harness.runtime.poll_background_messages();
         thread::sleep(Duration::from_millis(20));
@@ -1020,7 +1025,10 @@ fn parallel_reentry_while_enabled_refreshes_without_reset_or_dispatch() {
             ),
         )
         .expect("existing slot lease should be acquired");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness
         .runtime
         .app_mut()
@@ -1043,7 +1051,10 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-post-turn-dispatch");
     harness.committed_ready_task("dispatch one worker after main turn");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );
@@ -1119,7 +1130,10 @@ fn post_turn_dispatch_launches_all_idle_slots_concurrently() {
     .map(|prompt| harness.committed_ready_task(prompt).committed_task_id)
     .collect::<Vec<_>>();
     let _release_guard = harness.worker_port.hold_worker_streams();
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );
@@ -1195,7 +1209,10 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-parallel-completion-dispatch");
     harness.committed_ready_task("dispatch after parallel completion leaves ready head");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );
@@ -1228,7 +1245,10 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
 fn parallel_completion_with_drained_queue_alerts_without_dispatching() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-parallel-completion-drained");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );
@@ -1277,7 +1297,10 @@ fn pending_durable_dispatch_command_polls_without_visible_activity_pulse() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-pending-dispatch-command-poll");
     let commit = harness.committed_ready_task("pending durable command should dispatch");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );
@@ -1317,7 +1340,10 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-dispatch-coalesce");
     harness.committed_ready_task("coalesce dispatch while supervisor loads");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = None;
     harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
         loading_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
@@ -1382,11 +1408,14 @@ fn live_running_slot_is_preserved_during_off_to_on_pool_reset() {
     )
     .expect("running evidence should be written");
 
-    harness.runtime.app_mut().parallel_mode_enabled = true;
     harness
         .runtime
         .app_mut()
-        .parallel_mode_initial_pool_reset_completed = true;
+        .set_parallel_mode_enabled_for_test(true);
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_initial_pool_reset_completed_for_test(true);
     harness.turn_parallel_off();
     harness.enter_parallel();
 
@@ -1467,27 +1496,39 @@ fn stale_leased_slot_reset_preserves_failed_start_dispatch_block() {
 fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-late-enter-result");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.turn_parallel_off();
 
     harness
         .runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeEntered {
-            workspace_directory: harness.workspace_dir.clone(),
-            readiness_snapshot: ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-            supervisor_snapshot: Box::new(ready_parallel_mode_supervisor_snapshot(
-                &harness.workspace_dir,
-            )),
-            status_text: "parallel mode: on / readiness: ready / control tower ready".to_string(),
-            initial_pool_reset_completed: false,
-        })
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+            ParallelModeControlPlaneBackgroundEvent::Entered {
+                workspace_directory: harness.workspace_dir.clone(),
+                epoch_id: 1,
+                effect_id: ParallelModeControlPlaneEffectId {
+                    sequence: 99,
+                    kind: ParallelModeControlPlaneEffectKind::EnterParallelMode,
+                },
+                mode_was_enabled: false,
+                readiness_snapshot: ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
+                supervisor_snapshot: Box::new(ready_parallel_mode_supervisor_snapshot(
+                    &harness.workspace_dir,
+                )),
+                status_text: "parallel mode: on / readiness: ready / control tower ready"
+                    .to_string(),
+                initial_pool_reset_completed: false,
+            },
+        ))
         .expect("late enter result should enqueue");
     harness.runtime.poll_background_messages();
 
     assert!(
-        !harness.runtime.app().parallel_mode_enabled,
+        !harness.runtime.app().parallel_mode_enabled(),
         "late background enter result must not re-enable parallel mode after :parallel off"
     );
 }
@@ -1497,7 +1538,10 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-stale-worker-event");
     harness.committed_ready_task("late worker completion should not wake dispatch");
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );
@@ -1513,14 +1557,16 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
         .runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeWorkerEvent(
-            ParallelModeControlPlaneWorkerEvent::new(
-                harness.workspace_dir.clone(),
-                1,
-                "task-stale-worker",
-                "Stale Worker",
-                ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
-                vec!["late completion should be dropped".to_string()],
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+            ParallelModeControlPlaneBackgroundEvent::WorkerEvent(
+                ParallelModeControlPlaneWorkerEvent::new(
+                    harness.workspace_dir.clone(),
+                    1,
+                    "task-stale-worker",
+                    "Stale Worker",
+                    ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+                    vec!["late completion should be dropped".to_string()],
+                ),
             ),
         ))
         .expect("stale worker event should enqueue");
@@ -1554,7 +1600,10 @@ fn worker_launch_failure_blocks_task_until_task_update_then_retries() {
     let mut harness = NativeFlowHarness::new("flow-worker-failure-retry");
     let commit = harness.committed_ready_task("retry worker after failed launch");
     harness.worker_port.set_fail_launch(true);
-    harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .set_parallel_mode_enabled_for_test(true);
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
         ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
     );

@@ -22,6 +22,8 @@ pub use self::distributor::{
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorSnapshot,
 };
+#[allow(unused_imports)]
+pub use self::orchestrator::ParallelModeControlPlaneEntryDecision;
 pub(crate) use self::orchestrator::ParallelModeDispatchTaskCandidate;
 pub use self::orchestrator::{
     ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
