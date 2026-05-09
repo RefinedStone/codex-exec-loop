@@ -397,11 +397,11 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("Supersession / inline inspection"));
-    assert!(rendered.contains("realm: supervise"));
+    assert!(rendered.contains("supervisor: supervise"));
     assert!(rendered.contains("Capabilities"));
-    assert!(rendered.contains("Realm Map"));
-    assert!(rendered.contains("Actors"));
-    assert!(rendered.contains("Exit Corridor"));
+    assert!(rendered.contains("Pool Board"));
+    assert!(rendered.contains("Agent Roster"));
+    assert!(rendered.contains("Distributor Queue"));
     assert!(rendered.contains("loading pool board"));
     assert!(rendered.contains("loading agent roster"));
     assert!(rendered.contains("loading distributor board"));
@@ -546,8 +546,8 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     assert!(rendered.contains("events: 00:00 assigned"));
     assert!(rendered.contains("00:02 official"));
     assert!(rendered.contains("last event: 00:02 official"));
-    assert!(rendered.contains("lane map: [slot-1:RUN]"));
-    assert!(rendered.contains("exit corridor: head idle"));
+    assert!(rendered.contains("pool board: >[slot-1:RUN]<"));
+    assert!(rendered.contains("distributor queue: head idle"));
     assert!(!rendered.contains("commit_ready"));
 }
 

@@ -287,28 +287,28 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_section(
         frame,
         left_layout[1],
-        Line::from("Realm Map"),
+        Line::from("Pool Board"),
         pool_lines,
         false,
     );
     render_inline_section(
         frame,
         left_layout[2],
-        Line::from("Actors"),
+        Line::from("Agent Roster"),
         roster_lines,
         false,
     );
     render_inline_section(
         frame,
         right_layout[0],
-        Line::from("Quest Log"),
+        Line::from("Session Detail"),
         detail_lines,
         false,
     );
     render_inline_section(
         frame,
         right_layout[1],
-        Line::from("Exit Corridor"),
+        Line::from("Distributor Queue"),
         distributor_lines,
         false,
     );

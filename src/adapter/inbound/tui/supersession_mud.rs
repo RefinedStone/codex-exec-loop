@@ -177,14 +177,14 @@ fn build_mud_summary_lines(
 ) -> Vec<String> {
     vec![
         fit_line(format!(
-            "realm: {} | lanes {} | actors {} | corridor {}",
+            "supervisor: {} | slots {} | agents {} | distributor {}",
             snapshot.state_label(),
             pool_pressure_label(&snapshot.pool),
             snapshot.roster.active_count(),
             snapshot.distributor.compact_summary()
         )),
         fit_line(format!(
-            "quest board: {} | workspace {}",
+            "task board: {} | workspace {}",
             snapshot
                 .top_notice
                 .as_deref()
@@ -203,31 +203,20 @@ fn build_mud_pool_lines(
     pool: &ParallelModePoolBoardSnapshot,
     ui_state: &SupersessionMudUiState,
 ) -> Vec<String> {
-    let mut lines = vec![
-        fit_line(format!(
-            "realm map: {}",
-            pool.slots
-                .iter()
-                .enumerate()
-                .map(|(index, slot)| selected_token(
-                    slot_room_token(slot),
-                    is_selected_room(ui_state, index)
-                ))
-                .collect::<Vec<_>>()
-                .join(" ")
-        )),
-        fit_line(format!(
-            "lane map: {}",
-            pool.slots
-                .iter()
-                .map(slot_room_token)
-                .collect::<Vec<_>>()
-                .join(" ")
-        )),
-    ];
+    let mut lines = vec![fit_line(format!(
+        "pool board: {}",
+        pool.slots
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| {
+                selected_token(slot_room_token(slot), is_selected_room(ui_state, index))
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    ))];
     if pool.slots.is_empty() {
         lines.push(fit_line(format!(
-            "rooms: waiting for {} lanes at {}",
+            "slots: waiting for {} pool slots at {}",
             pool.configured_size,
             truncate_text(&pool.pool_root_label, FIELD_LIMIT)
         )));
@@ -236,7 +225,7 @@ fn build_mud_pool_lines(
 
     lines.extend(pool.slots.iter().enumerate().map(|(index, slot)| {
         fit_line(format!(
-            "{}room {} {} | branch {} | gate {} | owner {}",
+            "{}slot {} {} | branch {} | lease {} | owner {}",
             selection_prefix(is_selected_room(ui_state, index)),
             slot.slot_id,
             room_state_label(slot.state),
@@ -254,7 +243,7 @@ fn build_mud_roster_lines(
 ) -> Vec<String> {
     if snapshot.roster.entries.is_empty() {
         return vec![fit_line(format!(
-            "actors: tavern quiet | {}",
+            "agents: none active | {}",
             truncate_text(&snapshot.roster.empty_state, SUMMARY_LIMIT)
         ))];
     }
@@ -266,7 +255,7 @@ fn build_mud_roster_lines(
         .enumerate()
         .map(|(index, entry)| {
             fit_line(format!(
-                "{}actor {} in {} | quest {} | progress {} | signal {}",
+                "{}agent {} in {} | task {} | progress {} | summary {}",
                 selection_prefix(is_selected_actor(ui_state, index)),
                 entry.agent_id,
                 entry.slot_id,
@@ -284,8 +273,8 @@ fn build_mud_detail_lines(
 ) -> Vec<String> {
     let Some(detail) = snapshot.detail.session.as_ref() else {
         return vec![
-            "quest log: no selected actor".to_string(),
-            "trail: room -> thread -> report -> ledger -> corridor".to_string(),
+            "session detail: no selected agent".to_string(),
+            "flow: slot -> thread -> report -> ledger -> distributor".to_string(),
         ];
     };
     let trail = detail
@@ -304,24 +293,24 @@ fn build_mud_detail_lines(
         });
     let mut lines = vec![
         fit_line(format!(
-            "{}quest log: {} / {} / {}",
+            "{}session detail: {} / {} / {}",
             selection_prefix(ui_state.focused_zone == SupersessionMudFocusZone::QuestLog),
             detail.slot_id,
             detail.agent_id,
             truncate_text(&detail.task_title, FIELD_LIMIT)
         )),
         fit_line(format!(
-            "trail: {}",
+            "flow: {}",
             truncate_text(&trail.join(" -> "), LINE_LIMIT.saturating_sub(7))
         )),
         fit_line(format!(
-            "last signal: {}",
+            "latest summary: {}",
             truncate_text(&detail.latest_summary, SUMMARY_LIMIT)
         )),
     ];
     if let Some(outcome) = detail.distributor_outcome.as_deref() {
         lines.push(fit_line(format!(
-            "corridor handoff: {}",
+            "distributor handoff: {}",
             truncate_text(outcome, SUMMARY_LIMIT)
         )));
     }
@@ -334,14 +323,14 @@ fn build_mud_distributor_lines(
 ) -> Vec<String> {
     let mut lines = vec![
         fit_line(format!(
-            "{}exit corridor: head {} | depth {} | barrier {}",
+            "{}distributor queue: head {} | depth {} | barrier {}",
             selection_prefix(ui_state.focused_zone == SupersessionMudFocusZone::ExitCorridor),
             distributor.head_summary,
             distributor.queue_depth(),
             distributor.orchestrator_status.barrier_state
         )),
         fit_line(format!(
-            "gate check: {}",
+            "integration check: {}",
             truncate_text(
                 &distributor
                     .orchestrator_status
@@ -351,7 +340,7 @@ fn build_mud_distributor_lines(
         )),
     ];
     if distributor.queue_items.is_empty() {
-        lines.push("queue: corridor empty".to_string());
+        lines.push("queue: no distributor items".to_string());
     } else {
         lines.extend(
             distributor
@@ -360,7 +349,7 @@ fn build_mud_distributor_lines(
                 .enumerate()
                 .map(|(index, item)| {
                     fit_line(format!(
-                        "{}{} {} | actor {} | quest {} | branch {}",
+                        "{}{} {} | agent {} | task {} | branch {}",
                         selection_prefix(is_selected_quest(ui_state, index)),
                         if index == 0 { "head" } else { "held" },
                         item.queue_state.label(),
@@ -373,7 +362,7 @@ fn build_mud_distributor_lines(
     }
     if distributor.orchestrator_status.held_queue_count > 0 {
         lines.push(fit_line(format!(
-            "held behind head: {} quest(s)",
+            "held behind head: {} task(s)",
             distributor.orchestrator_status.held_queue_count
         )));
     }
@@ -405,13 +394,13 @@ fn slot_room_token(slot: &ParallelModePoolSlotSnapshot) -> String {
 
 fn room_state_label(state: ParallelModePoolSlotState) -> &'static str {
     match state {
-        ParallelModePoolSlotState::Idle => "rests",
-        ParallelModePoolSlotState::Leased => "is claimed",
-        ParallelModePoolSlotState::Running => "is active",
-        ParallelModePoolSlotState::AwaitingCleanup => "awaits cleanup",
-        ParallelModePoolSlotState::Blocked => "is blocked",
-        ParallelModePoolSlotState::Missing => "is missing",
-        ParallelModePoolSlotState::Unavailable => "is down",
+        ParallelModePoolSlotState::Idle => "idle",
+        ParallelModePoolSlotState::Leased => "leased",
+        ParallelModePoolSlotState::Running => "running",
+        ParallelModePoolSlotState::AwaitingCleanup => "cleanup pending",
+        ParallelModePoolSlotState::Blocked => "blocked",
+        ParallelModePoolSlotState::Missing => "missing",
+        ParallelModePoolSlotState::Unavailable => "unavailable",
     }
 }
 
@@ -469,10 +458,10 @@ fn selection_prefix(selected: bool) -> &'static str {
 
 fn zone_label(zone: SupersessionMudFocusZone) -> &'static str {
     match zone {
-        SupersessionMudFocusZone::RealmMap => "realm map",
-        SupersessionMudFocusZone::Actors => "actors",
-        SupersessionMudFocusZone::QuestLog => "quest log",
-        SupersessionMudFocusZone::ExitCorridor => "exit corridor",
+        SupersessionMudFocusZone::RealmMap => "pool board",
+        SupersessionMudFocusZone::Actors => "agent roster",
+        SupersessionMudFocusZone::QuestLog => "session detail",
+        SupersessionMudFocusZone::ExitCorridor => "distributor queue",
     }
 }
 
@@ -656,13 +645,13 @@ mod tests {
         .concat()
         .join("\n");
 
-        assert!(rendered.contains("realm: supervise"));
-        assert!(rendered.contains("lane map: [slot-1:RUN] [slot-2:IDLE] [slot-3:BLOCK]"));
-        assert!(rendered.contains("actor agent-1 in slot-1"));
-        assert!(rendered.contains("quest log: slot-1 / agent-1"));
-        assert!(rendered.contains("trail: assigned -> running -> official"));
-        assert!(rendered.contains("exit corridor: head queued | depth 2"));
-        assert!(rendered.contains("held behind head: 1 quest(s)"));
+        assert!(rendered.contains("supervisor: supervise"));
+        assert!(rendered.contains("pool board: >[slot-1:RUN]< [slot-2:IDLE] [slot-3:BLOCK]"));
+        assert!(rendered.contains("agent agent-1 in slot-1"));
+        assert!(rendered.contains("session detail: slot-1 / agent-1"));
+        assert!(rendered.contains("flow: assigned -> running -> official"));
+        assert!(rendered.contains("distributor queue: head queued | depth 2"));
+        assert!(rendered.contains("held behind head: 1 task(s)"));
         assert!(
             rendered.lines().all(|line| line.chars().count() <= 112),
             "MUD projection should keep line width bounded for narrow TUI panels:\n{rendered}"
@@ -738,10 +727,10 @@ mod tests {
         .concat()
         .join("\n");
 
-        assert!(rendered.contains("focus: exit corridor"));
-        assert!(rendered.contains("realm map: [slot-1:IDLE] [slot-2:RUN]"));
-        assert!(rendered.contains("> exit corridor: head queued | depth 1"));
-        assert!(rendered.contains("quest log: no selected actor"));
+        assert!(rendered.contains("focus: distributor queue"));
+        assert!(rendered.contains("pool board: [slot-1:IDLE] [slot-2:RUN]"));
+        assert!(rendered.contains("> distributor queue: head queued | depth 1"));
+        assert!(rendered.contains("session detail: no selected agent"));
         assert!(
             rendered.lines().all(|line| line.chars().count() <= 112),
             "focused MUD projection should remain bounded:\n{rendered}"
