@@ -179,7 +179,7 @@ impl NativeTuiApp {
         // Stop is both a local mode transition and an app-server control request:
         // disable future automation immediately, then ask the service to
         // interrupt any running native sessions.
-        let status_text = match self.conversation_service.request_stop_all_sessions() {
+        let status_text = match self.application.request_stop_all_sessions() {
             Ok(()) if self.conversation_has_running_turn() => {
                 "stop requested / active app-server sessions will be interrupted".to_string()
             }
@@ -278,7 +278,12 @@ impl NativeTuiApp {
             requested_direction_id: None,
             observed_planning_revision: None,
         };
-        match self.planning.runtime.prepare_task_intake(request) {
+        match self
+            .application
+            .planning()
+            .runtime
+            .prepare_task_intake(request)
+        {
             Ok(proposal) => self.task_intake_overlay_ui_state.show_preview(proposal),
             Err(error) => self
                 .task_intake_overlay_ui_state
@@ -294,7 +299,12 @@ impl NativeTuiApp {
         // Commit refreshes the conversation's planning runtime snapshot before opening
         // the queue overlay, otherwise the queue can render the pre-commit view
         // for one frame.
-        match self.planning.runtime.commit_task_intake(&proposal) {
+        match self
+            .application
+            .planning()
+            .runtime
+            .commit_task_intake(&proposal)
+        {
             Ok(result) => {
                 let committed_task_id = result.committed_task_id.clone();
                 self.task_intake_overlay_ui_state

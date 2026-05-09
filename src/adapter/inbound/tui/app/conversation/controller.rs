@@ -53,7 +53,8 @@ impl NativeTuiApp {
         &self,
         workspace_directory: &str,
     ) -> PlanningRuntimeSnapshot {
-        self.planning
+        self.application
+            .planning()
             .runtime
             .load_runtime_snapshot_or_invalid(workspace_directory)
     }

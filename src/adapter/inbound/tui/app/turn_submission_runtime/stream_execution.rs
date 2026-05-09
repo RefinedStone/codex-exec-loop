@@ -2,9 +2,9 @@ use std::any::Any;
 use std::sync::mpsc;
 use std::thread;
 
+use super::super::app_runtime::NativeTuiConversationStreamHandle;
 use crate::adapter::inbound::tui::app::{BackgroundMessage, ConversationState, NativeTuiApp};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelTurnSlotLeaseHandoff, ParallelTurnStreamLaunchRequest,
 };
@@ -77,7 +77,7 @@ impl NativeTuiApp {
         spawn_conversation_stream_worker(
             request,
             execution_snapshot_capture,
-            self.conversation_service.clone(),
+            self.application.conversation_streams(),
             self.parallel_mode_turn_service(),
             self.tx.clone(),
         );
@@ -87,9 +87,12 @@ impl NativeTuiApp {
         &self,
         workspace_directory: &str,
     ) -> PlanningTurnExecutionSnapshotCapture {
-        self.planning.runtime.capture_turn_execution_snapshot(
-            PlanningTurnExecutionSnapshotCaptureRequest::new(workspace_directory),
-        )
+        self.application
+            .planning()
+            .runtime
+            .capture_turn_execution_snapshot(PlanningTurnExecutionSnapshotCaptureRequest::new(
+                workspace_directory,
+            ))
     }
 
     fn sync_active_turn_workspace_directory(&mut self, workspace_directory: &str) {
@@ -128,7 +131,7 @@ fn resolve_stream_launch_request(
 fn spawn_conversation_stream_worker(
     request: PreparedTurnStreamRequest,
     execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
-    service: ConversationService,
+    conversation_streams: NativeTuiConversationStreamHandle,
     parallel_mode_turn_service: ParallelModeTurnService,
     outer_tx: std::sync::mpsc::Sender<BackgroundMessage>,
 ) {
@@ -136,8 +139,9 @@ fn spawn_conversation_stream_worker(
         let (event_tx, event_rx) = mpsc::channel();
 
         let request_for_service = request.clone();
-        let service_thread =
-            thread::spawn(move || run_stream_request(service, request_for_service, event_tx));
+        let service_thread = thread::spawn(move || {
+            run_stream_request(conversation_streams, request_for_service, event_tx)
+        });
         let mut stream_lifecycle =
             parallel_mode_turn_service.stream_lifecycle(request.workspace_directory.clone());
 
@@ -215,17 +219,19 @@ fn conversation_stream_background_message(
 }
 
 fn run_stream_request(
-    service: ConversationService,
+    conversation_streams: NativeTuiConversationStreamHandle,
     request: PreparedTurnStreamRequest,
     event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
 ) -> Result<(), String> {
     match request.thread_id {
-        Some(thread_id) => service
-            .run_turn_stream(&thread_id, &request.prompt, event_sender)
-            .map_err(|error: anyhow::Error| error.to_string()),
-        None => service
-            .run_new_thread_stream(&request.workspace_directory, &request.prompt, event_sender)
-            .map_err(|error: anyhow::Error| error.to_string()),
+        Some(thread_id) => {
+            conversation_streams.run_turn_stream(&thread_id, &request.prompt, event_sender)
+        }
+        None => conversation_streams.run_new_thread_stream(
+            &request.workspace_directory,
+            &request.prompt,
+            event_sender,
+        ),
     }
 }
 

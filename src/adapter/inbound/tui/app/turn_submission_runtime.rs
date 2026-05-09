@@ -29,7 +29,7 @@ const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
 
 impl NativeTuiApp {
     pub(super) fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
-        ParallelModeTurnService::new(self.parallel_mode_service.clone())
+        self.application.parallel_mode_turn_service()
     }
 
     pub(super) fn start_turn_submission(&mut self) {
@@ -202,7 +202,8 @@ impl NativeTuiApp {
             ConversationState::Loading | ConversationState::Failed(_) => (None, None),
         };
         match self
-            .planning
+            .application
+            .planning()
             .runtime
             .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
                 workspace_directory,
@@ -311,14 +312,16 @@ impl NativeTuiApp {
         // scaffold. Validation failures open the review overlay instead of silently
         // submitting a prompt against missing planning files.
         match self
-            .planning
+            .application
+            .planning()
             .workspace
             .stage_simple_mode_draft(&workspace_directory)
         {
             Ok(stage_result) => {
                 let draft_name = stage_result.draft_name.clone();
                 match self
-                    .planning
+                    .application
+                    .planning()
                     .workspace
                     .promote_staged_draft(&workspace_directory, &draft_name)
                 {

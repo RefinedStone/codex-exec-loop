@@ -13,7 +13,7 @@ pub(super) fn build_existing_workspace_overlay_view_for_app(
     let workspace_directory = app.planning_workspace_directory();
     build_existing_workspace_overlay_view_for_state(
         &app.conversation_state,
-        &app.planning,
+        app.application.planning(),
         &workspace_directory,
     )
 }

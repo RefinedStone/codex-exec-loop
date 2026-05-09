@@ -94,7 +94,8 @@ pub(crate) fn build_planning_summary_line(
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<String> {
-    app.planning
+    app.application
+        .planning()
         .runtime
         .build_summary_line(PlanningRuntimeSummaryLineRequest {
             snapshot: &conversation.planning_runtime_snapshot,

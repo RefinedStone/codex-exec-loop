@@ -505,7 +505,8 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         ));
     let planning_snapshot = runtime
         .app()
-        .planning
+        .application
+        .planning()
         .runtime
         .load_runtime_snapshot_or_invalid(&workspace_directory);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {

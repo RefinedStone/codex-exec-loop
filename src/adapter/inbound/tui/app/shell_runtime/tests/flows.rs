@@ -250,7 +250,8 @@ impl NativeFlowHarness {
         let proposal = self
             .runtime
             .app()
-            .planning
+            .application
+            .planning()
             .runtime
             .prepare_task_intake(PlanningTaskIntakeRequest {
                 workspace_directory: self.workspace_dir.clone(),
@@ -263,7 +264,8 @@ impl NativeFlowHarness {
             .expect("task intake proposal should prepare");
         self.runtime
             .app()
-            .planning
+            .application
+            .planning()
             .runtime
             .commit_task_intake(&proposal)
             .expect("task intake proposal should commit")
@@ -272,7 +274,8 @@ impl NativeFlowHarness {
     fn update_task_description(&self, task_id: &str, description: &str) {
         self.runtime
             .app()
-            .planning
+            .application
+            .planning()
             .task_tool
             .run(
                 &self.workspace_dir,
@@ -389,7 +392,8 @@ impl NativeFlowHarness {
         let planning_snapshot = self
             .runtime
             .app()
-            .planning
+            .application
+            .planning()
             .runtime
             .load_runtime_snapshot_or_invalid(&self.workspace_dir);
         let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
@@ -428,7 +432,8 @@ impl NativeFlowHarness {
         let planning_snapshot = self
             .runtime
             .app()
-            .planning
+            .application
+            .planning()
             .runtime
             .load_runtime_snapshot_or_invalid(&self.workspace_dir);
         assert!(

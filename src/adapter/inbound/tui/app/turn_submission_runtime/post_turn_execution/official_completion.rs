@@ -123,7 +123,7 @@ impl PostTurnEvaluationExecutor {
             if planning_workspace_directory == request.workspace_directory {
                 current_snapshot.clone()
             } else {
-                self.planning
+                self.planning_feature
                     .runtime
                     .load_runtime_snapshot_or_invalid(planning_workspace_directory)
             };
@@ -200,7 +200,7 @@ impl PostTurnEvaluationExecutor {
         // Record the exact prompt before execution so a failed worker run still leaves
         // enough state in the planning worker panel for operator recovery.
         let worker_prompt = self
-            .planning
+            .planning_feature
             .worker
             .render_official_completion_refresh_prompt(&worker_request);
         event_log::emit_lazy("official_completion_refresh_started", || {
@@ -242,7 +242,7 @@ impl PostTurnEvaluationExecutor {
         // Worker orchestration owns filesystem mutation and validation; this adapter
         // only sends the contract and interprets the outcome for TUI state.
         let worker_outcome = self
-            .planning
+            .planning_feature
             .worker
             .refresh_queue_from_official_completion(worker_request);
         let outcome = match worker_outcome {

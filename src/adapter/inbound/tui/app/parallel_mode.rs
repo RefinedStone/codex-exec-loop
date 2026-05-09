@@ -145,7 +145,7 @@ impl NativeTuiApp {
     pub(crate) fn parallel_mode_service(
         &self,
     ) -> &crate::application::service::parallel_mode::ParallelModeService {
-        &self.parallel_mode_service
+        self.application.parallel_mode()
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {

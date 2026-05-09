@@ -42,7 +42,7 @@ impl PostTurnEvaluationExecutor {
         // 첫 snapshot은 repair 전 현재 runtime state다. Worker 실패나 attempt exhaustion 때
         // 이 값 또는 마지막 worker outcome snapshot을 caller에게 돌려준다.
         let mut runtime_snapshot = self
-            .planning
+            .planning_feature
             .runtime
             .load_runtime_snapshot_or_invalid(workspace_directory);
         let log_context =
@@ -73,7 +73,7 @@ impl PostTurnEvaluationExecutor {
             // Prompt를 먼저 렌더링해 panel에 기록한다. Worker 실행이 실패해도 어떤 repair
             // 지시를 보냈는지 TUI/debug state가 남아 후처리 실패를 추적할 수 있다.
             let worker_prompt = self
-                .planning
+                .planning_feature
                 .worker
                 .render_repair_task_authority_prompt(&worker_request);
             event_log::emit_lazy("planning_worker_repair_attempt_started", || {
@@ -106,7 +106,10 @@ impl PostTurnEvaluationExecutor {
             );
             // 실제 repair는 application service boundary를 넘어 worker orchestration으로 들어간다.
             // 이 adapter는 prompt 계약과 결과 해석만 담당하고 파일 수정/재검증은 service가 수행한다.
-            let worker_outcome = self.planning.worker.repair_task_authority(worker_request);
+            let worker_outcome = self
+                .planning_feature
+                .worker
+                .repair_task_authority(worker_request);
 
             // Worker 호출 오류는 retry 대상이 아니다. Prompt 실행 자체가 실패했으므로 같은
             // request를 반복하지 않고 panel에 실패를 기록한 뒤 현재 snapshot으로 빠져나간다.

@@ -135,18 +135,18 @@ struct PostTurnEvaluationExecution {
 }
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
-    planning: PlanningServices,
+    planning_feature: PlanningServices,
     parallel_mode_turn_service: ParallelModeTurnService,
     planning_worker_panel_state: PlanningWorkerPanelState,
 }
 impl PostTurnEvaluationExecutor {
     fn new(
-        planning: PlanningServices,
+        planning_feature: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
         planning_worker_panel_state: PlanningWorkerPanelState,
     ) -> Self {
         Self {
-            planning,
+            planning_feature,
             parallel_mode_turn_service,
             planning_worker_panel_state,
         }
@@ -306,7 +306,7 @@ impl PostTurnEvaluationExecutor {
         } else if request.changed_planning_file_paths.is_empty() {
             conversation.planning_runtime_snapshot.clone()
         } else {
-            self.planning
+            self.planning_feature
                 .runtime
                 .load_runtime_snapshot_or_invalid(&request.workspace_directory)
         }
@@ -345,7 +345,7 @@ impl PostTurnEvaluationExecutor {
                 return blocked_reconciliation_result(error_message.clone());
             }
         };
-        match self.planning.runtime.reconcile_after_turn(
+        match self.planning_feature.runtime.reconcile_after_turn(
             &request.workspace_directory,
             &request.completed_turn_id,
             &request.changed_planning_file_paths,
@@ -412,7 +412,7 @@ impl PostTurnEvaluationExecutor {
             PlanningRuntimeWorkspaceStatus::ReadyWithTask => None,
             PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
                 let review_context = match self
-                    .planning
+                    .planning_feature
                     .workspace
                     .load_queue_idle_review_context(&request.workspace_directory)
                 {
@@ -498,7 +498,7 @@ impl PostTurnEvaluationExecutor {
             mode: mode.clone(),
         };
         let worker_prompt = self
-            .planning
+            .planning_feature
             .worker
             .render_refresh_queue_prompt(&worker_request);
         event_log::emit_lazy("planning_worker_refresh_started", || {
@@ -538,7 +538,7 @@ impl PostTurnEvaluationExecutor {
             worker_prompt,
         );
         let worker_outcome = self
-            .planning
+            .planning_feature
             .worker
             .refresh_queue_from_reply(worker_request);
         let outcome = match worker_outcome {
@@ -650,7 +650,7 @@ impl PostTurnEvaluationExecutor {
             && runtime_snapshot.has_proposal_candidates()
         {
             let promotion_outcome = self
-                .planning
+                .planning_feature
                 .worker
                 .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                     workspace_directory: &request.workspace_directory,
@@ -827,7 +827,7 @@ impl PostTurnEvaluationExecutor {
             );
         }
         match conversation
-            .decide_auto_follow_with_snapshot(&self.planning.runtime, runtime_snapshot)
+            .decide_auto_follow_with_snapshot(&self.planning_feature.runtime, runtime_snapshot)
         {
             AutoFollowDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
@@ -925,7 +925,7 @@ impl NativeTuiApp {
         };
         self.mark_post_turn_evaluation_running(&conversation, &request);
         let executor = PostTurnEvaluationExecutor::new(
-            self.planning.clone(),
+            self.application.planning_handle(),
             self.parallel_mode_turn_service(),
             self.planning_worker_panel_state.clone(),
         );

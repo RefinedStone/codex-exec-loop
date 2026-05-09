@@ -8,6 +8,7 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
+use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     PlanningServices, PlanningTurnExecutionSnapshotCapture,
 };
@@ -94,9 +95,112 @@ impl NativeTuiAppRuntimeChannels {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct NativeTuiApplicationHandle {
+    startup: StartupService,
+    sessions: SessionService,
+    conversations: ConversationService,
+    parallel: ParallelModeService,
+    planning_feature: PlanningServices,
+}
+
+impl NativeTuiApplicationHandle {
+    fn new(
+        startup: StartupService,
+        sessions: SessionService,
+        conversations: ConversationService,
+        parallel: ParallelModeService,
+        planning_feature: PlanningServices,
+    ) -> Self {
+        Self {
+            startup,
+            sessions,
+            conversations,
+            parallel,
+            planning_feature,
+        }
+    }
+
+    pub(super) fn startup(&self) -> StartupService {
+        self.startup.clone()
+    }
+
+    pub(super) fn sessions(&self) -> SessionService {
+        self.sessions.clone()
+    }
+
+    pub(super) fn conversations(&self) -> ConversationService {
+        self.conversations.clone()
+    }
+
+    pub(super) fn conversation_streams(&self) -> NativeTuiConversationStreamHandle {
+        NativeTuiConversationStreamHandle::new(self.conversations.clone())
+    }
+
+    pub(super) fn planning(&self) -> &PlanningServices {
+        &self.planning_feature
+    }
+
+    pub(super) fn planning_handle(&self) -> PlanningServices {
+        self.planning_feature.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn parallel_mode(&self) -> &ParallelModeService {
+        &self.parallel
+    }
+
+    pub(super) fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
+        ParallelModeTurnService::new(self.parallel.clone())
+    }
+
+    pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
+        self.conversations.runtime_control_truth()
+    }
+
+    pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
+        self.conversations
+            .request_stop_all_sessions()
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct NativeTuiConversationStreamHandle {
+    conversations: ConversationService,
+}
+
+impl NativeTuiConversationStreamHandle {
+    fn new(conversations: ConversationService) -> Self {
+        Self { conversations }
+    }
+
+    pub(super) fn run_turn_stream(
+        &self,
+        thread_id: &str,
+        prompt: &str,
+        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+    ) -> Result<(), String> {
+        self.conversations
+            .run_turn_stream(thread_id, prompt, event_sender)
+            .map_err(|error: anyhow::Error| error.to_string())
+    }
+
+    pub(super) fn run_new_thread_stream(
+        &self,
+        workspace_directory: &str,
+        prompt: &str,
+        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+    ) -> Result<(), String> {
+        self.conversations
+            .run_new_thread_stream(workspace_directory, prompt, event_sender)
+            .map_err(|error: anyhow::Error| error.to_string())
+    }
+}
+
 pub(crate) struct NativeTuiParallelModeBinding {
-    parallel_mode_service: ParallelModeService,
-    planning: PlanningServices,
+    parallel: ParallelModeService,
+    planning_feature: PlanningServices,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     runtime_channels: NativeTuiAppRuntimeChannels,
@@ -110,8 +214,8 @@ impl NativeTuiParallelModeBinding {
         let parallel_mode_control_plane =
             composition.bind_event_sink(runtime_channels.parallel_mode_event_sink());
         NativeTuiParallelModeBinding {
-            parallel_mode_service: composition.parallel_mode_service().clone(),
-            planning: composition.planning().clone(),
+            parallel: composition.parallel_mode_service().clone(),
+            planning_feature: composition.planning().clone(),
             parallel_mode_control_plane,
             runtime_channels,
         }
@@ -126,24 +230,32 @@ impl NativeTuiApp {
         parallel_mode_binding: NativeTuiParallelModeBinding,
     ) -> Self {
         let NativeTuiParallelModeBinding {
-            parallel_mode_service,
-            planning,
+            parallel,
+            planning_feature,
             parallel_mode_control_plane,
             runtime_channels,
         } = parallel_mode_binding;
+        let application = NativeTuiApplicationHandle::new(
+            startup_service,
+            session_service,
+            conversation_service,
+            parallel,
+            planning_feature,
+        );
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
         let workspace_directory = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
-        let turn_control_truth = conversation_service.runtime_control_truth();
+        let turn_control_truth = application.runtime_control_truth();
         let mut initial_conversation = ConversationViewModel::new_draft_with_truth(
             workspace_directory.clone(),
             turn_control_truth,
         );
         initial_conversation.replace_planning_runtime_snapshot(
-            planning
+            application
+                .planning()
                 .runtime
                 .load_runtime_snapshot_or_invalid(&workspace_directory),
         );
@@ -167,12 +279,8 @@ impl NativeTuiApp {
             task_intake_overlay_ui_state: super::TaskIntakeOverlayUiState::default(),
             pending_task_intake_command: None,
             active_session: None,
-            startup_service,
-            session_service,
-            conversation_service,
+            application,
             turn_control_truth,
-            parallel_mode_service,
-            planning,
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,
@@ -217,7 +325,7 @@ impl NativeTuiApp {
         match effect {
             ShellChromeEffect::RunStartupChecks => {
                 let tx = self.tx.clone();
-                let service = self.startup_service.clone();
+                let service = self.application.startup();
                 thread::spawn(move || {
                     let result = service.run_checks().map_err(|error| error.to_string());
                     let _ = tx.send(BackgroundMessage::StartupLoaded(result));
@@ -228,7 +336,7 @@ impl NativeTuiApp {
                 current_workspace_directory,
             } => {
                 let tx = self.tx.clone();
-                let service = self.session_service.clone();
+                let service = self.application.sessions();
                 // Session overlay requests are scoped to the visible conversation
                 // workspace unless the reducer explicitly supplied another root.
                 let workspace_directory = current_workspace_directory
@@ -279,7 +387,7 @@ impl NativeTuiApp {
         match effect {
             ConversationLifecycleEffect::LoadConversation { thread_id } => {
                 let tx = self.tx.clone();
-                let service = self.conversation_service.clone();
+                let service = self.application.conversations();
                 thread::spawn(move || {
                     let result = service
                         .load_snapshot(&thread_id)

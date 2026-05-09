@@ -3,16 +3,10 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneHandle,
-};
-use crate::application::service::planning::PlanningServices;
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::PlanningTaskIntakeRequest;
-use crate::application::service::session_service::SessionService;
-use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
 };
@@ -147,6 +141,7 @@ mod turn_submission_runtime;
 // composition root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
+use app_runtime::NativeTuiApplicationHandle;
 pub(super) use app_runtime::NativeTuiParallelModeBinding;
 use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
 use auto_follow_controls::{
@@ -291,12 +286,8 @@ struct NativeTuiApp {
     task_intake_overlay_ui_state: TaskIntakeOverlayUiState,
     pending_task_intake_command: Option<InlineShellCommandInput>,
     active_session: Option<SessionSummary>,
-    startup_service: StartupService,
-    session_service: SessionService,
-    conversation_service: ConversationService,
+    application: NativeTuiApplicationHandle,
     turn_control_truth: ConversationRuntimeControlTruth,
-    parallel_mode_service: ParallelModeService,
-    planning: PlanningServices,
     planning_worker_panel_state: PlanningWorkerPanelState,
     planning_worker_visibility: PlanningWorkerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,

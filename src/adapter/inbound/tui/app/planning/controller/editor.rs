@@ -18,7 +18,8 @@ impl NativeTuiApp {
          */
         let workspace_directory = self.planning_workspace_directory();
         self.open_guided_planning_editor_session(
-            self.planning
+            self.application
+                .planning()
                 .workspace
                 .stage_manual_editor_session(&workspace_directory),
             "planning draft editor ready",
@@ -34,7 +35,8 @@ impl NativeTuiApp {
          */
         let workspace_directory = self.planning_workspace_directory();
         self.open_directions_editor_session(
-            self.planning
+            self.application
+                .planning()
                 .workspace
                 .stage_detail_doc_editor_session(&workspace_directory, direction_id),
             "directions detail doc editor ready",
@@ -49,7 +51,8 @@ impl NativeTuiApp {
          */
         let workspace_directory = self.planning_workspace_directory();
         self.open_directions_editor_session(
-            self.planning
+            self.application
+                .planning()
                 .workspace
                 .stage_queue_idle_prompt_editor_session(&workspace_directory),
             "queue-idle prompt editor ready",
@@ -83,11 +86,12 @@ impl NativeTuiApp {
          * inside planning workspace services.
          */
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self.planning.workspace.save_draft_editor_files(
-            &workspace_directory,
-            &draft_name,
-            &editable_files,
-        ) {
+        let status_text = match self
+            .application
+            .planning()
+            .workspace
+            .save_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
+        {
             Ok(result) => {
                 /*
                  * The service returns the canonical validation report for the
@@ -142,11 +146,12 @@ impl NativeTuiApp {
             .clear_close_confirmation();
         let workspace_directory = self.planning_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self.planning.workspace.save_draft_editor_files(
-            &workspace_directory,
-            &draft_name,
-            &editable_files,
-        ) {
+        let status_text = match self
+            .application
+            .planning()
+            .workspace
+            .save_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
+        {
             Ok(result) => {
                 let validation_ok = result.validation_report.is_valid();
                 self.planning_draft_editor_ui_state
@@ -191,11 +196,11 @@ impl NativeTuiApp {
             .clear_close_confirmation();
         let workspace_directory = self.planning_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let promote_result = self.planning.workspace.promote_draft_editor_files(
-            &workspace_directory,
-            &draft_name,
-            &editable_files,
-        );
+        let promote_result = self
+            .application
+            .planning()
+            .workspace
+            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
         /*
          * Runtime snapshot refresh happens even on blocked promotion. A validation
          * failure may still update editor validation state or planning status copy, and
@@ -256,11 +261,11 @@ impl NativeTuiApp {
             .clear_close_confirmation();
         let workspace_directory = self.planning_workspace_directory();
         let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let promote_result = self.planning.workspace.promote_draft_editor_files(
-            &workspace_directory,
-            &draft_name,
-            &editable_files,
-        );
+        let promote_result = self
+            .application
+            .planning()
+            .workspace
+            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
         /*
          * Directions promotion also refreshes the ready conversation snapshot because
          * changing direction detail docs or queue-idle prompt can alter queue/runtime
