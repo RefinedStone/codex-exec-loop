@@ -140,10 +140,12 @@ pub use self::task_tool::{
 };
 // use case 묶음 재수출은 PlanningFeature의 필드 타입을 외부에서도 명시하거나 테스트 fixture에서 사용할 수 있게 한다.
 pub use self::use_cases::{
+    PlanningPostTurnQueueRefreshPreparation, PlanningPostTurnQueueRefreshPreparationRequest,
+    PlanningPostTurnQueueRefreshSkipReason, PlanningPostTurnQueueRefreshSkipped,
     PlanningPostTurnReconciliationOutcome, PlanningPostTurnReconciliationRequest,
-    PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningTurnExecutionSnapshotCapture,
-    PlanningTurnExecutionSnapshotCaptureRequest, PlanningTurnExecutionSnapshotCaptureState,
-    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningPreparedQueueRefresh, PlanningRuntimeUseCases, PlanningTaskToolUseCases,
+    PlanningTurnExecutionSnapshotCapture, PlanningTurnExecutionSnapshotCaptureRequest,
+    PlanningTurnExecutionSnapshotCaptureState, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
 // worker orchestration 타입은 queue refresh, official completion refresh, worker run outcome처럼 app-server worker 경로의
 // 입력과 결과를 공개한다.

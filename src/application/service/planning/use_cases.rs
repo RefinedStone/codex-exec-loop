@@ -19,7 +19,7 @@ use super::runtime::facade::{
     PlanningRuntimeAutoFollowPreview, PlanningRuntimeAutoFollowPreviewRequest,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeFacadeService,
     PlanningRuntimeStatusProjection, PlanningRuntimeStatusProjectionRequest,
-    PlanningRuntimeSummaryLineRequest, PlanningSubSessionHandoff,
+    PlanningRuntimeSummaryLineRequest, PlanningSubSessionHandoff, PlanningTaskHandoff,
 };
 use super::runtime::intake::{
     PlanningTaskIntakeCommitResult, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
@@ -28,17 +28,18 @@ use super::runtime::intake::{
 use super::runtime::manual_intake::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptIntakeService,
 };
-use super::runtime::prompt::PlanningRuntimeSnapshot;
+use super::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 use super::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
     planning_task_tool_contract_json,
 };
 use super::worker::orchestration::{
     PlanningLedgerRepairRequest, PlanningOfficialCompletionRefreshRequest,
-    PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService, PlanningWorkerRunOutcome,
+    PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
+    PlanningWorkerRunOutcome,
 };
 use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
-use crate::domain::planning::PriorityQueueTask;
+use crate::domain::planning::{PriorityQueueTask, QueueIdlePolicy};
 
 /*
  * 이 파일은 planning의 public application facade다.
@@ -230,6 +231,149 @@ pub struct PlanningPostTurnReconciliationRequest<'a> {
 pub struct PlanningPostTurnReconciliationOutcome {
     pub reconciliation_result: PlanningReconciliationResult,
     pub runtime_snapshot: PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnQueueRefreshPreparationRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub parent_thread_id: Option<&'a str>,
+    pub completed_turn_id: &'a str,
+    pub latest_user_message: Option<&'a str>,
+    pub latest_main_reply: Option<&'a str>,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningPostTurnQueueRefreshPreparation {
+    Skipped(Box<PlanningPostTurnQueueRefreshSkipped>),
+    Ready(Box<PlanningPreparedQueueRefresh>),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnQueueRefreshSkipped {
+    pub reason: PlanningPostTurnQueueRefreshSkipReason,
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningPostTurnQueueRefreshSkipReason {
+    PlanningRuntimeNotReady,
+    LatestMainReplyEmpty,
+    QueueIdleReviewContextUnavailable,
+    QueueIdlePolicyStop,
+    QueueIdlePromptMissing,
+}
+impl PlanningPostTurnQueueRefreshSkipReason {
+    pub fn log_label(self) -> &'static str {
+        match self {
+            Self::PlanningRuntimeNotReady => "planning_runtime_not_ready",
+            Self::LatestMainReplyEmpty => "latest_main_reply_empty",
+            Self::QueueIdleReviewContextUnavailable => "queue_idle_review_context_unavailable",
+            Self::QueueIdlePolicyStop => "queue_idle_policy_stop",
+            Self::QueueIdlePromptMissing => "queue_idle_prompt_missing",
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPreparedQueueRefresh {
+    workspace_directory: String,
+    parent_thread_id: Option<String>,
+    completed_turn_id: String,
+    latest_user_message: Option<String>,
+    latest_main_reply: String,
+    previous_handoff_task: Option<PlanningTaskHandoff>,
+    mode: PlanningPreparedQueueRefreshMode,
+    worker_prompt: String,
+}
+impl PlanningPreparedQueueRefresh {
+    fn new(
+        request: &PlanningPostTurnQueueRefreshPreparationRequest<'_>,
+        latest_main_reply: &str,
+        mode: PlanningPreparedQueueRefreshMode,
+        worker_prompt: String,
+    ) -> Self {
+        Self {
+            workspace_directory: request.workspace_directory.to_string(),
+            parent_thread_id: request.parent_thread_id.map(str::to_string),
+            completed_turn_id: request.completed_turn_id.to_string(),
+            latest_user_message: request.latest_user_message.map(str::to_string),
+            latest_main_reply: latest_main_reply.to_string(),
+            previous_handoff_task: request.previous_handoff_task.cloned(),
+            mode,
+            worker_prompt,
+        }
+    }
+
+    pub fn worker_prompt(&self) -> &str {
+        &self.worker_prompt
+    }
+
+    pub fn mode_label(&self) -> &'static str {
+        self.mode.log_label()
+    }
+
+    pub fn panel_operation_label(&self) -> &'static str {
+        self.mode.panel_operation_label()
+    }
+
+    pub fn latest_main_reply_char_count(&self) -> usize {
+        self.latest_main_reply.chars().count()
+    }
+
+    pub fn has_latest_user_message(&self) -> bool {
+        self.latest_user_message.is_some()
+    }
+
+    pub fn has_previous_handoff(&self) -> bool {
+        self.previous_handoff_task.is_some()
+    }
+
+    pub fn is_queue_idle_derivation(&self) -> bool {
+        matches!(
+            self.mode,
+            PlanningPreparedQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. }
+        )
+    }
+
+    fn as_refresh_request(&self) -> PlanningQueueRefreshRequest<'_> {
+        PlanningQueueRefreshRequest {
+            workspace_directory: &self.workspace_directory,
+            parent_thread_id: self.parent_thread_id.as_deref(),
+            completed_turn_id: &self.completed_turn_id,
+            latest_user_message: self.latest_user_message.as_deref(),
+            latest_main_reply: &self.latest_main_reply,
+            previous_handoff_task: self.previous_handoff_task.as_ref(),
+            mode: self.mode.as_refresh_mode(),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlanningPreparedQueueRefreshMode {
+    FromLatestMainReply,
+    DeriveQueueHeadWhenQueueIdle { queue_idle_prompt_markdown: String },
+}
+impl PlanningPreparedQueueRefreshMode {
+    fn as_refresh_mode(&self) -> PlanningQueueRefreshMode<'_> {
+        match self {
+            Self::FromLatestMainReply => PlanningQueueRefreshMode::FromLatestMainReply,
+            Self::DeriveQueueHeadWhenQueueIdle {
+                queue_idle_prompt_markdown,
+            } => PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle {
+                queue_idle_prompt_markdown,
+            },
+        }
+    }
+
+    fn log_label(&self) -> &'static str {
+        match self {
+            Self::FromLatestMainReply => "from_latest_main_reply",
+            Self::DeriveQueueHeadWhenQueueIdle { .. } => "derive_queue_head_when_queue_idle",
+        }
+    }
+
+    fn panel_operation_label(&self) -> &'static str {
+        match self {
+            Self::FromLatestMainReply => "refresh",
+            Self::DeriveQueueHeadWhenQueueIdle { .. } => "queue-idle-derive",
+        }
+    }
 }
 impl PlanningRuntimeUseCases {
     pub(crate) fn new(
@@ -483,6 +627,89 @@ impl PlanningWorkerUseCases {
         self.directions_service
             .load_queue_idle_review_context(workspace_dir)
     }
+    pub fn prepare_post_turn_queue_refresh(
+        &self,
+        request: PlanningPostTurnQueueRefreshPreparationRequest<'_>,
+    ) -> PlanningPostTurnQueueRefreshPreparation {
+        let runtime_snapshot = request.current_runtime_snapshot;
+        let skipped = |reason| {
+            PlanningPostTurnQueueRefreshPreparation::Skipped(Box::new(
+                PlanningPostTurnQueueRefreshSkipped {
+                    reason,
+                    runtime_snapshot: runtime_snapshot.clone(),
+                },
+            ))
+        };
+        if !matches!(
+            runtime_snapshot.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+                | PlanningRuntimeWorkspaceStatus::ReadyWithTask
+        ) {
+            return skipped(PlanningPostTurnQueueRefreshSkipReason::PlanningRuntimeNotReady);
+        }
+        let Some(latest_main_reply) = request
+            .latest_main_reply
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        else {
+            return skipped(PlanningPostTurnQueueRefreshSkipReason::LatestMainReplyEmpty);
+        };
+        let mode = match runtime_snapshot.workspace_status() {
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
+                PlanningPreparedQueueRefreshMode::FromLatestMainReply
+            }
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
+                let review_context = match self
+                    .load_queue_idle_review_context(request.workspace_directory)
+                {
+                    Ok(context) => context,
+                    Err(_) => {
+                        let reason =
+                            PlanningPostTurnQueueRefreshSkipReason::QueueIdleReviewContextUnavailable;
+                        return skipped(reason);
+                    }
+                };
+                match review_context.policy {
+                    QueueIdlePolicy::Stop => {
+                        return skipped(
+                            PlanningPostTurnQueueRefreshSkipReason::QueueIdlePolicyStop,
+                        );
+                    }
+                    QueueIdlePolicy::ReviewAndEnqueue => {
+                        let Some(prompt_markdown) = review_context.prompt_markdown else {
+                            return skipped(
+                                PlanningPostTurnQueueRefreshSkipReason::QueueIdlePromptMissing,
+                            );
+                        };
+                        PlanningPreparedQueueRefreshMode::DeriveQueueHeadWhenQueueIdle {
+                            queue_idle_prompt_markdown: prompt_markdown,
+                        }
+                    }
+                }
+            }
+            PlanningRuntimeWorkspaceStatus::Uninitialized
+            | PlanningRuntimeWorkspaceStatus::Invalid => {
+                unreachable!("non-ready planning states return before queue refresh mode is built")
+            }
+        };
+        let worker_prompt =
+            self.worker_orchestration
+                .render_refresh_queue_prompt(&PlanningQueueRefreshRequest {
+                    workspace_directory: request.workspace_directory,
+                    parent_thread_id: request.parent_thread_id,
+                    completed_turn_id: request.completed_turn_id,
+                    latest_user_message: request.latest_user_message,
+                    latest_main_reply,
+                    previous_handoff_task: request.previous_handoff_task,
+                    mode: mode.as_refresh_mode(),
+                });
+        PlanningPostTurnQueueRefreshPreparation::Ready(Box::new(PlanningPreparedQueueRefresh::new(
+            &request,
+            latest_main_reply,
+            mode,
+            worker_prompt,
+        )))
+    }
     pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
         self.worker_orchestration
             .render_refresh_queue_prompt(request)
@@ -500,6 +727,13 @@ impl PlanningWorkerUseCases {
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
         // model reply는 orchestration을 통해 들어온다. extraction, validation, repair prompt, mutation commit이 한 경로에 남게 한다.
         self.worker_orchestration.refresh_queue_from_reply(request)
+    }
+    pub fn refresh_prepared_queue_from_reply(
+        &self,
+        prepared: &PlanningPreparedQueueRefresh,
+    ) -> anyhow::Result<PlanningWorkerRunOutcome> {
+        self.worker_orchestration
+            .refresh_queue_from_reply(prepared.as_refresh_request())
     }
     pub fn refresh_queue_from_official_completion(
         &self,

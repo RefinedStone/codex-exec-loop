@@ -5,7 +5,7 @@ use super::super::super::conversation_runtime::{
     ConversationPostTurnAction, PostTurnAutomationProvenance,
 };
 use super::PostTurnEvaluationRequest;
-use crate::application::service::planning::{PlanningQueueRefreshMode, PlanningRuntimeSnapshot};
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 pub(super) fn post_turn_event_detail<I>(
     conversation: &ConversationViewModel,
@@ -150,15 +150,6 @@ pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) ->
         "has_actionable_queue_head": snapshot.has_actionable_queue_head(),
         "has_proposal_candidates": snapshot.has_proposal_candidates(),
     })
-}
-
-pub(super) fn planning_refresh_mode_label(mode: &PlanningQueueRefreshMode<'_>) -> &'static str {
-    match mode {
-        PlanningQueueRefreshMode::FromLatestMainReply => "from_latest_main_reply",
-        PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
-            "derive_queue_head_when_queue_idle"
-        }
-    }
 }
 
 pub(super) fn post_turn_action_log_detail(

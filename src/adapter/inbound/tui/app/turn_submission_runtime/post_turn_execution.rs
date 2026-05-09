@@ -13,11 +13,9 @@ use super::super::{
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
 use crate::application::service::planning::{
-    PlanningExecutionSnapshot, PlanningPostTurnReconciliationRequest,
+    PlanningExecutionSnapshot, PlanningPostTurnQueueRefreshPreparation,
+    PlanningPostTurnQueueRefreshPreparationRequest, PlanningPostTurnReconciliationRequest,
     PlanningProposalPromotionRequest, PlanningServices,
-};
-use crate::application::service::planning::{
-    PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
 };
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
@@ -51,8 +49,8 @@ mod repair;
 use self::planning_worker_panel::planning_worker_queue_summary;
 use self::queue_head_detail::repeated_queue_head_detail;
 use logging::{
-    planning_refresh_mode_label, planning_worker_refresh_skipped_detail, post_turn_action_decision,
-    post_turn_action_log_detail, post_turn_event_detail,
+    planning_worker_refresh_skipped_detail, post_turn_action_decision, post_turn_action_log_detail,
+    post_turn_event_detail,
 };
 
 // Post-turn evaluation is the handoff between a completed Codex turn and the
@@ -308,133 +306,35 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         current_snapshot: PlanningRuntimeSnapshot,
     ) -> PlanningQueueRefreshOutcome {
-        if !matches!(
-            current_snapshot.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-                | PlanningRuntimeWorkspaceStatus::ReadyWithTask
-        ) {
-            event_log::emit_lazy("planning_worker_refresh_skipped", || {
-                planning_worker_refresh_skipped_detail(
-                    conversation,
-                    request,
-                    "planning_runtime_not_ready",
-                    &current_snapshot,
-                )
-            });
-            return PlanningQueueRefreshOutcome {
-                runtime_snapshot: current_snapshot,
-            };
-        }
-        let Some(latest_main_reply) = conversation
-            .latest_agent_message_text()
-            .map(str::trim)
-            .filter(|message: &&str| !message.is_empty())
-        else {
-            event_log::emit_lazy("planning_worker_refresh_skipped", || {
-                planning_worker_refresh_skipped_detail(
-                    conversation,
-                    request,
-                    "latest_main_reply_empty",
-                    &current_snapshot,
-                )
-            });
-            return PlanningQueueRefreshOutcome {
-                runtime_snapshot: current_snapshot,
-            };
-        };
-        let review_prompt_markdown = match current_snapshot.workspace_status() {
-            PlanningRuntimeWorkspaceStatus::ReadyWithTask => None,
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
-                let review_context = match self
-                    .planning_feature
-                    .workspace
-                    .load_queue_idle_review_context(&request.workspace_directory)
-                {
-                    Ok(context) => context,
-                    Err(_) => {
-                        event_log::emit_lazy("planning_worker_refresh_skipped", || {
-                            planning_worker_refresh_skipped_detail(
-                                conversation,
-                                request,
-                                "queue_idle_review_context_unavailable",
-                                &current_snapshot,
-                            )
-                        });
-                        return PlanningQueueRefreshOutcome {
-                            runtime_snapshot: current_snapshot,
-                        };
-                    }
-                };
-                match review_context.policy {
-                    QueueIdlePolicy::Stop => {
-                        event_log::emit_lazy("planning_worker_refresh_skipped", || {
-                            planning_worker_refresh_skipped_detail(
-                                conversation,
-                                request,
-                                "queue_idle_policy_stop",
-                                &current_snapshot,
-                            )
-                        });
-                        return PlanningQueueRefreshOutcome {
-                            runtime_snapshot: current_snapshot,
-                        };
-                    }
-                    QueueIdlePolicy::ReviewAndEnqueue => {
-                        let Some(prompt_markdown) = review_context.prompt_markdown else {
-                            event_log::emit_lazy("planning_worker_refresh_skipped", || {
-                                planning_worker_refresh_skipped_detail(
-                                    conversation,
-                                    request,
-                                    "queue_idle_prompt_missing",
-                                    &current_snapshot,
-                                )
-                            });
-                            return PlanningQueueRefreshOutcome {
-                                runtime_snapshot: current_snapshot,
-                            };
-                        };
-                        Some(prompt_markdown)
-                    }
-                }
-            }
-            PlanningRuntimeWorkspaceStatus::Uninitialized
-            | PlanningRuntimeWorkspaceStatus::Invalid => {
-                return PlanningQueueRefreshOutcome {
-                    runtime_snapshot: current_snapshot,
-                };
-            }
-        };
-        let mode = match current_snapshot.workspace_status() {
-            PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
-                PlanningQueueRefreshMode::FromLatestMainReply
-            }
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask => {
-                let prompt_markdown = review_prompt_markdown
-                    .as_deref()
-                    .expect("queue-idle review prompt should exist for review_and_enqueue");
-                PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle {
-                    queue_idle_prompt_markdown: prompt_markdown,
-                }
-            }
-            PlanningRuntimeWorkspaceStatus::Uninitialized
-            | PlanningRuntimeWorkspaceStatus::Invalid => {
-                unreachable!("non-ready planning states return before queue refresh mode is built")
-            }
-        };
-        let worker_request = PlanningQueueRefreshRequest {
-            workspace_directory: &request.workspace_directory,
-            parent_thread_id: Some(conversation.thread_id.as_str())
-                .filter(|thread_id| !thread_id.trim().is_empty()),
-            completed_turn_id: &request.completed_turn_id,
-            latest_user_message: conversation.latest_user_message_text(),
-            latest_main_reply,
-            previous_handoff_task: conversation.last_planning_task_handoff(),
-            mode: mode.clone(),
-        };
-        let worker_prompt = self
+        let preparation = self
             .planning_feature
             .worker
-            .render_refresh_queue_prompt(&worker_request);
+            .prepare_post_turn_queue_refresh(PlanningPostTurnQueueRefreshPreparationRequest {
+                workspace_directory: &request.workspace_directory,
+                parent_thread_id: Some(conversation.thread_id.as_str())
+                    .filter(|thread_id| !thread_id.trim().is_empty()),
+                completed_turn_id: &request.completed_turn_id,
+                latest_user_message: conversation.latest_user_message_text(),
+                latest_main_reply: conversation.latest_agent_message_text(),
+                previous_handoff_task: conversation.last_planning_task_handoff(),
+                current_runtime_snapshot: &current_snapshot,
+            });
+        let prepared = match preparation {
+            PlanningPostTurnQueueRefreshPreparation::Skipped(skipped) => {
+                event_log::emit_lazy("planning_worker_refresh_skipped", || {
+                    planning_worker_refresh_skipped_detail(
+                        conversation,
+                        request,
+                        skipped.reason.log_label(),
+                        &skipped.runtime_snapshot,
+                    )
+                });
+                return PlanningQueueRefreshOutcome {
+                    runtime_snapshot: skipped.runtime_snapshot,
+                };
+            }
+            PlanningPostTurnQueueRefreshPreparation::Ready(prepared) => prepared,
+        };
         event_log::emit_lazy("planning_worker_refresh_started", || {
             post_turn_event_detail(
                 conversation,
@@ -444,47 +344,42 @@ impl PostTurnEvaluationExecutor {
                 Some("run_worker"),
                 Some(&current_snapshot),
                 [
-                    ("mode", json!(planning_refresh_mode_label(&mode))),
+                    ("mode", json!(prepared.mode_label())),
                     (
                         "latest_main_reply_chars",
-                        json!(latest_main_reply.chars().count()),
+                        json!(prepared.latest_main_reply_char_count()),
                     ),
                     (
                         "has_latest_user_message",
-                        json!(worker_request.latest_user_message.is_some()),
+                        json!(prepared.has_latest_user_message()),
                     ),
                     (
                         "has_previous_handoff",
-                        json!(worker_request.previous_handoff_task.is_some()),
+                        json!(prepared.has_previous_handoff()),
                     ),
-                    ("worker_prompt_chars", json!(worker_prompt.chars().count())),
+                    (
+                        "worker_prompt_chars",
+                        json!(prepared.worker_prompt().chars().count()),
+                    ),
                 ],
             )
         });
         self.record_planning_worker_running(
             PlanningWorkerStatus::RefreshRunning,
-            match mode {
-                PlanningQueueRefreshMode::FromLatestMainReply => "refresh",
-                PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
-                    "queue-idle-derive"
-                }
-            },
-            worker_prompt,
+            prepared.panel_operation_label(),
+            prepared.worker_prompt().to_string(),
         );
         let worker_outcome = self
             .planning_feature
             .worker
-            .refresh_queue_from_reply(worker_request);
+            .refresh_prepared_queue_from_reply(prepared.as_ref());
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
             Err(error) => {
-                let detail = match mode {
-                    PlanningQueueRefreshMode::FromLatestMainReply => {
-                        format!("planning worker refresh failed: {error}")
-                    }
-                    PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. } => {
-                        format!("planning worker queue-idle derivation failed: {error}")
-                    }
+                let detail = if prepared.is_queue_idle_derivation() {
+                    format!("planning worker queue-idle derivation failed: {error}")
+                } else {
+                    format!("planning worker refresh failed: {error}")
                 };
                 let invalid_snapshot =
                     PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON);
@@ -497,7 +392,7 @@ impl PostTurnEvaluationExecutor {
                         Some("block_auto_follow"),
                         Some(&invalid_snapshot),
                         [
-                            ("mode", json!(planning_refresh_mode_label(&mode))),
+                            ("mode", json!(prepared.mode_label())),
                             ("error", json!(error.to_string())),
                             (
                                 "invalid_reason",
@@ -527,7 +422,7 @@ impl PostTurnEvaluationExecutor {
                 Some("apply_outcome"),
                 Some(&outcome.runtime_snapshot),
                 [
-                    ("mode", json!(planning_refresh_mode_label(&mode))),
+                    ("mode", json!(prepared.mode_label())),
                     ("repair_requested", json!(outcome.repair_request.is_some())),
                     (
                         "task_authority_changed",
@@ -654,10 +549,7 @@ impl PostTurnEvaluationExecutor {
         }
         if !runtime_snapshot.has_actionable_queue_head()
             && !runtime_snapshot.has_proposal_candidates()
-            && matches!(
-                mode,
-                PlanningQueueRefreshMode::DeriveQueueHeadWhenQueueIdle { .. }
-            )
+            && prepared.is_queue_idle_derivation()
         {
             self.planning_worker_panel_state.last_host_detail = Some(
                 "planning worker derived no justified follow-up task from the latest request and reply"
