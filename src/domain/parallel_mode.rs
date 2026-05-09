@@ -30,7 +30,7 @@ pub use self::orchestrator::{
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
     ParallelModeDispatchOutcome, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
-    ParallelModePostTurnQueueSignal, ParallelModeRuntimeEvent,
+    ParallelModePostTurnQueueDecision, ParallelModePostTurnQueueSignal, ParallelModeRuntimeEvent,
     ParallelModeTaskDispatchBlockSnapshot,
 };
 pub use self::pool_reset::{

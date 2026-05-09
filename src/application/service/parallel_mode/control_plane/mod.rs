@@ -1,8 +1,12 @@
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use serde::{Deserialize, Serialize};
 
+mod controller;
 mod effect_runner;
 
+pub use controller::{
+    ParallelModeControlPlaneController, ParallelModeControlPlanePresentationEvent,
+};
 #[cfg(test)]
 pub(crate) use effect_runner::parallel_mode_distributor_tick_signature;
 pub use effect_runner::{

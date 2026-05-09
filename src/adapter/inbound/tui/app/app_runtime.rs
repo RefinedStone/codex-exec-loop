@@ -7,7 +7,11 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::{
     ParallelModeService,
-    control_plane::{ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneRuntime},
+    control_plane::{
+        ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneController,
+        ParallelModeControlPlaneEffectRunner, ParallelModeControlPlaneEventSink,
+    },
+    turn::ParallelModeTurnService,
 };
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
@@ -57,6 +61,19 @@ pub(super) enum BackgroundMessage {
     GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
 
+#[derive(Clone)]
+pub(super) struct TuiParallelModeControlPlaneEventSink {
+    tx: mpsc::Sender<BackgroundMessage>,
+}
+
+impl ParallelModeControlPlaneEventSink for TuiParallelModeControlPlaneEventSink {
+    fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
+        let _ = self
+            .tx
+            .send(BackgroundMessage::ParallelModeControlPlaneEvent(event));
+    }
+}
+
 impl NativeTuiApp {
     pub(super) fn new(
         startup_service: StartupService,
@@ -67,6 +84,14 @@ impl NativeTuiApp {
         planning: PlanningServices,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
+        let parallel_mode_control_plane_controller =
+            ParallelModeControlPlaneController::new(ParallelModeControlPlaneEffectRunner::new(
+                parallel_mode_service.clone(),
+                planning.clone(),
+                parallel_agent_worker_port,
+                ParallelModeTurnService::new(parallel_mode_service.clone()),
+                TuiParallelModeControlPlaneEventSink { tx: tx.clone() },
+            ));
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
@@ -91,9 +116,7 @@ impl NativeTuiApp {
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
-            parallel_mode_control_plane_runtime: ParallelModeControlPlaneRuntime::new(),
-            last_parallel_mode_automation_trigger: None,
-            last_parallel_mode_dispatch_withheld_reason: None,
+            parallel_mode_control_plane_controller,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
@@ -108,7 +131,6 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
-            parallel_agent_worker_port,
             turn_control_truth,
             parallel_mode_service,
             planning,

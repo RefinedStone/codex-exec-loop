@@ -400,13 +400,13 @@ fn parallel_task_update_after_enable_reuses_existing_epoch_for_dispatch() {
         "enabled parallel mode should already own the automation epoch"
     );
     assert_eq!(
-        runtime.app().last_parallel_mode_automation_trigger,
+        runtime.app().last_parallel_mode_automation_trigger(),
         Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
     );
     assert!(
         runtime
             .app()
-            .last_parallel_mode_dispatch_withheld_reason
+            .last_parallel_mode_dispatch_withheld_reason()
             .is_none()
     );
 }
@@ -520,7 +520,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
 
     assert!(runtime.app().parallel_mode_automation_epoch_id().is_some());
     assert_eq!(
-        runtime.app().last_parallel_mode_automation_trigger,
+        runtime.app().last_parallel_mode_automation_trigger(),
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
     );
     assert_eq!(fixture.launch_count.load(Ordering::SeqCst), 1);
