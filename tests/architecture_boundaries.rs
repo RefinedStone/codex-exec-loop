@@ -44,33 +44,7 @@ struct PatternDebtRule {
     reason: &'static str,
 }
 
-const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[
-    TemporaryAllowance {
-        path_suffix: "src/adapter/inbound/cli.rs",
-        pattern: "crate::adapter::outbound::",
-        reason: "CLI still owns production wiring until application composition is centralized.",
-    },
-    TemporaryAllowance {
-        path_suffix: "src/adapter/inbound/admin_api/mod.rs",
-        pattern: "crate::adapter::outbound::",
-        reason: "Admin API still owns production wiring until application composition is centralized.",
-    },
-    TemporaryAllowance {
-        path_suffix: "src/adapter/inbound/telegram_bot/mod.rs",
-        pattern: "crate::adapter::outbound::",
-        reason: "Telegram bot still owns production wiring until application composition is centralized.",
-    },
-    TemporaryAllowance {
-        path_suffix: "src/adapter/inbound/tui/app/shell_entrypoint.rs",
-        pattern: "crate::adapter::outbound::",
-        reason: "Native TUI shell entrypoint is the current production wiring boundary.",
-    },
-    TemporaryAllowance {
-        path_suffix: "src/adapter/inbound/tui/app/github_polling.rs",
-        pattern: "crate::adapter::outbound::",
-        reason: "GitHub review polling still builds its adapter from the TUI edge.",
-    },
-];
+const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[];
 
 const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     PatternDebtRule {

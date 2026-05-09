@@ -1,14 +1,12 @@
 use super::{BackgroundMessage, NativeTuiApp};
-use crate::adapter::outbound::github::GithubReviewPollerAdapter;
-use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::composition::production;
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
     GithubPullRequestPollState, GithubPullRequestTarget, truncate_notice_text,
 };
 use anyhow::{Result, anyhow, bail};
 use std::path::Path;
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,13 +43,18 @@ impl GithubReviewPollingBootstrap {
             return Self::from_env_values(
                 pull_request_value,
                 interval_seconds_value,
-                || Self::load_service(repo_root),
+                || production::build_github_review_poller_service(repo_root),
                 now,
             );
         }
         Self::from_discovery_result(
             interval_seconds_value,
-            || Self::load_service_for_current_branch(repo_root),
+            || {
+                production::discover_github_review_poller_service_for_current_branch(
+                    repo_root,
+                    GITHUB_POLL_BASE_BRANCH,
+                )
+            },
             now,
         )
     }
@@ -115,11 +118,6 @@ impl GithubReviewPollingBootstrap {
             },
         }
     }
-    fn load_service(repo_root: &Path) -> Result<GithubReviewPollerService> {
-        let adapter = GithubReviewPollerAdapter::from_refinedstone_credentials(repo_root)?;
-        let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
-        Ok(GithubReviewPollerService::new(port))
-    }
     fn from_discovery_result<F>(
         interval_seconds_value: Option<String>,
         discovery_loader: F,
@@ -160,24 +158,6 @@ impl GithubReviewPollingBootstrap {
                 },
             },
         }
-    }
-    fn load_service_for_current_branch(
-        repo_root: &Path,
-    ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>> {
-        // Missing local credentials are not a TUI setup error during automatic
-        // discovery because most local runs should remain quiet unless polling
-        // was explicitly requested.
-        let adapter = match GithubReviewPollerAdapter::from_refinedstone_credentials(repo_root) {
-            Ok(adapter) => adapter,
-            Err(_) => return Ok(None),
-        };
-        let Some(target) = adapter
-            .find_open_pull_request_for_current_branch(repo_root, GITHUB_POLL_BASE_BRANCH)?
-        else {
-            return Ok(None);
-        };
-        let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
-        Ok(Some((target, GithubReviewPollerService::new(port))))
     }
 }
 

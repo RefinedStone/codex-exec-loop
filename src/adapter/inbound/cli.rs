@@ -1,24 +1,13 @@
-use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
-use crate::adapter::outbound::github::GithubAutomationAdapter;
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
-use crate::application::service::parallel_mode::{
-    ParallelModeOrchestratorTickResult, control_plane::ParallelModeControlPlaneComposition,
-};
+use crate::application::service::parallel_mode::ParallelModeOrchestratorTickResult;
 use crate::application::service::planning::{
-    PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
-    PlanningControlService, PlanningResetTarget, PlanningServices, PlanningTaskToolRequest,
-    PlanningTaskToolResponse,
+    PlanningControlCommand, PlanningControlRequest, PlanningResetTarget, PlanningServices,
+    PlanningTaskToolRequest, PlanningTaskToolResponse,
 };
+use crate::composition::production;
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /*
  * CLI adapter는 operational command를 위한 non-TUI entrypoint다.
@@ -216,10 +205,7 @@ fn run_planning_control_command(
         writeln!(stdout, "issue: {issue}")?;
         return Ok(1);
     }
-    let control = PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
-        workspace_label,
-        build_production_planning_services(),
-    )));
+    let control = production::build_planning_control_service(workspace_label);
     let response = control.execute_request(PlanningControlRequest::new(command))?;
     writeln!(stdout, "{}", response.reply.text)?;
     Ok(0)
@@ -231,7 +217,7 @@ fn run_planning_tool(
     stdout: &mut impl Write,
 ) -> Result<i32> {
     // planning tool은 의도적으로 script/worker 지향이다. contract는 schema를 출력하고 run은 stdin payload를 소비한다.
-    let planning = build_production_planning_services();
+    let planning = production::build_planning_services();
     match subcommand.to_str() {
         Some("contract") => {
             writeln!(stdout, "{}", planning.task_tool.contract_json())?;
@@ -273,7 +259,7 @@ fn run_planning_tool(
 fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i32> {
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     validate_workspace_path(&workspace_path).map_err(anyhow::Error::msg)?;
-    let control_plane = build_production_parallel_mode_control_plane_composition();
+    let control_plane = production::build_parallel_mode_control_plane_composition();
     let workspace_label = workspace_path.display().to_string();
 
     writeln!(stdout, "workspace: {workspace_label}")?;
@@ -356,66 +342,12 @@ fn validate_workspace_path(workspace_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn build_production_planning_services() -> PlanningServices {
-    // 모든 planning CLI command는 native client가 쓰는 repo-scoped authority store를 공유한다.
-    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
-        "codex-exec-loop-native",
-        env!("CARGO_PKG_VERSION"),
-    ));
-    let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    PlanningServices::from_ports(
-        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
-            planning_authority.clone(),
-        )),
-        planning_authority.clone(),
-        planning_authority,
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
-    )
-}
-
-fn build_production_parallel_mode_control_plane_composition() -> ParallelModeControlPlaneComposition
-{
-    /*
-     * parallel-tick도 TUI/admin과 같은 control-plane composition을 통과한다.
-     * CLI는 결과를 동기적으로 렌더링하지만, service graph와 runtime/read-model 해석은 한 경로로 맞춘다.
-     */
-    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
-        "codex-exec-loop-native",
-        env!("CARGO_PKG_VERSION"),
-    ));
-    let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let planning_authority: Arc<dyn PlanningAuthorityPort> = planning_authority_adapter.clone();
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
-        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
-    );
-    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter;
-    let planning = PlanningServices::from_ports(
-        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
-            planning_authority_adapter.clone(),
-        )),
-        planning_authority.clone(),
-        planning_authority_adapter,
-        planning_worker_port,
-    );
-    let parallel_mode_service =
-        crate::application::service::parallel_mode::ParallelModeService::new(
-            planning_authority,
-            Arc::new(GithubAutomationAdapter::new()),
-            Arc::new(GitParallelModeRuntimeAdapter::new()),
-        );
-    ParallelModeControlPlaneComposition::new(
-        parallel_mode_service,
-        planning,
-        parallel_agent_worker_port,
-    )
-}
-
 fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     let workspace_label = workspace_path.display().to_string();
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return DoctorReport::path_issue(workspace_label, issue);
     }
-    let planning = build_production_planning_services();
+    let planning = production::build_planning_services();
     let report = planning
         .workspace
         .inspect_workspace(workspace_path.to_string_lossy().as_ref());
@@ -428,7 +360,7 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return ResetReport::path_issue(workspace_label, issue);
     }
-    let planning = build_production_planning_services();
+    let planning = production::build_planning_services();
     match planning
         .workspace
         .reset_workspace(workspace_path.to_string_lossy().as_ref(), target)

@@ -42,33 +42,9 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| Inbound composition | CLI/admin/Telegram/TUI entrypoint가 production outbound adapter wiring을 아직 직접 들고 있다. |
 | Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
-
-### R9. Production Composition Wiring 중앙화
-
-상태: `ready`
-
-대상:
-
-- `src/adapter/inbound/cli.rs`
-- `src/adapter/inbound/admin_api/mod.rs`
-- `src/adapter/inbound/telegram_bot/mod.rs`
-- `src/adapter/inbound/tui/app/shell_entrypoint.rs`
-- application composition module
-
-해야 할 일:
-
-- production outbound adapter wiring을 inbound entrypoint에서 application composition으로 올린다.
-- inbound adapter는 auth/context mapping과 command invocation만 남긴다.
-- GitHub polling처럼 TUI edge에 남은 adapter 생성도 application-facing handle로 감싼다.
-
-완료 조건:
-
-- `inbound_adapters_do_not_depend_on_outbound_implementations`의 temporary allowance를 줄이거나 제거한다.
-- CLI/admin/Telegram/TUI smoke regression이 통과한다.
 
 ### R10. Architecture Guard를 Behavior Regression으로 보강
 
@@ -88,7 +64,7 @@ state owner는 먼저 분류한 뒤 이동한다.
 완료 조건:
 
 - 남은 source guard마다 behavior test로 대체하지 않는 이유가 test 이름 또는 comment에 드러난다.
-- R9에서 제거된 debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
+- 제거된 architecture debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
 
 ## 문서 운영 규칙
 

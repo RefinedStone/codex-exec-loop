@@ -1,19 +1,6 @@
-use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
-use crate::adapter::outbound::github::GithubAutomationAdapter;
-use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
-use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
-use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
-};
-use crate::application::service::planning::{
-    PlanningAdminFacadeService, PlanningResetTarget, PlanningServices,
-};
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
+use crate::application::service::planning::{PlanningAdminFacadeService, PlanningResetTarget};
+use crate::composition::production;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
 use axum::http::StatusCode;
@@ -111,58 +98,14 @@ where
 
 fn build_admin_state(workspace_dir: String) -> AdminAppState {
     /*
-     * standalone admin server의 composition root다.
-     * app-server worker, sqlite planning authority, filesystem workspace adapter를 여기서 조립해
-     * PlanningServices와 PlanningAdminFacadeService에 주입한다. browser page와 JSON API는 이 결과 facade만 공유하므로
-     * queue, direction, draft state를 서로 다른 adapter instance에서 따로 읽는 drift가 생기지 않는다.
-     *
-     * FilesystemPlanningWorkspaceAdapter는 repo-scoped store를 함께 받는다.
-     * active planning authority가 git worktree 외부 integration checkout에 있을 수 있기 때문에, admin server의 파일 작업도
-     * candidate workspace와 authoritative store를 facade 규칙에 맞춰 구분해야 한다.
+     * Admin HTTP layer는 route와 transport contract만 소유한다.
+     * app-server, sqlite authority, filesystem workspace, Git/GitHub runtime wiring은
+     * production composition root에서 같은 graph로 받아 page/API handler가 동일 facade를 공유하게 한다.
      */
-    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
-        "codex-exec-loop-native",
-        env!("CARGO_PKG_VERSION"),
-    ));
-    let sqlite_planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let planning_authority: Arc<dyn PlanningAuthorityPort> = sqlite_planning_authority.clone();
-    let planning_task_repository: Arc<dyn PlanningTaskRepositoryPort> =
-        sqlite_planning_authority.clone();
-    let planning_workspace_port =
-        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
-            sqlite_planning_authority.clone(),
-        ));
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
-        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
-    );
-    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter;
-    let planning = PlanningServices::from_ports(
-        planning_workspace_port.clone(),
-        planning_authority.clone(),
-        planning_task_repository.clone(),
-        planning_worker_port,
-    );
-    let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
-    let parallel_mode = ParallelModeService::new(
-        planning_authority.clone(),
-        github_automation,
-        Arc::new(GitParallelModeRuntimeAdapter::new()),
-    );
-    let parallel_mode_control_plane = Arc::new(ParallelModeControlPlaneComposition::new(
-        parallel_mode,
-        planning.clone(),
-        parallel_agent_worker_port,
-    ));
-    let facade = Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
-        workspace_dir.clone(),
-        planning.clone(),
-        planning_workspace_port,
-        planning_authority.clone(),
-        planning_task_repository,
-    ));
+    let application = production::build_admin_application(workspace_dir);
     AdminAppState {
-        facade,
-        parallel_mode_control_plane,
+        facade: application.facade,
+        parallel_mode_control_plane: application.parallel_mode_control_plane,
         graphic: AdminGraphicConfig::from_env(),
     }
 }

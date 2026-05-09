@@ -5,27 +5,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
-use crate::adapter::outbound::github::GithubAutomationAdapter;
-use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
-use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::telegram_bot_port::{
     TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
     TelegramUpdate,
 };
-use crate::application::service::parallel_mode::{
-    ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
-};
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::{
-    PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
-    PlanningControlService, PlanningServices,
+    PlanningControlCommand, PlanningControlRequest, PlanningControlService,
 };
+use crate::composition::production;
 
 /*
 이 module은 Telegram을 "또 하나의 shell"로 붙이는 inbound adapter다. Telegram Bot API
@@ -70,7 +59,7 @@ where
 
     // Production wiring: Telegram HTTP adapter + planning control service + local allowlist policy.
     let runner = TelegramBotRunner::new(
-        Arc::new(CurlTelegramBotAdapter::new(args.token)),
+        production::build_telegram_bot_port(args.token),
         application.control_service,
         application.parallel_control_surface,
         TelegramBotPolicy::new(args.allowed_chat_ids),
@@ -93,44 +82,12 @@ fn build_telegram_application(workspace_dir: String) -> TelegramApplication {
     Planning status/reset goes through PlanningControlService, while read-only parallel status uses
     ParallelModeControlPlaneComposition instead of reaching around to ParallelModeService.
     */
-    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
-        "codex-exec-loop-native",
-        env!("CARGO_PKG_VERSION"),
-    ));
-    let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let planning_authority: Arc<dyn PlanningAuthorityPort> = planning_authority_adapter.clone();
-    let planning_workspace_port =
-        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
-            planning_authority_adapter.clone(),
-        ));
-    let planning = PlanningServices::from_ports(
-        planning_workspace_port.clone(),
-        planning_authority.clone(),
-        planning_authority_adapter,
-        Arc::new(AppServerPlanningWorkerAdapter::new(
-            app_server_adapter.clone(),
-        )),
-    );
-    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter;
-    let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
-    let parallel_mode_service = ParallelModeService::new(
-        planning_authority,
-        github_automation,
-        Arc::new(GitParallelModeRuntimeAdapter::new()),
-    );
-    let parallel_control_plane = Arc::new(ParallelModeControlPlaneComposition::new(
-        parallel_mode_service,
-        planning.clone(),
-        parallel_agent_worker_port,
-    ));
+    let application = production::build_telegram_application(workspace_dir.clone());
     TelegramApplication {
-        control_service: PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
-            workspace_dir.clone(),
-            planning,
-        ))),
+        control_service: application.control_service,
         parallel_control_surface: Arc::new(TelegramParallelControlPlaneSurface {
             workspace_dir,
-            control_plane: parallel_control_plane,
+            control_plane: application.parallel_mode_control_plane,
         }),
     }
 }

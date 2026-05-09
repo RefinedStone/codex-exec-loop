@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -7,29 +8,10 @@ use super::github_polling::GithubReviewPollingBootstrap;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
 use super::{NativeTuiApp, NativeTuiParallelModeBinding, ShellChromeEvent};
-use crate::adapter::outbound::app_server::AppServerPlanningWorkerAdapter;
-use crate::adapter::outbound::app_server::CodexAppServerAdapter;
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
-use crate::adapter::outbound::github::GithubAutomationAdapter;
-use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
-use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::parallel_mode::ParallelModeService;
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-use crate::application::service::planning::PlanningServices;
-use crate::application::service::session_service::SessionService;
-use crate::application::service::startup_service::StartupService;
+use crate::composition::production;
 
-/*
- * shell_entrypoint is the production composition root for the native TUI. Everything below this
- * point is concrete adapter wiring: app-server for Codex sessions, SQLite/filesystem planning
- * stores, Git/GitHub automation for parallel mode, and the terminal frontend. Keeping this graph in
- * one file makes the rest of the TUI depend on ports and services instead of construction details.
- */
+// shell_entrypoint owns terminal bootstrap only. Production service wiring lives
+// in crate::composition::production so TUI remains an inbound adapter.
 pub fn run() -> Result<()> {
     let frontend = ShellFrontend::new();
     let runtime = prepare_runtime(build_default_app());
@@ -37,61 +19,13 @@ pub fn run() -> Result<()> {
 }
 
 fn build_default_app() -> NativeTuiApp {
-    /*
-     * CodexAppServerAdapter is shared by startup, session catalog, conversation streaming, planning
-     * worker prompts, and parallel-agent workers. Cloning the Arc here is intentional: each service
-     * receives the port role it needs while the concrete process bridge remains one adapter.
-     */
-    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
-        "codex-exec-loop-native",
-        env!("CARGO_PKG_VERSION"),
-    ));
-    let sqlite_planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let planning_authority: Arc<dyn PlanningAuthorityPort> = sqlite_planning_authority.clone();
-    let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
-    /*
-     * Planning uses two storage-facing ports over the same SQLite-backed authority root. The
-     * workspace adapter owns file export/apply behavior, while the authority port feeds queue and
-     * direction state into services and parallel-mode readiness checks.
-     */
-    let planning_workspace_port =
-        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
-            sqlite_planning_authority.clone(),
-        ));
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
-        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
-    );
-    let startup_service = StartupService::new(app_server_adapter.clone());
-    let session_service = SessionService::new(app_server_adapter.clone());
-    let conversation_service = ConversationService::new(app_server_adapter.clone());
-    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter.clone();
-    let planning = PlanningServices::from_ports(
-        planning_workspace_port,
-        planning_authority.clone(),
-        sqlite_planning_authority,
-        planning_worker_port,
-    );
-    /*
-     * Parallel mode gets planning authority plus GitHub/Git runtime adapters, but not direct access
-     * to the conversation services. That boundary keeps slot orchestration focused on branches,
-     * leases, and PR state while the TUI runtime remains responsible for turn submission.
-     */
-    let parallel_mode_service = ParallelModeService::new(
-        planning_authority,
-        github_automation,
-        Arc::new(GitParallelModeRuntimeAdapter::new()),
-    );
-    let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
-        parallel_mode_service,
-        planning,
-        parallel_agent_worker_port,
-    );
+    let services = production::build_native_tui_application_services();
     let parallel_mode_binding =
-        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
+        NativeTuiParallelModeBinding::from_composition(services.parallel_mode_control_plane);
     let mut app = NativeTuiApp::new(
-        startup_service,
-        session_service,
-        conversation_service,
+        services.startup_service,
+        services.session_service,
+        services.conversation_service,
         parallel_mode_binding,
     );
     let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -131,6 +65,10 @@ mod tests {
         AppServerStartupContext, StartupProbePort,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::conversation_service::ConversationService;
+    use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::ConversationSnapshot;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;

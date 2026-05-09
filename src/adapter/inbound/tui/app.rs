@@ -21,10 +21,10 @@ use ratatui::widgets::Clear;
 use std::sync::mpsc::{Receiver, Sender};
 
 /*
- * This module is the native TUI composition root. The implementation is split
- * into focused reducers, presentation builders, runtime bridges, and renderers
- * under app/, while this file keeps the shared constants, module wiring, and
- * state container that those slices extend through sibling impl blocks.
+ * This module is the native TUI state and module root. Production service
+ * wiring lives in crate::composition::production; this file keeps shared
+ * constants, UI state, and sibling module wiring for reducers, presentation
+ * builders, runtime bridges, and renderers under app/.
  */
 
 // These defaults define the shell's bounded presentation surface: session lists
@@ -138,7 +138,7 @@ mod tui_testkit;
 mod turn_submission_runtime;
 
 // Re-exports below are the narrow surface area sibling modules expect from this
-// composition root. Keeping them here makes the dependency graph explicit: app
+// app module root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
 use app_runtime::NativeTuiApplicationHandle;
