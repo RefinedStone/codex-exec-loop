@@ -13,11 +13,13 @@ use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeControlPlaneWorkerEvent, ParallelModeDispatchOutcome,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
-    ParallelModePoolResetRunId, ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
-    ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
+    ParallelModePoolResetRunId, ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
+    ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
 };
 
-use super::{ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake};
+use super::{
+    ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModeControlPlaneLoadingStage {
@@ -485,11 +487,23 @@ where
         (readiness_snapshot, supervisor_snapshot)
     }
 
-    pub fn has_actionable_queue_head(&self, workspace_directory: &str) -> bool {
-        self.planning
+    pub fn continue_post_turn_queue_command(
+        &self,
+        workspace_directory: String,
+        signal: Option<ParallelModePostTurnQueueSignal>,
+        auto_follow_prompt_queued: bool,
+    ) -> ParallelModeControlPlaneCommand {
+        let has_actionable_queue_head = self
+            .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(workspace_directory)
-            .has_actionable_queue_head()
+            .load_runtime_snapshot_or_invalid(&workspace_directory)
+            .has_actionable_queue_head();
+        ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
+            workspace_directory,
+            signal,
+            auto_follow_prompt_queued,
+            has_actionable_queue_head,
+        }
     }
 
     pub fn pending_dispatch_wake(

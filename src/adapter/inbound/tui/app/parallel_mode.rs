@@ -142,12 +142,6 @@ impl NativeTuiApp {
         self.parallel_mode_readiness_snapshot.as_ref()
     }
     #[cfg(test)]
-    pub(crate) fn parallel_mode_service(
-        &self,
-    ) -> &crate::application::service::parallel_mode::ParallelModeService {
-        self.application.parallel_mode()
-    }
-    #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
         let workspace_directory = self.planning_workspace_directory();
         self.parallel_mode_control_plane

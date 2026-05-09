@@ -42,41 +42,11 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| Control-plane bypass | 일부 surface가 아직 `ParallelModeService`를 직접 받아 control-plane gate를 우회할 수 있다. |
 | TUI boundary | TUI production state에 raw application service handle debt가 남아 있다. |
 | Inbound composition | CLI/admin/Telegram/TUI entrypoint가 production outbound adapter wiring을 아직 직접 들고 있다. |
 | Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
-
-### R7. Parallel Control-Plane Bypass 제거
-
-상태: `ready`
-
-결정:
-
-- R6에서 queue-backed actor loop 전환은 보류했다.
-- 현재 선택은 mutex-serialized synchronous facade다.
-- 따라서 다음 문제는 actor loop 부재가 아니라 raw `ParallelModeService` bypass다.
-
-대상:
-
-- `src/application/service/parallel_mode/control_plane/composition.rs`
-- `src/application/service/parallel_mode/control_plane/controller.rs`
-- `src/adapter/inbound/tui/app/app_runtime.rs`
-- `src/adapter/inbound/tui/app/parallel_mode.rs`
-
-해야 할 일:
-
-- production inbound surface가 parallel control-plane handle을 우회하지 못하게 한다.
-- manual orchestrator tick도 control-plane command/effect 경로로 들어가게 한다.
-- controller가 command 구성 중 low-level queue query를 직접 호출하는 지점을 좁힌다.
-- TUI parallel binding에서 raw service accessor를 제거한다.
-
-완료 조건:
-
-- `temporary_parallel_control_surfaces_no_longer_bypass_control_plane_gate`가 통과한다.
-- 기존 `parallel_mode` regression이 통과한다.
 
 ### R8. TUI Raw Application Service Handle 축소
 
@@ -140,7 +110,7 @@ state owner는 먼저 분류한 뒤 이동한다.
 완료 조건:
 
 - 남은 source guard마다 behavior test로 대체하지 않는 이유가 test 이름 또는 comment에 드러난다.
-- R7-R9에서 제거된 debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
+- R8-R9에서 제거된 debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
 
 ## 문서 운영 규칙
 

@@ -55,6 +55,7 @@ struct NativeFlowHarness {
     runtime: ShellRuntime,
     workspace_dir: String,
     authority: Arc<SqlitePlanningAuthorityAdapter>,
+    parallel_mode_service: crate::application::service::parallel_mode::ParallelModeService,
     worker_port: Arc<FlowParallelAgentWorkerPort>,
 }
 
@@ -220,9 +221,11 @@ impl NativeFlowHarness {
         bootstrap_active_planning_workspace_with_services(&planning, &workspace_dir);
         let worker_port = Arc::new(FlowParallelAgentWorkerPort::default());
         let codex_port = Arc::new(FakeAppServerPort);
+        let parallel_mode_service =
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service();
         let parallel_mode_control_plane_composition =
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_control_plane_composition_with_worker(
-                crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+                parallel_mode_service.clone(),
                 planning,
                 worker_port.clone(),
             );
@@ -242,6 +245,7 @@ impl NativeFlowHarness {
             runtime: ShellRuntime::new(app),
             workspace_dir,
             authority,
+            parallel_mode_service,
             worker_port,
         }
     }
@@ -1004,9 +1008,7 @@ fn parallel_reentry_while_enabled_refreshes_without_reset_or_dispatch() {
     let mut harness = NativeFlowHarness::new("flow-parallel-reentry");
     harness.committed_ready_task("keep existing leased slot during reentry");
     let lease = harness
-        .runtime
-        .app()
-        .parallel_mode_service()
+        .parallel_mode_service
         .acquire_slot_lease(
             &harness.workspace_dir,
             ParallelModeSlotLeaseRequest::new(
@@ -1397,9 +1399,7 @@ fn live_running_slot_is_preserved_during_off_to_on_pool_reset() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-live-reset-block");
     let lease = harness
-        .runtime
-        .app()
-        .parallel_mode_service()
+        .parallel_mode_service
         .acquire_slot_lease(
             &harness.workspace_dir,
             ParallelModeSlotLeaseRequest::new(
@@ -1411,9 +1411,7 @@ fn live_running_slot_is_preserved_during_off_to_on_pool_reset() {
         )
         .expect("slot lease should be acquired");
     let running_lease = harness
-        .runtime
-        .app()
-        .parallel_mode_service()
+        .parallel_mode_service
         .mark_slot_running(&harness.workspace_dir, &lease.slot_id, "agent-running")
         .expect("slot should be marked running");
     fs::write(
@@ -1458,9 +1456,7 @@ fn stale_leased_slot_reset_preserves_failed_start_dispatch_block() {
     let _guard = flow_test_guard();
     let mut harness = NativeFlowHarness::new("flow-stale-lease-reset");
     let lease = harness
-        .runtime
-        .app()
-        .parallel_mode_service()
+        .parallel_mode_service
         .acquire_slot_lease(
             &harness.workspace_dir,
             ParallelModeSlotLeaseRequest::new(

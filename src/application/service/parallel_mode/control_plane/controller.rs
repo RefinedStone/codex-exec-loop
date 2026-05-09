@@ -187,17 +187,12 @@ where
         signal: Option<ParallelModePostTurnQueueSignal>,
         auto_follow_prompt_queued: bool,
     ) -> ParallelModePostTurnQueueContinuationOutcome {
-        let has_actionable_queue_head = self
-            .effect_runner
-            .has_actionable_queue_head(&workspace_directory);
-        let outcome = self
-            .runtime
-            .handle(ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
-                workspace_directory,
-                signal,
-                auto_follow_prompt_queued,
-                has_actionable_queue_head,
-            });
+        let command = self.effect_runner.continue_post_turn_queue_command(
+            workspace_directory,
+            signal,
+            auto_follow_prompt_queued,
+        );
+        let outcome = self.runtime.handle(command);
         let consume_auto_follow_prompt = outcome.events.iter().any(|event| {
             matches!(
                 event,

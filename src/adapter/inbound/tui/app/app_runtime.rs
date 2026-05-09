@@ -3,7 +3,6 @@ use std::thread;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
@@ -100,7 +99,7 @@ pub(super) struct NativeTuiApplicationHandle {
     startup: StartupService,
     sessions: SessionService,
     conversations: ConversationService,
-    parallel: ParallelModeService,
+    parallel_turns: ParallelModeTurnService,
     planning_feature: PlanningServices,
 }
 
@@ -109,14 +108,14 @@ impl NativeTuiApplicationHandle {
         startup: StartupService,
         sessions: SessionService,
         conversations: ConversationService,
-        parallel: ParallelModeService,
+        parallel_turns: ParallelModeTurnService,
         planning_feature: PlanningServices,
     ) -> Self {
         Self {
             startup,
             sessions,
             conversations,
-            parallel,
+            parallel_turns,
             planning_feature,
         }
     }
@@ -145,13 +144,8 @@ impl NativeTuiApplicationHandle {
         self.planning_feature.clone()
     }
 
-    #[cfg(test)]
-    pub(super) fn parallel_mode(&self) -> &ParallelModeService {
-        &self.parallel
-    }
-
     pub(super) fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
-        ParallelModeTurnService::new(self.parallel.clone())
+        self.parallel_turns.clone()
     }
 
     pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
@@ -199,7 +193,7 @@ impl NativeTuiConversationStreamHandle {
 }
 
 pub(crate) struct NativeTuiParallelModeBinding {
-    parallel: ParallelModeService,
+    parallel_turns: ParallelModeTurnService,
     planning_feature: PlanningServices,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
@@ -214,7 +208,7 @@ impl NativeTuiParallelModeBinding {
         let parallel_mode_control_plane =
             composition.bind_event_sink(runtime_channels.parallel_mode_event_sink());
         NativeTuiParallelModeBinding {
-            parallel: composition.parallel_mode_service().clone(),
+            parallel_turns: composition.parallel_mode_turn_service(),
             planning_feature: composition.planning().clone(),
             parallel_mode_control_plane,
             runtime_channels,
@@ -230,7 +224,7 @@ impl NativeTuiApp {
         parallel_mode_binding: NativeTuiParallelModeBinding,
     ) -> Self {
         let NativeTuiParallelModeBinding {
-            parallel,
+            parallel_turns,
             planning_feature,
             parallel_mode_control_plane,
             runtime_channels,
@@ -239,7 +233,7 @@ impl NativeTuiApp {
             startup_service,
             session_service,
             conversation_service,
-            parallel,
+            parallel_turns,
             planning_feature,
         );
 

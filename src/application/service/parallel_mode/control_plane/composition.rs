@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::mpsc;
 
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
@@ -8,12 +9,13 @@ use crate::application::service::parallel_mode::{
 };
 use crate::application::service::planning::{PlanningApplicationProjection, PlanningServices};
 use crate::domain::parallel_mode::{
-    ParallelModeReadinessSnapshot, ParallelModeRuntimeEventsSnapshot,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeOrchestratorStateMachine, ParallelModeReadinessSnapshot,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSupervisorSnapshot,
 };
 
 use super::controller::ParallelModeControlPlaneService;
 use super::{
+    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlaneEffectRunner, ParallelModeControlPlaneEventSink,
     ParallelModeControlPlaneHandle,
 };
@@ -31,6 +33,17 @@ pub struct ParallelModeControlPlaneDashboardSnapshot {
     pub events: ParallelModeRuntimeEventsSnapshot,
 }
 
+#[derive(Clone)]
+struct BlockingParallelModeControlPlaneEventSink {
+    tx: mpsc::Sender<ParallelModeControlPlaneBackgroundEvent>,
+}
+
+impl ParallelModeControlPlaneEventSink for BlockingParallelModeControlPlaneEventSink {
+    fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
+        let _ = self.tx.send(event);
+    }
+}
+
 impl ParallelModeControlPlaneComposition {
     pub fn new(
         parallel_mode_service: ParallelModeService,
@@ -44,8 +57,8 @@ impl ParallelModeControlPlaneComposition {
         }
     }
 
-    pub fn parallel_mode_service(&self) -> &ParallelModeService {
-        &self.parallel_mode_service
+    pub fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
+        ParallelModeTurnService::new(self.parallel_mode_service.clone())
     }
 
     pub fn planning(&self) -> &PlanningServices {
@@ -105,10 +118,36 @@ impl ParallelModeControlPlaneComposition {
         &self,
         workspace_directory: &str,
     ) -> Result<ParallelModeOrchestratorTickResult, String> {
-        self.parallel_mode_service.run_orchestrator_tick(
-            workspace_directory,
-            ParallelModeOrchestratorTrigger::ManualDispatch,
-        )
+        let (tx, rx) = mpsc::channel();
+        let handle = self.bind_event_sink(BlockingParallelModeControlPlaneEventSink { tx });
+        let workspace_directory = workspace_directory.to_string();
+        let _ = handle.handle_command(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: workspace_directory.clone(),
+        });
+        let _ = handle.handle_command(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+            workspace_directory: workspace_directory.clone(),
+            signature: "manual-dispatch".to_string(),
+        });
+
+        loop {
+            let event = rx
+                .recv()
+                .map_err(|error| format!("manual control-plane tick did not complete: {error}"))?;
+            if let ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+                blocked,
+                notices,
+                ..
+            } = event
+            {
+                return Ok(ParallelModeOrchestratorTickResult {
+                    trigger: ParallelModeOrchestratorTrigger::ManualDispatch,
+                    state: ParallelModeOrchestratorStateMachine::tick_state(blocked),
+                    blocked,
+                    notices,
+                });
+            }
+            let _ = handle.handle_background_event(event);
+        }
     }
 
     pub fn bind_event_sink<S>(&self, event_sink: S) -> ParallelModeControlPlaneHandle<S>
