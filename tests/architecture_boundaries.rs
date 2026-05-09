@@ -118,6 +118,54 @@ const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     },
 ];
 
+const TUI_RAW_APPLICATION_SERVICE_DEBTS: &[PatternDebtRule] = &[
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app.rs",
+        pattern: "startup_service: StartupService,",
+        reason: "NativeTuiApp still owns a raw startup application service instead of an application-facing handle.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app.rs",
+        pattern: "session_service: SessionService,",
+        reason: "NativeTuiApp still owns a raw session application service instead of an application-facing handle.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app.rs",
+        pattern: "conversation_service: ConversationService,",
+        reason: "NativeTuiApp still owns a raw conversation application service instead of an application-facing handle.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app.rs",
+        pattern: "parallel_mode_service: ParallelModeService,",
+        reason: "NativeTuiApp still owns a raw parallel application service instead of an application-facing handle.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app.rs",
+        pattern: "planning: PlanningServices,",
+        reason: "NativeTuiApp still owns raw planning services instead of a narrow application-facing handle.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app/app_runtime.rs",
+        pattern: "parallel_mode_service: ParallelModeService,",
+        reason: "TUI runtime dependencies still carry raw parallel service wiring.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app/app_runtime.rs",
+        pattern: "planning: PlanningServices,",
+        reason: "TUI runtime dependencies still carry raw planning service wiring.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
+        pattern: "planning: PlanningServices,",
+        reason: "TUI post-turn execution still owns raw planning service wiring.",
+    },
+    PatternDebtRule {
+        path_suffix: "src/adapter/inbound/tui/app/turn_submission_runtime/stream_execution.rs",
+        pattern: "service: ConversationService,",
+        reason: "TUI stream execution still owns raw conversation service wiring.",
+    },
+];
+
 #[test]
 fn domain_layer_has_no_application_or_adapter_dependencies() {
     assert_no_forbidden_references(BoundaryRule {
@@ -129,11 +177,46 @@ fn domain_layer_has_no_application_or_adapter_dependencies() {
 }
 
 #[test]
+fn domain_layer_has_no_runtime_ui_or_io_dependencies() {
+    assert_no_forbidden_references(BoundaryRule {
+        name: "domain must stay pure from runtime, UI, and IO infrastructure",
+        root: "src/domain",
+        forbidden_patterns: &[
+            "std::thread",
+            "std::sync::mpsc",
+            "tokio::",
+            "ratatui",
+            "crossterm",
+            "std::fs",
+            "std::process",
+            "Command::new",
+        ],
+        temporary_allowances: &[],
+    });
+}
+
+#[test]
 fn application_layer_has_no_concrete_adapter_dependencies() {
     assert_no_forbidden_references(BoundaryRule {
         name: "application must depend on ports and domain, not concrete adapters",
         root: "src/application",
         forbidden_patterns: &["crate::adapter::"],
+        temporary_allowances: &[],
+    });
+}
+
+#[test]
+fn application_layer_has_no_ui_framework_dependencies() {
+    assert_no_forbidden_references(BoundaryRule {
+        name: "application must not depend on TUI framework details",
+        root: "src/application",
+        forbidden_patterns: &[
+            "ratatui",
+            "crossterm",
+            "crate::adapter::inbound::tui",
+            "crate::adapter::inbound::admin_api",
+            "crate::adapter::inbound::telegram_bot",
+        ],
         temporary_allowances: &[],
     });
 }
@@ -152,6 +235,28 @@ fn temporary_inbound_composition_debt_has_been_removed() {
         "temporary architecture debt remains. This failure is intentional until composition wiring is moved out of inbound adapters:\n{}",
         format_temporary_debts(&debts)
     );
+}
+
+#[test]
+fn inbound_adapters_do_not_mutate_parallel_durable_state_directly() {
+    assert_no_forbidden_references(BoundaryRule {
+        name: "inbound adapters must not directly mutate parallel durable/runtime state",
+        root: "src/adapter/inbound",
+        forbidden_patterns: &[
+            "claim_next_dispatch_command",
+            "enqueue_runtime_dispatch_command",
+            "update_runtime_dispatch_command",
+            "try_claim_next_runtime_dispatch_command",
+            "mark_workspace_slot_running",
+            "release_workspace_slot_lease_after_failed_start",
+            "write_slot_lease",
+            "remove_slot_lease",
+            "cleanup_slot(",
+            "reset_slot_worktree_to_akra",
+            "build_dispatch_plan(",
+        ],
+        temporary_allowances: &[],
+    });
 }
 
 #[test]
@@ -201,6 +306,17 @@ fn outbound_port_modules_follow_port_naming_contract() {
         violations.is_empty(),
         "outbound port naming contract violations:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn temporary_tui_raw_application_services_have_been_wrapped() {
+    let debts = collect_pattern_debts(TUI_RAW_APPLICATION_SERVICE_DEBTS);
+
+    assert!(
+        debts.is_empty(),
+        "temporary TUI service-wiring debt remains. TUI production state should hold UI state, projection cache, and narrow application handles only:\n{}",
+        format_temporary_debts(&debts)
     );
 }
 
@@ -456,10 +572,25 @@ fn production_lines(source: &str) -> Vec<SourceLine> {
     let mut lines = Vec::new();
     let mut skip_cfg_test_item = false;
     let mut skipping_cfg_test_block = false;
+    let mut skipping_block_comment = false;
     let mut cfg_test_block_depth = 0isize;
 
     for (index, line) in source.lines().enumerate() {
         let trimmed = line.trim();
+
+        if skipping_block_comment {
+            if trimmed.contains("*/") {
+                skipping_block_comment = false;
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("/*") {
+            if !trimmed.contains("*/") {
+                skipping_block_comment = true;
+            }
+            continue;
+        }
 
         if skipping_cfg_test_block {
             cfg_test_block_depth += brace_delta(line);
