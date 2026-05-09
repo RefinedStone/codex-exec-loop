@@ -45,62 +45,20 @@ state owner는 먼저 분류한 뒤 이동한다.
 | Parallel control-plane | control-plane은 아직 queue actor가 아니라 mutex facade다. |
 | TUI boundary | TUI production state에 raw application service handle debt가 남아 있다. |
 | Inbound composition | CLI/admin/Telegram/TUI entrypoint가 production outbound adapter wiring을 아직 직접 들고 있다. |
-| Store/runtime | process-lifetime state와 durable recovery requirement를 기능별로 다시 판정해야 한다. |
 | Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
 
-### R5. Store/Runtime Recovery Boundary 재판정
-
-상태: `ready`
-
-대상:
-
-- `src/application/port/outbound/*`
-- `src/adapter/outbound/db/*`
-- `src/adapter/outbound/filesystem/*`
-- `src/adapter/outbound/git/*`
-- parallel/planning runtime store modules
-
-문제:
-
-- 어떤 state가 process-lifetime이어도 되는지, 어떤 state가 recoverable이어야 하는지
-  기능별로 다시 판정해야 한다.
-- 과거 inventory 문서는 제거했으므로 source code와 behavior test가 authority여야 한다.
-
-해야 할 일:
-
-- dispatch command, lease, session detail, distributor queue, planning authority, active turn
-  correlation을 recovery requirement 기준으로 분류한다.
-- durable state mutation이 adapter/TUI/thread에서 직접 일어나지 않는지 확인한다.
-- 필요한 경우 port boundary를 추가하거나 기존 port request/result를 좁힌다.
-
-완료 조건:
-
-- recoverable state는 durable store 또는 outbound boundary 뒤에 있다.
-- process-lifetime state는 restart loss가 허용되는 이유가 test 또는 code comment로 설명된다.
-- recovery/mirror-loss/stale completion regression이 통과한다.
-
-검증:
-
-```bash
-cargo test adapter::outbound::db::sqlite_planning_authority_adapter
-cargo test parallel_mode
-cargo test planning
-```
-
 ### R6. Control-Plane Event Loop 전환 여부 결정
 
-상태: `blocked`
-
-선행:
-
-- R5
+상태: `ready`
 
 현재 판단:
 
 - 지금 구조는 queue-backed actor loop가 아니라 mutex-serialized synchronous facade다.
-- 동기 facade는 당장 유지한다. 먼저 durable/process-lifetime state 경계를 확정한다.
+- recoverable state와 process-lifetime state의 경계는 R5에서 확정했다.
+- 이제 남은 판단은 synchronous mutex facade를 유지할지, queue-backed single consumer loop로
+  바꿀지이다.
 
 해야 할 일:
 

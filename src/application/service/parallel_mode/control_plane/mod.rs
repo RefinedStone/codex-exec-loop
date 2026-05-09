@@ -325,19 +325,27 @@ impl ParallelModeControlPlaneRuntimeOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModeControlPlaneRuntimeStore {
-    pub workspace_directory: Option<String>,
-    pub mode_enabled: bool,
-    pub initial_pool_reset_completed: bool,
-    pub current_epoch_id: Option<u64>,
-    pub next_epoch_id: u64,
-    pub parallel_entry_in_flight: Option<ParallelModeControlPlaneEffectId>,
-    pub supervisor_refresh_in_flight: Option<ParallelModeControlPlaneEffectId>,
-    pub orchestrator_wake_in_flight: Option<ParallelModeControlPlaneEffectId>,
-    pub orchestrator_tick_in_flight: Option<ParallelModeControlPlaneEffectId>,
-    pub projection_ready: bool,
-    pub pending_supervisor_refresh: bool,
-    pub pending_orchestrator_wake: Option<ParallelModeControlPlaneWake>,
-    pub last_orchestrator_tick_signature: Option<String>,
+    /*
+     * This store is process-lifetime control-plane memory, not recoverable state.
+     * Restart loss is acceptable because durable work lives in PlanningAuthorityPort
+     * projections: dispatch commands, slot leases, session detail, task dispatch
+     * blocks, distributor queue records, official-refresh claims, runtime events,
+     * planning authority, and task provenance. A fresh process must reopen an
+     * epoch explicitly, then read those durable rows before scheduling effects.
+     */
+    workspace_directory: Option<String>,
+    mode_enabled: bool,
+    initial_pool_reset_completed: bool,
+    current_epoch_id: Option<u64>,
+    next_epoch_id: u64,
+    parallel_entry_in_flight: Option<ParallelModeControlPlaneEffectId>,
+    supervisor_refresh_in_flight: Option<ParallelModeControlPlaneEffectId>,
+    orchestrator_wake_in_flight: Option<ParallelModeControlPlaneEffectId>,
+    orchestrator_tick_in_flight: Option<ParallelModeControlPlaneEffectId>,
+    projection_ready: bool,
+    pending_supervisor_refresh: bool,
+    pending_orchestrator_wake: Option<ParallelModeControlPlaneWake>,
+    last_orchestrator_tick_signature: Option<String>,
     next_effect_sequence: u64,
 }
 

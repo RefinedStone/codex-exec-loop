@@ -613,6 +613,99 @@ fn runtime_projection_snapshot_groups_current_rows_and_recent_events() {
 }
 
 #[test]
+fn runtime_recoverable_projection_survives_adapter_restart_boundary() {
+    let workspace_dir = temp_workspace("runtime-restart-boundary");
+    let writer = SqlitePlanningAuthorityAdapter::new();
+    let lease = slot_lease_for_task(
+        "slot-1",
+        "task-recoverable",
+        ParallelModeSlotLeaseState::Running,
+    );
+    let mut session = failed_start_session_detail(
+        "session-recoverable",
+        "task-recoverable",
+        "2026-05-04T12:00:00+00:00",
+    );
+    session.thread_id = Some("thread-recoverable".to_string());
+    let block = ParallelModeTaskDispatchBlockSnapshot::new(
+        "task-recoverable",
+        "2026-05-04T11:55:00+00:00",
+        "2026-05-04T12:00:00+00:00",
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    let queue_record = queue_record_for_task(
+        "queue-recoverable",
+        "session-recoverable",
+        "task-recoverable",
+    );
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("task-recoverable:ready".to_string()),
+        Some(41),
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    writer
+        .upsert_runtime_slot_lease(&workspace_dir, &lease)
+        .expect("slot lease should persist");
+    writer
+        .upsert_runtime_session_detail(&workspace_dir, &session)
+        .expect("session detail should persist");
+    writer
+        .upsert_runtime_task_dispatch_block(&workspace_dir, &block)
+        .expect("task dispatch block should persist");
+    writer
+        .upsert_runtime_distributor_queue_record(&workspace_dir, &queue_record)
+        .expect("distributor queue should persist");
+    assert!(
+        writer
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("dispatch command should persist")
+    );
+    assert!(
+        writer
+            .try_acquire_distributor_queue_claim(
+                &workspace_dir,
+                "queue-recoverable",
+                "owner-before-restart",
+            )
+            .expect("queue claim should acquire")
+    );
+    assert_eq!(
+        writer
+            .reserve_next_official_refresh_order(&workspace_dir)
+            .expect("first refresh order should reserve"),
+        1
+    );
+
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    let snapshot = restarted
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should survive a new adapter handle");
+
+    assert_eq!(snapshot.slot_leases.get("slot-1"), Some(&lease));
+    assert_eq!(snapshot.session_details, vec![session]);
+    assert_eq!(snapshot.task_dispatch_blocks, vec![block]);
+    assert_eq!(snapshot.distributor_queue_records, vec![queue_record]);
+    assert_eq!(snapshot.dispatch_commands, vec![command]);
+    assert!(
+        !restarted
+            .try_acquire_distributor_queue_claim(
+                &workspace_dir,
+                "queue-recoverable",
+                "owner-after-restart",
+            )
+            .expect("persisted queue claim should block a competing owner")
+    );
+    assert_eq!(
+        restarted
+            .reserve_next_official_refresh_order(&workspace_dir)
+            .expect("official refresh order should continue after restart"),
+        2
+    );
+}
+
+#[test]
 fn official_refresh_claim_orders_are_enforced_by_authority_store() {
     let workspace_dir = temp_workspace("official-refresh-claims");
     let adapter = SqlitePlanningAuthorityAdapter::new();
