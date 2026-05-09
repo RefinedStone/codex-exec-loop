@@ -516,6 +516,7 @@ impl NativeFlowHarness {
             ready_parallel_mode_readiness_snapshot(&self.workspace_dir),
             ready_parallel_mode_supervisor_snapshot(&self.workspace_dir),
             status_text.to_string(),
+            false,
         );
     }
 
@@ -1382,6 +1383,10 @@ fn live_running_slot_is_preserved_during_off_to_on_pool_reset() {
     .expect("running evidence should be written");
 
     harness.runtime.app_mut().parallel_mode_enabled = true;
+    harness
+        .runtime
+        .app_mut()
+        .parallel_mode_initial_pool_reset_completed = true;
     harness.turn_parallel_off();
     harness.enter_parallel();
 
@@ -1476,6 +1481,7 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
                 &harness.workspace_dir,
             )),
             status_text: "parallel mode: on / readiness: ready / control tower ready".to_string(),
+            initial_pool_reset_completed: false,
         })
         .expect("late enter result should enqueue");
     harness.runtime.poll_background_messages();

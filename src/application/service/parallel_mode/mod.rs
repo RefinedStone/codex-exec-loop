@@ -9,9 +9,10 @@ use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
     ParallelModeCapabilityState, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchTaskCandidate, ParallelModeOrchestratorState,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolResetReport, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEvent,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
+    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -412,10 +413,34 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
     ) -> Result<ParallelModePoolResetReport, String> {
+        self.reset_pool_on_parallel_enable_report_with_policy(
+            workspace_dir,
+            ParallelModePoolResetPolicy::ProtectLive,
+        )
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn reset_pool_on_parallel_initial_setup_report(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<ParallelModePoolResetReport, String> {
+        self.reset_pool_on_parallel_enable_report_with_policy(
+            workspace_dir,
+            ParallelModePoolResetPolicy::ForceDisposable,
+        )
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
+    fn reset_pool_on_parallel_enable_report_with_policy(
+        &self,
+        workspace_dir: &str,
+        policy: ParallelModePoolResetPolicy,
+    ) -> Result<ParallelModePoolResetReport, String> {
         reset_pool_for_parallel_enable(
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
             workspace_dir,
+            policy,
         )
     }
 

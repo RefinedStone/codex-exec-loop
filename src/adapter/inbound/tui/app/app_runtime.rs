@@ -70,6 +70,7 @@ pub(super) enum BackgroundMessage {
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         status_text: String,
+        initial_pool_reset_completed: bool,
     },
     ParallelModeSupervisorSnapshotRefreshed {
         workspace_directory: String,
@@ -133,6 +134,7 @@ impl NativeTuiApp {
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
             parallel_mode_enabled: false,
+            parallel_mode_initial_pool_reset_completed: false,
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),

@@ -417,12 +417,14 @@ impl NativeTuiApp {
                 // Bare `:parallel` is the only enable entrypoint. Open the
                 // control tower first, then let readiness/reconcile run off the
                 // terminal event loop so prompt typing stays responsive.
-                // A destructive pool reset belongs to the local off -> on
-                // transition. Re-running `:parallel` while already enabled only
-                // refreshes/reconciles; after `:parallel off`, the next
-                // `:parallel` resets the disposable pool again.
+                // The first `:parallel` in a TUI process must normalize every
+                // disposable slot because stale runtime projections can outlive
+                // failed/cleaned workers. Later off -> on entries keep the live
+                // lease protection path.
                 let workspace_directory = self.planning_workspace_directory();
                 let reset_pool_on_off_to_on_entry = !self.parallel_mode_enabled;
+                let force_initial_pool_reset = reset_pool_on_off_to_on_entry
+                    && !self.parallel_mode_initial_pool_reset_completed;
                 self.parallel_mode_enabled = true;
                 self.parallel_mode_readiness_snapshot = None;
                 self.parallel_mode_control_plane_runtime
@@ -438,6 +440,7 @@ impl NativeTuiApp {
                 self.spawn_parallel_mode_enter_worker(
                     workspace_directory,
                     reset_pool_on_off_to_on_entry,
+                    force_initial_pool_reset,
                 );
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text:
@@ -567,6 +570,7 @@ impl NativeTuiApp {
         &self,
         workspace_directory: String,
         reset_pool_on_off_to_on_entry: bool,
+        force_initial_pool_reset: bool,
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let planning = self.planning.clone();
@@ -588,9 +592,12 @@ impl NativeTuiApp {
                     "state": entry_plan.state.label(),
                     "reset_scope": entry_plan.reset_scope.map(|scope| scope.label()),
                     "readiness": readiness_snapshot.readiness_label(),
+                    "initial_setup_reset": force_initial_pool_reset,
                 })
             });
 
+            let initial_pool_reset_completed = force_initial_pool_reset
+                && entry_plan.reset_scope == Some(ParallelModePoolResetScope::PoolOnly);
             let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
                 let _ = tx.send(BackgroundMessage::ParallelModeEnterProgress {
                     workspace_directory: workspace_directory.clone(),
@@ -612,10 +619,17 @@ impl NativeTuiApp {
                         serde_json::json!({
                             "workspace": &workspace_directory,
                             "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+                            "initial_setup_reset": force_initial_pool_reset,
                         })
                     });
-                    parallel_mode_service
-                        .reset_pool_on_parallel_enable_report(&workspace_directory)
+                    let reset_report = if force_initial_pool_reset {
+                        parallel_mode_service
+                            .reset_pool_on_parallel_initial_setup_report(&workspace_directory)
+                    } else {
+                        parallel_mode_service
+                            .reset_pool_on_parallel_enable_report(&workspace_directory)
+                    };
+                    reset_report
                         .and_then(|report| {
                             if report.has_live_blockers() {
                                 event_log::emit_lazy("parallel_pool_reset_preserved_live", || {
@@ -623,6 +637,7 @@ impl NativeTuiApp {
                                         "workspace": &workspace_directory,
                                         "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
                                         "run_id": report.run_id.as_str(),
+                                        "policy": report.policy,
                                         "live_blockers": report.live_blocker_count(),
                                     })
                                 });
@@ -639,6 +654,7 @@ impl NativeTuiApp {
                                     "workspace": &workspace_directory,
                                     "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
                                     "run_id": report.run_id.as_str(),
+                                    "policy": report.policy,
                                     "slot_count": count,
                                 })
                             });
@@ -647,8 +663,13 @@ impl NativeTuiApp {
                             } else {
                                 String::new()
                             };
+                            let entry_label = if force_initial_pool_reset {
+                                "initial setup"
+                            } else {
+                                "off->on entry"
+                            };
                             Ok(format!(
-                                "reset {count} pool slot worktree(s) to prerelease after off->on entry{live_suffix} / {}",
+                                "reset {count} pool slot worktree(s) to prerelease after {entry_label}{live_suffix} / {}",
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
                             ))
                         })
@@ -673,6 +694,7 @@ impl NativeTuiApp {
                                 readiness_snapshot,
                                 supervisor_snapshot: Box::new(supervisor_snapshot),
                                 status_text,
+                                initial_pool_reset_completed: false,
                             });
                         };
                     }
@@ -713,6 +735,7 @@ impl NativeTuiApp {
                 readiness_snapshot,
                 supervisor_snapshot: Box::new(supervisor_snapshot),
                 status_text,
+                initial_pool_reset_completed,
             });
         });
     }
@@ -1145,6 +1168,7 @@ impl NativeTuiApp {
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: ParallelModeSupervisorSnapshot,
         status_text: String,
+        initial_pool_reset_completed: bool,
     ) {
         // A delayed enter result should not reopen parallel mode after the user
         // has already switched it off or moved to another workspace.
@@ -1155,6 +1179,9 @@ impl NativeTuiApp {
         }
 
         self.parallel_mode_enabled = readiness_snapshot.allows_parallel_mode();
+        if initial_pool_reset_completed {
+            self.parallel_mode_initial_pool_reset_completed = true;
+        }
         self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
         self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
