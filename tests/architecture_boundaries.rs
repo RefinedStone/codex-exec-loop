@@ -2,18 +2,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Copy)]
-struct TemporaryAllowance {
-    path_suffix: &'static str,
-    pattern: &'static str,
-    reason: &'static str,
-}
-
-#[derive(Clone, Copy)]
 struct BoundaryRule {
     name: &'static str,
     root: &'static str,
     forbidden_patterns: &'static [&'static str],
-    temporary_allowances: &'static [TemporaryAllowance],
 }
 
 struct SourceLine {
@@ -43,8 +35,6 @@ struct PatternDebtRule {
     pattern: &'static str,
     reason: &'static str,
 }
-
-const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[];
 
 const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     PatternDebtRule {
@@ -140,16 +130,17 @@ const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
 
 #[test]
 fn domain_layer_has_no_application_or_adapter_dependencies() {
+    // Static guard: dependency direction is a source graph property, not a runtime behavior.
     assert_no_forbidden_references(BoundaryRule {
         name: "domain must stay independent from application and adapters",
         root: "src/domain",
         forbidden_patterns: &["crate::application::", "crate::adapter::"],
-        temporary_allowances: &[],
     });
 }
 
 #[test]
 fn domain_layer_has_no_runtime_ui_or_io_dependencies() {
+    // Static guard: pure domain code must not gain runtime/framework imports even if behavior tests still pass.
     assert_no_forbidden_references(BoundaryRule {
         name: "domain must stay pure from runtime, UI, and IO infrastructure",
         root: "src/domain",
@@ -163,22 +154,22 @@ fn domain_layer_has_no_runtime_ui_or_io_dependencies() {
             "std::process",
             "Command::new",
         ],
-        temporary_allowances: &[],
     });
 }
 
 #[test]
 fn application_layer_has_no_concrete_adapter_dependencies() {
+    // Static guard: application may depend on ports, but concrete adapter imports are architectural leaks.
     assert_no_forbidden_references(BoundaryRule {
         name: "application must depend on ports and domain, not concrete adapters",
         root: "src/application",
         forbidden_patterns: &["crate::adapter::"],
-        temporary_allowances: &[],
     });
 }
 
 #[test]
 fn application_layer_has_no_ui_framework_dependencies() {
+    // Static guard: UI framework imports in application compile cleanly but invert the hexagonal boundary.
     assert_no_forbidden_references(BoundaryRule {
         name: "application must not depend on TUI framework details",
         root: "src/application",
@@ -189,28 +180,20 @@ fn application_layer_has_no_ui_framework_dependencies() {
             "crate::adapter::inbound::admin_api",
             "crate::adapter::inbound::telegram_bot",
         ],
-        temporary_allowances: &[],
     });
 }
 
 #[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
+    // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
+    // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.
     assert_no_forbidden_references(inbound_outbound_boundary_rule());
 }
 
 #[test]
-fn temporary_inbound_composition_debt_has_been_removed() {
-    let debts = collect_temporarily_allowed_references(inbound_outbound_boundary_rule());
-
-    assert!(
-        debts.is_empty(),
-        "temporary architecture debt remains. This failure is intentional until composition wiring is moved out of inbound adapters:\n{}",
-        format_temporary_debts(&debts)
-    );
-}
-
-#[test]
 fn inbound_adapters_do_not_mutate_parallel_durable_state_directly() {
+    // Static guard: these method names are the durable mutation boundary. Flow tests exercise dispatch/recovery
+    // behavior, while this check prevents inbound surfaces from reaching around the application service.
     assert_no_forbidden_references(BoundaryRule {
         name: "inbound adapters must not directly mutate parallel durable/runtime state",
         root: "src/adapter/inbound",
@@ -241,12 +224,13 @@ fn inbound_adapters_do_not_mutate_parallel_durable_state_directly() {
             "reset_slot_worktree_to_akra",
             "build_dispatch_plan(",
         ],
-        temporary_allowances: &[],
     });
 }
 
 #[test]
 fn tui_post_turn_execution_uses_planning_post_turn_facade() {
+    // Static guard retained as a supplement to post-turn behavior tests: exact low-level planning workflow
+    // symbols must not reappear in the TUI executor even if the happy path still works.
     assert_no_forbidden_references_in_paths(
         "TUI post-turn execution must call planning post-turn facade DTOs instead of composing low-level planning workflow",
         &[
@@ -259,16 +243,17 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
 
 #[test]
 fn outbound_adapters_do_not_depend_on_inbound_adapters() {
+    // Static guard: outbound adapters implement ports and should never depend on inbound transport/UI code.
     assert_no_forbidden_references(BoundaryRule {
         name: "outbound adapters must not depend on inbound adapters",
         root: "src/adapter/outbound",
         forbidden_patterns: &["crate::adapter::inbound::"],
-        temporary_allowances: &[],
     });
 }
 
 #[test]
 fn outbound_port_modules_follow_port_naming_contract() {
+    // Static guard: port module naming is a directory/API contract, not a behavior.
     let repo_root = repo_root();
     let port_root = repo_root.join("src/application/port/outbound");
     let mut violations = Vec::new();
@@ -309,6 +294,7 @@ fn outbound_port_modules_follow_port_naming_contract() {
 
 #[test]
 fn temporary_tui_raw_application_services_have_been_wrapped() {
+    // Static guard: R8 behavior tests cover TUI flow, but raw service fields in TUI state are a structural leak.
     let debts = collect_pattern_debts(TUI_RAW_APPLICATION_SERVICE_DEBTS);
 
     assert!(
@@ -320,6 +306,7 @@ fn temporary_tui_raw_application_services_have_been_wrapped() {
 
 #[test]
 fn temporary_parallel_runtime_store_has_been_made_private_to_single_writer() {
+    // Static guard: public fields on the runtime store would bypass the single-writer facade by construction.
     let debts = collect_public_fields_in_struct(
         "src/application/service/parallel_mode/control_plane/mod.rs",
         "ParallelModeControlPlaneRuntimeStore",
@@ -335,6 +322,8 @@ fn temporary_parallel_runtime_store_has_been_made_private_to_single_writer() {
 
 #[test]
 fn parallel_control_plane_host_uses_explicit_synchronous_single_writer_gate() {
+    // Static guard retained for the R6 architecture decision. The behavior counterpart is
+    // `synchronous_mutex_facade_covers_ordering_backpressure_and_stale_completion`.
     let repo_root = repo_root();
     let host_path = repo_root.join("src/application/service/parallel_mode/control_plane/host.rs");
     let source = fs::read_to_string(&host_path).unwrap_or_else(|error| {
@@ -357,6 +346,8 @@ fn parallel_control_plane_host_uses_explicit_synchronous_single_writer_gate() {
 
 #[test]
 fn temporary_parallel_control_surfaces_no_longer_bypass_control_plane_gate() {
+    // Static guard retained because a raw service escape hatch is visible in source before it shows up as
+    // broken behavior. Control-plane command behavior is covered by the parallel_mode test suite.
     let debts = collect_pattern_debts(PARALLEL_CONTROL_PLANE_BYPASS_DEBTS);
 
     assert!(
@@ -387,9 +378,7 @@ fn assert_no_forbidden_references(rule: BoundaryRule) {
             }
 
             for pattern in rule.forbidden_patterns {
-                if source_line.text.contains(pattern)
-                    && !is_temporarily_allowed(rule, &relative_path, pattern)
-                {
+                if source_line.text.contains(pattern) {
                     violations.push(BoundaryViolation {
                         rule: rule.name,
                         path: relative_path.clone(),
@@ -461,62 +450,7 @@ fn inbound_outbound_boundary_rule() -> BoundaryRule {
         name: "inbound adapters must not pull outbound adapters outside explicit composition roots",
         root: "src/adapter/inbound",
         forbidden_patterns: &["crate::adapter::outbound::"],
-        temporary_allowances: INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES,
     }
-}
-
-fn is_temporarily_allowed(rule: BoundaryRule, path: &str, pattern: &str) -> bool {
-    temporary_allowance_for(rule, path, pattern).is_some()
-}
-
-fn temporary_allowance_for(
-    rule: BoundaryRule,
-    path: &str,
-    pattern: &str,
-) -> Option<TemporaryAllowance> {
-    rule.temporary_allowances
-        .iter()
-        .copied()
-        .find(|allowance| path.ends_with(allowance.path_suffix) && pattern == allowance.pattern)
-}
-
-fn collect_temporarily_allowed_references(rule: BoundaryRule) -> Vec<TemporaryDebt> {
-    let repo_root = repo_root();
-    let root = repo_root.join(rule.root);
-    let mut debts = Vec::new();
-
-    for path in rust_files_under(&root) {
-        if is_test_only_path(&path) {
-            continue;
-        }
-
-        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
-            panic!("failed to read {}: {error}", path.display());
-        });
-        let relative_path = relative_path(&repo_root, &path);
-
-        for source_line in production_lines(&source) {
-            if is_comment_only_line(&source_line.text) {
-                continue;
-            }
-
-            for pattern in rule.forbidden_patterns {
-                if source_line.text.contains(pattern)
-                    && let Some(allowance) = temporary_allowance_for(rule, &relative_path, pattern)
-                {
-                    debts.push(TemporaryDebt {
-                        path: relative_path.clone(),
-                        line: source_line.number,
-                        pattern,
-                        text: source_line.text.trim().to_string(),
-                        reason: allowance.reason,
-                    });
-                }
-            }
-        }
-    }
-
-    debts
 }
 
 fn collect_pattern_debts(rules: &[PatternDebtRule]) -> Vec<TemporaryDebt> {

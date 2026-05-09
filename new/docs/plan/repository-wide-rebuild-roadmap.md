@@ -36,35 +36,17 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 ## 현재 판정
 
-전체 상태: `partial`
+전체 상태: `complete`
 
 진행된 것은 다시 문서화하지 않는다. 현재 남은 문제만 관리한다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
+| 없음 | R1-R10 기준 미완료 항목 없음. |
 
 ## 실행 Backlog
 
-### R10. Architecture Guard를 Behavior Regression으로 보강
-
-상태: `ready`
-
-대상:
-
-- `tests/architecture_boundaries.rs`
-- parallel/planning/TUI flow tests
-
-해야 할 일:
-
-- source-string guard가 실제 behavior regression 없이 정책만 잡는 곳을 분류한다.
-- 새 구조 slice마다 behavior test를 먼저 추가하고 source guard는 보조 안전망으로 낮춘다.
-- 남길 source guard는 directory dependency, public field 노출, raw adapter import처럼 정적 검사가 더 정확한 항목으로 제한한다.
-
-완료 조건:
-
-- 남은 source guard마다 behavior test로 대체하지 않는 이유가 test 이름 또는 comment에 드러난다.
-- 제거된 architecture debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
+현재 남은 R-slice는 없다.
 
 ## 문서 운영 규칙
 

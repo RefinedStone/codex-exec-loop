@@ -228,3 +228,98 @@ fn app_server_adapter() -> Arc<CodexAppServerAdapter> {
 fn github_automation_port() -> Arc<dyn GithubAutomationPort> {
     Arc::new(GithubAutomationAdapter::new())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+    use crate::application::service::planning::{PlanningControlCommand, PlanningControlRequest};
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempWorkspace {
+        path: PathBuf,
+    }
+
+    impl TempWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "akra-production-composition-{prefix}-{}-{unique_suffix}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("temp workspace should be created");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempWorkspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    // R10 behavior regression: production composition must execute use cases through
+    // application services, not by letting inbound adapters own concrete wiring.
+    #[test]
+    fn production_composition_control_service_executes_status_use_case() {
+        let workspace = TempWorkspace::new("status-use-case");
+        let workspace_dir = workspace.path().display().to_string();
+        let control_service = build_planning_control_service(workspace_dir.clone());
+
+        let response = control_service
+            .execute_request(PlanningControlRequest::new(PlanningControlCommand::Status))
+            .expect("production planning control service should execute status");
+
+        assert_eq!(response.workspace_dir, workspace_dir);
+        assert!(response.reply.text.contains("상태 요약"));
+        assert!(response.reply.text.contains("planning_state:"));
+    }
+
+    // R10 behavior regression for the R9 composition move: every inbound surface must be
+    // constructible from the shared production composition path.
+    #[test]
+    fn production_composition_builds_shared_inbound_application_surfaces() {
+        let workspace = TempWorkspace::new("inbound-surfaces");
+        let workspace_dir = workspace.path().display().to_string();
+
+        let admin = build_admin_application(workspace_dir.clone());
+        assert_eq!(admin.facade.workspace_dir(), workspace_dir);
+        let admin_projection = admin
+            .facade
+            .load_runtime_application_projection()
+            .expect("admin facade should load the shared planning projection");
+        assert!(!admin_projection.status_label.trim().is_empty());
+
+        let telegram = build_telegram_application(workspace_dir.clone());
+        let help = telegram
+            .control_service
+            .execute_request(PlanningControlRequest::new(PlanningControlCommand::Help))
+            .expect("telegram control service should share the planning control surface");
+        assert!(help.reply.text.contains("/status"));
+        let telegram_snapshot = telegram
+            .parallel_mode_control_plane
+            .inspect_dashboard_snapshot(
+                &workspace_dir,
+                ParallelModeRuntimeEventLogRequest::recent(1),
+            );
+        assert!(telegram_snapshot.events.visible_count() <= 1);
+
+        let tui = build_native_tui_application_services();
+        assert!(
+            !tui.parallel_mode_control_plane
+                .planning()
+                .runtime
+                .load_runtime_snapshot_or_invalid(&workspace_dir)
+                .preview_status_label()
+                .is_empty()
+        );
+    }
+}
