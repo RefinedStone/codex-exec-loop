@@ -453,11 +453,10 @@ fn parallel_sub_session_handoff_trace_payload(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
-
     use super::{PriorityQueueTask, parallel_sub_session_handoff_trace_payload};
     use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
     use crate::domain::planning::TaskStatus;
+    use crate::test_utils::json_payload_contains;
 
     #[test]
     fn parallel_sub_session_handoff_trace_payload_keeps_prompt_bodies_out_of_log() {
@@ -488,18 +487,5 @@ mod tests {
         assert!(!fields.contains_key("turn_prompt"));
         assert!(!fields.contains_key("developer_instructions"));
         assert!(!json_payload_contains(&payload, "SECRET-"));
-    }
-
-    fn json_payload_contains(value: &Value, needle: &str) -> bool {
-        match value {
-            Value::String(value) => value.contains(needle),
-            Value::Array(values) => values
-                .iter()
-                .any(|value| json_payload_contains(value, needle)),
-            Value::Object(values) => values
-                .values()
-                .any(|value| json_payload_contains(value, needle)),
-            _ => false,
-        }
     }
 }

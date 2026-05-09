@@ -148,6 +148,16 @@ EOF
 - lifecycle command parity
 EOF
       ;;
+    prompt-input-delay-pty)
+      cat <<'EOF'
+- launch with detached PTY backend
+- prompt input echoes without visible delay
+- multiline input stays editable before submit
+- submitted prompt transitions into streaming output
+- completion preserves prompt history and cursor recovery
+- interrupt and recovery remain responsive after delayed input checks
+EOF
+      ;;
     *)
       printf 'unsupported --check-profile: %s\n' "${check_profile}" >&2
       exit 1

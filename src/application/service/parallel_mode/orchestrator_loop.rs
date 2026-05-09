@@ -911,16 +911,11 @@ fn run_parallel_dispatch_official_completion(
 ) -> ParallelDispatchOfficialCompletionOutcome {
     let mut notices = Vec::new();
     event_log::emit_lazy("parallel_official_completion_started", || {
-        serde_json::json!({
-            "planning_workspace": &request.planning_workspace_directory,
-            "worktree": &request.worktree_directory,
-            "task_id": &request.handoff_task.task_id,
-            "task_title": &request.handoff_task.task_title,
-            "turn_id": &turn_completed.turn_id,
-            "changed_planning_file_paths": &turn_completed.changed_planning_file_paths,
-            "latest_main_reply_chars": latest_main_reply.map(|reply| reply.chars().count()),
-            "latest_main_reply": latest_main_reply,
-        })
+        parallel_official_completion_started_trace_payload(
+            request,
+            turn_completed,
+            latest_main_reply,
+        )
     });
 
     // Official completion refreshes are serialized by slot lease order, not by thread wake-up
@@ -1125,6 +1120,22 @@ fn run_parallel_dispatch_official_completion(
     ParallelDispatchOfficialCompletionOutcome::succeeded(notices)
 }
 
+fn parallel_official_completion_started_trace_payload(
+    request: &ParallelDispatchWorkerRequest,
+    turn_completed: &ParallelDispatchTurnCompleted,
+    latest_main_reply: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "planning_workspace": &request.planning_workspace_directory,
+        "worktree": &request.worktree_directory,
+        "task_id": &request.handoff_task.task_id,
+        "task_title": &request.handoff_task.task_title,
+        "turn_id": &turn_completed.turn_id,
+        "changed_planning_file_paths": &turn_completed.changed_planning_file_paths,
+        "latest_main_reply_chars": latest_main_reply.map(|reply| reply.chars().count()),
+    })
+}
+
 fn parallel_dispatch_validation_summary(changed_planning_file_paths: &[String]) -> String {
     if changed_planning_file_paths.is_empty() {
         /*
@@ -1172,13 +1183,14 @@ fn parallel_worker_agent_message_completed_trace_payload(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
-
     use super::{
-        ParallelDispatchWorkerRequest, parallel_worker_agent_message_completed_trace_payload,
+        ParallelDispatchTurnCompleted, ParallelDispatchWorkerRequest,
+        parallel_official_completion_started_trace_payload,
+        parallel_worker_agent_message_completed_trace_payload,
         parallel_worker_stream_starting_trace_payload,
     };
     use crate::application::service::planning::PlanningTaskHandoff;
+    use crate::test_utils::json_payload_contains;
 
     #[test]
     fn parallel_worker_stream_starting_trace_payload_keeps_prompt_bodies_out_of_log() {
@@ -1211,6 +1223,26 @@ mod tests {
         assert!(!json_payload_contains(&payload, "SECRET-REPLY"));
     }
 
+    #[test]
+    fn official_completion_started_trace_payload_keeps_latest_reply_body_out_of_log() {
+        let request = worker_request_with_secret_bodies();
+        let turn_completed = ParallelDispatchTurnCompleted {
+            turn_id: "turn-secret".to_string(),
+            changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+        };
+
+        let payload = parallel_official_completion_started_trace_payload(
+            &request,
+            &turn_completed,
+            Some("assistant SECRET-REPLY body"),
+        );
+        let fields = payload.as_object().expect("payload should be an object");
+
+        assert_eq!(fields["latest_main_reply_chars"], 27);
+        assert!(!fields.contains_key("latest_main_reply"));
+        assert!(!json_payload_contains(&payload, "SECRET-REPLY"));
+    }
+
     fn worker_request_with_secret_bodies() -> ParallelDispatchWorkerRequest {
         ParallelDispatchWorkerRequest {
             planning_workspace_directory: "/tmp/workspace".to_string(),
@@ -1227,19 +1259,6 @@ mod tests {
                 updated_at: "2026-05-09T00:00:00Z".to_string(),
                 status_label: "ready".to_string(),
             },
-        }
-    }
-
-    fn json_payload_contains(value: &Value, needle: &str) -> bool {
-        match value {
-            Value::String(value) => value.contains(needle),
-            Value::Array(values) => values
-                .iter()
-                .any(|value| json_payload_contains(value, needle)),
-            Value::Object(values) => values
-                .values()
-                .any(|value| json_payload_contains(value, needle)),
-            _ => false,
         }
     }
 }

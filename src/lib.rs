@@ -21,6 +21,8 @@ pub mod diagnostics;
 pub(crate) mod domain;
 // subprocess는 외부 CLI 경계의 non-interactive timeout 실행을 모은 crate-private helper다.
 pub(crate) mod subprocess;
+#[cfg(test)]
+pub(crate) mod test_utils;
 
 /*
  * 공용 실행 함수는 native-first UX의 분기점이다. argv가 doctor/init/admin 같은 CLI command로
