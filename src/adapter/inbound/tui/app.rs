@@ -102,6 +102,8 @@ mod planning;
 mod planning_draft_editor_ui;
 #[path = "app/planning_init_overlay_ui.rs"]
 mod planning_init_overlay_ui;
+#[path = "app/planning_overlay_shell_command.rs"]
+mod planning_overlay_shell_command;
 #[path = "app/planning_reset_shell_command.rs"]
 mod planning_reset_shell_command;
 #[path = "app/planning_shell_command.rs"]

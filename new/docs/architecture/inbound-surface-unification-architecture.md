@@ -237,7 +237,7 @@ Renderer가 domain rule을 재판단하면 안 된다.
 
 | Surface | 현재 공유 boundary | 유지할 점 | 후속 정리 후보 |
 | --- | --- | --- | --- |
-| TUI planning shell/overlay | `PlanningServices`, planning controllers, status projection, `PlanningResetTarget`, TUI planning/task shell parsers | UI-only overlay/editor state와 application service 호출 분리, `:planning`, `:task`, `:reset` execution/hint path는 shared parser로 mapping | 남은 editor command request DTO를 admin/CLI와 같은 이름으로 정렬 |
+| TUI planning shell/overlay | `PlanningServices`, planning controllers, status projection, `PlanningResetTarget`, TUI planning/task/overlay shell parsers | UI-only overlay/editor state와 application service 호출 분리, `:planning`, `:task`, `:queue`, `:directions`, `:reset` execution/hint path는 shared parser로 mapping | 남은 editor command request DTO를 admin/CLI와 같은 이름으로 정렬 |
 | TUI conversation/automation | `ConversationRuntimeEvent`, post-turn automation router | reducer/effect vocabulary와 background message routing 분리 | remaining runtime bridge correlation을 application runtime store로 이동 |
 | TUI parallel panel | `ParallelModeService`, domain state machine, panel controller, TUI parallel shell parser | projection 표시와 application wake request 분리, `:parallel` execution/hint path는 shared parser로 mapping | admin/CLI tick command vocabulary 정렬 |
 | CLI status/queue/reset | `PlanningControlCommand`, `PlanningControlService` | compact command surface 공유 | reset은 workspace reset path와 control reset path의 response shape 정렬 검토 |
@@ -302,7 +302,9 @@ long-running loop나 background worker는 effect completion을 application event
    `:reset` target은 shared `PlanningResetTarget`으로 고정했고 execution path와 buffered hint
    path는 같은 parser를 쓴다. `:planning [doctor]`도 같은 parser로 open-control-center/doctor
    vocabulary를 공유한다. `:task [prompt]`도 같은 parser로 prompt-editor/preview vocabulary를
-   공유한다. 남은 editor/overlay command는 공통 application command로 내릴 수 있는 부분부터 이동한다.
+   공유한다. `:queue`/`:directions` no-argument overlay commands도 같은 parser로 unsupported
+   argument recovery를 공유한다. 남은 editor command는 공통 application command로 내릴 수 있는
+   부분부터 이동한다.
 5. parallel TUI/admin/CLI entrypoint가 control-plane runtime command/event를 공유하도록
    tick/wake/snapshot vocabulary를 정리한다. CLI manual tick은 application orchestrator tick
    result vocabulary를 쓰고, TUI `:parallel` enable/disable grammar는 execution path와

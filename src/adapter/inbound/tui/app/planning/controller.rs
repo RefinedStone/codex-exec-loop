@@ -21,6 +21,7 @@ use self::status_text::{
     planning_doctor_status_text, planning_manual_editor_close_warning_status,
     planning_manual_editor_closed_status, planning_reset_preview_text, planning_reset_status_text,
 };
+use super::super::planning_overlay_shell_command::parse_planning_overlay_shell_argument;
 use super::super::planning_reset_shell_command::{
     PLANNING_RESET_USAGE_TEXT, parse_planning_reset_shell_argument,
 };
@@ -45,12 +46,13 @@ impl NativeTuiApp {
         &mut self,
         argument: Option<&str>,
     ) {
-        match argument.map(str::trim).filter(|value| !value.is_empty()) {
-            None => self.show_directions_maintenance_overlay(),
-            Some(value) => {
+        match parse_planning_overlay_shell_argument(argument) {
+            Ok(()) => self.show_directions_maintenance_overlay(),
+            Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "unsupported :directions argument `{value}` / supported: :directions"
+                        "unsupported :directions argument `{}` / supported: :directions",
+                        error.argument()
                     ),
                 })
             }
@@ -60,12 +62,13 @@ impl NativeTuiApp {
         &mut self,
         argument: Option<&str>,
     ) {
-        match argument.map(str::trim).filter(|value| !value.is_empty()) {
-            None => self.show_queue_overlay(),
-            Some(value) => {
+        match parse_planning_overlay_shell_argument(argument) {
+            Ok(()) => self.show_queue_overlay(),
+            Err(error) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!(
-                        "`:queue` does not accept arguments (`{value}`); use :queue to open queue inspection"
+                        "`:queue` does not accept arguments (`{}`); use :queue to open queue inspection",
+                        error.argument()
                     ),
                 })
             }
