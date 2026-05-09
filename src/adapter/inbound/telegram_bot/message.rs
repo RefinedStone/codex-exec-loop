@@ -22,6 +22,7 @@ pub(super) enum TelegramInboundCommand {
      * runner는 이 값을 받으면 현재 chat_id와 allowlist 판정만 렌더링한다.
      */
     WhoAmI,
+    ParallelStatus,
     /*
      * 나머지 운영 명령은 application service의 planning control 언어로 넘긴다.
      * adapter가 service 내부 모델을 다시 만들지 않도록 여기서 바로 감싼다.
@@ -90,6 +91,12 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
         "/whoami" => {
             parse_command_without_arguments(&arguments, TelegramInboundCommand::WhoAmI, "/whoami")
         }
+        "/parallel" | "parallel" => parse_parallel_arguments(&arguments),
+        "/parallel_status" => parse_command_without_arguments(
+            &arguments,
+            TelegramInboundCommand::ParallelStatus,
+            "/parallel_status",
+        ),
         /*
          * `status` 별칭은 slash command가 아닌 짧은 운영 입력도 받아준다.
          * 단, 다른 일반 문장까지 해석하지 않도록 정확히 이 토큰일 때만 매칭한다.
@@ -190,6 +197,13 @@ fn parse_plan_arguments(arguments: &[&str]) -> TelegramParsedMessage {
          * 현재 Telegram 표면에서 노출된 planning 하위 명령의 단일 출처다.
          */
         _ => TelegramParsedMessage::Error("사용법: /plan [status]".to_string()),
+    }
+}
+
+fn parse_parallel_arguments(arguments: &[&str]) -> TelegramParsedMessage {
+    match arguments {
+        [] | ["status"] => TelegramParsedMessage::Command(TelegramInboundCommand::ParallelStatus),
+        _ => TelegramParsedMessage::Error("사용법: /parallel [status]".to_string()),
     }
 }
 

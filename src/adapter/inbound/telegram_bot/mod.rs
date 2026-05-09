@@ -8,10 +8,19 @@ use anyhow::{Context, Result};
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
+use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
+use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::telegram_bot_port::{
     TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
     TelegramUpdate,
+};
+use crate::application::service::parallel_mode::{
+    ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
 };
 use crate::application::service::planning::{
     PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
@@ -57,14 +66,13 @@ where
         .canonicalize()
         .context("failed to canonicalize current directory for telegram bot")?;
     let workspace_dir = workspace_dir.display().to_string();
-    let control_service = PlanningControlService::new(Arc::new(build_planning_control_facade(
-        workspace_dir.clone(),
-    )));
+    let application = build_telegram_application(workspace_dir.clone());
 
     // Production wiring: Telegram HTTP adapter + planning control service + local allowlist policy.
     let runner = TelegramBotRunner::new(
         Arc::new(CurlTelegramBotAdapter::new(args.token)),
-        control_service,
+        application.control_service,
+        application.parallel_control_surface,
         TelegramBotPolicy::new(args.allowed_chat_ids),
         args.poll_timeout_seconds,
         args.drop_pending_updates,
@@ -74,27 +82,57 @@ where
     runner.run()
 }
 
-fn build_planning_control_facade(workspace_dir: String) -> PlanningControlFacadeService {
+struct TelegramApplication {
+    control_service: PlanningControlService,
+    parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
+}
+
+fn build_telegram_application(workspace_dir: String) -> TelegramApplication {
     /*
-    Telegram commands use the same application control facade as the CLI status/queue commands.
-    This keeps reset/status/queue behavior behind PlanningControlService instead of coupling chat
-    control to the admin management facade.
+    Telegram commands use the same application control facades as the CLI/admin/TUI command surfaces.
+    Planning status/reset goes through PlanningControlService, while read-only parallel status uses
+    ParallelModeControlPlaneComposition instead of reaching around to ParallelModeService.
     */
     let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
         "codex-exec-loop-native",
         env!("CARGO_PKG_VERSION"),
     ));
-    let planning_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let planning_workspace_port = Arc::new(
-        FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(planning_authority.clone()),
-    );
+    let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning_authority: Arc<dyn PlanningAuthorityPort> = planning_authority_adapter.clone();
+    let planning_workspace_port =
+        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
+            planning_authority_adapter.clone(),
+        ));
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
         planning_authority.clone(),
-        planning_authority.clone(),
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter)),
+        planning_authority_adapter,
+        Arc::new(AppServerPlanningWorkerAdapter::new(
+            app_server_adapter.clone(),
+        )),
     );
-    PlanningControlFacadeService::new(workspace_dir, planning)
+    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter;
+    let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
+    let parallel_mode_service = ParallelModeService::new(
+        planning_authority,
+        github_automation,
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    let parallel_control_plane = Arc::new(ParallelModeControlPlaneComposition::new(
+        parallel_mode_service,
+        planning.clone(),
+        parallel_agent_worker_port,
+    ));
+    TelegramApplication {
+        control_service: PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
+            workspace_dir.clone(),
+            planning,
+        ))),
+        parallel_control_surface: Arc::new(TelegramParallelControlPlaneSurface {
+            workspace_dir,
+            control_plane: parallel_control_plane,
+        }),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +153,32 @@ impl TelegramBotPolicy {
     }
 }
 
+trait TelegramParallelControlSurface: Send + Sync {
+    fn render_parallel_status(&self) -> Result<String>;
+}
+
+struct TelegramParallelControlPlaneSurface {
+    workspace_dir: String,
+    control_plane: Arc<ParallelModeControlPlaneComposition>,
+}
+
+impl TelegramParallelControlSurface for TelegramParallelControlPlaneSurface {
+    fn render_parallel_status(&self) -> Result<String> {
+        let snapshot = self.control_plane.inspect_dashboard_snapshot(
+            &self.workspace_dir,
+            ParallelModeRuntimeEventLogRequest::recent(5),
+        );
+        Ok(format!(
+            "병렬 상태\nreadiness: {}\npool: {}\nactive_agents: {}\nqueue_depth: {}\nevents: {}",
+            snapshot.readiness.readiness_label(),
+            snapshot.supervisor.pool.reconcile_status,
+            snapshot.supervisor.roster.active_count(),
+            snapshot.supervisor.distributor.queue_depth(),
+            snapshot.events.visible_count(),
+        ))
+    }
+}
+
 /*
 `TelegramBotRunner` is the long-running orchestration loop. It owns no planning domain
 logic: it polls updates, checks Telegram-specific authorization, delegates command execution,
@@ -125,6 +189,7 @@ struct TelegramBotRunner {
     gateway: Arc<dyn TelegramBotPort>,
     // Application boundary shared with non-Telegram control surfaces.
     control_service: PlanningControlService,
+    parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
     policy: TelegramBotPolicy,
     // Long polling timeout is configurable because Telegram HTTP infrastructure decides practical latency.
     poll_timeout_seconds: u16,
@@ -137,6 +202,7 @@ impl TelegramBotRunner {
     fn new(
         gateway: Arc<dyn TelegramBotPort>,
         control_service: PlanningControlService,
+        parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
         policy: TelegramBotPolicy,
         poll_timeout_seconds: u16,
         drop_pending_updates: bool,
@@ -145,6 +211,7 @@ impl TelegramBotRunner {
         Self {
             gateway,
             control_service,
+            parallel_control_surface,
             policy,
             poll_timeout_seconds,
             drop_pending_updates,
@@ -264,6 +331,14 @@ impl TelegramBotRunner {
             TelegramParsedMessage::Command(TelegramInboundCommand::WhoAmI) => {
                 Ok(Some(self.render_whoami(message.chat_id)))
             }
+            TelegramParsedMessage::Command(TelegramInboundCommand::ParallelStatus) => {
+                if !self.policy.is_allowed(message.chat_id) {
+                    return Ok(Some(self.render_unauthorized(message.chat_id)));
+                }
+                Ok(Some(
+                    self.parallel_control_surface.render_parallel_status()?,
+                ))
+            }
             TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command)) => {
                 // Help is safe without allowlist because it only describes commands and includes `/whoami`.
                 if matches!(command, PlanningControlCommand::Help) {
@@ -315,7 +390,7 @@ impl TelegramBotRunner {
 
     fn render_help(&self) -> String {
         // `/whoami` lives in this adapter, so append it to the shared planning control help text.
-        format!("{}\n/whoami", self.control_service.help_text())
+        format!("{}\n/parallel\n/whoami", self.control_service.help_text())
     }
 
     fn render_command_failure(

@@ -11,15 +11,13 @@ use crate::application::service::parallel_mode::{
 use crate::application::service::planning::PlanningServices;
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeDispatchOutcome, ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy,
-    ParallelModePoolResetReport, ParallelModePoolResetRunId, ParallelModePoolResetScope,
-    ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
+    ParallelModeControlPlaneWorkerEvent, ParallelModeDispatchOutcome,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
+    ParallelModePoolResetRunId, ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
+    ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
 };
 
-use super::{
-    ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake,
-    ParallelModeControlPlaneWorkerEvent,
-};
+use super::{ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModeControlPlaneLoadingStage {

@@ -4,10 +4,13 @@ use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::GithubAutomationAdapter;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
-use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::{
+    ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
+};
 use crate::application::service::planning::{
     PlanningAdminFacadeService, PlanningResetTarget, PlanningServices,
 };
@@ -52,7 +55,7 @@ struct AdminAppState {
      * HTML page handler와 JSON API handler가 같은 facade instance를 바라보므로 두 surface의 상태 해석도 함께 묶인다.
      */
     facade: Arc<PlanningAdminFacadeService>,
-    parallel_mode: Arc<ParallelModeService>,
+    parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
     graphic: AdminGraphicConfig,
 }
 
@@ -129,8 +132,10 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
         Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
             sqlite_planning_authority.clone(),
         ));
-    let planning_worker_port: Arc<dyn PlanningWorkerPort> =
-        Arc::new(AppServerPlanningWorkerAdapter::new(app_server_adapter));
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
+        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
+    );
+    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter;
     let planning = PlanningServices::from_ports(
         planning_workspace_port.clone(),
         planning_authority.clone(),
@@ -138,10 +143,15 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
         planning_worker_port,
     );
     let github_automation: Arc<dyn GithubAutomationPort> = Arc::new(GithubAutomationAdapter::new());
-    let parallel_mode = Arc::new(ParallelModeService::new(
+    let parallel_mode = ParallelModeService::new(
         planning_authority.clone(),
         github_automation,
         Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    let parallel_mode_control_plane = Arc::new(ParallelModeControlPlaneComposition::new(
+        parallel_mode,
+        planning.clone(),
+        parallel_agent_worker_port,
     ));
     let facade = Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
         workspace_dir.clone(),
@@ -152,7 +162,7 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
     ));
     AdminAppState {
         facade,
-        parallel_mode,
+        parallel_mode_control_plane,
         graphic: AdminGraphicConfig::from_env(),
     }
 }

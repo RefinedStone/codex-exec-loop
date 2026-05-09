@@ -3,8 +3,11 @@ use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::GithubAutomationAdapter;
+use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::parallel_mode::{
-    ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger, ParallelModeService,
+    ParallelModeOrchestratorTickResult, control_plane::ParallelModeControlPlaneComposition,
 };
 use crate::application::service::planning::{
     PlanningControlCommand, PlanningControlFacadeService, PlanningControlRequest,
@@ -270,15 +273,12 @@ fn run_planning_tool(
 fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i32> {
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     validate_workspace_path(&workspace_path).map_err(anyhow::Error::msg)?;
-    let service = build_production_parallel_mode_service();
+    let control_plane = build_production_parallel_mode_control_plane_composition();
     let workspace_label = workspace_path.display().to_string();
 
     writeln!(stdout, "workspace: {workspace_label}")?;
     // 이 command는 TUI가 supervise하는 같은 distributor queue를 수동/cron 환경에서 tick하는 driver다.
-    match service.run_orchestrator_tick(
-        &workspace_label,
-        ParallelModeOrchestratorTrigger::ManualDispatch,
-    ) {
+    match control_plane.run_manual_orchestrator_tick(&workspace_label) {
         Ok(result) => render_parallel_tick_result(stdout, &result),
         Err(error) => {
             writeln!(stdout, "parallel distributor tick failed: {error}")?;
@@ -373,12 +373,40 @@ fn build_production_planning_services() -> PlanningServices {
     )
 }
 
-fn build_production_parallel_mode_service() -> ParallelModeService {
-    // parallel tick은 GitHub automation과 local git/worktree runtime port를 모두 필요로 한다.
-    ParallelModeService::new(
-        Arc::new(SqlitePlanningAuthorityAdapter::new()),
-        Arc::new(GithubAutomationAdapter::new()),
-        Arc::new(GitParallelModeRuntimeAdapter::new()),
+fn build_production_parallel_mode_control_plane_composition() -> ParallelModeControlPlaneComposition
+{
+    /*
+     * parallel-tick도 TUI/admin과 같은 control-plane composition을 통과한다.
+     * CLI는 결과를 동기적으로 렌더링하지만, service graph와 runtime/read-model 해석은 한 경로로 맞춘다.
+     */
+    let app_server_adapter = Arc::new(CodexAppServerAdapter::new(
+        "codex-exec-loop-native",
+        env!("CARGO_PKG_VERSION"),
+    ));
+    let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning_authority: Arc<dyn PlanningAuthorityPort> = planning_authority_adapter.clone();
+    let planning_worker_port: Arc<dyn PlanningWorkerPort> = Arc::new(
+        AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
+    );
+    let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter;
+    let planning = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
+            planning_authority_adapter.clone(),
+        )),
+        planning_authority.clone(),
+        planning_authority_adapter,
+        planning_worker_port,
+    );
+    let parallel_mode_service =
+        crate::application::service::parallel_mode::ParallelModeService::new(
+            planning_authority,
+            Arc::new(GithubAutomationAdapter::new()),
+            Arc::new(GitParallelModeRuntimeAdapter::new()),
+        );
+    ParallelModeControlPlaneComposition::new(
+        parallel_mode_service,
+        planning,
+        parallel_agent_worker_port,
     )
 }
 
@@ -566,6 +594,26 @@ mod tests {
         assert_eq!(
             String::from_utf8(blocked_output).expect("blocked output should be utf8"),
             "integration worktree is blocked\n"
+        );
+    }
+
+    #[test]
+    fn parallel_tick_enters_through_control_plane_composition() {
+        /*
+         * CLI must not become a second direct ParallelModeService caller. It can
+         * render a synchronous result, but the service graph should be the same
+         * control-plane composition used by TUI/admin surfaces.
+         */
+        let source = include_str!("cli.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("CLI source should contain production section");
+
+        assert!(production_source.contains("run_manual_orchestrator_tick"));
+        assert!(
+            !production_source.contains(".run_orchestrator_tick("),
+            "CLI parallel-tick should call the control-plane composition facade"
         );
     }
 }

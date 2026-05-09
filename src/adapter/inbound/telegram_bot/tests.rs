@@ -3,8 +3,8 @@ use super::config::{
     parse_args_with_environment,
 };
 use super::{
-    TelegramBotPolicy, TelegramBotRunner, TelegramInboundCommand, TelegramParsedMessage,
-    parse_message,
+    TelegramBotPolicy, TelegramBotRunner, TelegramInboundCommand, TelegramParallelControlSurface,
+    TelegramParsedMessage, parse_message,
 };
 use crate::application::port::outbound::telegram_bot_port::{
     TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
@@ -108,6 +108,14 @@ impl PlanningControlSurface for FlakyPlanningControlSurface {
     }
 }
 
+struct FakeTelegramParallelControlSurface;
+
+impl TelegramParallelControlSurface for FakeTelegramParallelControlSurface {
+    fn render_parallel_status(&self) -> Result<String> {
+        Ok("병렬 상태\nreadiness: ready\npool: supervised\nactive_agents: 1\nqueue_depth: 2\nevents: 3".to_string())
+    }
+}
+
 #[derive(Default)]
 struct FakeTelegramBotPort {
     /*
@@ -152,6 +160,7 @@ fn build_runner(allowed_chat_ids: &[i64]) -> (Arc<FakeTelegramBotPort>, Telegram
     let runner = TelegramBotRunner::new(
         gateway.clone(),
         PlanningControlService::new(Arc::new(FakePlanningControlSurface)),
+        Arc::new(FakeTelegramParallelControlSurface),
         TelegramBotPolicy::new(allowed_chat_ids.iter().copied().collect()),
         /*
          * A limit of one mirrors the narrowest long-poll batch. The runner still
@@ -219,6 +228,26 @@ fn parse_message_maps_supported_planning_commands_to_shared_control_enum() {
             "Telegram input `{raw}` should map to the shared planning control command"
         );
     }
+}
+
+#[test]
+fn parse_message_maps_parallel_status_to_parallel_control_surface() {
+    for raw in [
+        "/parallel",
+        "parallel",
+        "/parallel status",
+        "/parallel_status",
+    ] {
+        assert_eq!(
+            parse_message(Some(raw)),
+            TelegramParsedMessage::Command(TelegramInboundCommand::ParallelStatus),
+            "Telegram input `{raw}` should map to the shared parallel control surface"
+        );
+    }
+    assert_eq!(
+        parse_message(Some("/parallel now")),
+        TelegramParsedMessage::Error("사용법: /parallel [status]".to_string())
+    );
 }
 
 #[test]
@@ -314,6 +343,22 @@ fn runner_executes_planning_command_for_allowed_chat() {
 }
 
 #[test]
+fn runner_executes_parallel_status_for_allowed_chat() {
+    let (_gateway, runner) = build_runner(&[42]);
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 1,
+            chat_id: 42,
+            text: Some("/parallel".to_string()),
+            sender_display_name: Some("operator".to_string()),
+        })
+        .expect("handler should succeed");
+    let reply = reply.expect("reply should exist");
+    assert!(reply.contains("병렬 상태"));
+    assert!(reply.contains("queue_depth: 2"));
+}
+
+#[test]
 fn help_reply_mentions_whoami_without_allowlist() {
     /*
      * Help remains open because it is the bootstrap surface for remote setup.
@@ -331,6 +376,7 @@ fn help_reply_mentions_whoami_without_allowlist() {
         .expect("handler should succeed");
     let reply = reply.expect("reply should exist");
     assert!(reply.contains("/whoami"));
+    assert!(reply.contains("/parallel"));
     assert!(reply.contains("/status"));
 }
 
@@ -443,6 +489,7 @@ fn process_updates_continues_after_individual_message_failure() {
         PlanningControlService::new(Arc::new(FlakyPlanningControlSurface {
             load_calls: AtomicUsize::new(0),
         })),
+        Arc::new(FakeTelegramParallelControlSurface),
         TelegramBotPolicy::new([42].into_iter().collect()),
         1,
         false,

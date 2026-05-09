@@ -12,7 +12,8 @@ use crate::application::service::planning::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchCommandSnapshot,
+    ParallelModeAutomationTrigger, ParallelModeControlPlaneWorkerEvent,
+    ParallelModeControlPlaneWorkerEventKind, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent,
     ParallelModeSlotLeaseRequest, ParallelModeSupervisorSnapshot,
 };
@@ -22,9 +23,6 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use super::ParallelModeService;
-use super::control_plane::{
-    ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
-};
 
 pub struct ParallelModeDispatchOrchestratorTickRequest {
     pub workspace_directory: String,
@@ -530,21 +528,21 @@ impl ParallelDispatchWorkerRunResult {
     fn launch_failed(notices: Vec<String>) -> Self {
         Self {
             notices,
-            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::WorkerLaunchFailed,
+            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::LaunchFailed,
         }
     }
 
     fn stream_failed(notices: Vec<String>) -> Self {
         Self {
             notices,
-            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::WorkerStreamFailed,
+            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::StreamFailed,
         }
     }
 
     fn completed(notices: Vec<String>) -> Self {
         Self {
             notices,
-            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+            worker_event_kind: ParallelModeControlPlaneWorkerEventKind::Completed,
         }
     }
 }
