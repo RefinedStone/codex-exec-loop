@@ -4,10 +4,27 @@ use crate::application::service::parallel_mode::{
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelTurnSlotLeaseHandoff {
+    pub task_id: String,
+    pub task_title: String,
+}
+impl ParallelTurnSlotLeaseHandoff {
+    pub fn new(task_id: impl Into<String>, task_title: impl Into<String>) -> Self {
+        Self {
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+        }
+    }
+
+    fn to_slot_lease_request(&self) -> ParallelModeSlotLeaseRequest {
+        ParallelModeSlotLeaseRequest::from_task_identity(&self.task_id, &self.task_title)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 /*
 이 요청 타입은 TUI가 "대화 스트림을 시작한다"는 한 가지 동작을 application 계층으로 넘길 때
 필요한 입력을 담는다. 평소에는 현재 workspace와 thread_id를 그대로 사용하지만, 병렬 모드에서는
-`slot_lease_request`가 함께 들어와 "먼저 빈 슬롯 worktree를 빌린 뒤 그 worktree에서 새 thread를
+`slot_lease_handoff`가 함께 들어와 "먼저 빈 슬롯 worktree를 빌린 뒤 그 worktree에서 새 thread를
 시작하라"는 의미가 된다. 그래서 이 타입은 대화 런타임과 병렬 슬롯 런타임 사이의 작은 경계
 객체다.
 */
@@ -15,7 +32,7 @@ pub struct ParallelTurnStreamLaunchRequest {
     pub workspace_directory: String,
     pub thread_id: Option<String>,
     pub prompt: String,
-    pub slot_lease_request: Option<ParallelModeSlotLeaseRequest>,
+    pub slot_lease_handoff: Option<ParallelTurnSlotLeaseHandoff>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
@@ -79,8 +96,9 @@ impl ParallelModeTurnService {
 
     /*
     스트림을 실제로 띄우기 전 병렬 슬롯 lease가 필요한지 판단하는 진입점이다.
-    `slot_lease_request`가 없으면 일반 대화이므로 입력 요청을 그대로 돌려주고, 있으면
-    `ParallelModeService::acquire_slot_lease`로 비어 있는 슬롯을 하나 확보한다.
+    `slot_lease_handoff`가 없으면 일반 대화이므로 입력 요청을 그대로 돌려주고, 있으면 application
+    service가 domain helper로 lease request를 만든 뒤 `ParallelModeService::acquire_slot_lease`로
+    비어 있는 슬롯을 하나 확보한다.
 
     lease가 성공하면 반환 요청을 슬롯 worktree 기준으로 다시 작성한다. 여기서 `thread_id`를 비우는
     것이 중요하다. 기존 thread를 재사용하면 root workspace의 대화 기록과 슬롯 작업 대화가 연결될
@@ -90,7 +108,11 @@ impl ParallelModeTurnService {
         &self,
         request: ParallelTurnStreamLaunchRequest,
     ) -> Result<ParallelTurnStreamLaunchOutcome, String> {
-        let Some(slot_lease_request) = request.slot_lease_request.clone() else {
+        let Some(slot_lease_request) = request
+            .slot_lease_handoff
+            .as_ref()
+            .map(ParallelTurnSlotLeaseHandoff::to_slot_lease_request)
+        else {
             return Ok(ParallelTurnStreamLaunchOutcome {
                 request,
                 launch_notice: None,
@@ -105,7 +127,7 @@ impl ParallelModeTurnService {
                 workspace_directory: lease.worktree_path.clone(),
                 thread_id: None,
                 prompt: request.prompt,
-                slot_lease_request: None,
+                slot_lease_handoff: None,
             },
             launch_notice: Some(format!(
                 "slot lease acquired before stream launch / slot: {} / agent: {} / task: {}",
@@ -450,7 +472,8 @@ fn should_promote_missing_turn_started_before_success(
 #[cfg(test)]
 mod tests {
     use super::{
-        ParallelModeTurnService, should_mark_cleanup_pending_after_success,
+        ParallelModeTurnService, ParallelTurnSlotLeaseHandoff,
+        should_mark_cleanup_pending_after_success,
         should_promote_missing_turn_started_before_success, should_release_unstarted_slot_lease,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -544,6 +567,19 @@ mod tests {
         assert!(!should_promote_missing_turn_started_before_success(
             false, true, false
         ));
+    }
+    #[test]
+    fn slot_lease_handoff_maps_to_domain_request_inside_turn_service_boundary() {
+        let request = ParallelTurnSlotLeaseHandoff::new(
+            " task-r1-turn-bridge ",
+            "Move slot lease request out of TUI",
+        )
+        .to_slot_lease_request();
+
+        assert_eq!(request.task_id, "task-r1-turn-bridge");
+        assert_eq!(request.task_title, "Move slot lease request out of TUI");
+        assert_eq!(request.agent_id, "agent-task-r1-turn-bridge");
+        assert_eq!(request.task_slug, "task-r1-turn-bridge");
     }
     #[test]
     fn turn_started_without_slot_lease_keeps_snapshot_steady() {

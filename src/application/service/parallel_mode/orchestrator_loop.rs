@@ -291,7 +291,10 @@ fn dispatch_parallel_queue_pool(
             .planning
             .runtime
             .build_sub_session_task_handoff_with_persona(&task, persona);
-        let lease_request = parallel_mode_slot_lease_request(&handoff.task);
+        let lease_request = ParallelModeSlotLeaseRequest::from_task_identity(
+            &handoff.task.task_id,
+            &handoff.task.task_title,
+        );
         match service.acquire_slot_lease(workspace_directory, lease_request) {
             Ok(lease) => {
                 event_log::emit_lazy("parallel_dispatch_slot_lease_acquired", || {
@@ -370,43 +373,6 @@ fn dispatch_parallel_queue_pool(
         })
     });
     outcome
-}
-
-fn parallel_mode_slot_lease_request(
-    handoff_task: &PlanningTaskHandoff,
-) -> ParallelModeSlotLeaseRequest {
-    let task_id = handoff_task.task_id.trim();
-    let task_title = handoff_task.task_title.trim();
-    let common_slug = sanitize_parallel_mode_identifier(task_id)
-        .or_else(|| sanitize_parallel_mode_identifier(task_title));
-    let task_slug = common_slug.clone().unwrap_or_else(|| "task".to_string());
-    let agent_slug = common_slug.unwrap_or_else(|| "agent".to_string());
-    ParallelModeSlotLeaseRequest::new(
-        task_id,
-        task_title,
-        format!("agent-{agent_slug}"),
-        task_slug,
-    )
-}
-
-fn sanitize_parallel_mode_identifier(input: &str) -> Option<String> {
-    let mut slug = String::new();
-    let mut previous_was_dash = false;
-    for character in input.chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-            previous_was_dash = false;
-            continue;
-        }
-        if !previous_was_dash && !slug.is_empty() {
-            slug.push('-');
-            previous_was_dash = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    if slug.is_empty() { None } else { Some(slug) }
 }
 
 fn parallel_runtime_event_for_dispatch_trigger(

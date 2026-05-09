@@ -8,9 +8,8 @@ use crate::adapter::inbound::tui::app::{
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::turn::{
-    ParallelModeTurnService, ParallelTurnStreamLaunchRequest,
+    ParallelModeTurnService, ParallelTurnSlotLeaseHandoff, ParallelTurnStreamLaunchRequest,
 };
-use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
 
 /* This module is the TUI-side bridge from a submitted prompt to the streaming
  * conversation service. It also mirrors every stream event into parallel-mode slot
@@ -22,7 +21,7 @@ pub(super) struct PreparedTurnStreamRequest {
     pub workspace_directory: String,
     pub thread_id: Option<String>,
     pub prompt: String,
-    pub slot_lease_request: Option<ParallelModeSlotLeaseRequest>,
+    pub slot_lease_handoff: Option<ParallelTurnSlotLeaseHandoff>,
 }
 
 // Service completion is observed after the event stream closes. The terminal
@@ -122,14 +121,14 @@ fn resolve_stream_launch_request(
             workspace_directory: request.workspace_directory,
             thread_id: request.thread_id,
             prompt: request.prompt,
-            slot_lease_request: request.slot_lease_request,
+            slot_lease_handoff: request.slot_lease_handoff,
         })?;
     Ok((
         PreparedTurnStreamRequest {
             workspace_directory: outcome.request.workspace_directory,
             thread_id: outcome.request.thread_id,
             prompt: outcome.request.prompt,
-            slot_lease_request: outcome.request.slot_lease_request,
+            slot_lease_handoff: outcome.request.slot_lease_handoff,
         },
         outcome.launch_notice,
         outcome.invalidate_supervisor_snapshot,
@@ -369,7 +368,7 @@ mod tests {
             workspace_directory: "/tmp/workspace".to_string(),
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
-            slot_lease_request: None,
+            slot_lease_handoff: None,
         }
     }
 

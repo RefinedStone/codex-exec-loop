@@ -10,8 +10,8 @@ use super::{
     ParallelModePoolResetPolicy, ParallelModePoolResetScope, ParallelModePoolSlotCleanupDecision,
     ParallelModePoolSlotState, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
     ParallelModeReadinessState, ParallelModeRuntimeEvent, ParallelModeRuntimeEventEntry,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorState,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+    ParallelModeSlotLeaseState, ParallelModeSupervisorState,
 };
 
 // readiness 집계의 최우선 안전 규칙을 고정한다. 하나라도 Blocked가 있으면 다른
@@ -100,6 +100,30 @@ fn readiness_derivation_marks_ready_when_all_capabilities_are_ready() {
     ]);
 
     assert_eq!(readiness, ParallelModeReadinessState::Ready);
+}
+
+#[test]
+fn slot_lease_request_from_task_identity_normalizes_parallel_agent_slug() {
+    let request = ParallelModeSlotLeaseRequest::from_task_identity(
+        " task-supersession-runtime ",
+        "Wire runtime into slot lease lifecycle",
+    );
+
+    assert_eq!(request.task_id, "task-supersession-runtime");
+    assert_eq!(request.task_title, "Wire runtime into slot lease lifecycle");
+    assert_eq!(request.agent_id, "agent-task-supersession-runtime");
+    assert_eq!(request.task_slug, "task-supersession-runtime");
+}
+
+#[test]
+fn slot_lease_request_from_task_identity_falls_back_to_task_title_slug() {
+    let request =
+        ParallelModeSlotLeaseRequest::from_task_identity(" !!! ", "Wire Runtime Into Slot Lease");
+
+    assert_eq!(request.task_id, "!!!");
+    assert_eq!(request.task_title, "Wire Runtime Into Slot Lease");
+    assert_eq!(request.agent_id, "agent-wire-runtime-into-slot-lease");
+    assert_eq!(request.task_slug, "wire-runtime-into-slot-lease");
 }
 
 // supervisor 상태는 mode toggle과 readiness gate를 함께 본다. 같은 Blocked
