@@ -29,7 +29,6 @@ structured planning-tool calls, parallel-mode distributor ticks, and Telegram co
 - Active context-first roadmap: [docs/plan/20-context-first-architecture-and-doc-coherence.md](docs/plan/20-context-first-architecture-and-doc-coherence.md)
 - Active terminal-agent bridge research hub: [docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md](docs/plan/21-terminal-agent-bridge-research-and-capability-boundary.md)
 - Docs map and source-of-truth index: [docs/README.md](docs/README.md)
-- Release delta from `v1.2.9`: [docs/releases/v1.2.9-to-prerelease.md](docs/releases/v1.2.9-to-prerelease.md)
 - Supersession docs hub: [docs/supersession/README.md](docs/supersession/README.md)
 
 ## Architecture Principles
