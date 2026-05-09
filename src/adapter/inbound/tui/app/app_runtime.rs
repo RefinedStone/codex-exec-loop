@@ -8,8 +8,8 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::{
     ParallelModeService,
     control_plane::{
-        ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneController,
-        ParallelModeControlPlaneEffectRunner, ParallelModeControlPlaneEventSink,
+        ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEffectRunner,
+        ParallelModeControlPlaneEventSink, ParallelModeControlPlaneService,
     },
     turn::ParallelModeTurnService,
 };
@@ -84,8 +84,8 @@ impl NativeTuiApp {
         planning: PlanningServices,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
-        let parallel_mode_control_plane_controller =
-            ParallelModeControlPlaneController::new(ParallelModeControlPlaneEffectRunner::new(
+        let parallel_mode_control_plane =
+            ParallelModeControlPlaneService::new(ParallelModeControlPlaneEffectRunner::new(
                 parallel_mode_service.clone(),
                 planning.clone(),
                 parallel_agent_worker_port,
@@ -116,7 +116,7 @@ impl NativeTuiApp {
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
-            parallel_mode_control_plane_controller,
+            parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),

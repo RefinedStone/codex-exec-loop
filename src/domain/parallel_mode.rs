@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 // 병렬 모드 도메인의 공개 관문이다. 세부 투영은 하위 모듈에 두고, 이 파일은
 // 서비스와 TUI가 공유하는 supervisor/slot/lease/pool board 어휘를 한곳에 모은다.
 mod agent_session;
+mod control_plane;
 mod distributor;
 mod orchestrator;
 mod pool_reset;
@@ -17,6 +18,10 @@ pub use self::agent_session::{
     ParallelModeLiveSessionDetailDefaults, ParallelModeSupervisorDetailSnapshot,
 };
 use self::agent_session::{roster_recency_key, roster_state_priority};
+#[allow(unused_imports)]
+pub use self::control_plane::{
+    ParallelModeControlPlaneAggregate, ParallelModeDispatchReadinessDecision,
+};
 pub use self::distributor::{
     ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
     ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus, ParallelModeQueueItemState,
@@ -25,6 +30,7 @@ pub use self::distributor::{
 #[allow(unused_imports)]
 pub use self::orchestrator::ParallelModeControlPlaneEntryDecision;
 pub(crate) use self::orchestrator::ParallelModeDispatchTaskCandidate;
+#[allow(unused_imports)]
 pub use self::orchestrator::{
     ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,

@@ -1,5 +1,4 @@
 use super::*;
-use crate::adapter::inbound::tui::app::ConversationInputEvent;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
@@ -506,19 +505,6 @@ impl NativeFlowHarness {
         self.runtime
             .app_mut()
             .apply_parallel_mode_orchestrator_wake_request(workspace_directory, trigger, epoch_id);
-    }
-
-    fn apply_ready_entered_snapshot(&mut self, status_text: &str) {
-        let readiness_snapshot = ready_parallel_mode_readiness_snapshot(&self.workspace_dir);
-        let supervisor_snapshot = ready_parallel_mode_supervisor_snapshot(&self.workspace_dir);
-        let app = self.runtime.app_mut();
-        app.set_parallel_mode_enabled_for_test(true);
-        app.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
-        app.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
-        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: status_text.to_string(),
-        });
-        app.maybe_wake_parallel_mode_orchestrator_for_pending_command();
     }
 
     fn poll_until_status_contains(&mut self, expected: &str) -> String {
@@ -1342,6 +1328,10 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
+    let (refresh_epoch_id, refresh_effect_id) = harness
+        .runtime
+        .app_mut()
+        .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
     harness.runtime.app_mut().parallel_mode_readiness_snapshot = None;
     harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
         loading_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
@@ -1369,7 +1359,22 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
     );
 
     harness
-        .apply_ready_entered_snapshot("parallel mode: on / readiness: ready / control tower ready");
+        .runtime
+        .app
+        .tx
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+            ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+                workspace_directory: harness.workspace_dir.clone(),
+                epoch_id: refresh_epoch_id,
+                effect_id: refresh_effect_id,
+                supervisor_snapshot: Box::new(ready_parallel_mode_supervisor_snapshot(
+                    &harness.workspace_dir,
+                )),
+                orchestrator_tick_signature: None,
+            },
+        ))
+        .expect("ready supervisor refresh should enqueue");
+    harness.runtime.poll_background_messages();
     harness.poll_until_worker_launches(1);
     harness.poll_until_dispatch_idle();
 
