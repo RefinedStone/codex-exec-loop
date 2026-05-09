@@ -227,20 +227,14 @@ impl PlanningRuntimeFacadeService {
             .expect("queued sub-session handoff prompt should not be empty");
 
         event_log::emit_lazy("parallel_sub_session_handoff_built", || {
-            serde_json::json!({
-                "task_id": &task.task_id,
-                "task_title": &task.task_title,
-                "direction_id": &task.direction_id,
-                "combined_priority": task.combined_priority,
-                "persona": persona.form_value(),
-                "service_name": &prompt.service_name,
-                "handoff_prompt_chars": task_prompt.chars().count(),
-                "turn_prompt_chars": prompt.turn_prompt.chars().count(),
-                "developer_instructions_chars": prompt.developer_instructions.chars().count(),
-                "handoff_prompt": &task_prompt,
-                "turn_prompt": &prompt.turn_prompt,
-                "developer_instructions": &prompt.developer_instructions,
-            })
+            parallel_sub_session_handoff_trace_payload(
+                task,
+                persona,
+                &prompt.service_name,
+                &task_prompt,
+                &prompt.turn_prompt,
+                &prompt.developer_instructions,
+            )
         });
 
         PlanningSubSessionHandoff {
@@ -434,4 +428,78 @@ fn render_queued_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
         )
         .build()
         .render()
+}
+
+fn parallel_sub_session_handoff_trace_payload(
+    task: &PriorityQueueTask,
+    persona: ParallelAgentPersona,
+    service_name: &str,
+    handoff_prompt: &str,
+    turn_prompt: &str,
+    developer_instructions: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": &task.task_id,
+        "task_title": &task.task_title,
+        "direction_id": &task.direction_id,
+        "combined_priority": task.combined_priority,
+        "persona": persona.form_value(),
+        "service_name": service_name,
+        "handoff_prompt_chars": handoff_prompt.chars().count(),
+        "turn_prompt_chars": turn_prompt.chars().count(),
+        "developer_instructions_chars": developer_instructions.chars().count(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::{PriorityQueueTask, parallel_sub_session_handoff_trace_payload};
+    use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
+    use crate::domain::planning::TaskStatus;
+
+    #[test]
+    fn parallel_sub_session_handoff_trace_payload_keeps_prompt_bodies_out_of_log() {
+        let payload = parallel_sub_session_handoff_trace_payload(
+            &PriorityQueueTask {
+                rank: 1,
+                task_id: "task-secret".to_string(),
+                direction_id: "direction-a".to_string(),
+                direction_title: "General".to_string(),
+                task_title: "Check trace retention".to_string(),
+                status: TaskStatus::Ready,
+                combined_priority: 42,
+                updated_at: "2026-05-09T00:00:00Z".to_string(),
+                rank_reasons: vec!["ready".to_string()],
+            },
+            ParallelAgentPersona::None,
+            "akra-parallel-worker",
+            "handoff SECRET-HANDOFF body",
+            "turn SECRET-TURN body",
+            "developer SECRET-DEVELOPER body",
+        );
+
+        let fields = payload.as_object().expect("payload should be an object");
+        assert_eq!(fields["handoff_prompt_chars"], 27);
+        assert_eq!(fields["turn_prompt_chars"], 21);
+        assert_eq!(fields["developer_instructions_chars"], 31);
+        assert!(!fields.contains_key("handoff_prompt"));
+        assert!(!fields.contains_key("turn_prompt"));
+        assert!(!fields.contains_key("developer_instructions"));
+        assert!(!json_payload_contains(&payload, "SECRET-"));
+    }
+
+    fn json_payload_contains(value: &Value, needle: &str) -> bool {
+        match value {
+            Value::String(value) => value.contains(needle),
+            Value::Array(values) => values
+                .iter()
+                .any(|value| json_payload_contains(value, needle)),
+            Value::Object(values) => values
+                .values()
+                .any(|value| json_payload_contains(value, needle)),
+            _ => false,
+        }
+    }
 }
