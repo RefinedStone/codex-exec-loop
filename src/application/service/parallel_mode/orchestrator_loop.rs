@@ -601,14 +601,7 @@ fn run_parallel_dispatch_worker(
     let (event_tx, event_rx) = mpsc::channel();
     let service_request = request.clone();
     event_log::emit_lazy("parallel_worker_stream_starting", || {
-        serde_json::json!({
-            "worktree": &request.worktree_directory,
-            "task_id": &request.handoff_task.task_id,
-            "task_title": &request.handoff_task.task_title,
-            "service_name": &request.service_name,
-            "prompt": &request.prompt,
-            "developer_instructions": &request.developer_instructions,
-        })
+        parallel_worker_stream_starting_trace_payload(&request)
     });
     let service_thread = thread::spawn(move || {
         /*
@@ -830,15 +823,7 @@ fn emit_parallel_worker_stream_event(
             phase,
             text,
         } => event_log::emit_lazy("parallel_worker_stream_event", || {
-            serde_json::json!({
-                "event": "agent_message_completed",
-                "worktree": &request.worktree_directory,
-                "task_id": &request.handoff_task.task_id,
-                "item_id": item_id,
-                "phase": phase,
-                "text_chars": text.chars().count(),
-                "text": text,
-            })
+            parallel_worker_agent_message_completed_trace_payload(request, item_id, phase, text)
         }),
         ConversationStreamEvent::TurnCompleted {
             turn_id,
@@ -1154,4 +1139,107 @@ fn parallel_dispatch_validation_summary(changed_planning_file_paths: &[String]) 
         "parallel worker completed with planning file changes: {}",
         changed_planning_file_paths.join(", ")
     )
+}
+
+fn parallel_worker_stream_starting_trace_payload(
+    request: &ParallelDispatchWorkerRequest,
+) -> serde_json::Value {
+    serde_json::json!({
+        "worktree": &request.worktree_directory,
+        "task_id": &request.handoff_task.task_id,
+        "task_title": &request.handoff_task.task_title,
+        "service_name": &request.service_name,
+        "prompt_chars": request.prompt.chars().count(),
+        "developer_instructions_chars": request.developer_instructions.chars().count(),
+    })
+}
+
+fn parallel_worker_agent_message_completed_trace_payload(
+    request: &ParallelDispatchWorkerRequest,
+    item_id: &str,
+    phase: &Option<String>,
+    text: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "event": "agent_message_completed",
+        "worktree": &request.worktree_directory,
+        "task_id": &request.handoff_task.task_id,
+        "item_id": item_id,
+        "phase": phase,
+        "text_chars": text.chars().count(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::{
+        ParallelDispatchWorkerRequest, parallel_worker_agent_message_completed_trace_payload,
+        parallel_worker_stream_starting_trace_payload,
+    };
+    use crate::application::service::planning::PlanningTaskHandoff;
+
+    #[test]
+    fn parallel_worker_stream_starting_trace_payload_keeps_prompt_bodies_out_of_log() {
+        let request = worker_request_with_secret_bodies();
+
+        let payload = parallel_worker_stream_starting_trace_payload(&request);
+        let fields = payload.as_object().expect("payload should be an object");
+
+        assert_eq!(fields["prompt_chars"], 18);
+        assert_eq!(fields["developer_instructions_chars"], 21);
+        assert!(!fields.contains_key("prompt"));
+        assert!(!fields.contains_key("developer_instructions"));
+        assert!(!json_payload_contains(&payload, "SECRET-"));
+    }
+
+    #[test]
+    fn parallel_worker_completed_message_trace_payload_keeps_text_body_out_of_log() {
+        let request = worker_request_with_secret_bodies();
+
+        let payload = parallel_worker_agent_message_completed_trace_payload(
+            &request,
+            "item-1",
+            &Some("final_answer".to_string()),
+            "assistant SECRET-REPLY body",
+        );
+        let fields = payload.as_object().expect("payload should be an object");
+
+        assert_eq!(fields["text_chars"], 27);
+        assert!(!fields.contains_key("text"));
+        assert!(!json_payload_contains(&payload, "SECRET-REPLY"));
+    }
+
+    fn worker_request_with_secret_bodies() -> ParallelDispatchWorkerRequest {
+        ParallelDispatchWorkerRequest {
+            planning_workspace_directory: "/tmp/workspace".to_string(),
+            worktree_directory: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+            automation_epoch_id: 7,
+            prompt: "prompt SECRET-BODY".to_string(),
+            developer_instructions: "developer SECRET-BODY".to_string(),
+            service_name: "akra-parallel-worker".to_string(),
+            handoff_task: PlanningTaskHandoff {
+                task_id: "task-a".to_string(),
+                task_title: "Check trace retention".to_string(),
+                direction_id: "direction-a".to_string(),
+                combined_priority: 42,
+                updated_at: "2026-05-09T00:00:00Z".to_string(),
+                status_label: "ready".to_string(),
+            },
+        }
+    }
+
+    fn json_payload_contains(value: &Value, needle: &str) -> bool {
+        match value {
+            Value::String(value) => value.contains(needle),
+            Value::Array(values) => values
+                .iter()
+                .any(|value| json_payload_contains(value, needle)),
+            Value::Object(values) => values
+                .values()
+                .any(|value| json_payload_contains(value, needle)),
+            _ => false,
+        }
+    }
 }

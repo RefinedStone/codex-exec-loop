@@ -201,6 +201,7 @@ cargo clippy --all-targets --all-features -D warnings
 - `AKRA_TRACE=codex_exec_loop_native::application::service::planning=debug cargo run`: trace a selected module filter.
 - `AKRA_TRACE_FILE=/tmp/akra-trace.jsonl`: override the trace JSONL destination with an exact append file instead of daily rolling.
 - `jq -r 'select(.event=="user_prompt_submit_inspected") | .transcript_text' /tmp/akra-trace.jsonl`: inspect the exact operator prompt submitted through the TUI.
+- Parallel sub-session trace events retain task/worktree identifiers and content lengths, but not raw handoff prompts, developer instructions, or assistant reply text.
 - `akra_event!(tracing::Level::DEBUG, "message", key = value)`: emit standard structured Akra diagnostics without evaluating field expressions when the target is disabled. The trace formatter flattens the lazy JSON detail into top-level JSONL fields while preserving string, number, and boolean types.
 - `codex_exec_loop_native::diagnostics::dropped_log_lines()`: read the in-process trace `tracing_appender` dropped-line counter for future doctor or health surfaces.
 - `akra_diagnostics_dropped_log_lines`: emitted as a shutdown warning when the non-blocking trace queue dropped any lines.
