@@ -174,6 +174,43 @@ impl ParallelModeSlotLeaseRequest {
             task_slug: task_slug.into(),
         }
     }
+
+    pub fn from_task_identity(task_id: impl AsRef<str>, task_title: impl AsRef<str>) -> Self {
+        let task_id = task_id.as_ref().trim();
+        let task_title = task_title.as_ref().trim();
+        let common_slug = sanitize_parallel_mode_identifier(task_id)
+            .or_else(|| sanitize_parallel_mode_identifier(task_title));
+        let task_slug = common_slug.clone().unwrap_or_else(|| "task".to_string());
+        let agent_slug = common_slug.unwrap_or_else(|| "agent".to_string());
+
+        Self::new(
+            task_id,
+            task_title,
+            format!("agent-{agent_slug}"),
+            task_slug,
+        )
+    }
+}
+
+fn sanitize_parallel_mode_identifier(input: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_dash = false;
+    for character in input.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            previous_was_dash = false;
+            continue;
+        }
+        if !previous_was_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_was_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    (!slug.is_empty()).then_some(slug)
 }
 
 // lease snapshot은 slot 소유권의 기준 데이터다. branch, worktree, agent, task,

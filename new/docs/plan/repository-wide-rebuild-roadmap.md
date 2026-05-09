@@ -53,7 +53,7 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 ### R1. Turn Submission Runtime Bridge 축소
 
-상태: `ready`
+상태: `in_progress`
 
 대상:
 
@@ -63,19 +63,16 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 문제:
 
-- TUI가 `ParallelModeSlotLeaseRequest`를 만들고 task/agent slug를 생성한다.
 - TUI stream bridge가 `ParallelModeTurnService`를 직접 조합해 slot lifecycle을 따라간다.
 - active turn execution snapshot capture가 post-turn reconciliation input이지만 TUI field에 남아 있다.
 
 해야 할 일:
 
 - stream launch 준비를 application request/result로 이동한다.
-- slot lease request 생성과 slug normalization을 application/domain helper로 단일화한다.
 - TUI는 launch outcome과 projection event만 처리한다.
 
 완료 조건:
 
-- TUI 파일에 slot lease slug 생성 helper가 없다.
 - TUI가 parallel slot lifecycle state transition service를 직접 호출하지 않는다.
 - stream start, launch failure, terminal failure, official completion ordering regression이 통과한다.
 
