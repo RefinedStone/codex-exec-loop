@@ -105,20 +105,18 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
 pub(super) fn make_test_app() -> NativeTuiApp {
     // One Arc-backed port is shared across startup, session, and conversation services to preserve production ownership shape.
     let codex_port = Arc::new(FakeAppServerPort);
+    let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+    );
+    let parallel_mode_control_plane_composition =
+        crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_control_plane_composition(
+            planning,
+        );
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        // Parallel agents are not part of inline frame rendering, so the worker boundary is present but inert.
-        Arc::new(
-            crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
-        ),
-        // The test parallel-mode service exposes the same control surface without slot/worktree orchestration.
-        crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-        // Planning services stay real enough for status copy, then the conversation snapshot is reset to a neutral baseline below.
-        crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        )),
+        parallel_mode_control_plane_composition,
     );
     // Inline rendering fixtures assume the app opens on an editable draft; fail loudly if constructor semantics change.
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {

@@ -19,6 +19,7 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -80,13 +81,16 @@ fn build_default_app() -> NativeTuiApp {
         github_automation,
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     );
+    let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
+        parallel_mode_service,
+        planning,
+        parallel_agent_worker_port,
+    );
     let mut app = NativeTuiApp::new(
         startup_service,
         session_service,
         conversation_service,
-        parallel_agent_worker_port,
-        parallel_mode_service,
-        planning,
+        parallel_mode_control_plane_composition,
     );
     let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
     /*
@@ -207,17 +211,21 @@ mod tests {
          * planning workspace. That keeps prepare_runtime tests about shell startup sequencing.
          */
         let codex_port = Arc::new(FakeAppServerPort);
+        let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        );
+        let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+            planning,
+            Arc::new(
+                crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
+            ),
+        );
         NativeTuiApp::new(
             StartupService::new(codex_port.clone()),
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
-            Arc::new(
-                crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
-            ),
-            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            crate::adapter::inbound::tui::app::test_helpers::test_planning_services(Arc::new(
-                FilesystemPlanningWorkspaceAdapter::new(),
-            )),
+            parallel_mode_control_plane_composition,
         )
     }
 

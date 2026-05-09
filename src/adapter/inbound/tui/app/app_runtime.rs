@@ -1,19 +1,12 @@
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::parallel_mode::{
-    ParallelModeService,
-    control_plane::{
-        ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEffectRunner,
-        ParallelModeControlPlaneEventSink, ParallelModeControlPlaneService,
-    },
-    turn::ParallelModeTurnService,
+use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
+    ParallelModeControlPlaneEventSink,
 };
-use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
@@ -79,19 +72,15 @@ impl NativeTuiApp {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
-        parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
-        parallel_mode_service: ParallelModeService,
-        planning: PlanningServices,
+        parallel_mode_control_plane_composition: ParallelModeControlPlaneComposition,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
-        let parallel_mode_control_plane =
-            ParallelModeControlPlaneService::new(ParallelModeControlPlaneEffectRunner::new(
-                parallel_mode_service.clone(),
-                planning.clone(),
-                parallel_agent_worker_port,
-                ParallelModeTurnService::new(parallel_mode_service.clone()),
-                TuiParallelModeControlPlaneEventSink { tx: tx.clone() },
-            ));
+        let parallel_mode_service = parallel_mode_control_plane_composition
+            .parallel_mode_service()
+            .clone();
+        let planning = parallel_mode_control_plane_composition.planning().clone();
+        let parallel_mode_control_plane = parallel_mode_control_plane_composition
+            .bind_event_sink(TuiParallelModeControlPlaneEventSink { tx: tx.clone() });
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.

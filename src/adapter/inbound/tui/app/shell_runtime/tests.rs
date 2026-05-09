@@ -172,34 +172,30 @@ struct ShellRuntimeParallelFixture {
 // ShellRuntime orchestration instead of isolated state mutations.
 fn make_test_runtime() -> ShellRuntime {
     let codex_port = Arc::new(FakeAppServerPort);
+    let planning =
+        test_helpers::test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let parallel_mode_control_plane_composition =
+        test_helpers::test_parallel_mode_control_plane_composition(planning);
     let app = NativeTuiApp::new(
-            StartupService::new(codex_port.clone()),
-            SessionService::new(codex_port.clone()),
-            ConversationService::new(codex_port),
-            Arc::new(
-                crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
-            ),
-            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            test_helpers::test_planning_services(Arc::new(
-                FilesystemPlanningWorkspaceAdapter::new(),
-            )),
-        );
+        StartupService::new(codex_port.clone()),
+        SessionService::new(codex_port.clone()),
+        ConversationService::new(codex_port),
+        parallel_mode_control_plane_composition,
+    );
     ShellRuntime::new(app)
 }
 fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>) -> ShellRuntime {
     let codex_port = Arc::new(FakeAppServerPort);
+    let planning =
+        test_helpers::test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let parallel_mode_control_plane_composition =
+        test_helpers::test_parallel_mode_control_plane_composition(planning);
     let app = NativeTuiApp::new(
-            StartupService::new(codex_port.clone()),
-            SessionService::new(session_port),
-            ConversationService::new(codex_port),
-            Arc::new(
-                crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort,
-            ),
-            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-            test_helpers::test_planning_services(Arc::new(
-                FilesystemPlanningWorkspaceAdapter::new(),
-            )),
-        );
+        StartupService::new(codex_port.clone()),
+        SessionService::new(session_port),
+        ConversationService::new(codex_port),
+        parallel_mode_control_plane_composition,
+    );
     ShellRuntime::new(app)
 }
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
@@ -233,13 +229,17 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
         launch_count: launch_count.clone(),
     });
     let codex_port = Arc::new(FakeAppServerPort);
+    let parallel_mode_control_plane_composition =
+        test_helpers::test_parallel_mode_control_plane_composition_with_worker(
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+            planning,
+            worker_port,
+        );
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
-        worker_port,
-        crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
-        planning,
+        parallel_mode_control_plane_composition,
     );
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
     app.sync_draft_shell_workspace(&workspace_dir);
