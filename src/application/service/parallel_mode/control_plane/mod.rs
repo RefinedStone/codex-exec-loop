@@ -1,7 +1,11 @@
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeControlPlaneAggregate,
-    ParallelModeEffectStartDecision, ParallelModeOrchestratorTickDecision,
+    ParallelModeControlPlaneEffectCompletionFollowUp, ParallelModeControlPlaneWorkerEvent,
+    ParallelModeControlPlaneWorkerEventKind, ParallelModeEffectStartDecision,
+    ParallelModeEntryCompletionDecision, ParallelModeModeCompletionDecision,
+    ParallelModeOrchestratorTickDecision, ParallelModePendingDispatchWakeDecision,
     ParallelModePostTurnQueueSignal, ParallelModeProjectionReadyContinuation,
+    ParallelModeTickCompletionDecision,
 };
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +13,9 @@ mod composition;
 mod controller;
 mod effect_runner;
 
-pub use composition::ParallelModeControlPlaneComposition;
+pub use composition::{
+    ParallelModeControlPlaneComposition, ParallelModeControlPlaneDashboardSnapshot,
+};
 pub use controller::{
     ParallelModeControlPlaneController, ParallelModeControlPlanePresentationEvent,
     ParallelModeControlPlaneService, ParallelModePostTurnQueueContinuationResult,
@@ -62,130 +68,6 @@ impl ParallelModeControlPlaneWake {
             trigger,
             epoch_id,
             enqueue_trigger,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ParallelModeControlPlaneWorkerEventKind {
-    WorkerCompleted,
-    WorkerLaunchFailed,
-    WorkerStreamFailed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ParallelModeControlPlaneWorkerEvent {
-    pub workspace_directory: String,
-    pub epoch_id: u64,
-    pub task_id: String,
-    pub task_title: String,
-    pub kind: ParallelModeControlPlaneWorkerEventKind,
-    pub notices: Vec<String>,
-}
-
-impl ParallelModeControlPlaneWorkerEvent {
-    pub fn new(
-        workspace_directory: impl Into<String>,
-        epoch_id: u64,
-        task_id: impl Into<String>,
-        task_title: impl Into<String>,
-        kind: ParallelModeControlPlaneWorkerEventKind,
-        notices: Vec<String>,
-    ) -> Self {
-        Self {
-            workspace_directory: workspace_directory.into(),
-            epoch_id,
-            task_id: task_id.into(),
-            task_title: task_title.into(),
-            kind,
-            notices,
-        }
-    }
-
-    pub fn reduce(
-        self,
-        current_workspace_directory: &str,
-        current_epoch_id: Option<u64>,
-        has_actionable_queue_head: bool,
-    ) -> ParallelModeControlPlaneWorkerEventOutcome {
-        if current_workspace_directory != self.workspace_directory {
-            return ParallelModeControlPlaneWorkerEventOutcome::stale(
-                self,
-                "worker event targets a different workspace",
-            );
-        }
-        if current_epoch_id != Some(self.epoch_id) {
-            return ParallelModeControlPlaneWorkerEventOutcome::stale(
-                self,
-                "worker event belongs to a stale epoch",
-            );
-        }
-
-        let event = match self.kind {
-            ParallelModeControlPlaneWorkerEventKind::WorkerCompleted => {
-                ParallelModeControlPlaneEvent::WorkerCompleted {
-                    workspace_directory: self.workspace_directory.clone(),
-                    epoch_id: self.epoch_id,
-                    task_id: self.task_id.clone(),
-                }
-            }
-            ParallelModeControlPlaneWorkerEventKind::WorkerLaunchFailed => {
-                ParallelModeControlPlaneEvent::WorkerLaunchFailed {
-                    workspace_directory: self.workspace_directory.clone(),
-                    epoch_id: self.epoch_id,
-                    task_id: self.task_id.clone(),
-                }
-            }
-            ParallelModeControlPlaneWorkerEventKind::WorkerStreamFailed => {
-                ParallelModeControlPlaneEvent::WorkerStreamFailed {
-                    workspace_directory: self.workspace_directory.clone(),
-                    epoch_id: self.epoch_id,
-                    task_id: self.task_id.clone(),
-                }
-            }
-        };
-        let wake = (self.kind == ParallelModeControlPlaneWorkerEventKind::WorkerCompleted
-            && has_actionable_queue_head)
-            .then(|| {
-                ParallelModeControlPlaneWake::new(
-                    self.workspace_directory.clone(),
-                    ParallelModeAutomationTrigger::ParallelOfficialCompletion,
-                    self.epoch_id,
-                    Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion),
-                )
-            });
-        ParallelModeControlPlaneWorkerEventOutcome {
-            event,
-            stale_drop_reason: None,
-            notices: self.notices,
-            refresh_supervisor: true,
-            wake,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParallelModeControlPlaneWorkerEventOutcome {
-    pub event: ParallelModeControlPlaneEvent,
-    pub stale_drop_reason: Option<String>,
-    pub notices: Vec<String>,
-    pub refresh_supervisor: bool,
-    pub wake: Option<ParallelModeControlPlaneWake>,
-}
-
-impl ParallelModeControlPlaneWorkerEventOutcome {
-    fn stale(event: ParallelModeControlPlaneWorkerEvent, reason: &str) -> Self {
-        Self {
-            event: ParallelModeControlPlaneEvent::StaleCommandDropped {
-                workspace_directory: event.workspace_directory,
-                epoch_id: event.epoch_id,
-                reason: reason.to_string(),
-            },
-            stale_drop_reason: Some(reason.to_string()),
-            notices: Vec::new(),
-            refresh_supervisor: false,
-            wake: None,
         }
     }
 }
@@ -801,17 +683,18 @@ impl ParallelModeControlPlaneRuntime {
         show_status: bool,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        let mode_enabled = ParallelModeControlPlaneAggregate::mode_enabled_for_workspace(
+        let decision = ParallelModeControlPlaneAggregate::supervisor_inspection(
             self.store.mode_enabled,
             self.store.workspace_directory.as_deref(),
             &workspace_directory,
+            reconcile_pool,
         );
         outcome
             .effects
             .push(ParallelModeControlPlaneEffect::InspectSupervisor {
                 workspace_directory,
-                mode_enabled,
-                reconcile_pool: reconcile_pool && mode_enabled,
+                mode_enabled: decision.mode_enabled,
+                reconcile_pool: decision.reconcile_pool,
                 show_status,
             });
     }
@@ -859,95 +742,18 @@ impl ParallelModeControlPlaneRuntime {
         effect_id: ParallelModeControlPlaneEffectId,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if !self.command_epoch_is_current(&workspace_directory, epoch_id, outcome) {
+        let unknown_reason = unknown_effect_reason(effect_id.kind);
+        if !self.finish_effect(
+            &workspace_directory,
+            epoch_id,
+            effect_id,
+            effect_id.kind,
+            unknown_reason,
+            outcome,
+        ) {
             return;
         }
-        match effect_id.kind {
-            ParallelModeControlPlaneEffectKind::EnterParallelMode => {
-                if self.store.parallel_entry_in_flight != Some(effect_id) {
-                    self.stale_command(
-                        workspace_directory,
-                        epoch_id,
-                        "unknown parallel entry",
-                        outcome,
-                    );
-                    return;
-                }
-                self.store.parallel_entry_in_flight = None;
-                outcome
-                    .events
-                    .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
-                if self.store.pending_supervisor_refresh {
-                    self.store.pending_supervisor_refresh = false;
-                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
-                    return;
-                }
-                self.drain_pending_orchestrator_wake(outcome);
-            }
-            ParallelModeControlPlaneEffectKind::RefreshSupervisor => {
-                if self.store.supervisor_refresh_in_flight != Some(effect_id) {
-                    self.stale_command(
-                        workspace_directory,
-                        epoch_id,
-                        "unknown supervisor refresh",
-                        outcome,
-                    );
-                    return;
-                }
-                self.store.supervisor_refresh_in_flight = None;
-                outcome
-                    .events
-                    .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
-                if self.store.pending_supervisor_refresh {
-                    self.store.pending_supervisor_refresh = false;
-                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
-                    return;
-                }
-                self.drain_pending_orchestrator_wake(outcome);
-            }
-            ParallelModeControlPlaneEffectKind::RunOrchestrator => {
-                if self.store.orchestrator_wake_in_flight != Some(effect_id) {
-                    self.stale_command(
-                        workspace_directory,
-                        epoch_id,
-                        "unknown orchestrator wake",
-                        outcome,
-                    );
-                    return;
-                }
-                self.store.orchestrator_wake_in_flight = None;
-                outcome
-                    .events
-                    .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
-                if self.store.pending_supervisor_refresh {
-                    self.store.pending_supervisor_refresh = false;
-                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
-                    return;
-                }
-                self.drain_pending_orchestrator_wake(outcome);
-            }
-            ParallelModeControlPlaneEffectKind::RunOrchestratorTick => {
-                if self.store.orchestrator_tick_in_flight != Some(effect_id) {
-                    self.stale_command(
-                        workspace_directory,
-                        epoch_id,
-                        "unknown orchestrator tick",
-                        outcome,
-                    );
-                    return;
-                }
-                self.store.orchestrator_tick_in_flight = None;
-                outcome
-                    .events
-                    .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
-                if self.store.pending_supervisor_refresh {
-                    self.store.pending_supervisor_refresh = false;
-                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
-                    return;
-                }
-                self.drain_pending_orchestrator_wake(outcome);
-            }
-        }
+        self.continue_after_effect_completed(workspace_directory, epoch_id, outcome);
     }
 
     fn entry_completed(
@@ -987,42 +793,51 @@ impl ParallelModeControlPlaneRuntime {
             .events
             .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
 
-        if !mode_enabled {
-            self.store.current_epoch_id = None;
-            self.store.workspace_directory = None;
-            self.store.projection_ready = false;
-            self.clear_process_effect_state();
-            outcome
-                .events
-                .push(ParallelModeControlPlaneEvent::EpochClosed {
-                    workspace_directory: workspace_directory.clone(),
-                    epoch_id,
-                });
-            outcome
-                .events
-                .push(ParallelModeControlPlaneEvent::ModeDisabled {
-                    workspace_directory,
-                });
-            return;
-        }
-
-        if self.store.pending_supervisor_refresh {
-            self.store.pending_supervisor_refresh = false;
-            self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
-            return;
-        }
-        self.store.projection_ready = true;
-        if !mode_was_enabled && has_actionable_queue_head {
-            self.start_orchestrator_wake(
-                ParallelModeControlPlaneWake::new(
-                    workspace_directory,
-                    ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
-                    epoch_id,
-                    Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
-                ),
-                outcome,
-            );
-            return;
+        match ParallelModeControlPlaneAggregate::entry_completion(
+            mode_enabled,
+            mode_was_enabled,
+            self.store.pending_supervisor_refresh,
+            has_actionable_queue_head,
+        ) {
+            ParallelModeEntryCompletionDecision::CloseEpoch => {
+                self.store.current_epoch_id = None;
+                self.store.workspace_directory = None;
+                self.store.projection_ready = false;
+                self.clear_process_effect_state();
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::EpochClosed {
+                        workspace_directory: workspace_directory.clone(),
+                        epoch_id,
+                    });
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::ModeDisabled {
+                        workspace_directory,
+                    });
+                return;
+            }
+            ParallelModeEntryCompletionDecision::RefreshSupervisor => {
+                self.store.pending_supervisor_refresh = false;
+                self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+                return;
+            }
+            ParallelModeEntryCompletionDecision::DispatchInitialQueue => {
+                self.store.projection_ready = true;
+                self.start_orchestrator_wake(
+                    ParallelModeControlPlaneWake::new(
+                        workspace_directory,
+                        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                        epoch_id,
+                        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+                    ),
+                    outcome,
+                );
+                return;
+            }
+            ParallelModeEntryCompletionDecision::ProjectionReady => {
+                self.store.projection_ready = true;
+            }
         }
         self.schedule_after_projection_ready(
             workspace_directory,
@@ -1079,7 +894,9 @@ impl ParallelModeControlPlaneRuntime {
             return;
         }
         self.store.mode_enabled = mode_enabled;
-        if !mode_enabled {
+        if ParallelModeControlPlaneAggregate::mode_completion(mode_enabled)
+            == ParallelModeModeCompletionDecision::CloseEpoch
+        {
             self.store.current_epoch_id = None;
             self.store.workspace_directory = None;
             self.store.projection_ready = false;
@@ -1126,7 +943,9 @@ impl ParallelModeControlPlaneRuntime {
         }
         self.store.projection_ready = false;
         self.start_or_queue_supervisor_refresh(workspace_directory.clone(), epoch_id, outcome);
-        if !blocked {
+        if ParallelModeControlPlaneAggregate::tick_completion(blocked)
+            == ParallelModeTickCompletionDecision::RefreshSupervisorAndQueueCapacityDispatch
+        {
             outcome.effects.push(
                 ParallelModeControlPlaneEffect::EnqueueSlotCapacityDispatch {
                     workspace_directory,
@@ -1142,24 +961,33 @@ impl ParallelModeControlPlaneRuntime {
         has_actionable_queue_head: bool,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        let current_workspace_directory = self.store.workspace_directory.as_deref().unwrap_or("");
-        let current_epoch_id = self.store.current_epoch_id;
-        let reduced = event.reduce(
-            current_workspace_directory,
-            current_epoch_id,
+        let decision = ParallelModeControlPlaneAggregate::worker_event_decision(
+            &event.workspace_directory,
+            event.epoch_id,
+            event.kind,
+            self.store.workspace_directory.as_deref(),
+            self.store.current_epoch_id,
             has_actionable_queue_head,
         );
-        if reduced.stale_drop_reason.is_some() {
-            outcome.events.push(reduced.event);
+        if let Some(reason) = decision.stale_drop_reason {
+            outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::StaleCommandDropped {
+                    workspace_directory: event.workspace_directory,
+                    epoch_id: event.epoch_id,
+                    reason: reason.to_string(),
+                });
             return;
         }
-        outcome.events.push(reduced.event);
-        for notice in reduced.notices {
+        outcome
+            .events
+            .push(worker_event_to_control_plane_event(&event));
+        for notice in event.notices {
             outcome
                 .events
                 .push(ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice });
         }
-        if reduced.refresh_supervisor {
+        if decision.refresh_supervisor {
             let Some(workspace_directory) = self.store.workspace_directory.clone() else {
                 return;
             };
@@ -1168,8 +996,16 @@ impl ParallelModeControlPlaneRuntime {
             };
             self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
         }
-        if let Some(wake) = reduced.wake {
-            self.wake_orchestrator(wake, outcome);
+        if let Some(trigger) = decision.wake_trigger {
+            self.wake_orchestrator(
+                ParallelModeControlPlaneWake::new(
+                    event.workspace_directory,
+                    trigger,
+                    event.epoch_id,
+                    Some(trigger),
+                ),
+                outcome,
+            );
         }
     }
 
@@ -1437,12 +1273,21 @@ impl ParallelModeControlPlaneRuntime {
                     reason: format!("pending dispatch command poll failed: {error}"),
                 });
         }
-        if let Some(wake) = wake {
-            self.wake_orchestrator(wake, outcome);
-            return;
-        }
-        if let Some(signature) = follow_up_tick_signature {
-            self.run_orchestrator_tick(workspace_directory, signature, outcome);
+        match ParallelModeControlPlaneAggregate::pending_dispatch_wake_decision(
+            wake.is_some(),
+            follow_up_tick_signature.is_some(),
+        ) {
+            ParallelModePendingDispatchWakeDecision::StartWake => {
+                if let Some(wake) = wake {
+                    self.wake_orchestrator(wake, outcome);
+                }
+            }
+            ParallelModePendingDispatchWakeDecision::RunFollowUpTick => {
+                if let Some(signature) = follow_up_tick_signature {
+                    self.run_orchestrator_tick(workspace_directory, signature, outcome);
+                }
+            }
+            ParallelModePendingDispatchWakeDecision::Idle => {}
         }
     }
 
@@ -1506,6 +1351,25 @@ impl ParallelModeControlPlaneRuntime {
             });
         self.start_orchestrator_wake(wake, outcome);
         true
+    }
+
+    fn continue_after_effect_completed(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        match ParallelModeControlPlaneAggregate::effect_completion_follow_up(
+            self.store.pending_supervisor_refresh,
+        ) {
+            ParallelModeControlPlaneEffectCompletionFollowUp::RefreshSupervisor => {
+                self.store.pending_supervisor_refresh = false;
+                self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            }
+            ParallelModeControlPlaneEffectCompletionFollowUp::DrainPendingWake => {
+                self.drain_pending_orchestrator_wake(outcome);
+            }
+        }
     }
 
     fn finish_effect(
@@ -1700,6 +1564,43 @@ impl ParallelModeControlPlaneRuntime {
                 epoch_id,
                 reason: reason.to_string(),
             });
+    }
+}
+
+fn unknown_effect_reason(kind: ParallelModeControlPlaneEffectKind) -> &'static str {
+    match kind {
+        ParallelModeControlPlaneEffectKind::EnterParallelMode => "unknown parallel entry",
+        ParallelModeControlPlaneEffectKind::RefreshSupervisor => "unknown supervisor refresh",
+        ParallelModeControlPlaneEffectKind::RunOrchestrator => "unknown orchestrator wake",
+        ParallelModeControlPlaneEffectKind::RunOrchestratorTick => "unknown orchestrator tick",
+    }
+}
+
+fn worker_event_to_control_plane_event(
+    event: &ParallelModeControlPlaneWorkerEvent,
+) -> ParallelModeControlPlaneEvent {
+    match event.kind {
+        ParallelModeControlPlaneWorkerEventKind::Completed => {
+            ParallelModeControlPlaneEvent::WorkerCompleted {
+                workspace_directory: event.workspace_directory.clone(),
+                epoch_id: event.epoch_id,
+                task_id: event.task_id.clone(),
+            }
+        }
+        ParallelModeControlPlaneWorkerEventKind::LaunchFailed => {
+            ParallelModeControlPlaneEvent::WorkerLaunchFailed {
+                workspace_directory: event.workspace_directory.clone(),
+                epoch_id: event.epoch_id,
+                task_id: event.task_id.clone(),
+            }
+        }
+        ParallelModeControlPlaneWorkerEventKind::StreamFailed => {
+            ParallelModeControlPlaneEvent::WorkerStreamFailed {
+                workspace_directory: event.workspace_directory.clone(),
+                epoch_id: event.epoch_id,
+                task_id: event.task_id.clone(),
+            }
+        }
     }
 }
 
@@ -2102,31 +2003,33 @@ mod tests {
             9,
             "task-1",
             "Task One",
-            ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+            ParallelModeControlPlaneWorkerEventKind::Completed,
             vec!["official completion refreshed".to_string()],
         );
 
-        let outcome = event.reduce("/repo", Some(9), true);
+        let decision = ParallelModeControlPlaneAggregate::worker_event_decision(
+            &event.workspace_directory,
+            event.epoch_id,
+            event.kind,
+            Some("/repo"),
+            Some(9),
+            true,
+        );
 
         assert_eq!(
-            outcome.event,
+            worker_event_to_control_plane_event(&event),
             ParallelModeControlPlaneEvent::WorkerCompleted {
                 workspace_directory: "/repo".to_string(),
                 epoch_id: 9,
                 task_id: "task-1".to_string(),
             }
         );
-        assert!(outcome.stale_drop_reason.is_none());
-        assert_eq!(outcome.notices, vec!["official completion refreshed"]);
-        assert!(outcome.refresh_supervisor);
+        assert!(decision.stale_drop_reason.is_none());
+        assert_eq!(event.notices, vec!["official completion refreshed"]);
+        assert!(decision.refresh_supervisor);
         assert_eq!(
-            outcome.wake,
-            Some(ParallelModeControlPlaneWake::new(
-                "/repo",
-                ParallelModeAutomationTrigger::ParallelOfficialCompletion,
-                9,
-                Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion),
-            ))
+            decision.wake_trigger,
+            Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion)
         );
     }
 
@@ -2137,23 +2040,30 @@ mod tests {
             9,
             "task-1",
             "Task One",
-            ParallelModeControlPlaneWorkerEventKind::WorkerLaunchFailed,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed,
             vec!["launch failed".to_string()],
         );
 
-        let outcome = event.reduce("/repo", Some(9), true);
+        let decision = ParallelModeControlPlaneAggregate::worker_event_decision(
+            &event.workspace_directory,
+            event.epoch_id,
+            event.kind,
+            Some("/repo"),
+            Some(9),
+            true,
+        );
 
         assert_eq!(
-            outcome.event,
+            worker_event_to_control_plane_event(&event),
             ParallelModeControlPlaneEvent::WorkerLaunchFailed {
                 workspace_directory: "/repo".to_string(),
                 epoch_id: 9,
                 task_id: "task-1".to_string(),
             }
         );
-        assert_eq!(outcome.notices, vec!["launch failed"]);
-        assert!(outcome.refresh_supervisor);
-        assert!(outcome.wake.is_none());
+        assert_eq!(event.notices, vec!["launch failed"]);
+        assert!(decision.refresh_supervisor);
+        assert!(decision.wake_trigger.is_none());
     }
 
     #[test]
@@ -2163,23 +2073,24 @@ mod tests {
             9,
             "task-1",
             "Task One",
-            ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+            ParallelModeControlPlaneWorkerEventKind::Completed,
             vec!["late completion".to_string()],
         );
 
-        let outcome = event.reduce("/repo", Some(10), true);
+        let decision = ParallelModeControlPlaneAggregate::worker_event_decision(
+            &event.workspace_directory,
+            event.epoch_id,
+            event.kind,
+            Some("/repo"),
+            Some(10),
+            true,
+        );
 
         assert_eq!(
-            outcome.event,
-            ParallelModeControlPlaneEvent::StaleCommandDropped {
-                workspace_directory: "/repo".to_string(),
-                epoch_id: 9,
-                reason: "worker event belongs to a stale epoch".to_string(),
-            }
+            decision.stale_drop_reason,
+            Some("worker event belongs to a stale epoch")
         );
-        assert!(outcome.stale_drop_reason.is_some());
-        assert!(outcome.notices.is_empty());
-        assert!(!outcome.refresh_supervisor);
-        assert!(outcome.wake.is_none());
+        assert!(!decision.refresh_supervisor);
+        assert!(decision.wake_trigger.is_none());
     }
 }

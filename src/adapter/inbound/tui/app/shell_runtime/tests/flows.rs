@@ -9,7 +9,6 @@ use crate::application::port::outbound::planning_task_repository_port::PlanningT
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEffectKind,
-    ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
 };
 use crate::application::service::planning::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolUpdateRequest, PlanningTaskUpdatePayload,
@@ -21,7 +20,8 @@ use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-    ParallelModeCapabilityState, ParallelModeDispatchBlockReason,
+    ParallelModeCapabilityState, ParallelModeControlPlaneWorkerEvent,
+    ParallelModeControlPlaneWorkerEventKind, ParallelModeDispatchBlockReason,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
     ParallelModeDistributorSnapshot, ParallelModeLiveSessionDetailDefaults,
     ParallelModePoolBoardSnapshot, ParallelModePoolSlotState, ParallelModePostTurnQueueSignal,
@@ -1573,7 +1573,7 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
                     1,
                     "task-stale-worker",
                     "Stale Worker",
-                    ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
+                    ParallelModeControlPlaneWorkerEventKind::Completed,
                     vec!["late completion should be dropped".to_string()],
                 ),
                 has_actionable_queue_head: true,

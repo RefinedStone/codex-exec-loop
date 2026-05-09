@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use super::orchestrator::{
-    ParallelModeOrchestratorStateMachine, ParallelModePostTurnQueueDecision,
-    ParallelModePostTurnQueueSignal,
+    ParallelModeAutomationTrigger, ParallelModeOrchestratorStateMachine,
+    ParallelModePostTurnQueueDecision, ParallelModePostTurnQueueSignal,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,99 @@ pub enum ParallelModeOrchestratorTickDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelModeSupervisorInspectionDecision {
+    pub mode_enabled: bool,
+    pub reconcile_pool: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeControlPlaneEffectCompletionFollowUp {
+    RefreshSupervisor,
+    DrainPendingWake,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeEntryCompletionDecision {
+    CloseEpoch,
+    RefreshSupervisor,
+    DispatchInitialQueue,
+    ProjectionReady,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeModeCompletionDecision {
+    KeepEpochOpen,
+    CloseEpoch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModeTickCompletionDecision {
+    RefreshSupervisorOnly,
+    RefreshSupervisorAndQueueCapacityDispatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModePendingDispatchPollDecision {
+    Ready,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelModePendingDispatchWakeDecision {
+    StartWake,
+    RunFollowUpTick,
+    Idle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelModeControlPlaneWorkerEventKind {
+    #[serde(rename = "worker_completed")]
+    Completed,
+    #[serde(rename = "worker_launch_failed")]
+    LaunchFailed,
+    #[serde(rename = "worker_stream_failed")]
+    StreamFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeControlPlaneWorkerEvent {
+    pub workspace_directory: String,
+    pub epoch_id: u64,
+    pub task_id: String,
+    pub task_title: String,
+    pub kind: ParallelModeControlPlaneWorkerEventKind,
+    pub notices: Vec<String>,
+}
+
+impl ParallelModeControlPlaneWorkerEvent {
+    pub fn new(
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+        task_id: impl Into<String>,
+        task_title: impl Into<String>,
+        kind: ParallelModeControlPlaneWorkerEventKind,
+        notices: Vec<String>,
+    ) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            epoch_id,
+            task_id: task_id.into(),
+            task_title: task_title.into(),
+            kind,
+            notices,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelModeControlPlaneWorkerEventDecision {
+    pub stale_drop_reason: Option<&'static str>,
+    pub refresh_supervisor: bool,
+    pub wake_trigger: Option<ParallelModeAutomationTrigger>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParallelModeControlPlaneAggregate;
 
 impl ParallelModeControlPlaneAggregate {
@@ -69,6 +164,20 @@ impl ParallelModeControlPlaneAggregate {
         }
     }
 
+    pub fn supervisor_inspection(
+        mode_enabled: bool,
+        current_workspace: Option<&str>,
+        workspace: &str,
+        reconcile_pool: bool,
+    ) -> ParallelModeSupervisorInspectionDecision {
+        let mode_enabled =
+            Self::mode_enabled_for_workspace(mode_enabled, current_workspace, workspace);
+        ParallelModeSupervisorInspectionDecision {
+            mode_enabled,
+            reconcile_pool: reconcile_pool && mode_enabled,
+        }
+    }
+
     pub fn effect_start_decision(
         control_effect_in_flight: bool,
     ) -> ParallelModeEffectStartDecision {
@@ -77,6 +186,43 @@ impl ParallelModeControlPlaneAggregate {
         }
 
         ParallelModeEffectStartDecision::StartNow
+    }
+
+    pub fn effect_completion_follow_up(
+        pending_supervisor_refresh: bool,
+    ) -> ParallelModeControlPlaneEffectCompletionFollowUp {
+        if pending_supervisor_refresh {
+            return ParallelModeControlPlaneEffectCompletionFollowUp::RefreshSupervisor;
+        }
+
+        ParallelModeControlPlaneEffectCompletionFollowUp::DrainPendingWake
+    }
+
+    pub fn entry_completion(
+        mode_enabled: bool,
+        mode_was_enabled: bool,
+        pending_supervisor_refresh: bool,
+        has_actionable_queue_head: bool,
+    ) -> ParallelModeEntryCompletionDecision {
+        if !mode_enabled {
+            return ParallelModeEntryCompletionDecision::CloseEpoch;
+        }
+        if pending_supervisor_refresh {
+            return ParallelModeEntryCompletionDecision::RefreshSupervisor;
+        }
+        if !mode_was_enabled && has_actionable_queue_head {
+            return ParallelModeEntryCompletionDecision::DispatchInitialQueue;
+        }
+
+        ParallelModeEntryCompletionDecision::ProjectionReady
+    }
+
+    pub fn mode_completion(mode_enabled: bool) -> ParallelModeModeCompletionDecision {
+        if mode_enabled {
+            return ParallelModeModeCompletionDecision::KeepEpochOpen;
+        }
+
+        ParallelModeModeCompletionDecision::CloseEpoch
     }
 
     pub fn projection_ready_continuation(
@@ -105,6 +251,14 @@ impl ParallelModeControlPlaneAggregate {
         ParallelModeOrchestratorTickDecision::Start
     }
 
+    pub fn tick_completion(blocked: bool) -> ParallelModeTickCompletionDecision {
+        if blocked {
+            return ParallelModeTickCompletionDecision::RefreshSupervisorOnly;
+        }
+
+        ParallelModeTickCompletionDecision::RefreshSupervisorAndQueueCapacityDispatch
+    }
+
     pub fn dispatch_readiness(
         projection_ready: bool,
         control_effect_in_flight: bool,
@@ -116,6 +270,33 @@ impl ParallelModeControlPlaneAggregate {
         }
 
         ParallelModeDispatchReadinessDecision::Ready
+    }
+
+    pub fn pending_dispatch_poll_readiness(
+        mode_enabled: bool,
+        current_epoch_open: bool,
+        projection_ready: bool,
+        control_effect_in_flight: bool,
+    ) -> ParallelModePendingDispatchPollDecision {
+        if !mode_enabled || !current_epoch_open || !projection_ready || control_effect_in_flight {
+            return ParallelModePendingDispatchPollDecision::Skip;
+        }
+
+        ParallelModePendingDispatchPollDecision::Ready
+    }
+
+    pub fn pending_dispatch_wake_decision(
+        has_wake: bool,
+        has_follow_up_tick: bool,
+    ) -> ParallelModePendingDispatchWakeDecision {
+        if has_wake {
+            return ParallelModePendingDispatchWakeDecision::StartWake;
+        }
+        if has_follow_up_tick {
+            return ParallelModePendingDispatchWakeDecision::RunFollowUpTick;
+        }
+
+        ParallelModePendingDispatchWakeDecision::Idle
     }
 
     pub fn post_turn_queue_continuation(
@@ -149,6 +330,38 @@ impl ParallelModeControlPlaneAggregate {
                 Some(epoch_id)
             }
             _ => None,
+        }
+    }
+
+    pub fn worker_event_decision(
+        event_workspace: &str,
+        event_epoch_id: u64,
+        event_kind: ParallelModeControlPlaneWorkerEventKind,
+        current_workspace: Option<&str>,
+        current_epoch_id: Option<u64>,
+        has_actionable_queue_head: bool,
+    ) -> ParallelModeControlPlaneWorkerEventDecision {
+        if current_workspace != Some(event_workspace) {
+            return ParallelModeControlPlaneWorkerEventDecision {
+                stale_drop_reason: Some("worker event targets a different workspace"),
+                refresh_supervisor: false,
+                wake_trigger: None,
+            };
+        }
+        if current_epoch_id != Some(event_epoch_id) {
+            return ParallelModeControlPlaneWorkerEventDecision {
+                stale_drop_reason: Some("worker event belongs to a stale epoch"),
+                refresh_supervisor: false,
+                wake_trigger: None,
+            };
+        }
+
+        ParallelModeControlPlaneWorkerEventDecision {
+            stale_drop_reason: None,
+            refresh_supervisor: true,
+            wake_trigger: (event_kind == ParallelModeControlPlaneWorkerEventKind::Completed
+                && has_actionable_queue_head)
+                .then_some(ParallelModeAutomationTrigger::ParallelOfficialCompletion),
         }
     }
 }
@@ -209,6 +422,38 @@ mod tests {
     }
 
     #[test]
+    fn entry_completion_keeps_projection_and_initial_dispatch_policy_in_domain() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::entry_completion(false, false, false, true),
+            ParallelModeEntryCompletionDecision::CloseEpoch
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::entry_completion(true, false, true, true),
+            ParallelModeEntryCompletionDecision::RefreshSupervisor
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::entry_completion(true, false, false, true),
+            ParallelModeEntryCompletionDecision::DispatchInitialQueue
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::entry_completion(true, true, false, true),
+            ParallelModeEntryCompletionDecision::ProjectionReady
+        );
+    }
+
+    #[test]
+    fn tick_completion_queues_capacity_dispatch_only_when_retry_is_not_blocked() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::tick_completion(true),
+            ParallelModeTickCompletionDecision::RefreshSupervisorOnly
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::tick_completion(false),
+            ParallelModeTickCompletionDecision::RefreshSupervisorAndQueueCapacityDispatch
+        );
+    }
+
+    #[test]
     fn orchestrator_tick_skips_duplicate_or_busy_tick() {
         assert_eq!(
             ParallelModeControlPlaneAggregate::orchestrator_tick_decision(true, None, "sig"),
@@ -245,6 +490,71 @@ mod tests {
             Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
         );
         assert!(decision.should_consume_auto_follow_prompt());
+    }
+
+    #[test]
+    fn pending_dispatch_poll_requires_enabled_ready_open_epoch() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::pending_dispatch_poll_readiness(
+                true, true, true, false
+            ),
+            ParallelModePendingDispatchPollDecision::Ready
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::pending_dispatch_poll_readiness(
+                true, true, false, false
+            ),
+            ParallelModePendingDispatchPollDecision::Skip
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::pending_dispatch_poll_readiness(
+                true, true, true, true
+            ),
+            ParallelModePendingDispatchPollDecision::Skip
+        );
+    }
+
+    #[test]
+    fn worker_event_decision_is_epoch_scoped_and_wakes_only_completed_queue_work() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::worker_event_decision(
+                "/repo",
+                7,
+                ParallelModeControlPlaneWorkerEventKind::Completed,
+                Some("/repo"),
+                Some(7),
+                true,
+            ),
+            ParallelModeControlPlaneWorkerEventDecision {
+                stale_drop_reason: None,
+                refresh_supervisor: true,
+                wake_trigger: Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion),
+            }
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::worker_event_decision(
+                "/repo",
+                7,
+                ParallelModeControlPlaneWorkerEventKind::LaunchFailed,
+                Some("/repo"),
+                Some(7),
+                true,
+            )
+            .wake_trigger,
+            None
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::worker_event_decision(
+                "/repo",
+                7,
+                ParallelModeControlPlaneWorkerEventKind::Completed,
+                Some("/repo"),
+                Some(8),
+                true,
+            )
+            .stale_drop_reason,
+            Some("worker event belongs to a stale epoch")
+        );
     }
 
     #[test]

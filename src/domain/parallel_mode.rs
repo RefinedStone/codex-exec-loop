@@ -20,9 +20,14 @@ pub use self::agent_session::{
 use self::agent_session::{roster_recency_key, roster_state_priority};
 #[allow(unused_imports)]
 pub use self::control_plane::{
-    ParallelModeControlPlaneAggregate, ParallelModeDispatchReadinessDecision,
+    ParallelModeControlPlaneAggregate, ParallelModeControlPlaneEffectCompletionFollowUp,
+    ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventDecision,
+    ParallelModeControlPlaneWorkerEventKind, ParallelModeDispatchReadinessDecision,
     ParallelModeEffectStartDecision, ParallelModeEnableEntryDecision,
-    ParallelModeOrchestratorTickDecision, ParallelModeProjectionReadyContinuation,
+    ParallelModeEntryCompletionDecision, ParallelModeModeCompletionDecision,
+    ParallelModeOrchestratorTickDecision, ParallelModePendingDispatchPollDecision,
+    ParallelModePendingDispatchWakeDecision, ParallelModeProjectionReadyContinuation,
+    ParallelModeSupervisorInspectionDecision, ParallelModeTickCompletionDecision,
 };
 pub use self::distributor::{
     ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,

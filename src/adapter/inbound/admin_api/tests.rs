@@ -411,8 +411,8 @@ fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
         "dashboard should ask the admin facade for the shared planning projection"
     );
     assert!(
-        AKRA_DASHBOARD_RS.contains("inspect_readiness_from_planning_projection"),
-        "dashboard should pass planning projection facts into parallel readiness"
+        AKRA_DASHBOARD_RS.contains("inspect_dashboard_snapshot_from_projection"),
+        "dashboard should pass planning projection facts into parallel control-plane readiness"
     );
     assert!(
         !AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_snapshot"),
@@ -431,21 +431,22 @@ fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
 #[test]
 fn akra_parallel_admin_surface_is_read_only_snapshot_projection() {
     /*
-     * Admin Akra routes inspect parallel mode; they do not provide a second
-     * manual tick/mutation surface beside CLI/TUI. This keeps parallel command
-     * ordering inside ParallelModeService and its control-plane runtime.
+     * Admin Akra routes inspect parallel mode through the application
+     * control-plane composition; they do not provide a second manual
+     * tick/mutation surface beside CLI/TUI.
      */
     assert!(
-        AKRA_DASHBOARD_RS.contains("build_supervisor_snapshot"),
-        "admin dashboard should render the application supervisor projection"
+        AKRA_DASHBOARD_RS.contains("inspect_dashboard_snapshot_from_projection"),
+        "admin dashboard should render through the parallel control-plane composition"
     );
     assert!(
         AKRA_DASHBOARD_RS.contains("build_runtime_events_snapshot"),
-        "admin dashboard should render the runtime event projection"
+        "admin event feed should render through the control-plane read surface"
     );
     for forbidden in [
         "run_orchestrator_tick",
         "process_distributor_queue",
+        "ParallelModeService",
         "ParallelModeControlPlaneCommand",
         "ParallelModeControlPlaneEvent",
     ] {

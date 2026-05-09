@@ -1,5 +1,5 @@
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
-use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
@@ -268,17 +268,18 @@ pub(super) struct GuildMetricsView {
 
 pub(super) fn build_akra_dashboard_view(
     planning_admin: &PlanningAdminFacadeService,
-    parallel_mode: &ParallelModeService,
+    parallel_mode_control_plane: &ParallelModeControlPlaneComposition,
 ) -> Result<AkraAdminDashboardView> {
     let workspace_dir = planning_admin.workspace_dir();
     let planning_projection = planning_admin.load_runtime_application_projection()?;
-    let readiness = parallel_mode
-        .inspect_readiness_from_planning_projection(workspace_dir, &planning_projection);
-    let supervisor = parallel_mode.build_supervisor_snapshot(workspace_dir, true, Some(&readiness));
-    let events = parallel_mode.build_runtime_events_snapshot(
+    let snapshot = parallel_mode_control_plane.inspect_dashboard_snapshot_from_projection(
         workspace_dir,
+        &planning_projection,
         ParallelModeRuntimeEventLogRequest::recent(DASHBOARD_EVENT_LIMIT),
     );
+    let readiness = snapshot.readiness;
+    let supervisor = snapshot.supervisor;
+    let events = snapshot.events;
 
     let pool = map_pool(&supervisor);
     let agents = map_agents(&supervisor);
@@ -476,7 +477,7 @@ fn map_distributor(supervisor: &ParallelModeSupervisorSnapshot) -> DistributorVi
 
 pub(super) fn build_akra_events_view(
     workspace_dir: &str,
-    parallel_mode: &ParallelModeService,
+    parallel_mode_control_plane: &ParallelModeControlPlaneComposition,
     limit: usize,
     after_sequence: Option<i64>,
 ) -> (EventFeedView, Vec<RuntimeEventView>) {
@@ -486,7 +487,7 @@ pub(super) fn build_akra_events_view(
         }
         None => ParallelModeRuntimeEventLogRequest::recent(limit),
     };
-    let events = parallel_mode.build_runtime_events_snapshot(workspace_dir, request);
+    let events = parallel_mode_control_plane.build_runtime_events_snapshot(workspace_dir, request);
     let feed = map_event_feed(&events, limit, after_sequence.is_some());
     let entries = events.entries.iter().map(map_runtime_event).collect();
     (feed, entries)

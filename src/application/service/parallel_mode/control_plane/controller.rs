@@ -6,7 +6,9 @@ use crate::application::service::parallel_mode::control_plane::effect_runner::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchOutcome, ParallelModePostTurnQueueSignal,
+    ParallelModeAutomationTrigger, ParallelModeControlPlaneAggregate,
+    ParallelModeControlPlaneWorkerEvent, ParallelModeDispatchOutcome,
+    ParallelModePendingDispatchPollDecision, ParallelModePostTurnQueueSignal,
     ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
 };
 
@@ -14,7 +16,7 @@ use super::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffect,
     ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEvent,
     ParallelModeControlPlaneRuntime, ParallelModeControlPlaneRuntimeOutcome,
-    ParallelModeControlPlaneRuntimeStore, ParallelModeControlPlaneWorkerEvent,
+    ParallelModeControlPlaneRuntimeStore,
 };
 
 const CONTROL_PLANE_TICK_INTERVAL: Duration = Duration::from_secs(1);
@@ -365,10 +367,13 @@ where
         workspace_directory: String,
         follow_up_tick_signature: Option<String>,
     ) -> Vec<ParallelModeControlPlanePresentationEvent> {
-        if !self.mode_enabled() || self.current_epoch_id().is_none() {
-            return Vec::new();
-        }
-        if !self.runtime.store().projection_ready || self.control_effect_in_flight() {
+        if ParallelModeControlPlaneAggregate::pending_dispatch_poll_readiness(
+            self.mode_enabled(),
+            self.current_epoch_id().is_some(),
+            self.runtime.store().projection_ready,
+            self.control_effect_in_flight(),
+        ) == ParallelModePendingDispatchPollDecision::Skip
+        {
             return Vec::new();
         }
         self.handle_command(ParallelModeControlPlaneCommand::PollPendingDispatchWake {

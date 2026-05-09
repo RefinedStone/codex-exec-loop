@@ -88,32 +88,44 @@ pub(super) async fn runtime_api(
 pub(super) async fn akra_dashboard_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(state.facade.as_ref(), state.parallel_mode.as_ref())
-        .map_err(internal_server_error)?;
+    let dashboard = build_akra_dashboard_view(
+        state.facade.as_ref(),
+        state.parallel_mode_control_plane.as_ref(),
+    )
+    .map_err(internal_server_error)?;
     Ok(Json(dashboard).into_response())
 }
 
 pub(super) async fn akra_pool_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(state.facade.as_ref(), state.parallel_mode.as_ref())
-        .map_err(internal_server_error)?;
+    let dashboard = build_akra_dashboard_view(
+        state.facade.as_ref(),
+        state.parallel_mode_control_plane.as_ref(),
+    )
+    .map_err(internal_server_error)?;
     Ok(Json(dashboard.pool).into_response())
 }
 
 pub(super) async fn akra_agents_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(state.facade.as_ref(), state.parallel_mode.as_ref())
-        .map_err(internal_server_error)?;
+    let dashboard = build_akra_dashboard_view(
+        state.facade.as_ref(),
+        state.parallel_mode_control_plane.as_ref(),
+    )
+    .map_err(internal_server_error)?;
     Ok(Json(dashboard.agents).into_response())
 }
 
 pub(super) async fn akra_distributor_api(
     State(state): State<AdminAppState>,
 ) -> std::result::Result<Response, StatusCode> {
-    let dashboard = build_akra_dashboard_view(state.facade.as_ref(), state.parallel_mode.as_ref())
-        .map_err(internal_server_error)?;
+    let dashboard = build_akra_dashboard_view(
+        state.facade.as_ref(),
+        state.parallel_mode_control_plane.as_ref(),
+    )
+    .map_err(internal_server_error)?;
     Ok(Json(dashboard.distributor).into_response())
 }
 
@@ -134,7 +146,7 @@ pub(super) async fn akra_events_api(
     }
     let (feed, events) = build_akra_events_view(
         state.facade.workspace_dir(),
-        state.parallel_mode.as_ref(),
+        state.parallel_mode_control_plane.as_ref(),
         limit,
         query.after_sequence,
     );
