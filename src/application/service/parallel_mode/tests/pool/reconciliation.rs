@@ -393,7 +393,7 @@ fn parallel_initial_setup_forces_live_running_slots_back_to_baseline() {
 
 // 초기 설정 전에 사용자가 pool worktree를 수동 삭제했더라도 durable runtime projection은
 // 같은 repo authority DB에 남을 수 있다. 첫 `:parallel`은 missing slot을 새로 만들기 전에
-// 이 stale lease/session/queue/dispatch command를 버려야 한다.
+// 이 stale lease/session/queue/dispatch command/block을 버려야 한다.
 #[test]
 fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing() {
     let repo = TempGitRepo::new("parallel-initial-clears-missing-runtime");
@@ -458,6 +458,16 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
         ),
     )
     .expect("stale dispatch command should persist");
+    SqlitePlanningAuthorityAdapter::upsert_runtime_task_dispatch_block(
+        &repo.workspace_dir(),
+        &ParallelModeTaskDispatchBlockSnapshot::new(
+            lease.task_id.as_str(),
+            "2026-05-09T08:31:40Z",
+            "2026-05-09T20:32:57.657951438+00:00",
+            ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+        ),
+    )
+    .expect("stale dispatch block should persist");
     run_git(
         &repo.repo_root,
         &[
@@ -493,6 +503,7 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
     assert!(runtime_projection.session_details.is_empty());
     assert!(runtime_projection.distributor_queue_records.is_empty());
     assert!(runtime_projection.dispatch_commands.is_empty());
+    assert!(runtime_projection.task_dispatch_blocks.is_empty());
     assert!(!repo.slot_lease_path(1).exists());
     assert!(!repo.session_detail_path(&lease.session_key()).exists());
 }

@@ -282,6 +282,17 @@ pub(super) fn reset_pool_for_parallel_enable(
         ParallelModePoolResetRunId::new(format!("{}:{}", repo_root, Utc::now().to_rfc3339())),
         policy,
     );
+    let initial_reset_dispatch_block_task_ids =
+        if policy == ParallelModePoolResetPolicy::ForceDisposable {
+            context
+                .task_dispatch_blocks
+                .iter()
+                .map(|block| block.task_id.trim().to_string())
+                .filter(|task_id| !task_id.is_empty())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
         let slot_path = pool_root.join(&slot_id);
@@ -442,6 +453,17 @@ pub(super) fn reset_pool_for_parallel_enable(
                 .map_err(|error| {
                     format!("parallel runtime projection clear failed after initial reset: {error}")
                 })?;
+            if !initial_reset_dispatch_block_task_ids.is_empty() {
+                planning_authority
+                    .clear_parallel_runtime_projections_for_tasks(
+                        &repo_root,
+                        &initial_reset_dispatch_block_task_ids,
+                        "force-disposable initial pool reset cleared dispatch blocks",
+                    )
+                    .map_err(|error| {
+                        format!("parallel dispatch block clear failed after initial reset: {error}")
+                    })?;
+            }
         } else {
             planning_authority
                 .apply_parallel_pool_reset_report(&repo_root, &report)
