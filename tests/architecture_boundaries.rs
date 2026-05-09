@@ -29,6 +29,42 @@ struct BoundaryViolation {
     text: String,
 }
 
+struct TemporaryDebt {
+    path: String,
+    line: usize,
+    pattern: &'static str,
+    text: String,
+    reason: &'static str,
+}
+
+const INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES: &[TemporaryAllowance] = &[
+    TemporaryAllowance {
+        path_suffix: "src/adapter/inbound/cli.rs",
+        pattern: "crate::adapter::outbound::",
+        reason: "CLI still owns production wiring until application composition is centralized.",
+    },
+    TemporaryAllowance {
+        path_suffix: "src/adapter/inbound/admin_api/mod.rs",
+        pattern: "crate::adapter::outbound::",
+        reason: "Admin API still owns production wiring until application composition is centralized.",
+    },
+    TemporaryAllowance {
+        path_suffix: "src/adapter/inbound/telegram_bot/mod.rs",
+        pattern: "crate::adapter::outbound::",
+        reason: "Telegram bot still owns production wiring until application composition is centralized.",
+    },
+    TemporaryAllowance {
+        path_suffix: "src/adapter/inbound/tui/app/shell_entrypoint.rs",
+        pattern: "crate::adapter::outbound::",
+        reason: "Native TUI shell entrypoint is the current production wiring boundary.",
+    },
+    TemporaryAllowance {
+        path_suffix: "src/adapter/inbound/tui/app/github_polling.rs",
+        pattern: "crate::adapter::outbound::",
+        reason: "GitHub review polling still builds its adapter from the TUI edge.",
+    },
+];
+
 #[test]
 fn domain_layer_has_no_application_or_adapter_dependencies() {
     assert_no_forbidden_references(BoundaryRule {
@@ -51,38 +87,18 @@ fn application_layer_has_no_concrete_adapter_dependencies() {
 
 #[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
-    assert_no_forbidden_references(BoundaryRule {
-        name: "inbound adapters must not pull outbound adapters outside explicit composition roots",
-        root: "src/adapter/inbound",
-        forbidden_patterns: &["crate::adapter::outbound::"],
-        temporary_allowances: &[
-            TemporaryAllowance {
-                path_suffix: "src/adapter/inbound/cli.rs",
-                pattern: "crate::adapter::outbound::",
-                reason: "CLI still owns production wiring until application composition is centralized.",
-            },
-            TemporaryAllowance {
-                path_suffix: "src/adapter/inbound/admin_api/mod.rs",
-                pattern: "crate::adapter::outbound::",
-                reason: "Admin API still owns production wiring until application composition is centralized.",
-            },
-            TemporaryAllowance {
-                path_suffix: "src/adapter/inbound/telegram_bot/mod.rs",
-                pattern: "crate::adapter::outbound::",
-                reason: "Telegram bot still owns production wiring until application composition is centralized.",
-            },
-            TemporaryAllowance {
-                path_suffix: "src/adapter/inbound/tui/app/shell_entrypoint.rs",
-                pattern: "crate::adapter::outbound::",
-                reason: "Native TUI shell entrypoint is the current production wiring boundary.",
-            },
-            TemporaryAllowance {
-                path_suffix: "src/adapter/inbound/tui/app/github_polling.rs",
-                pattern: "crate::adapter::outbound::",
-                reason: "GitHub review polling still builds its adapter from the TUI edge.",
-            },
-        ],
-    });
+    assert_no_forbidden_references(inbound_outbound_boundary_rule());
+}
+
+#[test]
+fn temporary_inbound_composition_debt_has_been_removed() {
+    let debts = collect_temporarily_allowed_references(inbound_outbound_boundary_rule());
+
+    assert!(
+        debts.is_empty(),
+        "temporary architecture debt remains. This failure is intentional until composition wiring is moved out of inbound adapters:\n{}",
+        format_temporary_debts(&debts)
+    );
 }
 
 #[test]
@@ -178,11 +194,67 @@ fn assert_no_forbidden_references(rule: BoundaryRule) {
     );
 }
 
+fn inbound_outbound_boundary_rule() -> BoundaryRule {
+    BoundaryRule {
+        name: "inbound adapters must not pull outbound adapters outside explicit composition roots",
+        root: "src/adapter/inbound",
+        forbidden_patterns: &["crate::adapter::outbound::"],
+        temporary_allowances: INBOUND_OUTBOUND_TEMPORARY_ALLOWANCES,
+    }
+}
+
 fn is_temporarily_allowed(rule: BoundaryRule, path: &str, pattern: &str) -> bool {
-    rule.temporary_allowances.iter().any(|allowance| {
-        debug_assert!(!allowance.reason.trim().is_empty());
-        path.ends_with(allowance.path_suffix) && pattern == allowance.pattern
-    })
+    temporary_allowance_for(rule, path, pattern).is_some()
+}
+
+fn temporary_allowance_for(
+    rule: BoundaryRule,
+    path: &str,
+    pattern: &str,
+) -> Option<TemporaryAllowance> {
+    rule.temporary_allowances
+        .iter()
+        .copied()
+        .find(|allowance| path.ends_with(allowance.path_suffix) && pattern == allowance.pattern)
+}
+
+fn collect_temporarily_allowed_references(rule: BoundaryRule) -> Vec<TemporaryDebt> {
+    let repo_root = repo_root();
+    let root = repo_root.join(rule.root);
+    let mut debts = Vec::new();
+
+    for path in rust_files_under(&root) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        let relative_path = relative_path(&repo_root, &path);
+
+        for source_line in production_lines(&source) {
+            if is_comment_only_line(&source_line.text) {
+                continue;
+            }
+
+            for pattern in rule.forbidden_patterns {
+                if source_line.text.contains(pattern)
+                    && let Some(allowance) = temporary_allowance_for(rule, &relative_path, pattern)
+                {
+                    debts.push(TemporaryDebt {
+                        path: relative_path.clone(),
+                        line: source_line.number,
+                        pattern,
+                        text: source_line.text.trim().to_string(),
+                        reason: allowance.reason,
+                    });
+                }
+            }
+        }
+    }
+
+    debts
 }
 
 fn format_violations(violations: &[BoundaryViolation]) -> String {
@@ -192,6 +264,19 @@ fn format_violations(violations: &[BoundaryViolation]) -> String {
             format!(
                 "{}:{}: {} matched `{}` in rule `{}`",
                 violation.path, violation.line, violation.text, violation.pattern, violation.rule
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_temporary_debts(debts: &[TemporaryDebt]) -> String {
+    debts
+        .iter()
+        .map(|debt| {
+            format!(
+                "{}:{}: {} matched `{}`; reason: {}",
+                debt.path, debt.line, debt.text, debt.pattern, debt.reason
             )
         })
         .collect::<Vec<_>>()
