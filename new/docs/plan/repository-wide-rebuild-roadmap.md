@@ -42,8 +42,8 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 현재 구현된 것 | 아직 안 된 것 |
 | --- | --- | --- |
-| Parallel control-plane | TUI에서 `projection_ready`, refresh/reconcile, dispatch readiness, stale epoch 판단을 대부분 제거했다. | `turn_submission_runtime`과 post-turn bridge에 parallel handoff/slot lease logic이 남아 있다. control-plane은 queue actor가 아니라 mutex facade다. |
-| TUI boundary | shell state 일부와 parallel panel은 controller/projection으로 나뉘었다. | `NativeTuiApp`이 service wiring과 runtime bridge를 많이 들고 있다. `QueueAutoPrompt`, active turn snapshot, slot lease request 생성이 TUI에 남아 있다. |
+| Parallel control-plane | TUI에서 `projection_ready`, refresh/reconcile, dispatch readiness, stale epoch 판단을 대부분 제거했다. | `turn_submission_runtime`과 post-turn bridge에 active turn snapshot/auto-follow ownership이 남아 있다. control-plane은 queue actor가 아니라 mutex facade다. |
+| TUI boundary | shell state 일부와 parallel panel은 controller/projection으로 나뉘었다. | `NativeTuiApp`이 service wiring과 runtime bridge를 많이 들고 있다. `QueueAutoPrompt`, active turn snapshot이 TUI에 남아 있다. |
 | Planning | projection/facade/domain policy seed가 있다. | post-turn executor와 TUI runtime bridge가 planning workflow를 직접 조합한다. 모든 route가 하나의 application command로 통일되지는 않았다. |
 | Inbound surfaces | CLI/admin/Telegram 일부 vocabulary가 공유된다. | route별로 같은 기능이 같은 application request/result를 쓰는지 재감사가 필요하다. |
 | Store/runtime | SQLite authority, runtime projection, mirror I/O boundary 일부가 정리됐다. | process-lifetime state와 durable recovery requirement를 기능별로 다시 판정해야 한다. |
@@ -63,17 +63,17 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 문제:
 
-- TUI stream bridge가 `ParallelModeTurnService`를 직접 조합해 slot lifecycle을 따라간다.
 - active turn execution snapshot capture가 post-turn reconciliation input이지만 TUI field에 남아 있다.
+- stream worker start가 conversation transport와 post-turn reconciliation 준비를 한 함수에서 섞는다.
 
 해야 할 일:
 
-- stream launch 준비를 application request/result로 이동한다.
+- active turn execution snapshot capture를 application request/result로 이동한다.
 - TUI는 launch outcome과 projection event만 처리한다.
 
 완료 조건:
 
-- TUI가 parallel slot lifecycle state transition service를 직접 호출하지 않는다.
+- active turn execution snapshot capture가 `NativeTuiApp` field 소유가 아니다.
 - stream start, launch failure, terminal failure, official completion ordering regression이 통과한다.
 
 검증:
