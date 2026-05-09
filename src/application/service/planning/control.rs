@@ -224,8 +224,8 @@ fn map_control_status_snapshot(
         planning_state: doctor.planning_state().label().to_string(),
         task_authority_signature: projection.task_authority_signature,
         queue_head_task_signature: projection.queue_head_task_signature,
-        queue_summary: doctor.queue_summary().map(str::to_string),
-        proposal_summary: doctor.proposal_summary().map(str::to_string),
+        queue_summary: projection.queue_summary,
+        proposal_summary: projection.proposal_summary,
         health: doctor.health().map(str::to_string),
         issue: doctor.issue().map(str::to_string),
         note: doctor.note().map(str::to_string),
@@ -540,6 +540,14 @@ mod tests {
         assert_eq!(snapshot.preview_status_label, "ready");
         assert_eq!(snapshot.task_authority_signature, Some(42));
         assert_eq!(snapshot.queue_head_task_signature, Some(7));
+        assert_eq!(
+            snapshot.queue_summary.as_deref(),
+            Some("projection queue summary")
+        );
+        assert_eq!(
+            snapshot.proposal_summary.as_deref(),
+            Some("projection proposal summary")
+        );
         assert_eq!(
             snapshot
                 .queue_head

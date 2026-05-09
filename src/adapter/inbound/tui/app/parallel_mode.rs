@@ -147,8 +147,13 @@ impl NativeTuiApp {
     ) -> &crate::application::service::parallel_mode::ParallelModeService {
         &self.parallel_mode_service
     }
+    #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
-        self.parallel_mode_control_plane.current_epoch_id()
+        let workspace_directory = self.planning_workspace_directory();
+        let store = self.parallel_mode_control_plane.store();
+        (store.workspace_directory.as_deref() == Some(workspace_directory.as_str()))
+            .then_some(store.current_epoch_id)
+            .flatten()
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_supervisor_refresh_in_flight(&self) -> bool {
@@ -421,8 +426,16 @@ impl NativeTuiApp {
     }
 
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {
-        let workspace_directory = self.planning_workspace_directory();
-        let epoch_id = self.parallel_mode_automation_epoch_id();
+        let (workspace_directory, epoch_id) = {
+            let store = self.parallel_mode_control_plane.store();
+            (
+                store
+                    .workspace_directory
+                    .clone()
+                    .unwrap_or_else(|| self.planning_workspace_directory()),
+                store.current_epoch_id,
+            )
+        };
         self.apply_parallel_mode_control_plane_command(ParallelModeControlPlaneCommand::Disable {
             workspace_directory: workspace_directory.clone(),
         });

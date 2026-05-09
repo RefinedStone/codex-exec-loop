@@ -412,6 +412,32 @@ fn parallel_task_update_after_enable_reuses_existing_epoch_for_dispatch() {
 }
 
 #[test]
+fn parallel_epoch_id_ignores_stale_workspace_epoch() {
+    /*
+     * 세션 전환으로 shell workspace가 바뀌면 이전 workspace의 epoch를 현재 workspace의
+     * 자동화 epoch로 노출하지 않아야 한다. stale epoch가 보이면 후속 dispatch/disable이
+     * 잘못된 workspace 상태를 정상으로 오인할 수 있다.
+     */
+    let mut runtime = make_test_runtime();
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/parallel-workspace-a"));
+    runtime
+        .app_mut()
+        .sync_draft_shell_workspace("/tmp/parallel-workspace-a");
+    runtime
+        .app_mut()
+        .set_parallel_mode_automation_epoch_for_test(7);
+
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics("/tmp/parallel-workspace-b"));
+    runtime
+        .app_mut()
+        .sync_draft_shell_workspace("/tmp/parallel-workspace-b");
+
+    assert_eq!(runtime.app().parallel_mode_automation_epoch_id(), None);
+}
+
+#[test]
 fn bare_parallel_enter_dispatches_ready_queue() {
     /*
      * :parallel entry opens the automation epoch after readiness and pool

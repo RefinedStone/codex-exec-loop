@@ -538,8 +538,8 @@ fn oversized_worker_command_batch_is_rejected_before_mutation() {
 #[test]
 fn invalid_priority_is_rejected_by_domain_validation() {
     /*
-     * priority bounds are semantic task-authority rules. The mutation service should surface the
-     * domain validation error and avoid writing a candidate authority document.
+     * 우선순위 범위는 시맨틱한 task-authority 규칙이다. mutation 서비스는 도메인 검증 오류를
+     * 표면으로 드러내고 후보 authority 문서가 작성되는 것을 방지해야 한다.
      */
     let repo = repo();
     let workspace = workspace("domain-priority-validation");

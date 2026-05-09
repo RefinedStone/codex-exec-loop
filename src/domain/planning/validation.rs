@@ -223,9 +223,9 @@ impl PlanningSemanticValidationService {
 
     fn validate_task_priority(&self, task: &TaskDefinition, report: &mut PlanningValidationReport) {
         /*
-         * priority bounds are task-authority invariants, not mutation-service details. Queue ranking
-         * and every inbound projection read the same combined priority, so semantic validation owns
-         * the accepted range before queue projection is rebuilt.
+         * 우선순위 범위는 mutation 서비스의 세부 사항이 아니라 task authority의 불변 조건이다.
+         * 큐 랭킹과 모든 inbound projection이 같은 combined priority를 읽기 때문에,
+         * queue projection을 다시 만들기 전에 semantic validation이 허용 범위를 소유한다.
          */
         let task_id = task.id.trim();
         if !(0..=100).contains(&task.base_priority) {
@@ -242,7 +242,8 @@ impl PlanningSemanticValidationService {
                 format!("task {task_id} dynamic_priority_delta must be within -100..100"),
             );
         }
-        if !(0..=100).contains(&task.combined_priority()) {
+        let combined_priority = task.base_priority.checked_add(task.dynamic_priority_delta);
+        if !matches!(combined_priority, Some(priority) if (0..=100).contains(&priority)) {
             report.push_error(
                 PlanningFileKind::TaskAuthority,
                 "invalid_combined_priority",
@@ -692,9 +693,18 @@ mod tests {
         invalid_combined.base_priority = 90;
         invalid_combined.dynamic_priority_delta = 20;
         invalid_combined.priority_reason = "temporary boost".to_string();
+        let mut overflow_combined = task("overflow-combined", TaskStatus::Ready);
+        overflow_combined.base_priority = i32::MAX;
+        overflow_combined.dynamic_priority_delta = 1;
+        overflow_combined.priority_reason = "temporary boost".to_string();
         let ledger = TaskAuthorityDocument {
             version: 1,
-            tasks: vec![invalid_base, invalid_delta, invalid_combined],
+            tasks: vec![
+                invalid_base,
+                invalid_delta,
+                invalid_combined,
+                overflow_combined,
+            ],
         };
 
         let report = validate(&directions, &ledger);
@@ -707,5 +717,12 @@ mod tests {
         assert!(codes.contains(&"invalid_base_priority"));
         assert!(codes.contains(&"invalid_dynamic_priority_delta"));
         assert!(codes.contains(&"invalid_combined_priority"));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "invalid_combined_priority"
+                    && issue.message.contains("overflow-combined"))
+        );
     }
 }
