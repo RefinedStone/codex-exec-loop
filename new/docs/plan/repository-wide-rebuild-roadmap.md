@@ -42,32 +42,10 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| TUI boundary | TUI production state에 raw application service handle debt가 남아 있다. |
 | Inbound composition | CLI/admin/Telegram/TUI entrypoint가 production outbound adapter wiring을 아직 직접 들고 있다. |
 | Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
-
-### R8. TUI Raw Application Service Handle 축소
-
-상태: `ready`
-
-대상:
-
-- `src/adapter/inbound/tui/app.rs`
-- `src/adapter/inbound/tui/app/app_runtime.rs`
-- `src/adapter/inbound/tui/app/*controller*`
-
-해야 할 일:
-
-- TUI production state가 raw application service를 직접 들고 있는 범위를 좁힌다.
-- TUI가 필요한 것은 UI state, projection cache, narrow application handle뿐으로 만든다.
-- startup/session/conversation/planning/parallel 경계별로 작은 handle을 구성한다.
-
-완료 조건:
-
-- `temporary_tui_raw_application_services_have_been_wrapped`가 통과한다.
-- TUI flow regression이 통과한다.
 
 ### R9. Production Composition Wiring 중앙화
 
@@ -110,7 +88,7 @@ state owner는 먼저 분류한 뒤 이동한다.
 완료 조건:
 
 - 남은 source guard마다 behavior test로 대체하지 않는 이유가 test 이름 또는 comment에 드러난다.
-- R8-R9에서 제거된 debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
+- R9에서 제거된 debt는 source guard 삭제만이 아니라 behavior regression으로 확인된다.
 
 ## 문서 운영 규칙
 

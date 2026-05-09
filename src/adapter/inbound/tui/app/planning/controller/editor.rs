@@ -20,7 +20,7 @@ impl NativeTuiApp {
         self.open_guided_planning_editor_session(
             self.application
                 .planning()
-                .workspace
+                .workspace()
                 .stage_manual_editor_session(&workspace_directory),
             "planning draft editor ready",
             PlanningInitModeSelection::Detail,
@@ -37,7 +37,7 @@ impl NativeTuiApp {
         self.open_directions_editor_session(
             self.application
                 .planning()
-                .workspace
+                .workspace()
                 .stage_detail_doc_editor_session(&workspace_directory, direction_id),
             "directions detail doc editor ready",
         );
@@ -53,7 +53,7 @@ impl NativeTuiApp {
         self.open_directions_editor_session(
             self.application
                 .planning()
-                .workspace
+                .workspace()
                 .stage_queue_idle_prompt_editor_session(&workspace_directory),
             "queue-idle prompt editor ready",
         );
@@ -89,7 +89,7 @@ impl NativeTuiApp {
         let status_text = match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .save_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
         {
             Ok(result) => {
@@ -149,7 +149,7 @@ impl NativeTuiApp {
         let status_text = match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .save_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
         {
             Ok(result) => {
@@ -199,7 +199,7 @@ impl NativeTuiApp {
         let promote_result = self
             .application
             .planning()
-            .workspace
+            .workspace()
             .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
         /*
          * Runtime snapshot refresh happens even on blocked promotion. A validation
@@ -264,7 +264,7 @@ impl NativeTuiApp {
         let promote_result = self
             .application
             .planning()
-            .workspace
+            .workspace()
             .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
         /*
          * Directions promotion also refreshes the ready conversation snapshot because

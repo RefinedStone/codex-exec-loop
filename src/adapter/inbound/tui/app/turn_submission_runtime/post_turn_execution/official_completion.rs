@@ -118,7 +118,7 @@ impl PostTurnEvaluationExecutor {
     ) -> OfficialCompletionRefreshOutcome {
         let preparation = self
             .planning_feature
-            .worker
+            .worker()
             .prepare_post_turn_official_completion_refresh(
                 PlanningPostTurnOfficialCompletionPreparationRequest {
                     planning_workspace_directory,
@@ -221,7 +221,7 @@ impl PostTurnEvaluationExecutor {
         // only sends the contract and interprets the outcome for TUI state.
         let worker_outcome = self
             .planning_feature
-            .worker
+            .worker()
             .refresh_prepared_official_completion(prepared.as_ref());
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
@@ -316,7 +316,7 @@ impl PostTurnEvaluationExecutor {
             } else {
                 let repair_block = self
                     .planning_feature
-                    .worker
+                    .worker()
                     .block_unresolved_post_turn_official_completion_repair(
                         PlanningPostTurnOfficialCompletionRepairBlockRequest {
                             runtime_snapshot: &repair_outcome.runtime_snapshot,
@@ -350,7 +350,7 @@ impl PostTurnEvaluationExecutor {
 
         let finalization = self
             .planning_feature
-            .worker
+            .worker()
             .finalize_post_turn_official_completion_refresh(
                 PlanningPostTurnOfficialCompletionFinalizationRequest {
                     planning_workspace_directory,

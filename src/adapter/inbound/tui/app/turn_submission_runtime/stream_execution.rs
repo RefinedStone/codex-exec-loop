@@ -89,7 +89,7 @@ impl NativeTuiApp {
     ) -> PlanningTurnExecutionSnapshotCapture {
         self.application
             .planning()
-            .runtime
+            .runtime()
             .capture_turn_execution_snapshot(PlanningTurnExecutionSnapshotCaptureRequest::new(
                 workspace_directory,
             ))

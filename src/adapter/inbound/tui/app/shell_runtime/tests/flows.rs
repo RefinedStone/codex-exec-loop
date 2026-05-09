@@ -256,7 +256,7 @@ impl NativeFlowHarness {
             .app()
             .application
             .planning()
-            .runtime
+            .runtime()
             .prepare_task_intake(PlanningTaskIntakeRequest {
                 workspace_directory: self.workspace_dir.clone(),
                 raw_prompt: prompt.to_string(),
@@ -270,7 +270,7 @@ impl NativeFlowHarness {
             .app()
             .application
             .planning()
-            .runtime
+            .runtime()
             .commit_task_intake(&proposal)
             .expect("task intake proposal should commit")
     }
@@ -280,7 +280,7 @@ impl NativeFlowHarness {
             .app()
             .application
             .planning()
-            .task_tool
+            .task_tool()
             .run(
                 &self.workspace_dir,
                 PlanningTaskToolRequest::UpdateTask(PlanningTaskToolUpdateRequest {
@@ -398,7 +398,7 @@ impl NativeFlowHarness {
             .app()
             .application
             .planning()
-            .runtime
+            .runtime()
             .load_runtime_snapshot_or_invalid(&self.workspace_dir);
         let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
         else {
@@ -438,7 +438,7 @@ impl NativeFlowHarness {
             .app()
             .application
             .planning()
-            .runtime
+            .runtime()
             .load_runtime_snapshot_or_invalid(&self.workspace_dir);
         assert!(
             planning_snapshot.has_actionable_queue_head(),

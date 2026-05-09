@@ -1,5 +1,6 @@
 #[cfg(not(test))]
 use super::super::app_runtime::BackgroundMessage;
+use super::super::app_runtime::NativeTuiPlanningHandle;
 #[cfg(test)]
 use super::super::conversation_runtime::ConversationRuntimeEvent;
 use super::super::conversation_runtime::{
@@ -19,7 +20,7 @@ use crate::application::service::planning::{
     PlanningPostTurnQueueRefreshFinalizationEvent, PlanningPostTurnQueueRefreshFinalizationRequest,
     PlanningPostTurnQueueRefreshPreparation, PlanningPostTurnQueueRefreshPreparationRequest,
     PlanningPostTurnReconciliationRequest, PlanningPostTurnWorkerPanelStartRequest,
-    PlanningPostTurnWorkerPanelStartState, PlanningServices,
+    PlanningPostTurnWorkerPanelStartState,
 };
 use crate::application::service::post_turn_decision::{
     PostTurnAutoFollowStopReason, PostTurnDecision as ApplicationPostTurnDecision,
@@ -123,13 +124,13 @@ struct PostTurnEvaluationExecution {
 }
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
-    planning_feature: PlanningServices,
+    planning_feature: NativeTuiPlanningHandle,
     parallel_mode_turn_service: ParallelModeTurnService,
     planning_worker_panel_state: PlanningWorkerPanelState,
 }
 impl PostTurnEvaluationExecutor {
     fn new(
-        planning_feature: PlanningServices,
+        planning_feature: NativeTuiPlanningHandle,
         parallel_mode_turn_service: ParallelModeTurnService,
         planning_worker_panel_state: PlanningWorkerPanelState,
     ) -> Self {
@@ -179,7 +180,7 @@ impl PostTurnEvaluationExecutor {
                 ],
             )
         });
-        let reconciliation_outcome = self.planning_feature.runtime.reconcile_post_turn(
+        let reconciliation_outcome = self.planning_feature.runtime().reconcile_post_turn(
             PlanningPostTurnReconciliationRequest {
                 workspace_directory: &request.workspace_directory,
                 completed_turn_id: &request.completed_turn_id,
@@ -301,7 +302,7 @@ impl PostTurnEvaluationExecutor {
     ) -> PlanningQueueRefreshOutcome {
         let preparation = self
             .planning_feature
-            .worker
+            .worker()
             .prepare_post_turn_queue_refresh(PlanningPostTurnQueueRefreshPreparationRequest {
                 workspace_directory: &request.workspace_directory,
                 parent_thread_id: Some(conversation.thread_id.as_str())
@@ -364,7 +365,7 @@ impl PostTurnEvaluationExecutor {
         );
         let worker_outcome = self
             .planning_feature
-            .worker
+            .worker()
             .refresh_prepared_queue_from_reply(prepared.as_ref());
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
@@ -470,7 +471,7 @@ impl PostTurnEvaluationExecutor {
         }
         let finalization = self
             .planning_feature
-            .worker
+            .worker()
             .finalize_post_turn_queue_refresh(PlanningPostTurnQueueRefreshFinalizationRequest {
                 workspace_directory: &request.workspace_directory,
                 previous_handoff_task: conversation.last_planning_task_handoff(),
@@ -601,8 +602,10 @@ impl PostTurnEvaluationExecutor {
                     .turn_activity
                     .last_completed_file_change_count(),
             );
-        match self.planning_feature.runtime.decide_post_turn_auto_follow(
-            PlanningPostTurnAutoFollowRequest {
+        match self
+            .planning_feature
+            .runtime()
+            .decide_post_turn_auto_follow(PlanningPostTurnAutoFollowRequest {
                 continuation_paused: conversation
                     .auto_follow_state
                     .post_turn_continuation_paused(),
@@ -612,8 +615,7 @@ impl PostTurnEvaluationExecutor {
                 stop_keyword_matched,
                 no_file_changes_stop_matched,
                 runtime_snapshot,
-            },
-        ) {
+            }) {
             PlanningPostTurnAutoFollowDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
@@ -803,7 +805,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .runtime
+            .runtime()
             .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
                 continuation_paused: conversation
                     .auto_follow_state

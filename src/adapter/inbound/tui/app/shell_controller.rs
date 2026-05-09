@@ -281,7 +281,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .runtime
+            .runtime()
             .prepare_task_intake(request)
         {
             Ok(proposal) => self.task_intake_overlay_ui_state.show_preview(proposal),
@@ -302,7 +302,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .runtime
+            .runtime()
             .commit_task_intake(&proposal)
         {
             Ok(result) => {

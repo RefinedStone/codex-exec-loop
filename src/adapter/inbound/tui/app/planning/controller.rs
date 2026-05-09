@@ -87,7 +87,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .load_summary(&workspace_directory)
         {
             Ok(summary) => {
@@ -157,14 +157,14 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .has_planning_workspace(&workspace_directory)
         {
             Ok(true) => Ok(()),
             Ok(false) => {
                 if self
                     .application.planning()
-                    .workspace
+                    .workspace()
                     .has_planning_candidate_workspace(&workspace_directory)
                     .map_err(|error| {
                         anyhow::anyhow!(
@@ -179,7 +179,7 @@ impl NativeTuiApp {
                 let stage_result = self
                     .application
                     .planning()
-                    .workspace
+                    .workspace()
                     .stage_simple_mode_draft(&workspace_directory)
                     .map_err(|error| {
                         anyhow::anyhow!("planning default bootstrap failed while staging: {error}")
@@ -187,7 +187,7 @@ impl NativeTuiApp {
                 let promote_result = self
                     .application
                     .planning()
-                    .workspace
+                    .workspace()
                     .promote_staged_draft(&workspace_directory, &stage_result.draft_name)
                     .map_err(|error| {
                         anyhow::anyhow!(
@@ -229,7 +229,7 @@ impl NativeTuiApp {
                 match self
                     .application
                     .planning()
-                    .workspace
+                    .workspace()
                     .has_planning_workspace(&workspace_directory)
                 {
                     Ok(true) => self.show_planning_init_overlay(),
@@ -260,7 +260,7 @@ impl NativeTuiApp {
         let report = self
             .application
             .planning()
-            .workspace
+            .workspace()
             .inspect_workspace(&workspace_directory);
 
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
@@ -307,7 +307,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .reset_workspace(&workspace_directory, parsed.target)
         {
             Ok(result) => {
@@ -323,7 +323,7 @@ impl NativeTuiApp {
                 let fallback_status = if !self
                     .application
                     .planning()
-                    .workspace
+                    .workspace()
                     .has_planning_workspace(&workspace_directory)
                     .unwrap_or(false)
                 {
@@ -348,7 +348,7 @@ impl NativeTuiApp {
         let status_text = match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .stage_simple_mode_draft(&workspace_directory)
         {
             Ok(stage_result) => {
@@ -384,7 +384,7 @@ impl NativeTuiApp {
         self.open_guided_planning_editor_session(
             self.application
                 .planning()
-                .workspace
+                .workspace()
                 .load_manual_editor_session(&workspace_directory, &draft_name),
             "planning simple draft editor ready",
             PlanningInitModeSelection::Simple,
@@ -402,7 +402,7 @@ impl NativeTuiApp {
         let promote_result = self
             .application
             .planning()
-            .workspace
+            .workspace()
             .promote_staged_draft(&workspace_directory, &draft_name);
         self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
             &workspace_directory,

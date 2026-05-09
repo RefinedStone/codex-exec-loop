@@ -204,7 +204,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .runtime
+            .runtime()
             .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
                 workspace_directory,
                 raw_prompt: transcript_text.clone(),
@@ -314,7 +314,7 @@ impl NativeTuiApp {
         match self
             .application
             .planning()
-            .workspace
+            .workspace()
             .stage_simple_mode_draft(&workspace_directory)
         {
             Ok(stage_result) => {
@@ -322,7 +322,7 @@ impl NativeTuiApp {
                 match self
                     .application
                     .planning()
-                    .workspace
+                    .workspace()
                     .promote_staged_draft(&workspace_directory, &draft_name)
                 {
                     Ok(result) => {

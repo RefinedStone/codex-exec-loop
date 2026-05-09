@@ -96,7 +96,7 @@ pub(crate) fn build_planning_summary_line(
 ) -> Option<String> {
     app.application
         .planning()
-        .runtime
+        .runtime()
         .build_summary_line(PlanningRuntimeSummaryLineRequest {
             snapshot: &conversation.planning_runtime_snapshot,
             has_running_turn: conversation.has_running_turn(),

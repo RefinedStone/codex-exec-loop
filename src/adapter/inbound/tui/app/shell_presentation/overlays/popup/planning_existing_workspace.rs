@@ -1,4 +1,4 @@
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
+use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningRuntimeUseCases};
 
 use super::super::super::super::{ConversationState, NativeTuiApp};
 use super::super::PlanningInitOverlayView;
@@ -13,7 +13,7 @@ pub(super) fn build_existing_workspace_overlay_view_for_app(
     let workspace_directory = app.planning_workspace_directory();
     build_existing_workspace_overlay_view_for_state(
         &app.conversation_state,
-        app.application.planning(),
+        app.application.planning().runtime(),
         &workspace_directory,
     )
 }
@@ -21,11 +21,14 @@ pub(super) fn build_existing_workspace_overlay_view_for_app(
 // State-level seam keeps snapshot source priority testable without constructing a whole NativeTuiApp.
 fn build_existing_workspace_overlay_view_for_state(
     conversation_state: &ConversationState,
-    planning: &PlanningServices,
+    planning_runtime: &PlanningRuntimeUseCases,
     workspace_directory: &str,
 ) -> PlanningInitOverlayView {
-    let snapshot =
-        resolve_existing_workspace_snapshot(conversation_state, planning, workspace_directory);
+    let snapshot = resolve_existing_workspace_snapshot(
+        conversation_state,
+        planning_runtime,
+        workspace_directory,
+    );
     build_existing_workspace_overlay_view(build_existing_workspace_copy(
         workspace_directory,
         &snapshot,
@@ -36,15 +39,15 @@ fn build_existing_workspace_overlay_view_for_state(
 // Ready conversations win because their cached snapshot may include the latest in-memory post-turn refresh.
 fn resolve_existing_workspace_snapshot(
     conversation_state: &ConversationState,
-    planning: &PlanningServices,
+    planning_runtime: &PlanningRuntimeUseCases,
     workspace_directory: &str,
 ) -> PlanningRuntimeSnapshot {
     match conversation_state {
         ConversationState::Ready(conversation) => conversation.planning_runtime_snapshot.clone(),
         // Without a conversation cache, fall back to the runtime loader and let failures become invalid snapshots.
-        ConversationState::Loading | ConversationState::Failed(_) => planning
-            .runtime
-            .load_runtime_snapshot_or_invalid(workspace_directory),
+        ConversationState::Loading | ConversationState::Failed(_) => {
+            planning_runtime.load_runtime_snapshot_or_invalid(workspace_directory)
+        }
     }
 }
 
@@ -72,7 +75,7 @@ mod tests {
 
         let resolved = resolve_existing_workspace_snapshot(
             &ConversationState::ready(conversation),
-            &planning,
+            &planning.runtime,
             "/tmp/other-workspace",
         );
 
@@ -87,7 +90,7 @@ mod tests {
 
         let resolved = resolve_existing_workspace_snapshot(
             &ConversationState::Loading,
-            &planning,
+            &planning.runtime,
             workspace_directory,
         );
 

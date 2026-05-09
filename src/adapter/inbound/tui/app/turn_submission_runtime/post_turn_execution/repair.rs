@@ -42,7 +42,7 @@ impl PostTurnEvaluationExecutor {
             PostTurnWorkerLogContext::new(thread_id, completed_turn_id, workspace_directory);
         let repair_outcome = self
             .planning_feature
-            .worker
+            .worker()
             .repair_post_turn_task_authority(PlanningPostTurnRepairRequest {
                 workspace_directory,
                 parent_thread_id: Some(thread_id).filter(|thread_id| !thread_id.trim().is_empty()),

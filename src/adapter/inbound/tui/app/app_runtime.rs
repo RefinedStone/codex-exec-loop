@@ -8,8 +8,11 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+#[cfg(test)]
+use crate::application::service::planning::PlanningTaskToolUseCases;
 use crate::application::service::planning::{
-    PlanningServices, PlanningTurnExecutionSnapshotCapture,
+    PlanningRuntimeUseCases, PlanningServices, PlanningTurnExecutionSnapshotCapture,
+    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -96,11 +99,11 @@ impl NativeTuiAppRuntimeChannels {
 
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
-    startup: StartupService,
-    sessions: SessionService,
-    conversations: ConversationService,
+    startup: NativeTuiStartupHandle,
+    sessions: NativeTuiSessionCatalogHandle,
+    conversations: NativeTuiConversationHandle,
     parallel_turns: ParallelModeTurnService,
-    planning_feature: PlanningServices,
+    planning_feature: NativeTuiPlanningHandle,
 }
 
 impl NativeTuiApplicationHandle {
@@ -112,35 +115,35 @@ impl NativeTuiApplicationHandle {
         planning_feature: PlanningServices,
     ) -> Self {
         Self {
-            startup,
-            sessions,
-            conversations,
+            startup: NativeTuiStartupHandle::new(startup),
+            sessions: NativeTuiSessionCatalogHandle::new(sessions),
+            conversations: NativeTuiConversationHandle::new(conversations),
             parallel_turns,
-            planning_feature,
+            planning_feature: NativeTuiPlanningHandle::new(planning_feature),
         }
     }
 
-    pub(super) fn startup(&self) -> StartupService {
+    pub(super) fn startup(&self) -> NativeTuiStartupHandle {
         self.startup.clone()
     }
 
-    pub(super) fn sessions(&self) -> SessionService {
+    pub(super) fn sessions(&self) -> NativeTuiSessionCatalogHandle {
         self.sessions.clone()
     }
 
-    pub(super) fn conversations(&self) -> ConversationService {
+    pub(super) fn conversations(&self) -> NativeTuiConversationHandle {
         self.conversations.clone()
     }
 
     pub(super) fn conversation_streams(&self) -> NativeTuiConversationStreamHandle {
-        NativeTuiConversationStreamHandle::new(self.conversations.clone())
+        self.conversations.streams()
     }
 
-    pub(super) fn planning(&self) -> &PlanningServices {
+    pub(super) fn planning(&self) -> &NativeTuiPlanningHandle {
         &self.planning_feature
     }
 
-    pub(super) fn planning_handle(&self) -> PlanningServices {
+    pub(super) fn planning_handle(&self) -> NativeTuiPlanningHandle {
         self.planning_feature.clone()
     }
 
@@ -153,9 +156,99 @@ impl NativeTuiApplicationHandle {
     }
 
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
-        self.conversations
+        self.conversations.request_stop_all_sessions()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct NativeTuiStartupHandle {
+    service: StartupService,
+}
+
+impl NativeTuiStartupHandle {
+    fn new(service: StartupService) -> Self {
+        Self { service }
+    }
+
+    pub(super) fn run_checks(
+        &self,
+    ) -> anyhow::Result<crate::domain::startup_diagnostics::StartupDiagnostics> {
+        self.service.run_checks()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct NativeTuiSessionCatalogHandle {
+    service: SessionService,
+}
+
+impl NativeTuiSessionCatalogHandle {
+    fn new(service: SessionService) -> Self {
+        Self { service }
+    }
+
+    pub(super) fn load_session_catalog(
+        &self,
+        request: SessionCatalogRequest,
+    ) -> anyhow::Result<SessionCatalog> {
+        self.service.load_session_catalog(request)
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct NativeTuiConversationHandle {
+    service: ConversationService,
+}
+
+impl NativeTuiConversationHandle {
+    fn new(service: ConversationService) -> Self {
+        Self { service }
+    }
+
+    pub(super) fn load_snapshot(&self, thread_id: &str) -> anyhow::Result<ConversationSnapshot> {
+        self.service.load_snapshot(thread_id)
+    }
+
+    pub(super) fn streams(&self) -> NativeTuiConversationStreamHandle {
+        NativeTuiConversationStreamHandle::new(self.service.clone())
+    }
+
+    pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
+        self.service.runtime_control_truth()
+    }
+
+    pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
+        self.service
             .request_stop_all_sessions()
             .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct NativeTuiPlanningHandle {
+    services: PlanningServices,
+}
+
+impl NativeTuiPlanningHandle {
+    fn new(services: PlanningServices) -> Self {
+        Self { services }
+    }
+
+    pub(super) fn workspace(&self) -> &PlanningWorkspaceUseCases {
+        &self.services.workspace
+    }
+
+    pub(super) fn runtime(&self) -> &PlanningRuntimeUseCases {
+        &self.services.runtime
+    }
+
+    pub(super) fn worker(&self) -> &PlanningWorkerUseCases {
+        &self.services.worker
+    }
+
+    #[cfg(test)]
+    pub(super) fn task_tool(&self) -> &PlanningTaskToolUseCases {
+        &self.services.task_tool
     }
 }
 
@@ -250,7 +343,7 @@ impl NativeTuiApp {
         initial_conversation.replace_planning_runtime_snapshot(
             application
                 .planning()
-                .runtime
+                .runtime()
                 .load_runtime_snapshot_or_invalid(&workspace_directory),
         );
         Self {

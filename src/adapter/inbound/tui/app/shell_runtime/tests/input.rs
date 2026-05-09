@@ -507,7 +507,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         .app()
         .application
         .planning()
-        .runtime
+        .runtime()
         .load_runtime_snapshot_or_invalid(&workspace_directory);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
