@@ -15,7 +15,6 @@ use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
-use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -49,11 +48,6 @@ pub(super) enum BackgroundMessage {
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
-    WakeParallelModeOrchestrator {
-        workspace_directory: String,
-        trigger: ParallelModeAutomationTrigger,
-        epoch_id: u64,
-    },
     PostTurnEvaluated {
         thread_id: String,
         completed_turn_id: String,

@@ -347,6 +347,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
                 epoch_id,
                 effect_id,
                 supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
+                orchestrator_tick_signature: None,
             },
         ))
         .expect("supervisor refresh should enqueue");
