@@ -1,5 +1,9 @@
 # TUI Conversation And Automation Split Plan
 
+> 상태: 과거 migration/inventory 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](./repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 done/완료 표현은 현재 완료 판정이 아니다.
+
 ## 목적
 
 이 문서는 `TUI-01A`의 산출물이다. `TUI-00`에서 고정한 state inventory와 regression

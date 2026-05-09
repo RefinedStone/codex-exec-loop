@@ -1,5 +1,9 @@
 # Repository-Wide Rebuild Architecture
 
+> 상태: 배경 기준 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](../plan/repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 계획/우선순위 문구는 완료 판정이 아니다.
+
 ## 목적
 
 이 문서는 Akra repository 전체 구조를 대폭 재설계하기 위한 최상위 기준 문서다.

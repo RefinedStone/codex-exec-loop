@@ -1,5 +1,9 @@
 # Store Runtime State Boundary Inventory
 
+> 상태: 과거 inventory 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](./repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 완료 표현은 현재 완료 판정이 아니다.
+
 이 문서는 `STORE-00A`의 산출물이다. 기준 문서는
 [store-and-runtime-state-architecture.md](../architecture/store-and-runtime-state-architecture.md)이며,
 목표는 durable store, process-lifetime runtime store, workspace artifact, external runtime

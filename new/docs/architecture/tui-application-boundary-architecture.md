@@ -1,5 +1,9 @@
 # TUI Application Boundary Architecture
 
+> 상태: 배경 기준 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](../plan/repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 migration slice 문구는 현재 완료 판정이 아니다.
+
 ## 목적
 
 이 문서는 `DOC-TUI-00`의 산출물이다. 목표는 TUI를 "화면 중심"으로 유지하되

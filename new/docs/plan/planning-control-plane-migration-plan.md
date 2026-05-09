@@ -1,5 +1,9 @@
 # Planning Control Plane Migration Plan
 
+> 상태: 과거 migration/inventory 문서다. 현재 구현 판정과 다음 작업은
+> [repository-wide-rebuild-roadmap.md](./repository-wide-rebuild-roadmap.md)를 따른다.
+> 이 문서의 완료 표현은 현재 완료 판정이 아니다.
+
 ## 목적
 
 이 문서는 `PLAN-00`의 산출물이다. 목표는 planning 구조를 바꾸기 전에 현재

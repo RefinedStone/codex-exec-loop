@@ -1,917 +1,307 @@
 # Repository-Wide Rebuild Roadmap
 
-## 목적
+## 문서 지위
 
-이 문서는 `new/docs`의 대규모 구조 재설계를 worker가 바로 집을 수 있는 작업
-단위로 쪼갠다. 상위 기준은 다음 문서다.
+이 문서는 `new/docs` 재건 작업의 단일 실행 문서다. 아래 두 문서는 별도 기준
+문서로 유지하고, 이 문서에서 압축하지 않는다.
 
-- [../architecture/repository-wide-rebuild-architecture.md](../architecture/repository-wide-rebuild-architecture.md)
 - [../architecture/parallel-control-plane-architecture.md](../architecture/parallel-control-plane-architecture.md)
 - [parallel-control-plane-migration-plan.md](./parallel-control-plane-migration-plan.md)
 
-이 roadmap은 현재 구조를 보존하기 위한 backlog가 아니다. 목적은 버그를 만드는
-구조를 새 기준선으로 교체하는 것이다.
+그 외 `new/docs` 문서는 설계 배경 또는 과거 inventory로만 취급한다. 구현 상태와
+다음 작업 판단은 이 문서를 기준으로 한다. 과거 문서의 `done` 표기는
+`prerelease`에 어떤 slice가 병합됐다는 관리 기록일 뿐이며, repository-wide rebuild
+완료 선언으로 보지 않는다.
 
-## Worker 운영 규칙
+## 판정 기준
 
-모든 worker는 아래 규칙을 따른다.
-
-- 하나의 worker는 하나의 slice만 소유한다.
-- 하나의 slice는 하나의 branch와 하나의 PR로 끝낸다.
-- 기본 base는 `origin/prerelease`다.
-- `akra-agent/slot-*` worktree는 runtime이 관리하므로 수동 정리하지 않는다.
-- 코드 변경 slice는 선행 regression 또는 architecture 문서가 없으면 시작하지 않는다.
-- 문서 slice는 구현 결정을 남기되, 현재 구조를 있는 그대로 해설하는 문서가 되면 안 된다.
-- 구현 slice는 domain/application/adapter 책임을 바꾸는 경우 `new/docs` 문서를 함께 갱신한다.
-- slice가 서로 같은 파일을 수정해야 하면 먼저 이 roadmap의 ownership을 갱신한다.
-
-## Slice 상태 규칙
-
-각 slice는 다음 상태 중 하나로 관리한다.
+상태는 세 가지만 쓴다.
 
 | 상태 | 의미 |
 | --- | --- |
-| `ready` | 바로 작업 가능 |
-| `blocked` | 선행 slice 필요 |
-| `active` | worker가 branch를 잡고 진행 중 |
-| `done` | `prerelease`에 반영됨 |
+| `implemented` | 코드가 기준을 만족하고, regression이 계층 계약을 막는다 |
+| `partial` | 일부 구현됐지만 TUI/application/domain/store 경계에 잔여 작업이 있다 |
+| `not-started` | 문서 또는 inventory만 있고 실제 구조 이동이 없다 |
 
-이 문서의 초기 상태는 worker 배정 전 기준이다. worker가 실제로 착수하면 해당
-slice의 상태를 `active`로 바꾸는 문서 PR을 별도로 만들 필요는 없다. 병렬 runtime이
-이미 branch/worktree 상태를 갖기 때문이다. 다만 사람이 수동으로 여러 worker를
-배정할 때는 이 문서를 갱신해도 된다.
+`implemented`로 바꾸려면 아래 조건을 모두 만족해야 한다.
 
-## 우선순위 요약
+- 구현 PR이 `prerelease`에 병합됐다.
+- 테스트가 behavior를 막는다. source string guard만으로는 부족하다.
+- inbound adapter에 domain policy, durable mutation, worker launch decision이 남지 않는다.
+- application service는 ordering, transaction, port effect orchestration을 맡고,
+  invariant 판단은 domain decision으로 이동했다.
+- durable/recoverable state, process-lifetime runtime state, UI-only state가 서로
+  다른 owner를 가진다.
+- 문서의 field/file inventory가 현재 코드와 drift되지 않는다.
 
-| Priority | Slice | 상태 | 목적 |
+## 현재 판정
+
+전체 판정: `partial`
+
+1차 문서화와 regression seed는 진행됐지만, repository-wide rebuild는 완료되지
+않았다. 특히 TUI runtime bridge와 post-turn/stream lifecycle에 application workflow가
+남아 있다. 따라서 다음 작업은 새 원칙을 더 쓰는 것이 아니라, 실제 코드 경계를
+줄이는 migration slice여야 한다.
+
+| 영역 | 상태 | 구현된 것 | 남은 문제 |
 | --- | --- | --- | --- |
-| P0 | `PAR-00` | done | parallel regression contract 고정 |
-| P0 | `PAR-01` | done | parallel domain decision seed |
-| P0 | `PAR-02` | done | parallel application runtime facade |
-| P0 | `PAR-03` | done | parallel TUI controller split |
-| P0 | `PAR-04` | done | parallel worker event path |
-| P1 | `DOC-PLAN-00` | done | planning control-plane architecture 작성 |
-| P1 | `PLAN-00` | done | planning regression/audit contract |
-| P1 | `PLAN-01` | done | planning application facade 표준화 |
-| P1 | `PLAN-02` | done | planning domain decision/projection 정리 |
-| P2 | `DOC-TUI-00` | done | TUI/application boundary architecture 작성 |
-| P2 | `TUI-00` | done | TUI shell state inventory와 regression |
-| P2 | `TUI-01` | done | conversation lifecycle와 automation lifecycle 분리 |
-| P3 | `DOC-INBOUND-00` | done | inbound surface unification architecture 작성 |
-| P3 | `INBOUND-00` | done | CLI/admin/Telegram command surface 통일 |
-| P4 | `DOC-STORE-00` | done | store/runtime-state architecture 작성 |
-| P4 | `STORE-00` | done | durable store와 runtime store 경계 정리 |
-| P5 | `TEST-00` | done | test/doc contract taxonomy 정리 |
+| Parallel control-plane | `partial` | `projection_ready`, refresh/reconcile, dispatch readiness, stale epoch 판단이 TUI 밖으로 이동했다. TUI는 raw control-plane service 대신 handle을 보유한다. | queue-backed event loop가 아니라 mutex-serialized facade다. `turn_submission_runtime`과 post-turn bridge에 parallel handoff/slot lease logic이 남아 있다. |
+| Planning | `partial` | planning projection, control facade, domain policy seed가 있다. task mutation, promotion, queue follow, repair guard 일부가 domain/application 경계로 이동했다. | TUI와 post-turn executor가 아직 `PlanningServices`와 planning workflow를 직접 조합한다. facade가 모든 inbound/runtime bridge를 덮지는 못한다. |
+| TUI boundary | `partial` | shell state inventory, background message inventory, conversation/automation vocabulary split이 있다. | `NativeTuiApp`이 service wiring과 runtime bridge를 크게 보유한다. `QueueAutoPrompt` mutation, active turn snapshot capture, slot lease request 생성이 TUI 쪽에 남아 있다. |
+| Inbound surfaces | `partial` | CLI/admin/Telegram 일부 command vocabulary가 shared facade를 사용한다. admin route pair와 TUI parser drift를 막는 regression이 있다. | 모든 surface가 같은 application command/use case를 쓰는지는 기능별로 재검증이 필요하다. parallel live control-plane host 공유는 아직 아니다. |
+| Store/runtime state | `partial` | SQLite authority, runtime projection, pool-local mirror I/O, process runtime state inventory가 있다. mirror I/O는 outbound runtime port로 이동했다. | inventory와 현재 코드가 일부 drift됐다. process-lifetime state와 durable/recoverable state의 recovery 요구가 기능별로 다시 판정되어야 한다. |
+| Tests/docs | `partial` | test taxonomy와 여러 regression anchor가 있다. | 문서가 많고 완료 표기가 과하다. source-level guard가 실제 behavior regression을 대체하는 곳이 있다. |
 
-## P0. Parallel Control-Plane Slices
+## 해야 할 작업
 
-parallel은 repository-wide rebuild의 reference architecture다. 여기서 실패하면 다른
-영역으로 일반화하지 않는다.
+우선순위는 TUI에서 application workflow를 빼는 순서다. event loop 전환은 지금
+필수 작업이 아니다. 동기 facade를 유지하더라도 아래 작업은 필요하다.
 
-### PAR-00. Regression Contract Lock
+### R1. Turn Submission Runtime Bridge 축소
 
-상태: `done`
+상태: `ready`
 
-목적:
+목표:
 
-- 구조 변경 전에 현재 parallel failure mode를 테스트로 고정한다.
-- “worktree 3개 중 2개가 blocked여도 남은 capacity가 진행되어야 한다”는 계약을 잠근다.
-- “task가 많을 때 dispatch가 하나만 진행되는 회귀”를 막는다.
-
-소유 범위:
-
-- `src/application/service/parallel_mode/tests/orchestrator_loop.rs`
-- `src/application/service/parallel_mode/tests/pool/*`
-- 필요한 경우 `src/adapter/inbound/tui/app/shell_runtime/tests/*`
-
-산출물:
-
-- blocked worktree + idle slot dispatch regression test
-- capacity available event continuation regression test
-- repeated `:parallel` duplicate worker guard test
-
-금지:
-
-- runtime 구조 변경
-- TUI controller 분리
-- domain decision 추출
-
-검증:
-
-- `cargo test parallel_mode`
-- 실패 재현 테스트 이름만 봐도 operator-visible 문제가 드러나야 한다.
-
-### PAR-01. Domain Decision Seed
-
-상태: `done`
-
-선행:
-
-- `PAR-00`
-
-목적:
-
-- dispatch, capacity, stale epoch, failed-start unblock 판단을 domain decision으로 내린다.
-- application service의 policy `if/else` 증가를 멈춘다.
-
-소유 범위:
-
-- `src/domain/parallel_mode/*`
-- `src/application/service/parallel_mode/orchestration.rs`
-- 관련 application tests
-
-산출물:
-
-- I/O 없는 decision 타입
-- DB/thread/filesystem 없이 실행되는 domain tests
-- application service에서 중복 판단 제거
-
-금지:
-
-- worker thread launch 위치 변경
-- TUI state 변경
-- repository schema 변경
-
-검증:
-
-- `cargo test domain::parallel_mode`
-- `cargo test parallel_mode`
-
-### PAR-02. Application Runtime Facade
-
-상태: `done`
-
-선행:
-
-- `PAR-01`
-
-목적:
-
-- `ParallelModeControlPlaneRuntime` 또는 동등한 application runtime facade를 만든다.
-- 외부 진입점이 runtime command/event로 들어오게 한다.
-
-소유 범위:
-
-- `src/application/service/parallel_mode/control_plane/*`
-- `src/application/service/parallel_mode/orchestrator_loop.rs`
-- `src/application/service/parallel_mode/tests/orchestrator_loop.rs`
-
-산출물:
-
-- `Enable`, `Disable`, `RefreshSupervisor`, `WakeOrchestrator`, `WorkerCompleted`, `EffectCompleted` command/event 표면
-- process-lifetime runtime store
-- fake repository/port 기반 ordering tests
-
-금지:
-
-- runtime store를 SQLite에 저장
-- TUI background message가 durable state를 직접 mutate
-
-검증:
-
-- command serialization/order tests
-- wake coalescing tests
-- stale epoch tests
-
-### PAR-03. TUI Controller Split
-
-상태: `done`
-
-선행:
-
-- `PAR-02`
-
-목적:
-
-- `parallel_mode.rs`에서 presentation state와 application command dispatch를 분리한다.
-- TUI는 `ParallelPanelUiEvent -> ParallelPanelUiState + Effect`만 담당한다.
-
-소유 범위:
-
-- `src/adapter/inbound/tui/app/parallel_mode.rs`
-- `src/adapter/inbound/tui/app/parallel_mode/*`
-- `src/adapter/inbound/tui/app/shell_runtime/tests/*`
-
-산출물:
-
-- `ParallelPanelStateController`
-- controller-only tests
-- TUI에서 durable command claim/dispatch 판단 제거
-
-금지:
-
-- application runtime policy를 TUI controller로 복사
-- controller 간 직접 business flow 구독
-
-검증:
-
-- controller unit tests
-- shell runtime input tests
-- visible rendering이 바뀌면 snapshot tests
-
-### PAR-04. Worker Event Path
-
-상태: `done`
-
-선행:
-
-- `PAR-02`
-- `PAR-03`
-
-목적:
-
-- worker success/failure가 TUI state를 직접 고치지 않고 application runtime event로 돌아오게 한다.
-- worker launch failure, stream failure, stale completion, capacity available event를 runtime에서 처리한다.
-
-소유 범위:
-
-- `src/application/service/parallel_mode/orchestrator_loop.rs`
+- `src/adapter/inbound/tui/app/turn_submission_runtime.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime/*`
-- `src/adapter/inbound/tui/app/parallel_mode.rs`
 
-산출물:
+현재 문제:
 
-- `WorkerCompleted`, `WorkerLaunchFailed`, `WorkerStreamFailed` event path
-- lease/session detail/dispatch command 보상 갱신
-- capacity continuation regression 통과
+- TUI가 `ParallelModeSlotLeaseRequest`를 만들고 task/agent slug를 생성한다.
+- TUI stream bridge가 `ParallelModeTurnService`를 직접 조합해 slot lifecycle을
+  따라간다.
+- active turn execution snapshot capture가 post-turn reconciliation input이지만
+  TUI field에 남아 있다.
 
-금지:
+해야 할 일:
 
-- failure를 TUI status copy로만 소비
-- thread가 repository나 UI state를 직접 mutate
+- stream launch 준비를 application request/result로 이동한다.
+- slot lease request 생성과 slug normalization을 application/domain helper로
+  단일화한다.
+- TUI는 `StartStream` effect를 application bridge에 넘기고, returned launch
+  projection과 background message만 처리한다.
 
-검증:
+완료 조건:
 
-- completion-to-dispatch continuation tests
-- worker failure compensation tests
-- official completion refresh ordering tests
+- TUI 파일에 slot lease slug 생성 helper가 없다.
+- TUI가 parallel slot lifecycle state transition service를 직접 호출하지 않는다.
+- stream start, launch failure, terminal failure, official completion ordering regression이 통과한다.
 
-## P1. Planning Slices
+권장 검증:
 
-planning은 parallel 다음의 구조 재정렬 대상이다. 목표는 planning authoring,
-runtime, repair, worker, admin, task mutation이 같은 구조 언어를 쓰게 하는 것이다.
+```bash
+cargo test turn_submission_runtime
+cargo test parallel_mode
+cargo test shell_runtime
+```
 
-### DOC-PLAN-00. Planning Control-Plane Architecture
+### R2. Post-Turn Automation Effect Ownership 정리
 
-상태: `done`
+상태: `ready`
 
-목적:
+목표:
 
-- planning 전체의 새 architecture 문서를 작성한다.
-- authoring/runtime/repair/worker/admin/task mutation 책임을 재정의한다.
+- `src/adapter/inbound/tui/app/post_turn_automation.rs`
+- `src/adapter/inbound/tui/app/conversation_runtime.rs`
+- `src/application/service/post_turn_decision.rs`
+- 필요 시 `src/application/service/parallel_mode/control_plane/*`
 
-소유 범위:
+현재 문제:
 
-- `new/docs/architecture/planning-control-plane-architecture.md`
+- TUI target이 `ConversationRuntimeEffect::QueueAutoPrompt`를 직접 검사하고 제거한다.
+- pending task-intake path도 generic auto prompt를 TUI에서 suppress한다.
+- post-turn continuation은 control-plane으로 올라갔지만 effect vector ownership은
+  여전히 TUI adapter에 있다.
 
-필수 내용:
+해야 할 일:
 
-- Planning Application Projection 정의
-- durable task authority와 process-lifetime runtime state 분리
-- TUI/admin/CLI가 공유할 application facade/command 원칙
-- semantic validation, queue ordering, proposal classification의 domain 소유권
-- prompt assembly, hidden worker retry, workspace sync의 application 소유권
+- post-turn result를 application-level outcome으로 낮추고, TUI는 outcome을 effect로
+  매핑만 한다.
+- auto prompt consume 여부와 parallel dispatch 기록을 application command/outcome으로 표현한다.
+- task-intake flush와 auto prompt suppression ordering을 behavior test로 고정한다.
 
-검증:
+완료 조건:
 
-- `repository-wide-rebuild-architecture.md`와 모순이 없어야 한다.
-- 현재 구조 해설이 아니라 새 구조 기준이어야 한다.
+- `post_turn_automation.rs`가 `QueueAutoPrompt` variant를 직접 retain/filter하지 않는다.
+- parallel continuation과 task-intake suppression이 같은 application outcome vocabulary를 사용한다.
+- duplicate submit 방지 regression이 통과한다.
 
-### PLAN-00. Planning Regression And Audit Contract
+권장 검증:
 
-상태: `done`
+```bash
+cargo test conversation_runtime
+cargo test post_turn
+cargo test shell_runtime
+```
 
-선행:
+### R3. NativeTuiApp Service Wiring 축소
 
-- `DOC-PLAN-00`
+상태: `ready`
 
-목적:
+목표:
 
-- planning 리팩터링 전에 현재 user-visible contract와 failure mode를 테스트로 고정한다.
-- authoring/runtime/repair/worker/admin/task mutation이 여는 파일 fan-in을 기록한다.
+- `src/adapter/inbound/tui/app.rs`
+- `src/adapter/inbound/tui/app/app_runtime.rs`
+- TUI runtime bridge modules
 
-소유 범위:
+현재 문제:
 
-- `src/application/service/planning/tests` 또는 현재 planning test 위치
-- 필요한 경우 `new/docs/plan/planning-control-plane-migration-plan.md`
+- `NativeTuiApp`이 `PlanningServices`, `ParallelModeService`, `ConversationService`
+  등 여러 application service를 직접 들고 있다.
+- TUI가 service composition root처럼 동작해 기능별 boundary가 흐려진다.
 
-산출물:
+해야 할 일:
 
-- queue ordering/proposal classification regression
-- planning authoring close-risk regression
-- repair/reconciliation regression
-- admin/TUI shared projection audit
+- TUI가 직접 들 필요가 없는 service를 application-facing handle/facade로 감싼다.
+- projection cache와 service wiring field를 분리한다.
+- 기존 test helper가 raw service에 기대는 부분을 facade/test double로 바꾼다.
 
-금지:
+완료 조건:
 
-- architecture 없이 facade 변경
-- 테스트 이름이 내부 helper만 설명하는 형태
+- `NativeTuiApp` field inventory가 현재 코드와 맞다.
+- TUI app field는 UI-only state, projection cache, application handle로만 분류된다.
+- raw planning/parallel service 접근이 테스트 전용으로도 새 helper 계약을 통과한다.
 
-검증:
+권장 검증:
 
-- planning 관련 unit/integration tests
-- audit 문서가 다음 implementation slice를 지정해야 한다.
+```bash
+cargo test shell_runtime
+cargo test shell_rendering
+cargo test planning
+```
 
-### PLAN-01. Planning Application Facade Standardization
+### R4. Store/Runtime Inventory Drift 제거
 
-상태: `done`
+상태: `ready`
 
-선행:
+목표:
 
-- `PLAN-00`
+- [store-runtime-state-boundary-inventory.md](./store-runtime-state-boundary-inventory.md)
+- [tui-shell-state-inventory.md](./tui-shell-state-inventory.md)
+- 관련 runtime/store modules
 
-목적:
+현재 문제:
 
-- TUI/admin/CLI가 planning internals를 직접 호출하지 않도록 application facade/command 표면을 정리한다.
+- inventory 문서가 현재 코드와 일부 맞지 않는다.
+- 과거 field 이름이나 이동 완료 문구가 남아 있어 worker가 잘못된 기준으로 작업할 수 있다.
 
-소유 범위:
+해야 할 일:
 
-- `src/application/service/planning/*`
-- `src/adapter/inbound/tui/app/planning/*`
-- `src/adapter/inbound/admin_api/*`
-- `src/adapter/inbound/cli.rs`
+- inventory를 현재 코드 기준으로 갱신한다.
+- 각 state를 `UI-only`, `Application Projection Cache`, `Process Runtime`,
+  `Durable/Recoverable`, `Service Wiring` 중 하나로 다시 판정한다.
+- drift를 발견하면 구현 변경 slice와 문서-only slice를 분리한다.
 
-산출물:
+완료 조건:
 
-- inbound-neutral planning command/use case 표면
-- internal module 직접 import 감소
-- surface별 mapping과 rendering만 adapter에 남김
+- inventory에 존재하지 않는 field명이 남지 않는다.
+- `done` 대신 현재 owner와 다음 owner만 적는다.
+- 구현 변경이 필요한 항목은 이 문서의 R-slice로 연결된다.
 
-금지:
+권장 검증:
 
-- TUI 전용 planning use case와 admin 전용 planning use case를 분리 생성
-- planning policy를 adapter로 복사
+```bash
+rg "parallel_mode_enabled|parallel_mode_control_plane_runtime|Hybrid" new/docs
+git diff --check
+```
 
-검증:
+### R5. Inbound Surface 실제 공통 경로 감사
 
-- planning facade tests
-- TUI/admin/CLI behavior regression
+상태: `ready`
 
-완료 근거:
+목표:
 
-- `PlanningApplicationProjection`이 queue lane, runtime status, source signature의 공통 read model이 되었다.
-- `/status`, `/queue`, Telegram, admin overview, Akra dashboard, TUI status/queue 표시 경로가 projection 또는 planning control facade를 통과한다.
-- inbound adapter의 read-only status/queue 경로에서 `PriorityQueueService`와 `queue_projection()` 직접 호출을 제거했다.
-- mutation, worker orchestration, repair eligibility 판단은 정책 변경 없이 `PLAN-02`로 넘긴다.
-
-### PLAN-02. Planning Domain Decision And Projection
-
-상태: `done`
-
-선행:
-
-- `PLAN-01`
-
-목적:
-
-- semantic validation, queue/proposal decision, projection summary를 domain 중심으로 정리한다.
-- application은 prompt assembly와 side effect ordering에 집중한다.
-
-소유 범위:
-
-- `src/domain/planning/*`
-- `src/application/service/planning/runtime/*`
-- `src/application/service/planning/task_mutation/*`
-
-산출물:
-
-- I/O 없는 planning decision tests
-- Application Projection assembly path
-- task mutation validation 중복 제거
-
-작업 단위:
-
-- `PLAN-02A`: task mutation update legality 중 terminal status 재분류 금지와
-  description update ownership을 domain `PlanningTaskMutationPolicy`로 이동한다. 완료.
-- `PLAN-02B`: task authority link/priority invariant를 domain semantic validation으로
-  일원화하고, task mutation application validation의 중복 helper를 제거한다. 완료.
-- `PLAN-02C`: proposal promotion 가능 여부를 queue projection 기반 domain
-  `PlanningProposalPromotionPolicy`로 이동하고, application은 authority load/commit만 맡는다. 완료.
-- `PLAN-02D`: queue-idle/repeated-head auto-follow gate를 domain
-  `PlanningQueueFollowPolicy`로 이동하고, runtime policy service는 snapshot fact mapping만 맡는다. 완료.
-- `PLAN-02E`: repair candidate stale/queue-advancement eligibility regression을 domain
-  `PlanningRepairCandidatePolicy` test guard로 이동하고, reconciliation regression은 같은 policy를 검증한다. 완료.
-- `PLAN-02F`: task creation/runtime intake의 active direction selection과 relation-note
-  fallback을 domain `PlanningActiveDirectionPolicy`로 일원화한다. 완료.
-- `PLAN-02G`: task mutation/runtime intake의 stable task-id allocation과 collision suffix
-  전진 규칙을 domain `PlanningTaskIdPolicy`로 일원화한다. 완료.
-- `PLAN-02H`: task mutation create/update의 `depends_on`/`blocked_by` reference
-  normalization을 domain `PlanningTaskReferencePolicy`로 일원화한다. 완료.
-- `PLAN-02I`: worker command candidate extraction은 untrusted worker output을 typed
-  application command로 낮추는 boundary라 domain으로 이동하지 않는다고 감사하고,
-  invalid 후보 뒤의 valid command 후보가 승리하는 regression을 추가한다. 완료.
-
-금지:
-
-- domain에서 workspace file, DB, adapter type import
-- prompt text assembly를 domain으로 이동
-
-검증:
-
-- `cargo test domain::planning`
-- planning runtime/task mutation tests
-
-완료 근거:
-
-- task mutation legality, validation, promotion, queue follow, repair candidate guard,
-  active direction selection, task-id allocation, reference normalization이 domain decision
-  또는 domain test guard로 이동했다.
-- worker command candidate extraction은 prompt/worker text parsing과 repair evidence
-  preservation을 다루는 application boundary라 domain으로 이동하지 않는 것으로 감사했다.
-- worker command는 accepted authority가 아니라 typed mutation command candidate로만 들어가며,
-  이후 mutation service의 validation, projection rebuild, optimistic commit을 통과한다.
-
-## P2. TUI Shell And Conversation Slices
-
-TUI는 policy owner가 아니라 inbound adapter다. Shell, conversation, automation,
-planning handoff, parallel handoff가 섞이는 부분을 줄인다.
-
-### DOC-TUI-00. TUI Application Boundary Architecture
-
-상태: `done`
-
-목적:
-
-- TUI가 가진 state를 UI-only state, Application Projection cache, background message mapping으로 분류한다.
-- conversation lifecycle과 automation lifecycle의 경계를 정한다.
-
-소유 범위:
-
-- `new/docs/architecture/tui-application-boundary-architecture.md`
-
-필수 내용:
-
-- controller/reducer/presentation/runtime bridge 역할
-- prompt lock, overlay, selection, cursor의 UI-only 소유권
-- post-turn automation, auto-follow, planning/parallel handoff의 application/domain 소유권
-- background message가 직접 mutation하지 않는 규칙
-
-검증:
-
-- repository-wide rebuild architecture와 같은 용어를 사용해야 한다.
-
-완료 근거:
-
-- [../architecture/tui-application-boundary-architecture.md](../architecture/tui-application-boundary-architecture.md)
-  에 controller/reducer/presentation/runtime bridge 역할과 state ownership 기준을
-  고정했다.
-- prompt lock, overlay, selection, cursor는 UI-only state로 분류했고, planning/parallel
-  handoff와 post-turn automation은 application/domain 결과를 따르는 projection/event
-  흐름으로 정의했다.
-- `TUI-00`은 이 문서를 선행 조건으로 하는 state inventory/regression slice가 되었으므로
-  ready 상태로 전환한다.
-
-### TUI-00. Shell State Inventory And Regression
-
-상태: `done`
-
-선행:
-
-- `DOC-TUI-00`
-
-목적:
-
-- TUI state를 분류하고, 구조 변경 전 rendering/input contract를 고정한다.
-
-소유 범위:
-
-- `src/adapter/inbound/tui/app/shell_runtime/tests/*`
-- `src/adapter/inbound/tui/app/shell_rendering*_tests.rs`
-- `new/docs/plan/tui-shell-state-inventory.md`
-- `new/docs/plan/tui-background-message-inventory.md`
-- `new/docs/plan/tui-shell-regression-anchors.md`
-
-산출물:
-
-- UI-only state inventory
-- Application Projection cache inventory
-- shell input/rendering regression tests
-
-작업 단위:
-
-- `TUI-00A`: `NativeTuiApp` field별 UI-only, Application Projection Cache,
-  Runtime Bridge, Service Wiring ownership inventory를 작성한다. 완료.
-- `TUI-00B`: `BackgroundMessage`별 target boundary inventory를 작성하고, background
-  message가 reducer/application event로만 들어가는 최소 shell runtime regression을 추가한다. 완료.
-- `TUI-00C`: prompt lock, overlay focus, selection/cursor와 projection update 충돌을 막는
-  shell input/rendering regression을 추가한다. 완료.
-
-금지:
-
-- test 없이 controller split 시작
-
-검증:
-
-- shell runtime tests
-- shell rendering snapshot tests
-
-완료 근거:
-
-- [tui-shell-state-inventory.md](./tui-shell-state-inventory.md)가 `NativeTuiApp` field별
-  UI-only, Application Projection Cache, Runtime Bridge, Service Wiring ownership을
-  고정한다.
-- [tui-background-message-inventory.md](./tui-background-message-inventory.md)가
-  `BackgroundMessage`별 target boundary를 고정한다.
-- [tui-shell-regression-anchors.md](./tui-shell-regression-anchors.md)가 prompt lock,
-  overlay focus, selection/cursor, projection refresh regression anchor를 묶는다.
-- shell runtime tests에 supervisor projection refresh가 Supersession overlay focus와 MUD
-  selection을 보존하는 regression을 추가했다.
-
-### TUI-01. Conversation And Automation Split
-
-상태: `done`
-
-선행:
-
-- `TUI-00`
-
-목적:
-
-- conversation lifecycle과 post-turn automation lifecycle을 분리한다.
-- auto-follow, planning handoff, parallel handoff policy를 TUI에서 밀어낸다.
-
-소유 범위:
-
-- `new/docs/plan/tui-conversation-automation-split-plan.md`
-- `src/adapter/inbound/tui/app/conversation*`
-- `src/adapter/inbound/tui/app/turn_submission_runtime/*`
-- `src/application/service/*`
-
-산출물:
-
-- conversation state와 automation state 분리
-- application event path
-- TUI가 projection 표시만 담당하는 handoff path
-
-작업 단위:
-
-- `TUI-01A`: conversation lifecycle과 post-turn automation lifecycle의 fan-in, ownership,
-  migration slice를 [tui-conversation-automation-split-plan.md](./tui-conversation-automation-split-plan.md)
-  에 고정한다. 완료.
-- `TUI-01B`: `shell_runtime.rs`와 `app_runtime.rs`에 흩어진 post-turn automation routing을
-  TUI-side automation router/controller로 추출한다. behavior 변경 없이 stale guard,
-  planning worker panel projection assignment, supervisor invalidation, reducer dispatch
-  ordering을 유지한다. 완료.
-- `TUI-01C`: conversation reducer vocabulary에서 stream lifecycle과 automation result를
-  분리한다. `EvaluatePostTurnAutomation` effect와 `PostTurnAutomationEvaluated`
-  event를 사용하고, auto-follow는 automation result action으로만 남긴다. 완료.
-- `TUI-01D`: queued auto prompt metadata, planning handoff, parallel handoff signal을
-  automation provenance로 묶고 pending task-intake flush와 parallel continuation의
-  ordering contract를 테스트로 고정한다. 완료.
-- `TUI-01E`: `conversation_state`의 `Hybrid` 분류를 제거하거나 남은 Runtime Bridge field의
-  유지 사유와 후속 migration owner를 문서화한다. 완료.
-
-완료 근거:
-
-- `TUI-01A`: conversation/automation lifecycle fan-in과 slice ownership을 고정했다.
-- `TUI-01B`: post-turn automation routing을 TUI-side router로 추출했다.
-- `TUI-01C`: reducer vocabulary에서 stream lifecycle과 automation result를 분리했다.
-- `TUI-01D`: completed turn id, planning handoff, parallel handoff signal을
-  `PostTurnAutomationProvenance`로 묶었다.
-- `TUI-01E`: `conversation_state`의 opaque `Hybrid` 분류를 제거하고 하위 field별 UI-only,
-  Application Projection Cache, Runtime Bridge ownership과 후속 owner를 문서화했다.
-
-금지:
-
-- TUI background message에서 domain policy 판단
-
-검증:
-
-- conversation runtime tests
-- post-turn execution tests
-- affected TUI input/rendering tests
-
-## P3. Inbound Surface Slices
-
-Inbound surface는 business logic owner가 아니다. TUI, CLI, admin, Telegram은 같은
-application command/use case를 공유해야 한다.
-
-### DOC-INBOUND-00. Inbound Surface Unification Architecture
-
-상태: `done`
-
-목적:
-
-- TUI/CLI/admin/Telegram request mapping과 response rendering 규칙을 통일한다.
-
-소유 범위:
-
-- `new/docs/architecture/inbound-surface-unification-architecture.md`
-
-필수 내용:
-
-- surface별 책임
-- shared application command 호출 원칙
-- auth/session/context mapping 위치
-- copy/rendering과 policy의 분리
-
-검증:
-
-- TUI/admin/CLI/Telegram을 bounded context로 취급하지 않아야 한다.
-
-완료 근거:
-
-- [inbound-surface-unification-architecture.md](../architecture/inbound-surface-unification-architecture.md)
-  에 TUI, CLI, admin API, Telegram bot을 bounded context가 아닌 inbound adapter로 고정했다.
-- surface별 책임, shared application command 호출 원칙, auth/session/context mapping 위치,
-  response rendering과 policy 분리 규칙을 문서화했다.
-- current surface inventory와 `INBOUND-00` 구현 분할 기준을 추가했다.
-
-### INBOUND-00. Shared Command Surface
-
-상태: `done`
-
-선행:
-
-- `DOC-INBOUND-00`
-- 관련 context architecture 문서
-
-목적:
-
-- planning/parallel command를 inbound-neutral surface로 공유한다.
-
-소유 범위:
-
-- `new/docs/plan/inbound-surface-command-inventory.md`
 - `src/adapter/inbound/cli.rs`
 - `src/adapter/inbound/admin_api/*`
 - `src/adapter/inbound/telegram_bot/*`
-- shared application command/facade modules
+- shared application facade modules
 
-산출물:
+현재 문제:
 
-- duplicated policy 제거
-- request/response DTO mapping 유지
-- common application call path
+- 일부 command vocabulary는 정렬됐지만, 모든 mutation/read path가 같은 application
+  service를 쓰는지는 기능별로 다시 봐야 한다.
+- admin/CLI/Telegram의 rendering 차이와 policy 차이가 문서상 구분보다 흐릴 수 있다.
 
-작업 단위:
+해야 할 일:
 
-- `INBOUND-00A`: surface command inventory와 CLI/admin/Telegram reset/control command
-  regression anchor를 고정한다. 완료.
-- `INBOUND-00B`: CLI와 Telegram의 planning control command context와 response contract를
-  같은 request/result vocabulary로 정렬한다. 완료.
-- `INBOUND-00C`: admin HTML/JSON route pair가 같은 mutation request DTO와 facade method를
-  통과하는지 route pair별 regression을 보강한다. 완료.
-- `INBOUND-00D-A`: TUI `:reset` shell argument를 shared `PlanningResetTarget`
-  vocabulary로 고정한다. 완료.
-- `INBOUND-00D-B`: TUI `:reset` execution path와 inline buffered hint path가 같은
-  parser를 공유하게 해 reset vocabulary drift를 막는다. 완료.
-- `INBOUND-00D-C`: TUI `:planning [doctor]` execution path와 inline buffered hint path가 같은
-  parser를 공유하게 해 planning control-center/doctor vocabulary drift를 막는다. 완료.
-- `INBOUND-00D-D`: TUI `:task [prompt]` execution path와 inline buffered hint path가 같은
-  parser를 공유하게 해 prompt-editor/preview vocabulary drift를 막는다. 완료.
-- `INBOUND-00D-E`: TUI `:queue`/`:directions` no-argument overlay command의 execution path와
-  buffered hint path가 같은 parser를 공유하게 해 overlay vocabulary drift를 막는다. 완료.
-- `INBOUND-00D-F`: TUI planning/directions editor keymap은 UI-only controller vocabulary로 유지하고
-  save/promote mutation만 `PlanningServices`로 위임하는 계약을 고정한다. 완료.
-- `INBOUND-00D`: TUI planning shell command와 CLI/admin control vocabulary의 남은 차이를 줄인다. 완료.
-- `INBOUND-00E-A`: CLI `parallel-tick`을 application orchestrator tick result vocabulary로
-  정렬한다. 완료.
-- `INBOUND-00E-B`: TUI `:parallel` execution path와 inline buffered hint path가 같은
-  parser를 공유하게 해 enable/disable vocabulary drift를 막는다. 완료.
-- `INBOUND-00E-C`: admin Akra dashboard/API가 parallel tick mutation surface가 아니라
-  read-only supervisor/event projection surface임을 regression으로 고정한다. 완료.
-- `INBOUND-00E`: parallel TUI/admin/CLI entrypoint를 control-plane runtime command/event
-  vocabulary로 정렬한다. 완료.
+- planning reset/status/queue/task mutation과 parallel status/tick path를 route별로 표로 만든다.
+- direct service call이 adapter mapping인지, duplicated policy인지 판정한다.
+- duplicated policy는 shared application command/facade로 이동한다.
 
-완료 근거:
+완료 조건:
 
-- CLI/Telegram planning control은 `PlanningControlRequest`/`PlanningControlResponse`를 공유한다.
-- Admin HTML/JSON mutation route pair는 같은 `PlanningAdmin*Request` DTO와 facade method를 통과한다.
-- TUI planning shell grammar는 execution path와 inline hint path가 같은 parser를 공유하고,
-  editor keymap은 UI-only vocabulary와 `PlanningServices` mutation delegation으로 분리했다.
-- CLI manual tick, TUI `:parallel`, admin Akra dashboard/API는 control-plane runtime command/event
-  vocabulary 기준으로 정렬했다.
+- surface별로 같은 기능이 같은 application request/result vocabulary를 사용한다.
+- adapter에는 parsing/auth/context/rendering만 남는다.
+- admin API용 rule, CLI용 rule, Telegram용 rule이 따로 존재하지 않는다.
 
-금지:
+권장 검증:
 
-- admin API용 domain rule, CLI용 domain rule을 따로 만들기
+```bash
+cargo test cli
+cargo test admin_api
+cargo test telegram
+cargo test planning
+```
 
-검증:
+### R6. Control-Plane Event Loop 전환 여부 결정
 
-- CLI tests
-- admin API tests
-- Telegram parser/runner tests
-- affected planning/parallel tests
-
-## P4. Store And Runtime State Slices
-
-Store와 runtime state 경계가 흐리면 재시작, retry, stale completion, test reset이 모두
-깨진다.
-
-### DOC-STORE-00. Store And Runtime State Architecture
-
-상태: `done`
-
-목적:
-
-- durable/recoverable state, process-lifetime runtime state, UI-only state를 repo 전체 기준으로 정의한다.
-
-소유 범위:
-
-- `new/docs/architecture/store-and-runtime-state-architecture.md`
-
-필수 내용:
-
-- repository/store와 runtime store의 차이
-- SQLite authority, file workspace, lease/session detail, runtime projection 분류
-- in-memory map이 허용되는 경우
-- recovery와 test reset 기준
-
-검증:
-
-- parallel architecture의 state table과 모순이 없어야 한다.
-
-완료 근거:
-
-- [store-and-runtime-state-architecture.md](../architecture/store-and-runtime-state-architecture.md)를
-  추가해 durable authority, durable runtime projection, workspace artifact,
-  process-lifetime runtime state, UI-only state, Application Projection의 기준을 정의했다.
-- SQLite planning authority, filesystem planning workspace, git worktree/branch artifact,
-  in-memory store 허용 조건, recovery와 test reset 기준을 분류했다.
-- `STORE-00`이 바로 inventory 작업에 들어갈 수 있도록 구현 분할 기준과 완료 조건을 추가했다.
-
-### STORE-00. Durable Store Boundary Audit
-
-상태: `done`
+상태: `blocked`
 
 선행:
 
-- `DOC-STORE-00`
+- R1
+- R2
+- R3
 
-목적:
+현재 판단:
 
-- SQLite authority, filesystem workspace, git worktree, runtime event projection의 책임을 재분류한다.
+- 지금 구조는 queue-backed actor loop가 아니라 mutex-serialized synchronous facade다.
+- 동기 facade는 당장 유지해도 된다. 먼저 TUI/application 경계를 줄여야 한다.
 
-소유 범위:
+해야 할 일:
 
-- `src/application/port/outbound/*`
-- `src/adapter/outbound/db/*`
-- `src/adapter/outbound/filesystem/*`
-- `src/adapter/outbound/git/*`
-- `new/docs/plan/store-runtime-state-boundary-inventory.md`
+- R1-R3 이후에도 background completion ordering, backpressure, shutdown, stale event
+  문제가 남는지 측정한다.
+- 문제가 남으면 queue-backed single consumer loop 설계를 별도 slice로 작성한다.
+- 문제가 충분히 제어되면 mutex facade를 명시적 설계 선택으로 문서화한다.
 
-산출물:
+완료 조건:
 
-- durable state inventory
-- process-lifetime runtime state inventory
-- adapter mapping versus application policy audit
+- actor loop가 필요한지 여부가 구현 근거와 regression으로 결정된다.
+- 선택한 구조가 `parallel-control-plane-architecture.md`와 충돌하면, 충돌 내용을
+  해당 parallel 기준 문서에 별도로 갱신한다.
 
-금지:
+## 문서 정리 규칙
 
-- audit 없이 repository trait 추가
-- timer/effect id를 durable store로 이동
+새 문서를 추가하지 않는다. 새 작업은 이 문서의 R-slice를 갱신한다.
 
-검증:
+기존 문서는 다음처럼만 사용한다.
 
-- SQLite runtime projection tests
-- filesystem adapter tests
-- affected planning/parallel recovery tests
+| 문서 | 지위 |
+| --- | --- |
+| `parallel-control-plane-architecture.md` | 유지되는 기준 문서 |
+| `parallel-control-plane-migration-plan.md` | 유지되는 기준 문서 |
+| `repository-wide-rebuild-roadmap.md` | 현재 실행 기준 |
+| 나머지 `new/docs/architecture/*` | 배경 설명. 구현 상태 authority 아님 |
+| 나머지 `new/docs/plan/*` | 과거 inventory 또는 regression 메모. `done` authority 아님 |
 
-작업 단위:
+기존 문서를 수정할 때는 장황한 상태 표를 늘리지 않는다. 필요한 경우 이 문서의
+R-slice 하나만 갱신한다.
 
-- `STORE-00A`: durable state, process-lifetime runtime state, adapter policy audit inventory를
-  [store-runtime-state-boundary-inventory.md](./store-runtime-state-boundary-inventory.md)에
-  고정한다. 완료.
-- `STORE-00B`: SQLite runtime projection regression matrix를 보강한다. dispatch command,
-  runtime event feed, claim/recovery, task cleanup projection을 같은 DB read boundary로 검증한다. 완료.
-- `STORE-00C`: pool-local mirror I/O를 application service helper에서 outbound filesystem/runtime
-  boundary로 이동한다. authority-first write order와 mirror-loss recovery 테스트를 유지한다. 완료.
-- `STORE-00D`: parallel wake/epoch/in-flight process state를 TUI-owned state에서 application
-  control-plane runtime state로 이동한다. 완료.
-- `STORE-00E`: planning workspace artifact reset/sync contract를 보강한다. filesystem artifact,
-  repo-scoped active documents, shadow documents, accepted DB authority의 reset boundary를 고정한다. 완료.
+## Worker 보고 형식
 
-`STORE-00` 완료 근거:
-
-- durable authority, durable runtime projection, process-lifetime runtime store, UI-only state를
-  inventory와 regression으로 분리했다.
-- SQLite runtime projection, pool-local mirror I/O, parallel runtime state, planning workspace
-  artifact reset/sync contract의 owner와 recovery boundary를 고정했다.
-
-`STORE-00A` 완료 근거:
-
-- `STORE-00A`에서 durable/process runtime state inventory와 adapter mapping versus application
-  policy audit를 작성했다.
-
-`STORE-00B` 완료 근거:
-
-- SQLite runtime projection tests에 dispatch command cancel matrix, current row/event snapshot
-  grouping, official refresh claim ordering regression을 추가했다.
-- `cargo test adapter::outbound::db::sqlite_planning_authority_adapter`로 DB adapter projection
-  contract를 검증했다.
-
-`STORE-00C` 완료 근거:
-
-- `STORE-00C`에서 pool-local `.leases`, `.agent-sessions`, `.distributor-queue` mirror read/write/remove를
-  `ParallelModeRuntimePort` 경계로 이동했다.
-- `.leases`, `.agent-sessions`, `.distributor-queue` mirror read/write/remove 경로가
-  application service helper의 직접 `std::fs` 호출 대신 `ParallelModeRuntimePort` filesystem
-  primitive를 사용한다.
-- authority store upsert/delete가 mirror write/remove보다 먼저 실행되는 순서는 유지했다.
-- `acquire_slot_lease_rolls_back_authority_when_mirror_write_fails`,
-  `build_supervisor_snapshot_reads_store_backed_runtime_projections_after_mirror_loss`,
-  distributor recovery tests로 mirror failure/loss contract를 검증한다.
-
-`STORE-00D` 완료 근거:
-
-- `NativeTuiApp`에서 supervisor refresh, orchestrator wake, orchestrator tick in-flight flag와
-  automation epoch allocator를 제거하고 `ParallelModeControlPlaneRuntime`가 소유하게 했다.
-- supervisor refresh, dispatch wake, distributor retry tick background completion은 effect id와 epoch id를
-  application runtime에 되돌려 stale completion을 drop한다.
-- TUI scheduler는 runtime helper로 in-flight 여부만 조회하며 poll timestamp와 overlay projection만 inbound
-  bridge state로 남긴다.
-
-`STORE-00E` 완료 근거:
-
-- SQLite repo-scoped active workspace artifact removal과 draft staging이 accepted task authority
-  snapshot을 mutate하지 않는 regression을 추가했다.
-- `cargo test adapter::outbound::db::sqlite_planning_authority_adapter`로 DB authority와 workspace
-  artifact boundary를 검증했다.
-
-## P5. Test And Docs Slices
-
-테스트와 문서도 새 구조를 따라야 한다. 테스트가 계층 계약을 설명하지 못하면
-worker가 변경 범위를 안전하게 잡을 수 없다.
-
-### TEST-00. Contract Taxonomy
-
-상태: `done`
-
-선행:
-
-- `PAR-00`
-- `DOC-PLAN-00`
-- `DOC-TUI-00`
-- `DOC-STORE-00`
-- `INBOUND-00`
-- `STORE-00`
-
-목적:
-
-- 테스트를 domain decision, application ordering, adapter mapping/rendering, integration journey로 분류한다.
-- `new/docs` 문서와 테스트 위치가 서로 추적 가능하게 한다.
-
-소유 범위:
-
-- `new/docs/plan/repository-wide-test-contract-taxonomy.md`
-- 관련 test module README 또는 module-level comments where useful
-
-산출물:
-
-- test contract taxonomy
-- 각 major context별 필수 regression 목록
-- worker가 새 slice를 시작할 때 참고할 검증 matrix
-
-금지:
-
-- 테스트 파일 이동만 하는 기계적 PR
-- behavior 변경 없이 snapshot 대량 갱신
-
-검증:
-
-- 문서 링크 확인
-- 기존 test command 목록이 재현 가능해야 한다.
-
-완료 근거:
-
-- [repository-wide-test-contract-taxonomy.md](./repository-wide-test-contract-taxonomy.md)를 추가해
-  domain decision, application ordering, outbound store/recovery, inbound mapping, TUI runtime,
-  TUI rendering, source-level guard, journey validation test layer를 정의했다.
-- major context별 현재 anchor와 우선 실행 명령을 정리했다.
-- source-level guard, fake port, process-lifetime runtime state reset 기준을 문서화했다.
-
-## 병렬 작업 가능 조합
-
-현재 바로 시작 가능한 조합:
-
-- 없음. 새 slice를 추가할 때는 이 roadmap에 priority, owner, verification matrix를 먼저 추가한다.
-
-서로 같은 production file을 건드리지 않는 조합:
-
-- 현재 P0-P5 parent slice는 모두 완료됐다. 후속 work는
-  [repository-wide-test-contract-taxonomy.md](./repository-wide-test-contract-taxonomy.md)의
-  contract layer 기준으로 새 slice를 분해한 뒤 병렬 가능 여부를 판단한다.
-
-동시에 진행하면 안 되는 조합:
-
-- `PLAN-01`과 `INBOUND-00`
-- `PAR-04`와 `TUI-01`
-- 완료된 `STORE-00D` production file을 다시 여는 작업과 별도 TUI runtime migration slice
-
-## Worker 완료 보고 형식
-
-각 worker는 최종 보고에 다음을 포함한다.
+모든 구현 slice는 최종 보고에 아래 항목만 적는다.
 
 ```text
 Slice:
 Branch:
+Implemented:
+Still partial:
 Changed files:
-Key decisions:
 Verification:
-Blocked follow-up:
+Follow-up:
 ```
 
-문서 slice는 “다음 worker가 바로 구현 가능한가”를 기준으로 완료한다.
-구현 slice는 “어느 계층 계약을 바꿨는가”와 “어떤 regression이 막는가”를 기준으로
-완료한다.
+`Still partial`이 비어 있지 않으면 이 roadmap의 해당 영역 상태를 `implemented`로
+바꾸지 않는다.
