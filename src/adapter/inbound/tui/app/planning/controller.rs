@@ -536,3 +536,122 @@ impl NativeTuiApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    const CONTROLLER_RS: &str = include_str!("controller.rs");
+    const DIRECTIONS_OVERLAY_RS: &str = include_str!("controller/directions_overlay.rs");
+    const EDITOR_RS: &str = include_str!("controller/editor.rs");
+    const PLANNING_INIT_OVERLAY_RS: &str = include_str!("controller/planning_init_overlay.rs");
+
+    fn occurrence_count(source: &str, needle: &str) -> usize {
+        source.match_indices(needle).count()
+    }
+
+    #[test]
+    fn editor_overlay_keymaps_stay_tui_local_and_delegate_mutations() {
+        let controller_runtime_source = CONTROLLER_RS
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(CONTROLLER_RS);
+
+        for ui_action in [
+            "move_file_selection",
+            "move_cursor_left",
+            "move_cursor_right",
+            "move_cursor_up",
+            "move_cursor_down",
+            "insert_newline",
+            "backspace",
+            "delete_previous_word",
+            "insert_character",
+        ] {
+            assert!(
+                controller_runtime_source.contains(ui_action),
+                "draft editor keymap should keep UI-only action local: {ui_action}"
+            );
+        }
+
+        assert!(controller_runtime_source.contains("save: fn(&mut Self)"));
+        assert!(controller_runtime_source.contains("promote: fn(&mut Self)"));
+        assert_eq!(
+            occurrence_count(
+                controller_runtime_source,
+                "KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => save(self)"
+            ),
+            1
+        );
+        assert_eq!(
+            occurrence_count(
+                controller_runtime_source,
+                "KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => promote(self)"
+            ),
+            1
+        );
+
+        for (overlay_name, source, save_hook, promote_hook, close_hook) in [
+            (
+                "planning init",
+                PLANNING_INIT_OVERLAY_RS,
+                "Self::save_planning_manual_editor",
+                "Self::promote_planning_manual_editor",
+                "handle_planning_manual_editor_close_confirmation_key",
+            ),
+            (
+                "directions",
+                DIRECTIONS_OVERLAY_RS,
+                "Self::save_directions_manual_editor",
+                "Self::promote_directions_manual_editor",
+                "handle_directions_manual_editor_close_confirmation_key",
+            ),
+        ] {
+            assert!(
+                source.contains("self.handle_draft_editor_key("),
+                "{overlay_name} overlay should delegate editor keys to the shared TUI keymap"
+            );
+            assert!(
+                source.contains(save_hook),
+                "{overlay_name} overlay should inject its service save hook"
+            );
+            assert!(
+                source.contains(promote_hook),
+                "{overlay_name} overlay should inject its service promote hook"
+            );
+            assert!(
+                source.contains(close_hook),
+                "{overlay_name} overlay should guard close confirmation before text editing"
+            );
+        }
+
+        assert_eq!(
+            occurrence_count(EDITOR_RS, ".workspace.save_draft_editor_files("),
+            2,
+            "planning and directions editor saves should both delegate through PlanningServices"
+        );
+        assert_eq!(
+            occurrence_count(EDITOR_RS, ".workspace.promote_draft_editor_files("),
+            2,
+            "planning and directions editor promotions should both delegate through PlanningServices"
+        );
+
+        for forbidden in [
+            "PlanningAdmin",
+            "PlanningControlCommand",
+            "PlanningControlRequest",
+            "run_orchestrator_tick",
+            "process_distributor_queue",
+        ] {
+            for (source_name, source) in [
+                ("controller", controller_runtime_source),
+                ("editor", EDITOR_RS),
+                ("planning init overlay", PLANNING_INIT_OVERLAY_RS),
+                ("directions overlay", DIRECTIONS_OVERLAY_RS),
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "{source_name} should not route editor keymaps through cross-surface command vocabulary: {forbidden}"
+                );
+            }
+        }
+    }
+}
