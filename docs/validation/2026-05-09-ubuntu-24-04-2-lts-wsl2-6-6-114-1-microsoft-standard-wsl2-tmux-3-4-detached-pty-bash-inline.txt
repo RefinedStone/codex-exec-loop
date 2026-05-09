@@ -1,0 +1,16 @@
+date: 2026-05-09
+commit: 5c8a49f2f25d66392d9d91b11e54880a2cdc4ec0
+os: Ubuntu 24.04.2 LTS / WSL2 6.6.114.1-microsoft-standard-WSL2
+terminal: tmux 3.4 detached PTY
+shell: bash
+frontend: inline
+term: tmux-256color
+check_profile: prompt-input-delay-pty
+checks:
+- launch inline TUI in tmux PTY
+- startup-pending prompt text echo
+- startup-pending Ctrl+U prompt clear
+- ready-state prompt text echo
+- Ctrl+q clean exit and shell restore
+result: pass
+notes: Prompt input delay check in tmux 3.4 detached PTY at 100x30: startup-pending prompt echo 8ms, Ctrl+U clear 8ms, ready prompt echo 8ms, startup reached ready in 714ms; Ctrl+q exited and shell restored; no visible prompt stutter.
