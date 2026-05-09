@@ -181,12 +181,14 @@ impl ShellRuntime {
                     readiness_snapshot,
                     supervisor_snapshot,
                     status_text,
+                    initial_pool_reset_completed,
                 } => {
                     self.app.apply_parallel_mode_entered(
                         &workspace_directory,
                         readiness_snapshot,
                         *supervisor_snapshot,
                         status_text,
+                        initial_pool_reset_completed,
                     );
                 }
                 BackgroundMessage::ParallelModeSupervisorSnapshotRefreshed {

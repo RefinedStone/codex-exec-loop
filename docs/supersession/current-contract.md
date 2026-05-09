@@ -42,14 +42,18 @@ to [remaining-work.md](remaining-work.md).
 - Off-to-on `:parallel` entry checks readiness, opens the board, attempts a pool-only reset and
   reconcile, opens an automation epoch, and dispatches any already-ready accepted queue up to
   idle-slot capacity.
+- The first off-to-on `:parallel` in a TUI process treats the pool as disposable initial setup:
+  every registered `akra` slot is forced back to the current `prerelease` baseline and stale lease,
+  session, and distributor mirrors for reset slots are cleared.
 - Re-running `:parallel` while already enabled refreshes readiness and supervisor projection only;
   it does not reset the pool, reopen the automation epoch, or launch workers by itself.
 - `Esc` closes the board surface only. Parallel mode remains enabled.
 - `:parallel off` disables local parallel mode and clears the automation epoch, pending dispatch,
   and in-flight dispatch state, but leaves pool worktrees in place.
-- The next off-to-on `:parallel` attempts reset again. Reset is blocked when live Running,
+- Later off-to-on `:parallel` entries attempt a guarded reset. Reset is blocked when live Running,
   CleanupPending, or recent Leased slots are present.
-- Idle or stale reusable slots are reset into disposable baselines; active slots are preserved.
+- Idle or stale reusable slots are reset into disposable baselines; protected active slots are
+  preserved only after the initial setup reset has completed once in the process.
 - Parallel automation starts when `:parallel` opens an automation epoch with an accepted ready
   queue, or after the main session completes a user turn and post-turn planning evaluation returns
   an accepted ready queue. In the post-turn case the normal main-session auto-follow prompt is

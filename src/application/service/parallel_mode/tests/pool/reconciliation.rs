@@ -333,6 +333,64 @@ fn parallel_entry_from_off_preserves_live_running_slot_and_resets_idle_slots() {
     assert!(current_branch(&slot_path).starts_with("akra-agent/slot-1/"));
 }
 
+// TUI 프로세스에서 처음 `:parallel`을 켜는 초기 설정은 이전 실행의 stale
+// projection을 신뢰하지 않는다. failed/cleaned worker가 Running lease를 남겨도
+// disposable pool 전체를 현재 prerelease baseline으로 강제 정렬해야 한다.
+#[test]
+fn parallel_initial_setup_forces_live_running_slots_back_to_baseline() {
+    let repo = TempGitRepo::new("parallel-initial-force-reset-active");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "stale.txt", "stale\n", "stale agent work");
+    fs::write(slot_path.join("scratch.tmp"), "discard me\n").expect("scratch file should write");
+
+    let report = service
+        .reset_pool_on_parallel_initial_setup_report(&repo.workspace_dir())
+        .expect("initial setup reset should force disposable slots");
+    let snapshot = service.build_supervisor_snapshot(
+        &repo.workspace_dir(),
+        true,
+        Some(&ParallelModeReadinessSnapshot::new(
+            repo.workspace_dir(),
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        )),
+    );
+
+    assert_eq!(report.policy, ParallelModePoolResetPolicy::ForceDisposable);
+    assert_eq!(report.live_blocker_count(), 0);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE);
+    assert_eq!(snapshot.roster.active_count(), 0);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!slot_path.join("stale.txt").exists());
+    assert!(!slot_path.join("scratch.tmp").exists());
+    assert_eq!(current_branch(&slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                slot_path.to_str().expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("slot head should resolve"),
+        repo.head_sha()
+    );
+}
+
 // Dirty tracked files in no-lease reusable slots must not stop off -> on pool reset. Git checkout
 // without --force can fail before reset --hard runs when a slot has committed and uncommitted edits
 // to the same tracked file, which leaves the slot detached at stale work.

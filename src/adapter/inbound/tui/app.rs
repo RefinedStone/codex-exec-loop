@@ -309,6 +309,7 @@ struct NativeTuiApp {
     startup_state: StartupState,
     session_state: SessionState,
     parallel_mode_enabled: bool,
+    parallel_mode_initial_pool_reset_completed: bool,
     parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
     parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     supersession_mud_ui_state: SupersessionMudUiState,

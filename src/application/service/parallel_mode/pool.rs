@@ -243,6 +243,7 @@ pub(super) fn reset_pool_for_parallel_enable(
     planning_authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     workspace_dir: &str,
+    policy: ParallelModePoolResetPolicy,
 ) -> Result<ParallelModePoolResetReport, String> {
     let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
         return Err("git repository is unavailable".to_string());
@@ -279,7 +280,7 @@ pub(super) fn reset_pool_for_parallel_enable(
 
     let mut report = ParallelModePoolResetReport::new(
         ParallelModePoolResetRunId::new(format!("{}:{}", repo_root, Utc::now().to_rfc3339())),
-        ParallelModePoolResetPolicy::ProtectLive,
+        policy,
     );
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
@@ -300,17 +301,32 @@ pub(super) fn reset_pool_for_parallel_enable(
             continue;
         };
 
-        if let Some(lease) = context.slot_leases.get(&slot_id)
+        if policy == ParallelModePoolResetPolicy::ProtectLive
+            && let Some(lease) = context.slot_leases.get(&slot_id)
             && live_lease_blocks_parallel_entry_reset(lease, &context.session_details)
         {
+            let reason = format!("live {} lease is protected", lease.state.label());
             report
                 .slot_reports
                 .push(ParallelModePoolResetSlotReport::new(
-                    slot_id,
+                    &slot_id,
                     ParallelModePoolResetSlotAction::PreserveLive,
                     ParallelModePoolResetSlotOutcome::Blocked,
-                    format!("live {} lease is protected", lease.state.label()),
+                    reason.clone(),
                 ));
+            event_log::emit_lazy("parallel_pool_slot_reset_preserved_live", || {
+                serde_json::json!({
+                    "workspace": workspace_dir,
+                    "repo_root": repo_root,
+                    "pool_root": pool_root,
+                    "run_id": report.run_id.as_str(),
+                    "policy": report.policy,
+                    "slot_id": slot_id,
+                    "slot_path": slot_path,
+                    "lease_state": lease.state.label(),
+                    "reason": reason,
+                })
+            });
         }
     }
 
@@ -337,7 +353,8 @@ pub(super) fn reset_pool_for_parallel_enable(
         {
             continue;
         }
-        if let Some(lease) = context.slot_leases.get(&slot_id)
+        if policy == ParallelModePoolResetPolicy::ProtectLive
+            && let Some(lease) = context.slot_leases.get(&slot_id)
             && live_lease_blocks_parallel_entry_reset(lease, &context.session_details)
         {
             continue;
