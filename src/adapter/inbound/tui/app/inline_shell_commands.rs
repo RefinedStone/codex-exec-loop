@@ -1,6 +1,7 @@
 use super::parallel_mode_shell_command::{
     ParsedParallelModeShellCommand, parse_parallel_mode_shell_argument,
 };
+use super::planning_overlay_shell_command::parse_planning_overlay_shell_argument;
 use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
@@ -199,12 +200,11 @@ impl InlineShellCommandInput {
         match self.command {
             InlineShellCommand::Parallel => parallel_argument_hint(self.argument()),
             InlineShellCommand::PlanningInit => planning_argument_hint(self.argument()),
-            InlineShellCommand::Directions => match self.argument() {
-                Some(value) => format!(
-                    "Press Enter to apply `:directions {value}`. Supported command: :directions."
-                ),
-                None => self.command.spec().buffered_hint.to_string(),
-            },
+            InlineShellCommand::Directions => planning_overlay_argument_hint(
+                self.argument(),
+                InlineShellCommand::Directions,
+                "directions",
+            ),
             InlineShellCommand::Task => task_argument_hint(self.argument()),
             InlineShellCommand::Turns => match self.argument() {
                 Some(value) => {
@@ -212,12 +212,9 @@ impl InlineShellCommandInput {
                 }
                 None => self.command.spec().buffered_hint.to_string(),
             },
-            InlineShellCommand::Queue => match self.argument() {
-                Some(value) => format!(
-                    "`:queue` does not accept arguments (`{value}`); press Enter to open queue inspection."
-                ),
-                None => self.command.spec().buffered_hint.to_string(),
-            },
+            InlineShellCommand::Queue => {
+                planning_overlay_argument_hint(self.argument(), InlineShellCommand::Queue, "queue")
+            }
             InlineShellCommand::Reset => match parse_reset_argument(self.argument()) {
                 Some(parsed) => reset_argument_hint(parsed),
                 None => reset_argument_recovery_hint(self.argument()),
@@ -462,6 +459,25 @@ fn task_argument_hint(argument: Option<&str>) -> String {
         ParsedTaskShellCommand::PreviewPrompt { prompt } => {
             format!("Press Enter to preview a runtime task for `{prompt}`.")
         }
+    }
+}
+fn planning_overlay_argument_hint(
+    argument: Option<&str>,
+    command: InlineShellCommand,
+    label: &str,
+) -> String {
+    match parse_planning_overlay_shell_argument(argument) {
+        Ok(()) => command.spec().buffered_hint.to_string(),
+        Err(error) if command == InlineShellCommand::Queue => format!(
+            "`:queue` does not accept arguments (`{}`); press Enter to open queue inspection.",
+            error.argument()
+        ),
+        Err(error) => format!(
+            "Press Enter to apply `:{} {}`. Supported command: :{}.",
+            command.command_name().trim_start_matches(':'),
+            error.argument(),
+            label
+        ),
     }
 }
 fn parse_reset_argument(argument: Option<&str>) -> Option<ParsedPlanningResetShellCommand> {
