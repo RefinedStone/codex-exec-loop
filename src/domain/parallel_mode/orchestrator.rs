@@ -1,6 +1,7 @@
 // orchestrator state machine은 parallel mode의 제어 결정을 표시 문자열이나
 // 파일 존재 여부에서 분리한다. application layer는 여기서 나온 action만 실행하고,
 // planning task authority 자체를 reset 대상으로 삼지 않는다.
+use super::pool_reset::ParallelModePoolResetPolicy;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,6 +317,18 @@ impl ParallelModeEntryPlan {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelModeControlPlaneEntryDecision {
+    pub plan: ParallelModeEntryPlan,
+    pub reset_policy: Option<ParallelModePoolResetPolicy>,
+}
+
+impl ParallelModeControlPlaneEntryDecision {
+    fn new(plan: ParallelModeEntryPlan, reset_policy: Option<ParallelModePoolResetPolicy>) -> Self {
+        Self { plan, reset_policy }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelModeDispatchBlockReason {
@@ -426,6 +439,24 @@ impl ParallelModeOrchestratorStateMachine {
             ParallelModeOrchestratorState::PoolResetting,
             Some(ParallelModePoolResetScope::PoolOnly),
         )
+    }
+
+    pub fn decide_parallel_entry(
+        mode_was_enabled: bool,
+        readiness_allows_parallel_mode: bool,
+        initial_pool_reset_required: bool,
+    ) -> ParallelModeControlPlaneEntryDecision {
+        let plan = Self::plan_parallel_entry(mode_was_enabled, readiness_allows_parallel_mode);
+        let reset_policy = match plan.reset_scope {
+            Some(ParallelModePoolResetScope::PoolOnly) if initial_pool_reset_required => {
+                Some(ParallelModePoolResetPolicy::ForceDisposable)
+            }
+            Some(ParallelModePoolResetScope::PoolOnly) => {
+                Some(ParallelModePoolResetPolicy::ProtectLive)
+            }
+            None => None,
+        };
+        ParallelModeControlPlaneEntryDecision::new(plan, reset_policy)
     }
 
     pub fn dispatch_eligibility(

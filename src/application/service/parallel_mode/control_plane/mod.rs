@@ -1,9 +1,17 @@
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use serde::{Deserialize, Serialize};
 
+mod effect_runner;
+
+pub use effect_runner::{
+    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEffectRunner,
+    ParallelModeControlPlaneEventSink, ParallelModeControlPlaneLoadingStage,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelModeControlPlaneEffectKind {
+    EnterParallelMode,
     RefreshSupervisor,
     RunOrchestrator,
     RunOrchestratorTick,
@@ -199,6 +207,13 @@ pub enum ParallelModeControlPlaneCommand {
         epoch_id: u64,
         effect_id: ParallelModeControlPlaneEffectId,
     },
+    EntryCompleted {
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        mode_enabled: bool,
+        initial_pool_reset_completed: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +229,13 @@ pub enum ParallelModeControlPlaneEvent {
     },
     EffectStarted {
         effect_id: ParallelModeControlPlaneEffectId,
+    },
+    ModeEnabled {
+        workspace_directory: String,
+        epoch_id: u64,
+    },
+    ModeDisabled {
+        workspace_directory: String,
     },
     SupervisorRefreshQueued,
     OrchestratorWakeQueued {
@@ -252,6 +274,13 @@ pub enum ParallelModeControlPlaneEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "effect", rename_all = "snake_case")]
 pub enum ParallelModeControlPlaneEffect {
+    EnterParallelMode {
+        effect_id: ParallelModeControlPlaneEffectId,
+        workspace_directory: String,
+        epoch_id: u64,
+        mode_was_enabled: bool,
+        initial_pool_reset_required: bool,
+    },
     RefreshSupervisor {
         effect_id: ParallelModeControlPlaneEffectId,
         workspace_directory: String,
@@ -276,7 +305,8 @@ pub enum ParallelModeControlPlaneEffect {
 impl ParallelModeControlPlaneEffect {
     pub fn effect_id(&self) -> Option<ParallelModeControlPlaneEffectId> {
         match self {
-            Self::RefreshSupervisor { effect_id, .. }
+            Self::EnterParallelMode { effect_id, .. }
+            | Self::RefreshSupervisor { effect_id, .. }
             | Self::RunOrchestrator { effect_id, .. }
             | Self::RunOrchestratorTick { effect_id, .. } => Some(*effect_id),
             Self::CancelDispatchCommands { .. } => None,
@@ -302,8 +332,11 @@ impl ParallelModeControlPlaneRuntimeOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelModeControlPlaneRuntimeStore {
     pub workspace_directory: Option<String>,
+    pub mode_enabled: bool,
+    pub initial_pool_reset_completed: bool,
     pub current_epoch_id: Option<u64>,
     pub next_epoch_id: u64,
+    pub parallel_entry_in_flight: Option<ParallelModeControlPlaneEffectId>,
     pub supervisor_refresh_in_flight: Option<ParallelModeControlPlaneEffectId>,
     pub orchestrator_wake_in_flight: Option<ParallelModeControlPlaneEffectId>,
     pub orchestrator_tick_in_flight: Option<ParallelModeControlPlaneEffectId>,
@@ -317,8 +350,11 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
     fn default() -> Self {
         Self {
             workspace_directory: None,
+            mode_enabled: false,
+            initial_pool_reset_completed: false,
             current_epoch_id: None,
             next_epoch_id: 1,
+            parallel_entry_in_flight: None,
             supervisor_refresh_in_flight: None,
             orchestrator_wake_in_flight: None,
             orchestrator_tick_in_flight: None,
@@ -351,8 +387,34 @@ impl ParallelModeControlPlaneRuntime {
     #[cfg(test)]
     pub fn force_epoch_for_test(&mut self, workspace_directory: impl Into<String>, epoch_id: u64) {
         self.store.workspace_directory = Some(workspace_directory.into());
+        self.store.mode_enabled = true;
         self.store.current_epoch_id = Some(epoch_id);
         self.store.next_epoch_id = self.store.next_epoch_id.max(epoch_id.saturating_add(1));
+    }
+
+    pub fn mode_enabled(&self) -> bool {
+        self.store.mode_enabled
+    }
+
+    #[cfg(test)]
+    pub fn force_mode_for_test(&mut self, workspace_directory: impl Into<String>, enabled: bool) {
+        let workspace_directory = workspace_directory.into();
+        self.store.mode_enabled = enabled;
+        if enabled {
+            self.ensure_epoch(
+                workspace_directory,
+                &mut ParallelModeControlPlaneRuntimeOutcome::new(),
+            );
+        } else {
+            self.store.workspace_directory = None;
+            self.store.current_epoch_id = None;
+            self.clear_process_effect_state();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn force_initial_pool_reset_completed_for_test(&mut self, completed: bool) {
+        self.store.initial_pool_reset_completed = completed;
     }
 
     #[cfg(test)]
@@ -405,6 +467,20 @@ impl ParallelModeControlPlaneRuntime {
                 epoch_id,
                 effect_id,
             } => self.effect_completed(workspace_directory, epoch_id, effect_id, &mut outcome),
+            ParallelModeControlPlaneCommand::EntryCompleted {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                mode_enabled,
+                initial_pool_reset_completed,
+            } => self.entry_completed(
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                mode_enabled,
+                initial_pool_reset_completed,
+                &mut outcome,
+            ),
         }
         outcome
     }
@@ -422,8 +498,27 @@ impl ParallelModeControlPlaneRuntime {
         workspace_directory: String,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
+        let mode_was_enabled = self.store.mode_enabled
+            && self.store.workspace_directory.as_deref() == Some(workspace_directory.as_str());
+        let initial_pool_reset_required =
+            !mode_was_enabled && !self.store.initial_pool_reset_completed;
         let epoch_id = self.ensure_epoch(workspace_directory.clone(), outcome);
-        self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
+        self.store.mode_enabled = true;
+        self.store.workspace_directory = Some(workspace_directory.clone());
+        self.store.last_orchestrator_tick_signature = None;
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::ModeEnabled {
+                workspace_directory: workspace_directory.clone(),
+                epoch_id,
+            });
+        self.start_parallel_entry(
+            workspace_directory,
+            epoch_id,
+            mode_was_enabled,
+            initial_pool_reset_required,
+            outcome,
+        );
     }
 
     fn disable(
@@ -451,8 +546,14 @@ impl ParallelModeControlPlaneRuntime {
                     epoch_id,
                 });
         }
+        self.store.mode_enabled = false;
         self.store.workspace_directory = None;
         self.clear_process_effect_state();
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::ModeDisabled {
+                workspace_directory: workspace_directory.clone(),
+            });
         outcome
             .effects
             .push(ParallelModeControlPlaneEffect::CancelDispatchCommands {
@@ -504,6 +605,27 @@ impl ParallelModeControlPlaneRuntime {
             return;
         }
         match effect_id.kind {
+            ParallelModeControlPlaneEffectKind::EnterParallelMode => {
+                if self.store.parallel_entry_in_flight != Some(effect_id) {
+                    self.stale_command(
+                        workspace_directory,
+                        epoch_id,
+                        "unknown parallel entry",
+                        outcome,
+                    );
+                    return;
+                }
+                self.store.parallel_entry_in_flight = None;
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
+                if self.store.pending_supervisor_refresh {
+                    self.store.pending_supervisor_refresh = false;
+                    self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+                    return;
+                }
+                self.drain_pending_orchestrator_wake(outcome);
+            }
             ParallelModeControlPlaneEffectKind::RefreshSupervisor => {
                 if self.store.supervisor_refresh_in_flight != Some(effect_id) {
                     self.stale_command(
@@ -568,6 +690,94 @@ impl ParallelModeControlPlaneRuntime {
                 self.drain_pending_orchestrator_wake(outcome);
             }
         }
+    }
+
+    fn entry_completed(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        mode_enabled: bool,
+        initial_pool_reset_completed: bool,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        if !self.command_epoch_is_current(&workspace_directory, epoch_id, outcome) {
+            return;
+        }
+        if self.store.parallel_entry_in_flight != Some(effect_id) {
+            self.stale_command(
+                workspace_directory,
+                epoch_id,
+                "unknown parallel entry",
+                outcome,
+            );
+            return;
+        }
+
+        self.store.parallel_entry_in_flight = None;
+        self.store.mode_enabled = mode_enabled;
+        if initial_pool_reset_completed {
+            self.store.initial_pool_reset_completed = true;
+        }
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::EffectCompleted { effect_id });
+
+        if !mode_enabled {
+            self.store.current_epoch_id = None;
+            self.store.workspace_directory = None;
+            self.clear_process_effect_state();
+            outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::EpochClosed {
+                    workspace_directory: workspace_directory.clone(),
+                    epoch_id,
+                });
+            outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::ModeDisabled {
+                    workspace_directory,
+                });
+            return;
+        }
+
+        if self.store.pending_supervisor_refresh {
+            self.store.pending_supervisor_refresh = false;
+            self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            return;
+        }
+        self.drain_pending_orchestrator_wake(outcome);
+    }
+
+    fn start_parallel_entry(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        mode_was_enabled: bool,
+        initial_pool_reset_required: bool,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        if self.has_in_flight_effect() {
+            outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
+            self.store.pending_supervisor_refresh = true;
+            return;
+        }
+        let effect_id = self.next_effect_id(ParallelModeControlPlaneEffectKind::EnterParallelMode);
+        self.store.parallel_entry_in_flight = Some(effect_id);
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::EffectStarted { effect_id });
+        outcome
+            .effects
+            .push(ParallelModeControlPlaneEffect::EnterParallelMode {
+                effect_id,
+                workspace_directory,
+                epoch_id,
+                mode_was_enabled,
+                initial_pool_reset_required,
+            });
     }
 
     fn start_or_queue_supervisor_refresh(
@@ -715,12 +925,14 @@ impl ParallelModeControlPlaneRuntime {
     }
 
     fn has_in_flight_effect(&self) -> bool {
-        self.store.supervisor_refresh_in_flight.is_some()
+        self.store.parallel_entry_in_flight.is_some()
+            || self.store.supervisor_refresh_in_flight.is_some()
             || self.store.orchestrator_wake_in_flight.is_some()
             || self.store.orchestrator_tick_in_flight.is_some()
     }
 
     fn clear_process_effect_state(&mut self) {
+        self.store.parallel_entry_in_flight = None;
         self.store.supervisor_refresh_in_flight = None;
         self.store.orchestrator_wake_in_flight = None;
         self.store.orchestrator_tick_in_flight = None;
@@ -912,16 +1124,25 @@ mod tests {
     }
 
     #[test]
-    fn enable_opens_epoch_and_orders_refresh_before_orchestrator_wake() {
+    fn enable_opens_epoch_and_orders_entry_before_orchestrator_wake() {
         let mut runtime = ParallelModeControlPlaneRuntime::new();
         let enabled = runtime.handle(enable("/repo"));
-        let refresh = only_effect(&enabled);
+        let entry = only_effect(&enabled);
         assert!(matches!(
             enabled.events.as_slice(),
             [
                 ParallelModeControlPlaneEvent::EpochOpened { epoch_id: 1, .. },
+                ParallelModeControlPlaneEvent::ModeEnabled { epoch_id: 1, .. },
                 ParallelModeControlPlaneEvent::EffectStarted { .. }
             ]
+        ));
+        assert!(matches!(
+            &entry,
+            ParallelModeControlPlaneEffect::EnterParallelMode {
+                mode_was_enabled: false,
+                initial_pool_reset_required: true,
+                ..
+            }
         ));
 
         let queued_wake = runtime.handle(wake("/repo", 1));
@@ -934,8 +1155,8 @@ mod tests {
             }]
         );
 
-        let refresh_id = refresh.effect_id().expect("refresh effect should have id");
-        let completed = runtime.handle(completed("/repo", 1, refresh_id));
+        let entry_id = entry.effect_id().expect("entry effect should have id");
+        let completed = runtime.handle(completed("/repo", 1, entry_id));
         assert!(matches!(
             completed.events.as_slice(),
             [

@@ -174,7 +174,7 @@ impl NativeTuiApp {
     }
     fn handle_stop_shell_command(&mut self) {
         self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
-        self.parallel_mode_enabled = false;
+        self.close_parallel_mode_automation_epoch();
         self.invalidate_parallel_mode_supervisor_snapshot();
         // Stop is both a local mode transition and an app-server control request:
         // disable future automation immediately, then ask the service to

@@ -385,7 +385,7 @@ fn inline_help_inspection_renders_command_help() {
 fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
-    app.parallel_mode_enabled = true;
+    app.set_parallel_mode_enabled_for_test(true);
     app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Degraded,
     ));
@@ -421,7 +421,7 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("test terminal");
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.parallel_mode_enabled = true;
+    app.set_parallel_mode_enabled_for_test(true);
     app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
     ));
@@ -463,7 +463,7 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
      */
     let mut terminal = Terminal::new(TestBackend::new(72, 32)).expect("test terminal");
     let mut app = make_test_app();
-    app.parallel_mode_enabled = true;
+    app.set_parallel_mode_enabled_for_test(true);
     app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
     ));
@@ -556,7 +556,7 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.shell_overlay = ShellOverlay::Supersession;
-    app.parallel_mode_enabled = true;
+    app.set_parallel_mode_enabled_for_test(true);
     app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
@@ -587,7 +587,7 @@ fn inline_tail_omits_parallel_loading_spinner_after_empty_non_loading_snapshot()
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.shell_overlay = ShellOverlay::Supersession;
-    app.parallel_mode_enabled = true;
+    app.set_parallel_mode_enabled_for_test(true);
     app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
@@ -624,7 +624,7 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
         &mut app,
         "parallel summary should render in the live shell",
     );
-    app.parallel_mode_enabled = true;
+    app.set_parallel_mode_enabled_for_test(true);
     app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
     ));

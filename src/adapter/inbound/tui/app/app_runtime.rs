@@ -7,10 +7,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::{
     ParallelModeService,
-    control_plane::{
-        ParallelModeControlPlaneEffectId, ParallelModeControlPlaneRuntime,
-        ParallelModeControlPlaneWorkerEvent,
-    },
+    control_plane::{ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneRuntime},
 };
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::session_service::SessionService;
@@ -18,10 +15,7 @@ use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
-use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot,
-    ParallelModeSupervisorSnapshot,
-};
+use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -54,44 +48,11 @@ pub(super) enum BackgroundMessage {
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
+    ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
     WakeParallelModeOrchestrator {
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         epoch_id: u64,
-    },
-    ParallelModeEnterProgress {
-        workspace_directory: String,
-        readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
-        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
-        status_text: String,
-    },
-    ParallelModeEntered {
-        workspace_directory: String,
-        readiness_snapshot: ParallelModeReadinessSnapshot,
-        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
-        status_text: String,
-        initial_pool_reset_completed: bool,
-    },
-    ParallelModeSupervisorSnapshotRefreshed {
-        workspace_directory: String,
-        epoch_id: u64,
-        effect_id: ParallelModeControlPlaneEffectId,
-        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
-    },
-    ParallelModeOrchestratorWakeCompleted {
-        workspace_directory: String,
-        effect_id: ParallelModeControlPlaneEffectId,
-        readiness_snapshot: ParallelModeReadinessSnapshot,
-        supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
-        outcome: ParallelModeDispatchOutcome,
-    },
-    ParallelModeWorkerEvent(ParallelModeControlPlaneWorkerEvent),
-    ParallelModeOrchestratorTickCompleted {
-        workspace_directory: String,
-        epoch_id: u64,
-        effect_id: ParallelModeControlPlaneEffectId,
-        blocked: bool,
-        notices: Vec<String>,
     },
     PostTurnEvaluated {
         thread_id: String,
@@ -133,8 +94,6 @@ impl NativeTuiApp {
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
-            parallel_mode_enabled: false,
-            parallel_mode_initial_pool_reset_completed: false,
             parallel_mode_readiness_snapshot: None,
             parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
