@@ -1715,6 +1715,7 @@ fn risky_admin_mutations_require_browser_confirmation() {
 fn controls_page_uses_agent_profiles_for_parallel_agent_prompting() {
     assert!(CONTROLS_TEMPLATE.contains("Agent Profiles"));
     assert!(CONTROLS_TEMPLATE.contains("name=\"profiles_json\""));
+    assert!(CONTROLS_TEMPLATE.contains("persona_prompt"));
     assert!(ADMIN_MOD.contains("\"/admin/controls/agent-profiles\""));
     assert!(!CONTROLS_TEMPLATE.contains("Parallel Agent Persona"));
     assert!(!CONTROLS_TEMPLATE.contains("name=\"persona\""));
