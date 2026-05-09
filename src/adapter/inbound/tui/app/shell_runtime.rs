@@ -156,17 +156,6 @@ impl ShellRuntime {
                     self.app
                         .apply_parallel_mode_control_plane_background_event(event);
                 }
-                BackgroundMessage::WakeParallelModeOrchestrator {
-                    workspace_directory,
-                    trigger,
-                    epoch_id,
-                } => {
-                    self.app.apply_parallel_mode_orchestrator_wake_request(
-                        workspace_directory,
-                        trigger,
-                        epoch_id,
-                    );
-                }
                 BackgroundMessage::PostTurnEvaluated {
                     thread_id,
                     completed_turn_id,

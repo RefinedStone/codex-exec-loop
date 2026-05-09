@@ -13,10 +13,13 @@ use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeDispatchOutcome, ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy,
     ParallelModePoolResetReport, ParallelModePoolResetRunId, ParallelModePoolResetScope,
-    ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
 };
 
-use super::{ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWorkerEvent};
+use super::{
+    ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake,
+    ParallelModeControlPlaneWorkerEvent,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModeControlPlaneLoadingStage {
@@ -40,12 +43,15 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         status_text: String,
         initial_pool_reset_completed: bool,
+        has_actionable_queue_head: bool,
+        orchestrator_tick_signature: Option<String>,
     },
     SupervisorSnapshotRefreshed {
         workspace_directory: String,
         epoch_id: u64,
         effect_id: ParallelModeControlPlaneEffectId,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
+        orchestrator_tick_signature: Option<String>,
     },
     OrchestratorWakeCompleted {
         workspace_directory: String,
@@ -53,8 +59,12 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
         readiness_snapshot: ParallelModeReadinessSnapshot,
         supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
         outcome: ParallelModeDispatchOutcome,
+        orchestrator_tick_signature: Option<String>,
     },
-    WorkerEvent(ParallelModeControlPlaneWorkerEvent),
+    WorkerEvent {
+        event: ParallelModeControlPlaneWorkerEvent,
+        has_actionable_queue_head: bool,
+    },
     ConversationRuntimeNotice(String),
     OrchestratorTickCompleted {
         workspace_directory: String,
@@ -137,6 +147,9 @@ where
                     workspace_directory,
                     epoch_id,
                     effect_id,
+                    orchestrator_tick_signature: parallel_mode_distributor_tick_signature(
+                        &supervisor_snapshot,
+                    ),
                     supervisor_snapshot: Box::new(supervisor_snapshot),
                 },
             );
@@ -207,6 +220,7 @@ where
             let planning_snapshot = planning
                 .runtime
                 .load_runtime_snapshot_or_invalid(&workspace_directory);
+            let has_actionable_queue_head = planning_snapshot.has_actionable_queue_head();
             let readiness_snapshot =
                 parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
             let entry_decision = ParallelModeOrchestratorStateMachine::decide_parallel_entry(
@@ -326,6 +340,8 @@ where
                                 supervisor_snapshot: Box::new(supervisor_snapshot),
                                 status_text,
                                 initial_pool_reset_completed: false,
+                                has_actionable_queue_head,
+                                orchestrator_tick_signature: None,
                             },
                         );
                         return;
@@ -362,6 +378,8 @@ where
                 (supervisor_snapshot, status_text)
             };
 
+            let orchestrator_tick_signature =
+                parallel_mode_distributor_tick_signature(&supervisor_snapshot);
             event_sink.send_control_plane_event(ParallelModeControlPlaneBackgroundEvent::Entered {
                 workspace_directory,
                 epoch_id,
@@ -371,6 +389,8 @@ where
                 supervisor_snapshot: Box::new(supervisor_snapshot),
                 status_text,
                 initial_pool_reset_completed,
+                has_actionable_queue_head,
+                orchestrator_tick_signature,
             });
         });
     }
@@ -392,10 +412,12 @@ where
         thread::spawn(move || {
             let (loop_event_tx, loop_event_rx) = mpsc::channel();
             let loop_event_sink = event_sink.clone();
+            let loop_planning = planning.clone();
             thread::spawn(move || {
                 while let Ok(event) = loop_event_rx.recv() {
-                    loop_event_sink
-                        .send_control_plane_event(background_event_from_parallel_loop_event(event));
+                    loop_event_sink.send_control_plane_event(
+                        background_event_from_parallel_loop_event(event, &loop_planning),
+                    );
                 }
             });
             let result = parallel_mode_service.run_dispatch_orchestrator_tick(
@@ -411,6 +433,8 @@ where
                 },
             );
 
+            let orchestrator_tick_signature =
+                parallel_mode_distributor_tick_signature(&result.supervisor_snapshot);
             event_sink.send_control_plane_event(
                 ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted {
                     workspace_directory: result.workspace_directory,
@@ -418,6 +442,7 @@ where
                     readiness_snapshot: result.readiness_snapshot,
                     supervisor_snapshot: Box::new(result.supervisor_snapshot),
                     outcome: result.outcome,
+                    orchestrator_tick_signature,
                 },
             );
         });
@@ -428,17 +453,89 @@ where
             .parallel_mode_service
             .cancel_dispatch_commands(workspace_directory, reason);
     }
+
+    pub fn pending_dispatch_wake(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> Result<Option<ParallelModeControlPlaneWake>, String> {
+        self.parallel_mode_service
+            .pending_dispatch_wake(workspace_directory, epoch_id)
+    }
+
+    pub fn enqueue_slot_capacity_dispatch(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> Result<usize, String> {
+        let planning_snapshot = self
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(workspace_directory);
+        self.parallel_mode_service
+            .enqueue_dispatch_commands_for_event(
+                workspace_directory,
+                ParallelModeRuntimeEvent::SlotCapacityAvailable,
+                &planning_snapshot,
+                Some(epoch_id),
+            )
+    }
+
+    pub fn enqueue_dispatch_for_trigger(
+        &self,
+        workspace_directory: &str,
+        trigger: crate::domain::parallel_mode::ParallelModeAutomationTrigger,
+        epoch_id: u64,
+    ) -> Result<usize, String> {
+        let planning_snapshot = self
+            .planning
+            .runtime
+            .load_runtime_snapshot_or_invalid(workspace_directory);
+        self.parallel_mode_service
+            .enqueue_dispatch_commands_for_trigger(
+                workspace_directory,
+                trigger,
+                &planning_snapshot,
+                Some(epoch_id),
+            )
+    }
 }
 
 fn background_event_from_parallel_loop_event(
     event: ParallelModeOrchestratorLoopEvent,
+    planning: &PlanningServices,
 ) -> ParallelModeControlPlaneBackgroundEvent {
     match event {
         ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
             ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(notice)
         }
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => {
-            ParallelModeControlPlaneBackgroundEvent::WorkerEvent(event)
+            let has_actionable_queue_head = planning
+                .runtime
+                .load_runtime_snapshot_or_invalid(&event.workspace_directory)
+                .has_actionable_queue_head();
+            ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
+                event,
+                has_actionable_queue_head,
+            }
         }
     }
+}
+
+pub(crate) fn parallel_mode_distributor_tick_signature(
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> Option<String> {
+    let head = snapshot.distributor.queue_items.first()?;
+    Some(format!(
+        "{}|{}|{}|{}|{}|{}",
+        snapshot.workspace_path,
+        head.source_agent,
+        head.branch_name,
+        head.commit_short_sha,
+        head.queue_state.label(),
+        snapshot
+            .distributor
+            .orchestrator_status
+            .integration_worktree_readiness
+    ))
 }

@@ -496,21 +496,16 @@ impl NativeFlowHarness {
             .expect("drained parallel completion evaluation should enqueue");
     }
 
-    fn send_dispatch_request_for_current_epoch(&self, trigger: ParallelModeAutomationTrigger) {
+    fn send_dispatch_request_for_current_epoch(&mut self, trigger: ParallelModeAutomationTrigger) {
         let epoch_id = self
             .runtime
             .app()
             .parallel_mode_automation_epoch_id()
             .expect("automation epoch should be open");
+        let workspace_directory = self.workspace_dir.clone();
         self.runtime
-            .app
-            .tx
-            .send(BackgroundMessage::WakeParallelModeOrchestrator {
-                workspace_directory: self.workspace_dir.clone(),
-                trigger,
-                epoch_id,
-            })
-            .expect("dispatch request should enqueue");
+            .app_mut()
+            .apply_parallel_mode_orchestrator_wake_request(workspace_directory, trigger, epoch_id);
     }
 
     fn apply_ready_entered_snapshot(&mut self, status_text: &str) {
@@ -1522,6 +1517,8 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
                 status_text: "parallel mode: on / readiness: ready / control tower ready"
                     .to_string(),
                 initial_pool_reset_completed: false,
+                has_actionable_queue_head: false,
+                orchestrator_tick_signature: None,
             },
         ))
         .expect("late enter result should enqueue");
@@ -1558,8 +1555,8 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
         .app
         .tx
         .send(BackgroundMessage::ParallelModeControlPlaneEvent(
-            ParallelModeControlPlaneBackgroundEvent::WorkerEvent(
-                ParallelModeControlPlaneWorkerEvent::new(
+            ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
+                event: ParallelModeControlPlaneWorkerEvent::new(
                     harness.workspace_dir.clone(),
                     1,
                     "task-stale-worker",
@@ -1567,7 +1564,8 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
                     ParallelModeControlPlaneWorkerEventKind::WorkerCompleted,
                     vec!["late completion should be dropped".to_string()],
                 ),
-            ),
+                has_actionable_queue_head: true,
+            },
         ))
         .expect("stale worker event should enqueue");
     harness.runtime.poll_background_messages();
