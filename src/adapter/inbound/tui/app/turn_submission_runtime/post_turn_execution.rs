@@ -7,18 +7,19 @@ use super::super::conversation_runtime::{
     QueuedAutoPrompt,
 };
 use super::super::{
-    AutoFollowDecision, AutoFollowSkipReason, ConversationState, ConversationViewModel,
-    NativeTuiApp, PlanningWorkerPanelState, PlanningWorkerStatus,
+    AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
+    PlanningWorkerPanelState, PlanningWorkerStatus,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::planning::PlanningRuntimeSnapshot;
 use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
 use crate::application::service::planning::{
-    PlanningExecutionSnapshot, PlanningPostTurnQueueRefreshPreparation,
-    PlanningPostTurnQueueRefreshPreparationRequest, PlanningPostTurnReconciliationRequest,
-    PlanningProposalPromotionRequest, PlanningServices,
-};
-use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON, PlanningPostTurnAutoFollowDecision,
+    PlanningPostTurnAutoFollowRequest, PlanningPostTurnAutoFollowSkipReason,
+    PlanningPostTurnQueueRefreshFinalizationEvent, PlanningPostTurnQueueRefreshFinalizationRequest,
+    PlanningPostTurnQueueRefreshPreparation, PlanningPostTurnQueueRefreshPreparationRequest,
+    PlanningPostTurnReconciliationRequest, PlanningPostTurnWorkerPanelStartRequest,
+    PlanningPostTurnWorkerPanelStartState, PlanningServices,
 };
 use crate::application::service::post_turn_decision::{
     PostTurnAutoFollowStopReason, PostTurnDecision as ApplicationPostTurnDecision,
@@ -28,26 +29,18 @@ use crate::diagnostics::event_log;
 use crate::domain::operator_alert::OperatorAlert;
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
-use crate::domain::planning::QueueIdlePolicy;
 use serde_json::json;
-const MAX_PLANNING_REPAIR_ATTEMPTS: usize = 2;
 #[cfg(not(test))]
 const POST_TURN_EVALUATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto-follow stays paused until the next accepted planning worker refresh";
-const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
-    "official completion refresh failed; the leased slot stays reserved until planning is repaired";
 #[path = "post_turn_execution/logging.rs"]
 mod logging;
 #[path = "post_turn_execution/official_completion.rs"]
 mod official_completion;
 #[path = "post_turn_execution/planning_worker_panel.rs"]
 mod planning_worker_panel;
-#[path = "post_turn_execution/queue_head_detail.rs"]
-mod queue_head_detail;
 #[path = "post_turn_execution/repair.rs"]
 mod repair;
 use self::planning_worker_panel::planning_worker_queue_summary;
-use self::queue_head_detail::repeated_queue_head_detail;
 use logging::{
     planning_worker_refresh_skipped_detail, post_turn_action_decision, post_turn_action_log_detail,
     post_turn_event_detail,
@@ -475,18 +468,22 @@ impl PostTurnEvaluationExecutor {
                 PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
             };
         }
-        if !runtime_snapshot.has_actionable_queue_head()
-            && runtime_snapshot.has_proposal_candidates()
-        {
-            let promotion_outcome = self
-                .planning_feature
-                .worker
-                .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
-                    workspace_directory: &request.workspace_directory,
-                });
-            match promotion_outcome {
-                Ok(promotion_outcome) => {
-                    runtime_snapshot = promotion_outcome.runtime_snapshot;
+        let finalization = self
+            .planning_feature
+            .worker
+            .finalize_post_turn_queue_refresh(PlanningPostTurnQueueRefreshFinalizationRequest {
+                workspace_directory: &request.workspace_directory,
+                previous_handoff_task: conversation.last_planning_task_handoff(),
+                previous_runtime_snapshot: &conversation.planning_runtime_snapshot,
+                refreshed_runtime_snapshot: &runtime_snapshot,
+                queue_idle_derivation: prepared.is_queue_idle_derivation(),
+            });
+        runtime_snapshot = finalization.runtime_snapshot;
+        for event in finalization.events {
+            match event {
+                PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionCompleted {
+                    outcome: promotion_outcome,
+                } => {
                     event_log::emit_lazy("planning_worker_proposal_promotion_completed", || {
                         post_turn_event_detail(
                             conversation,
@@ -498,7 +495,7 @@ impl PostTurnEvaluationExecutor {
                                 .as_ref()
                                 .map(|_| "promoted")
                                 .or(Some("no_promotable_proposal")),
-                            Some(&runtime_snapshot),
+                            Some(&promotion_outcome.runtime_snapshot),
                             [(
                                 "promoted_task_title",
                                 json!(promotion_outcome.promoted_task_title.as_deref()),
@@ -506,7 +503,7 @@ impl PostTurnEvaluationExecutor {
                         )
                     });
                     self.planning_worker_panel_state.last_queue_summary =
-                        planning_worker_queue_summary(&runtime_snapshot);
+                        planning_worker_queue_summary(&promotion_outcome.runtime_snapshot);
                     self.planning_worker_panel_state.last_host_detail =
                         promotion_outcome.promoted_task_title.map(|title| {
                             format!(
@@ -514,11 +511,10 @@ impl PostTurnEvaluationExecutor {
                             )
                         });
                 }
-                Err(error) => {
-                    let detail = format!("host proposal promotion failed: {error}");
-                    let invalid_snapshot = PlanningRuntimeSnapshot::invalid(
-                        PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON,
-                    );
+                PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionFailed {
+                    detail,
+                    runtime_snapshot: invalid_snapshot,
+                } => {
                     event_log::emit_lazy("planning_worker_proposal_promotion_failed", || {
                         post_turn_event_detail(
                             conversation,
@@ -528,7 +524,7 @@ impl PostTurnEvaluationExecutor {
                             Some("block_auto_follow"),
                             Some(&invalid_snapshot),
                             [
-                                ("error", json!(error.to_string())),
+                                ("error", json!(detail.as_str())),
                                 (
                                     "invalid_reason",
                                     json!(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON),
@@ -545,36 +541,33 @@ impl PostTurnEvaluationExecutor {
                         runtime_snapshot: invalid_snapshot,
                     };
                 }
+                PlanningPostTurnQueueRefreshFinalizationEvent::QueueIdleDerivationEmpty {
+                    detail,
+                } => {
+                    self.planning_worker_panel_state.last_host_detail = Some(detail);
+                }
+                PlanningPostTurnQueueRefreshFinalizationEvent::RepeatedQueueHead {
+                    detail,
+                    runtime_snapshot: guard_snapshot,
+                } => {
+                    self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshFailed;
+                    self.planning_worker_panel_state.last_host_detail = Some(detail.clone());
+                    event_log::emit_lazy(
+                        "planning_worker_refresh_paused_repeated_queue_head",
+                        || {
+                            post_turn_event_detail(
+                                conversation,
+                                request,
+                                "refresh",
+                                "repeated_queue_head_guard",
+                                Some("pause_auto_follow"),
+                                Some(&guard_snapshot),
+                                [("pause_reason", json!(detail.as_str()))],
+                            )
+                        },
+                    );
+                }
             }
-        }
-        if !runtime_snapshot.has_actionable_queue_head()
-            && !runtime_snapshot.has_proposal_candidates()
-            && prepared.is_queue_idle_derivation()
-        {
-            self.planning_worker_panel_state.last_host_detail = Some(
-                "planning worker derived no justified follow-up task from the latest request and reply"
-                    .to_string(),
-            );
-        }
-        if let Some(detail) = repeated_queue_head_detail(
-            conversation.last_planning_task_handoff(),
-            &conversation.planning_runtime_snapshot,
-            &runtime_snapshot,
-        ) {
-            self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshFailed;
-            self.planning_worker_panel_state.last_host_detail = Some(detail.clone());
-            event_log::emit_lazy("planning_worker_refresh_paused_repeated_queue_head", || {
-                post_turn_event_detail(
-                    conversation,
-                    request,
-                    "refresh",
-                    "repeated_queue_head_guard",
-                    Some("pause_auto_follow"),
-                    Some(&runtime_snapshot),
-                    [("pause_reason", json!(detail.as_str()))],
-                )
-            });
-            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
         }
 
         PlanningQueueRefreshOutcome { runtime_snapshot }
@@ -590,72 +583,38 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
         runtime_snapshot: &PlanningRuntimeSnapshot,
     ) -> TuiPostTurnDecision {
-        if conversation
+        let latest_agent_message = conversation.latest_agent_message_text();
+        let stop_keyword_matched = latest_agent_message
+            .map(|message| {
+                conversation
+                    .auto_follow_state
+                    .stop_rules
+                    .stop_keyword
+                    .matches(message)
+            })
+            .unwrap_or(false);
+        let no_file_changes_stop_matched = conversation
             .auto_follow_state
-            .post_turn_continuation_paused()
-        {
-            event_log::emit_lazy("auto_follow_decision", || {
-                post_turn_event_detail(
-                    conversation,
-                    request,
-                    "auto_follow",
-                    "decision",
-                    Some("skip"),
-                    Some(runtime_snapshot),
-                    [("reason", json!("PostTurnContinuationPaused"))],
-                )
-            });
-            return TuiPostTurnDecision::from_action(
-                request.completed_turn_id.clone(),
-                ConversationPostTurnAction::SkipAutoFollow {
-                    reason: AutoFollowSkipReason::PostTurnContinuationPaused,
-                },
+            .stop_rules
+            .should_stop_on_no_file_changes(
+                conversation
+                    .turn_activity
+                    .last_completed_file_change_count(),
             );
-        }
-        if runtime_snapshot.queue_is_drained() {
-            event_log::emit_lazy("auto_follow_decision", || {
-                post_turn_event_detail(
-                    conversation,
-                    request,
-                    "auto_follow",
-                    "decision",
-                    Some("skip"),
-                    Some(runtime_snapshot),
-                    [("reason", json!("PlanningQueueDrained"))],
-                )
-            });
-            return TuiPostTurnDecision::from_action(
-                request.completed_turn_id.clone(),
-                ConversationPostTurnAction::SkipAutoFollow {
-                    reason: AutoFollowSkipReason::PlanningQueueDrained,
-                },
-            );
-        }
-        if runtime_snapshot.workspace_status() == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            && runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
-        {
-            event_log::emit_lazy("auto_follow_decision", || {
-                post_turn_event_detail(
-                    conversation,
-                    request,
-                    "auto_follow",
-                    "decision",
-                    Some("skip"),
-                    Some(runtime_snapshot),
-                    [("reason", json!("PlanningQueueIdlePolicyStop"))],
-                )
-            });
-            return TuiPostTurnDecision::from_action(
-                request.completed_turn_id.clone(),
-                ConversationPostTurnAction::SkipAutoFollow {
-                    reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
-                },
-            );
-        }
-        match conversation
-            .decide_auto_follow_with_snapshot(&self.planning_feature.runtime, runtime_snapshot)
-        {
-            AutoFollowDecision::QueuePrompt(queued_prompt) => {
+        match self.planning_feature.runtime.decide_post_turn_auto_follow(
+            PlanningPostTurnAutoFollowRequest {
+                continuation_paused: conversation
+                    .auto_follow_state
+                    .post_turn_continuation_paused(),
+                can_queue_next: conversation.auto_follow_state.can_queue_next(),
+                latest_agent_message,
+                stop_keyword: conversation.auto_follow_state.stop_keyword_value(),
+                stop_keyword_matched,
+                no_file_changes_stop_matched,
+                runtime_snapshot,
+            },
+        ) {
+            PlanningPostTurnAutoFollowDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
                         conversation,
@@ -696,7 +655,8 @@ impl PostTurnEvaluationExecutor {
                         .with_handoff_task(queued_prompt.handoff_task),
                 )
             }
-            AutoFollowDecision::Skip(reason) => {
+            PlanningPostTurnAutoFollowDecision::Skip(reason) => {
+                let reason = auto_follow_skip_reason_from_planning(reason);
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
                         conversation,
@@ -726,6 +686,37 @@ fn auto_follow_skip_reason_from_post_turn(
         }
         PostTurnAutoFollowStopReason::ParallelSessionCompleted => {
             AutoFollowSkipReason::ParallelSessionCompleted
+        }
+    }
+}
+
+fn auto_follow_skip_reason_from_planning(
+    reason: PlanningPostTurnAutoFollowSkipReason,
+) -> AutoFollowSkipReason {
+    match reason {
+        PlanningPostTurnAutoFollowSkipReason::PostTurnContinuationPaused => {
+            AutoFollowSkipReason::PostTurnContinuationPaused
+        }
+        PlanningPostTurnAutoFollowSkipReason::PlanningQueueDrained => {
+            AutoFollowSkipReason::PlanningQueueDrained
+        }
+        PlanningPostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop => {
+            AutoFollowSkipReason::PlanningQueueIdlePolicyStop
+        }
+        PlanningPostTurnAutoFollowSkipReason::LimitReached => AutoFollowSkipReason::LimitReached,
+        PlanningPostTurnAutoFollowSkipReason::NoAgentReply => AutoFollowSkipReason::NoAgentReply,
+        PlanningPostTurnAutoFollowSkipReason::StopKeywordMatched => {
+            AutoFollowSkipReason::StopKeywordMatched
+        }
+        PlanningPostTurnAutoFollowSkipReason::NoFileChanges => AutoFollowSkipReason::NoFileChanges,
+        PlanningPostTurnAutoFollowSkipReason::PlanningBlocked => {
+            AutoFollowSkipReason::PlanningBlocked
+        }
+        PlanningPostTurnAutoFollowSkipReason::PlanningQueueHeadRequired => {
+            AutoFollowSkipReason::PlanningQueueHeadRequired
+        }
+        PlanningPostTurnAutoFollowSkipReason::PlanningRepeatedQueueHead => {
+            AutoFollowSkipReason::PlanningRepeatedQueueHead
         }
     }
 }
@@ -809,24 +800,24 @@ impl NativeTuiApp {
         conversation: &ConversationViewModel,
         request: &PostTurnEvaluationRequest,
     ) {
-        if conversation
-            .auto_follow_state
-            .post_turn_continuation_paused()
-        {
-            return;
-        }
-        if request
-            .changed_planning_file_paths
-            .iter()
-            .any(|path| PlanningExecutionSnapshot::captures_path(path))
-        {
-            self.planning_worker_panel_state.status = PlanningWorkerStatus::RepairRunning;
-        } else if conversation.planning_runtime_snapshot.workspace_status()
-            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            && conversation.planning_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
-        {
-        } else {
-            self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshRunning;
+        match self
+            .application
+            .planning()
+            .runtime
+            .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
+                continuation_paused: conversation
+                    .auto_follow_state
+                    .post_turn_continuation_paused(),
+                changed_planning_file_paths: &request.changed_planning_file_paths,
+                current_runtime_snapshot: &conversation.planning_runtime_snapshot,
+            }) {
+            PlanningPostTurnWorkerPanelStartState::PreserveCurrent => {}
+            PlanningPostTurnWorkerPanelStartState::RepairRunning => {
+                self.planning_worker_panel_state.status = PlanningWorkerStatus::RepairRunning;
+            }
+            PlanningPostTurnWorkerPanelStartState::RefreshRunning => {
+                self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshRunning;
+            }
         }
     }
 }

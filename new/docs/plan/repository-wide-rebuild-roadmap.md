@@ -40,55 +40,15 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 진행된 것은 다시 문서화하지 않는다. 현재 남은 문제만 관리한다.
 
-| 영역 | 현재 구현된 것 | 아직 안 된 것 |
-| --- | --- | --- |
-| Parallel control-plane | TUI에서 `projection_ready`, refresh/reconcile, dispatch readiness, stale epoch 판단을 대부분 제거했다. | control-plane은 queue actor가 아니라 mutex facade다. |
-| TUI boundary | `NativeTuiApp` production state는 UI state, projection cache, application-facing handle로 정리됐다. | TUI runtime bridge가 planning/post-turn workflow를 직접 조합하는 부분은 남아 있다. |
-| Planning | projection/facade/domain policy seed가 있다. | post-turn executor와 TUI runtime bridge가 planning workflow를 직접 조합한다. 모든 route가 하나의 application command로 통일되지는 않았다. |
-| Inbound surfaces | CLI/admin/Telegram 일부 vocabulary가 공유된다. | route별로 같은 기능이 같은 application request/result를 쓰는지 재감사가 필요하다. |
-| Store/runtime | SQLite authority, runtime projection, mirror I/O boundary 일부가 정리됐다. | process-lifetime state와 durable recovery requirement를 기능별로 다시 판정해야 한다. |
-| Tests | regression anchor가 여럿 있다. | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
+| 영역 | 남은 문제 |
+| --- | --- |
+| Parallel control-plane | control-plane은 아직 queue actor가 아니라 mutex facade다. |
+| TUI boundary | TUI production state에 raw application service handle debt가 남아 있다. |
+| Inbound composition | CLI/admin/Telegram/TUI entrypoint가 production outbound adapter wiring을 아직 직접 들고 있다. |
+| Store/runtime | process-lifetime state와 durable recovery requirement를 기능별로 다시 판정해야 한다. |
+| Tests | source-string guard가 behavior test를 대체하는 곳이 있다. 새 slice마다 behavior test를 우선한다. |
 
 ## 실행 Backlog
-
-### R4. Planning Runtime Bridge를 Application Facade로 통합
-
-상태: `ready`
-
-대상:
-
-- `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution*`
-- `src/application/service/planning/*`
-- `src/adapter/inbound/admin_api/*`
-- `src/adapter/inbound/cli.rs`
-- `src/adapter/inbound/telegram_bot/*`
-
-문제:
-
-- planning projection/domain policy seed는 있지만 post-turn/TUI/admin/CLI route가 모두
-  같은 command surface를 쓰는지 확실하지 않다.
-- post-turn executor가 planning workflow를 직접 조합하는 부분이 남아 있다.
-
-해야 할 일:
-
-- planning reset/status/queue/task mutation/post-turn refresh route를 application request/result로 정리한다.
-- route별 direct service call이 adapter mapping인지 duplicated policy인지 판정한다.
-- duplicated policy는 shared facade로 이동한다.
-
-완료 조건:
-
-- 같은 planning 기능은 surface와 무관하게 같은 application request/result vocabulary를 사용한다.
-- adapter에는 parsing/auth/context/rendering만 남는다.
-- planning-related behavior regression이 통과한다.
-
-검증:
-
-```bash
-cargo test planning
-cargo test cli
-cargo test admin_api
-cargo test telegram
-```
 
 ### R5. Store/Runtime Recovery Boundary 재판정
 
@@ -135,12 +95,12 @@ cargo test planning
 
 선행:
 
-- R4
+- R5
 
 현재 판단:
 
 - 지금 구조는 queue-backed actor loop가 아니라 mutex-serialized synchronous facade다.
-- 동기 facade는 당장 유지한다. 먼저 TUI/application 경계를 줄인다.
+- 동기 facade는 당장 유지한다. 먼저 durable/process-lifetime state 경계를 확정한다.
 
 해야 할 일:
 

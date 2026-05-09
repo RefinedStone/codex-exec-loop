@@ -10,7 +10,10 @@ use super::authoring::proposal_promotion::{
     PlanningProposalPromotionService,
 };
 use super::repair::doctor::{PlanningDoctorReport, PlanningDoctorService};
-use super::repair::reconciliation::{PlanningExecutionSnapshot, PlanningReconciliationResult};
+use super::repair::reconciliation::{
+    PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningRepairRequest,
+    PlanningRepairRetryReason,
+};
 use super::repair::reset::{
     PlanningResetService, PlanningResetTarget, PlanningWorkspaceResetResult,
 };
@@ -18,8 +21,9 @@ use super::runtime::facade::{
     PlanningMainSessionHandoff, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowPreview, PlanningRuntimeAutoFollowPreviewRequest,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeFacadeService,
-    PlanningRuntimeStatusProjection, PlanningRuntimeStatusProjectionRequest,
-    PlanningRuntimeSummaryLineRequest, PlanningSubSessionHandoff, PlanningTaskHandoff,
+    PlanningRuntimeQueuedAutoFollowPrompt, PlanningRuntimeStatusProjection,
+    PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
+    PlanningSubSessionHandoff, PlanningTaskHandoff,
 };
 use super::runtime::intake::{
     PlanningTaskIntakeCommitResult, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
@@ -28,6 +32,7 @@ use super::runtime::intake::{
 use super::runtime::manual_intake::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptIntakeService,
 };
+use super::runtime::policy::PlanningAutoFollowBlockReason;
 use super::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
 use super::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
@@ -39,7 +44,14 @@ use super::worker::orchestration::{
     PlanningWorkerRunOutcome,
 };
 use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
-use crate::domain::planning::{PriorityQueueTask, QueueIdlePolicy};
+use crate::domain::planning::{
+    PlanningOfficialCompletionRefreshContract, PriorityQueueTask, QueueIdlePolicy,
+};
+
+pub const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto-follow stays paused until the next accepted planning worker refresh";
+pub const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
+    "official completion refresh failed; the leased slot stays reserved until planning is repaired";
+pub const DEFAULT_POST_TURN_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
 /*
  * 이 파일은 planning의 public application facade다.
@@ -233,6 +245,46 @@ pub struct PlanningPostTurnReconciliationOutcome {
     pub runtime_snapshot: PlanningRuntimeSnapshot,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnWorkerPanelStartRequest<'a> {
+    pub continuation_paused: bool,
+    pub changed_planning_file_paths: &'a [String],
+    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningPostTurnWorkerPanelStartState {
+    PreserveCurrent,
+    RepairRunning,
+    RefreshRunning,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnAutoFollowRequest<'a> {
+    pub continuation_paused: bool,
+    pub can_queue_next: bool,
+    pub latest_agent_message: Option<&'a str>,
+    pub stop_keyword: &'a str,
+    pub stop_keyword_matched: bool,
+    pub no_file_changes_stop_matched: bool,
+    pub runtime_snapshot: &'a PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningPostTurnAutoFollowDecision {
+    QueuePrompt(PlanningRuntimeQueuedAutoFollowPrompt),
+    Skip(PlanningPostTurnAutoFollowSkipReason),
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningPostTurnAutoFollowSkipReason {
+    PostTurnContinuationPaused,
+    PlanningQueueDrained,
+    PlanningQueueIdlePolicyStop,
+    LimitReached,
+    NoAgentReply,
+    StopKeywordMatched,
+    NoFileChanges,
+    PlanningBlocked,
+    PlanningQueueHeadRequired,
+    PlanningRepeatedQueueHead,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnQueueRefreshPreparationRequest<'a> {
     pub workspace_directory: &'a str,
     pub parent_thread_id: Option<&'a str>,
@@ -374,6 +426,185 @@ impl PlanningPreparedQueueRefreshMode {
             Self::DeriveQueueHeadWhenQueueIdle { .. } => "queue-idle-derive",
         }
     }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnRepairRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub parent_thread_id: Option<&'a str>,
+    pub completed_turn_id: &'a str,
+    pub repair_request: &'a PlanningRepairRequest,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub max_attempts: usize,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnRepairOutcome {
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub resolved: bool,
+    pub attempts: Vec<PlanningPostTurnRepairAttempt>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnRepairAttempt {
+    pub attempt_number: usize,
+    pub max_attempts: usize,
+    pub retry_reason: Option<PlanningRepairRetryReason>,
+    pub started_runtime_snapshot: PlanningRuntimeSnapshot,
+    pub worker_prompt: String,
+    pub result: PlanningPostTurnRepairAttemptResult,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningPostTurnRepairAttemptResult {
+    WorkerFailed {
+        detail: String,
+        error: String,
+    },
+    WorkerSucceeded {
+        outcome: Box<PlanningWorkerRunOutcome>,
+        next_repair_request: Option<PlanningRepairRequest>,
+        next_retry_reason: Option<PlanningRepairRetryReason>,
+        resolved: bool,
+        exhausted: bool,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnQueueRefreshFinalizationRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub previous_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub refreshed_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub queue_idle_derivation: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnQueueRefreshFinalizationOutcome {
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub events: Vec<PlanningPostTurnQueueRefreshFinalizationEvent>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningPostTurnQueueRefreshFinalizationEvent {
+    ProposalPromotionCompleted {
+        outcome: PlanningProposalPromotionOutcome,
+    },
+    ProposalPromotionFailed {
+        detail: String,
+        runtime_snapshot: PlanningRuntimeSnapshot,
+    },
+    QueueIdleDerivationEmpty {
+        detail: String,
+    },
+    RepeatedQueueHead {
+        detail: String,
+        runtime_snapshot: PlanningRuntimeSnapshot,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnOfficialCompletionPreparationRequest<'a> {
+    pub planning_workspace_directory: &'a str,
+    pub turn_workspace_directory: &'a str,
+    pub parent_thread_id: Option<&'a str>,
+    pub latest_user_message: Option<&'a str>,
+    pub latest_main_reply: Option<&'a str>,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub contract: &'a PlanningOfficialCompletionRefreshContract,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningPostTurnOfficialCompletionPreparation {
+    Blocked(Box<PlanningPostTurnOfficialCompletionBlocked>),
+    Ready(Box<PlanningPreparedOfficialCompletionRefresh>),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnOfficialCompletionBlocked {
+    pub planning_workspace_snapshot: PlanningRuntimeSnapshot,
+    pub failure_detail: String,
+    pub failure_snapshot: PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPreparedOfficialCompletionRefresh {
+    workspace_directory: String,
+    parent_thread_id: Option<String>,
+    latest_user_message: Option<String>,
+    latest_main_reply: String,
+    previous_handoff_task: Option<PlanningTaskHandoff>,
+    contract: PlanningOfficialCompletionRefreshContract,
+    planning_workspace_snapshot: PlanningRuntimeSnapshot,
+    worker_prompt: String,
+}
+impl PlanningPreparedOfficialCompletionRefresh {
+    fn new(
+        request: &PlanningPostTurnOfficialCompletionPreparationRequest<'_>,
+        planning_workspace_snapshot: PlanningRuntimeSnapshot,
+        latest_main_reply: &str,
+        worker_prompt: String,
+    ) -> Self {
+        Self {
+            workspace_directory: request.planning_workspace_directory.to_string(),
+            parent_thread_id: request.parent_thread_id.map(str::to_string),
+            latest_user_message: request.latest_user_message.map(str::to_string),
+            latest_main_reply: latest_main_reply.to_string(),
+            previous_handoff_task: request.previous_handoff_task.cloned(),
+            contract: request.contract.clone(),
+            planning_workspace_snapshot,
+            worker_prompt,
+        }
+    }
+
+    pub fn planning_workspace_snapshot(&self) -> &PlanningRuntimeSnapshot {
+        &self.planning_workspace_snapshot
+    }
+
+    pub fn worker_prompt(&self) -> &str {
+        &self.worker_prompt
+    }
+
+    pub fn latest_main_reply_char_count(&self) -> usize {
+        self.latest_main_reply.chars().count()
+    }
+
+    pub fn has_latest_user_message(&self) -> bool {
+        self.latest_user_message.is_some()
+    }
+
+    pub fn has_previous_handoff(&self) -> bool {
+        self.previous_handoff_task.is_some()
+    }
+
+    pub fn refresh_order(&self) -> u64 {
+        self.contract.refresh_order
+    }
+
+    fn as_refresh_request(&self) -> PlanningOfficialCompletionRefreshRequest<'_> {
+        PlanningOfficialCompletionRefreshRequest {
+            workspace_directory: &self.workspace_directory,
+            parent_thread_id: self.parent_thread_id.as_deref(),
+            latest_user_message: self.latest_user_message.as_deref(),
+            latest_main_reply: &self.latest_main_reply,
+            previous_handoff_task: self.previous_handoff_task.as_ref(),
+            contract: &self.contract,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnOfficialCompletionFinalizationRequest<'a> {
+    pub planning_workspace_directory: &'a str,
+    pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
+    pub previous_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub refreshed_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub worker_summary: Option<&'a str>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnOfficialCompletionFinalizationOutcome {
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub repeated_queue_head_detail: Option<String>,
+    pub blocked_failure_detail: Option<String>,
+    pub authority_refresh_outcome: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnOfficialCompletionRepairBlockRequest<'a> {
+    pub runtime_snapshot: &'a PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnOfficialCompletionRepairBlockOutcome {
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub failure_detail: &'static str,
 }
 impl PlanningRuntimeUseCases {
     pub(crate) fn new(
@@ -571,6 +802,99 @@ impl PlanningRuntimeUseCases {
             },
         }
     }
+
+    pub fn post_turn_worker_panel_start_state(
+        &self,
+        request: PlanningPostTurnWorkerPanelStartRequest<'_>,
+    ) -> PlanningPostTurnWorkerPanelStartState {
+        if request.continuation_paused {
+            return PlanningPostTurnWorkerPanelStartState::PreserveCurrent;
+        }
+        if request
+            .changed_planning_file_paths
+            .iter()
+            .any(|path| PlanningExecutionSnapshot::captures_path(path))
+        {
+            return PlanningPostTurnWorkerPanelStartState::RepairRunning;
+        }
+        if request.current_runtime_snapshot.workspace_status()
+            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            && request.current_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
+        {
+            return PlanningPostTurnWorkerPanelStartState::PreserveCurrent;
+        }
+        PlanningPostTurnWorkerPanelStartState::RefreshRunning
+    }
+
+    pub fn decide_post_turn_auto_follow(
+        &self,
+        request: PlanningPostTurnAutoFollowRequest<'_>,
+    ) -> PlanningPostTurnAutoFollowDecision {
+        if request.continuation_paused {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::PostTurnContinuationPaused,
+            );
+        }
+        if request.runtime_snapshot.queue_is_drained() {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::PlanningQueueDrained,
+            );
+        }
+        if request.runtime_snapshot.workspace_status()
+            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            && request.runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
+        {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop,
+            );
+        }
+        if !request.can_queue_next {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::LimitReached,
+            );
+        }
+        let Some(last_message) = request
+            .latest_agent_message
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        else {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::NoAgentReply,
+            );
+        };
+        if request.stop_keyword_matched {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::StopKeywordMatched,
+            );
+        }
+        if request.no_file_changes_stop_matched {
+            return PlanningPostTurnAutoFollowDecision::Skip(
+                PlanningPostTurnAutoFollowSkipReason::NoFileChanges,
+            );
+        }
+        match self.decide_auto_follow(PlanningRuntimeAutoFollowRequest {
+            stop_keyword: request.stop_keyword,
+            last_message,
+            snapshot: request.runtime_snapshot,
+        }) {
+            PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
+                PlanningPostTurnAutoFollowDecision::QueuePrompt(prompt)
+            }
+            PlanningRuntimeAutoFollowDecision::Blocked(block_reason) => {
+                PlanningPostTurnAutoFollowDecision::Skip(match block_reason {
+                    PlanningAutoFollowBlockReason::InvalidWorkspace => {
+                        PlanningPostTurnAutoFollowSkipReason::PlanningBlocked
+                    }
+                    PlanningAutoFollowBlockReason::ActionableQueueRequired => {
+                        PlanningPostTurnAutoFollowSkipReason::PlanningQueueHeadRequired
+                    }
+                    PlanningAutoFollowBlockReason::RepeatedQueueHead => {
+                        PlanningPostTurnAutoFollowSkipReason::PlanningRepeatedQueueHead
+                    }
+                })
+            }
+        }
+    }
 }
 
 fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResult {
@@ -735,12 +1059,194 @@ impl PlanningWorkerUseCases {
         self.worker_orchestration
             .refresh_queue_from_reply(prepared.as_refresh_request())
     }
+    pub fn finalize_post_turn_queue_refresh(
+        &self,
+        request: PlanningPostTurnQueueRefreshFinalizationRequest<'_>,
+    ) -> PlanningPostTurnQueueRefreshFinalizationOutcome {
+        let mut runtime_snapshot = request.refreshed_runtime_snapshot.clone();
+        let mut events = Vec::new();
+        if !runtime_snapshot.has_actionable_queue_head()
+            && runtime_snapshot.has_proposal_candidates()
+        {
+            match self.promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: request.workspace_directory,
+            }) {
+                Ok(outcome) => {
+                    runtime_snapshot = outcome.runtime_snapshot.clone();
+                    events.push(
+                        PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionCompleted {
+                            outcome,
+                        },
+                    );
+                }
+                Err(error) => {
+                    let detail = format!("host proposal promotion failed: {error}");
+                    let invalid_snapshot = PlanningRuntimeSnapshot::invalid(
+                        PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON,
+                    );
+                    events.push(
+                        PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionFailed {
+                            detail,
+                            runtime_snapshot: invalid_snapshot.clone(),
+                        },
+                    );
+                    return PlanningPostTurnQueueRefreshFinalizationOutcome {
+                        runtime_snapshot: invalid_snapshot,
+                        events,
+                    };
+                }
+            }
+        }
+        if !runtime_snapshot.has_actionable_queue_head()
+            && !runtime_snapshot.has_proposal_candidates()
+            && request.queue_idle_derivation
+        {
+            events.push(
+                PlanningPostTurnQueueRefreshFinalizationEvent::QueueIdleDerivationEmpty {
+                    detail:
+                        "planning worker derived no justified follow-up task from the latest request and reply"
+                            .to_string(),
+                },
+            );
+        }
+        if let Some(detail) = repeated_queue_head_detail(
+            request.previous_handoff_task,
+            request.previous_runtime_snapshot,
+            &runtime_snapshot,
+        ) {
+            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
+            events.push(
+                PlanningPostTurnQueueRefreshFinalizationEvent::RepeatedQueueHead {
+                    detail,
+                    runtime_snapshot: runtime_snapshot.clone(),
+                },
+            );
+        }
+
+        PlanningPostTurnQueueRefreshFinalizationOutcome {
+            runtime_snapshot,
+            events,
+        }
+    }
     pub fn refresh_queue_from_official_completion(
         &self,
         request: PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
         self.worker_orchestration
             .refresh_queue_from_official_completion(request)
+    }
+    pub fn prepare_post_turn_official_completion_refresh(
+        &self,
+        request: PlanningPostTurnOfficialCompletionPreparationRequest<'_>,
+    ) -> PlanningPostTurnOfficialCompletionPreparation {
+        let planning_workspace_snapshot =
+            if request.planning_workspace_directory == request.turn_workspace_directory {
+                request.current_runtime_snapshot.clone()
+            } else {
+                self.worker_orchestration
+                    .load_runtime_snapshot_or_invalid(request.planning_workspace_directory)
+            };
+        if matches!(
+            planning_workspace_snapshot.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::Invalid | PlanningRuntimeWorkspaceStatus::Uninitialized
+        ) {
+            let failure_detail = planning_workspace_snapshot
+                .preview_detail()
+                .unwrap_or(
+                    "official completion refresh is blocked because the planning workspace is unavailable",
+                )
+                .to_string();
+            let failure_snapshot =
+                official_completion_failure_snapshot(&planning_workspace_snapshot, &failure_detail);
+            return PlanningPostTurnOfficialCompletionPreparation::Blocked(Box::new(
+                PlanningPostTurnOfficialCompletionBlocked {
+                    planning_workspace_snapshot,
+                    failure_detail,
+                    failure_snapshot,
+                },
+            ));
+        }
+        let latest_main_reply = request
+            .latest_main_reply
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .unwrap_or(request.contract.completion.final_response_summary.as_str());
+        let worker_prompt = self
+            .worker_orchestration
+            .render_official_completion_refresh_prompt(&PlanningOfficialCompletionRefreshRequest {
+                workspace_directory: request.planning_workspace_directory,
+                parent_thread_id: request.parent_thread_id,
+                latest_user_message: request.latest_user_message,
+                latest_main_reply,
+                previous_handoff_task: request.previous_handoff_task,
+                contract: request.contract,
+            });
+
+        PlanningPostTurnOfficialCompletionPreparation::Ready(Box::new(
+            PlanningPreparedOfficialCompletionRefresh::new(
+                &request,
+                planning_workspace_snapshot,
+                latest_main_reply,
+                worker_prompt,
+            ),
+        ))
+    }
+    pub fn refresh_prepared_official_completion(
+        &self,
+        prepared: &PlanningPreparedOfficialCompletionRefresh,
+    ) -> anyhow::Result<PlanningWorkerRunOutcome> {
+        self.worker_orchestration
+            .refresh_queue_from_official_completion(prepared.as_refresh_request())
+    }
+    pub fn finalize_post_turn_official_completion_refresh(
+        &self,
+        request: PlanningPostTurnOfficialCompletionFinalizationRequest<'_>,
+    ) -> PlanningPostTurnOfficialCompletionFinalizationOutcome {
+        let mut runtime_snapshot = request.refreshed_runtime_snapshot.clone();
+        let repeated_queue_head_detail = repeated_queue_head_detail(
+            request.previous_handoff_task,
+            request.previous_runtime_snapshot,
+            &runtime_snapshot,
+        );
+        if let Some(detail) = repeated_queue_head_detail.as_ref() {
+            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
+        }
+        if runtime_snapshot.blocks_auto_follow() {
+            let failure_detail = runtime_snapshot
+                .preview_detail()
+                .unwrap_or(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
+                .to_string();
+            let failure_snapshot =
+                official_completion_failure_snapshot(&runtime_snapshot, &failure_detail);
+            return PlanningPostTurnOfficialCompletionFinalizationOutcome {
+                runtime_snapshot: failure_snapshot,
+                repeated_queue_head_detail,
+                blocked_failure_detail: Some(failure_detail),
+                authority_refresh_outcome: None,
+            };
+        }
+        let authority_refresh_outcome = request
+            .worker_summary
+            .map(|summary| format!("official ledger refresh succeeded: {summary}"))
+            .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
+        PlanningPostTurnOfficialCompletionFinalizationOutcome {
+            runtime_snapshot,
+            repeated_queue_head_detail,
+            blocked_failure_detail: None,
+            authority_refresh_outcome: Some(authority_refresh_outcome),
+        }
+    }
+    pub fn block_unresolved_post_turn_official_completion_repair(
+        &self,
+        request: PlanningPostTurnOfficialCompletionRepairBlockRequest<'_>,
+    ) -> PlanningPostTurnOfficialCompletionRepairBlockOutcome {
+        PlanningPostTurnOfficialCompletionRepairBlockOutcome {
+            runtime_snapshot: official_completion_failure_snapshot(
+                request.runtime_snapshot,
+                OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
+            ),
+            failure_detail: OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
+        }
     }
     pub fn render_repair_task_authority_prompt(
         &self,
@@ -755,6 +1261,118 @@ impl PlanningWorkerUseCases {
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
         self.worker_orchestration.repair_task_authority(request)
     }
+    pub fn repair_post_turn_task_authority(
+        &self,
+        request: PlanningPostTurnRepairRequest<'_>,
+    ) -> PlanningPostTurnRepairOutcome {
+        let max_attempts = request.max_attempts.max(1);
+        let mut runtime_snapshot = self
+            .worker_orchestration
+            .load_runtime_snapshot_or_invalid(request.workspace_directory);
+        let mut next_request = request.repair_request.clone();
+        let mut next_retry_reason = None;
+        let mut attempts = Vec::new();
+
+        for attempt_number in 1..=max_attempts {
+            let attempt_retry_reason = next_retry_reason;
+            let started_runtime_snapshot = runtime_snapshot.clone();
+            let worker_request = PlanningLedgerRepairRequest {
+                workspace_directory: request.workspace_directory,
+                parent_thread_id: request.parent_thread_id,
+                completed_turn_id: request.completed_turn_id,
+                repair_request: &next_request,
+                previous_handoff_task: request.previous_handoff_task,
+                attempt_number,
+                max_attempts,
+                retry_reason: attempt_retry_reason,
+            };
+            let worker_prompt = self
+                .worker_orchestration
+                .render_repair_task_authority_prompt(&worker_request);
+            let worker_outcome = self
+                .worker_orchestration
+                .repair_task_authority(worker_request);
+            let result = match worker_outcome {
+                Ok(outcome) => {
+                    runtime_snapshot = outcome.runtime_snapshot.clone();
+                    let next_repair_request = outcome.repair_request.clone();
+                    let resolved = next_repair_request.is_none();
+                    let exhausted = !resolved && attempt_number == max_attempts;
+                    let next_reason = if resolved || exhausted {
+                        None
+                    } else if outcome.task_authority_changed {
+                        Some(PlanningRepairRetryReason::TaskAuthorityStillInvalid)
+                    } else {
+                        Some(PlanningRepairRetryReason::TaskAuthorityUnchanged)
+                    };
+                    PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                        outcome: Box::new(outcome),
+                        next_repair_request,
+                        next_retry_reason: next_reason,
+                        resolved,
+                        exhausted,
+                    }
+                }
+                Err(error) => {
+                    let detail = format!(
+                        "planning worker repair attempt {attempt_number}/{max_attempts} failed: {error}"
+                    );
+                    PlanningPostTurnRepairAttemptResult::WorkerFailed {
+                        detail,
+                        error: error.to_string(),
+                    }
+                }
+            };
+            let should_return = matches!(
+                &result,
+                PlanningPostTurnRepairAttemptResult::WorkerFailed { .. }
+                    | PlanningPostTurnRepairAttemptResult::WorkerSucceeded { resolved: true, .. }
+                    | PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                        exhausted: true,
+                        ..
+                    }
+            );
+            if let PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                next_repair_request: Some(repair_request),
+                next_retry_reason: retry_reason_for_next_attempt,
+                resolved: false,
+                exhausted: false,
+                ..
+            } = &result
+            {
+                next_request = repair_request.clone();
+                next_retry_reason = *retry_reason_for_next_attempt;
+            }
+            attempts.push(PlanningPostTurnRepairAttempt {
+                attempt_number,
+                max_attempts,
+                retry_reason: attempt_retry_reason,
+                started_runtime_snapshot,
+                worker_prompt,
+                result,
+            });
+            if should_return {
+                let resolved = matches!(
+                    attempts.last().map(|attempt| &attempt.result),
+                    Some(PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                        resolved: true,
+                        ..
+                    })
+                );
+                return PlanningPostTurnRepairOutcome {
+                    runtime_snapshot,
+                    resolved,
+                    attempts,
+                };
+            }
+        }
+
+        PlanningPostTurnRepairOutcome {
+            runtime_snapshot,
+            resolved: false,
+            attempts,
+        }
+    }
     pub fn promote_top_proposal_to_ready_if_needed(
         &self,
         request: PlanningProposalPromotionRequest<'_>,
@@ -762,5 +1380,117 @@ impl PlanningWorkerUseCases {
         // promotion은 refresh/repair가 queue proposal을 만든 뒤 실행된다. deterministic 단계라 worker model에게 다시 묻지 않는다.
         self.proposal_promotion
             .promote_top_proposal_to_ready_if_needed(request)
+    }
+}
+
+fn official_completion_failure_snapshot(
+    current_snapshot: &PlanningRuntimeSnapshot,
+    failure_detail: &str,
+) -> PlanningRuntimeSnapshot {
+    let detail = if failure_detail.trim().is_empty() {
+        OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON
+    } else {
+        failure_detail
+    };
+    current_snapshot.with_auto_follow_pause_reason(detail.to_string())
+}
+
+fn repeated_queue_head_detail(
+    previous_handoff: Option<&PlanningTaskHandoff>,
+    previous_snapshot: &PlanningRuntimeSnapshot,
+    snapshot: &PlanningRuntimeSnapshot,
+) -> Option<String> {
+    let previous_handoff = previous_handoff?;
+    let queue_head = snapshot.queue_head()?;
+    if queue_head.task_id.trim() != previous_handoff.task_id.trim() {
+        return None;
+    }
+
+    let unchanged = queue_head.task_title.trim() == previous_handoff.task_title.trim()
+        && queue_head.direction_id.trim() == previous_handoff.direction_id.trim()
+        && queue_head.combined_priority == previous_handoff.combined_priority
+        && queue_head.updated_at.trim() == previous_handoff.updated_at.trim()
+        && queue_head.status.label() == previous_handoff.status_label;
+    if !unchanged {
+        return None;
+    }
+
+    let queue_head_task_unchanged = match (
+        previous_snapshot.queue_head_task_signature(),
+        snapshot.queue_head_task_signature(),
+    ) {
+        (Some(previous), Some(current)) => previous == current,
+        (None, None) => true,
+        _ => false,
+    };
+    if !queue_head_task_unchanged {
+        return None;
+    }
+
+    Some(format!(
+        "planning worker refresh kept the previously handed-off task unchanged as the queue head; unrelated ledger edits do not count as queue advancement: {}",
+        previous_handoff.task_title
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::planning::{PriorityQueueTask, TaskStatus};
+
+    fn sample_queue_head() -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank: 1,
+            task_id: "task-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_title: "Direction".to_string(),
+            task_title: "Queue head".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 80,
+            updated_at: "2026-04-23T00:00:00Z".to_string(),
+            rank_reasons: vec!["ready".to_string()],
+        }
+    }
+
+    fn sample_handoff() -> PlanningTaskHandoff {
+        PlanningTaskHandoff {
+            task_id: "task-1".to_string(),
+            task_title: "Queue head".to_string(),
+            direction_id: "direction-1".to_string(),
+            combined_priority: 80,
+            updated_at: "2026-04-23T00:00:00Z".to_string(),
+            status_label: "ready".to_string(),
+        }
+    }
+
+    fn snapshot_with_signature(signature: Option<u64>) -> PlanningRuntimeSnapshot {
+        PlanningRuntimeSnapshot::ready(
+            "prompt".to_string(),
+            "summary".to_string(),
+            Some(sample_queue_head()),
+        )
+        .with_test_signatures(None, signature)
+    }
+
+    #[test]
+    fn post_turn_repeated_queue_head_treats_missing_and_present_signatures_as_changed() {
+        let detail = repeated_queue_head_detail(
+            Some(&sample_handoff()),
+            &snapshot_with_signature(None),
+            &snapshot_with_signature(Some(7)),
+        );
+
+        assert!(detail.is_none());
+    }
+
+    #[test]
+    fn post_turn_repeated_queue_head_accepts_both_missing_signatures_as_unchanged() {
+        let detail = repeated_queue_head_detail(
+            Some(&sample_handoff()),
+            &snapshot_with_signature(None),
+            &snapshot_with_signature(None),
+        );
+
+        assert!(detail.is_some());
     }
 }

@@ -4,12 +4,14 @@
  * TUI는 그 결과를 "다음 prompt를 큐에 넣기" 또는 "이유를 남기고 멈추기"로만
  * 소비하므로 이 enum들이 adapter 내부 protocol 역할을 한다.
  */
+#[cfg(test)]
 use crate::application::service::planning::PlanningRuntimeQueuedAutoFollowPrompt;
 
 use super::super::turn_activity::TurnActivityState;
 use super::AutoFollowState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 /*
  * AutoFollowDecision은 view model이 post-turn runtime에 돌려주는 실행 계획이다.
  * `QueuePrompt`는 application service가 만든 queue-aware prompt를 그대로 운반하고,

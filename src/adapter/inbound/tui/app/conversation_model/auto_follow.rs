@@ -9,7 +9,9 @@ const AUTO_FOLLOW_MODE_LABEL: &str = "planning queue";
 
 #[path = "auto_follow_decision.rs"]
 mod decision;
-pub(crate) use decision::{AutoFollowDecision, AutoFollowSkipReason};
+#[cfg(test)]
+pub(crate) use decision::AutoFollowDecision;
+pub(crate) use decision::AutoFollowSkipReason;
 
 /*
  * AutoFollowState is the conversation-local control plane for internal

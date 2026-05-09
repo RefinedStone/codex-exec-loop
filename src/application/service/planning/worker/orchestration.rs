@@ -193,6 +193,15 @@ impl PlanningWorkerOrchestrationService {
             },
         )
     }
+
+    pub fn load_runtime_snapshot_or_invalid(
+        &self,
+        workspace_directory: &str,
+    ) -> PlanningRuntimeSnapshot {
+        self.runtime_facade
+            .load_runtime_snapshot_or_invalid(workspace_directory)
+    }
+
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn refresh_queue_from_official_completion(
         &self,

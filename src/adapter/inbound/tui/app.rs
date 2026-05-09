@@ -160,9 +160,12 @@ use conversation_lifecycle::{
     reduce_conversation_lifecycle,
 };
 #[allow(unused_imports)]
+#[cfg(test)]
+pub(super) use conversation_model::AutoFollowDecision;
+#[allow(unused_imports)]
 pub(super) use conversation_model::{
-    AutoFollowDecision, AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState,
-    ConversationInputState, ConversationState, ConversationViewModel, StopKeywordRule,
+    AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
+    ConversationState, ConversationViewModel, StopKeywordRule,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,

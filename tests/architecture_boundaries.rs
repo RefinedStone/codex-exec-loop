@@ -166,6 +166,22 @@ const TUI_RAW_APPLICATION_SERVICE_DEBTS: &[PatternDebtRule] = &[
     },
 ];
 
+const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
+    "PlanningLedgerRepairRequest",
+    "PlanningOfficialCompletionRefreshRequest",
+    "PlanningProposalPromotionRequest",
+    "PlanningQueueRefreshRequest",
+    "PlanningRuntimeWorkspaceStatus",
+    "QueueIdlePolicy",
+    ".promote_top_proposal_to_ready_if_needed(",
+    ".refresh_queue_from_official_completion(",
+    ".refresh_queue_from_reply(",
+    ".render_official_completion_refresh_prompt(",
+    ".render_refresh_queue_prompt(",
+    ".render_repair_task_authority_prompt(",
+    ".repair_task_authority(",
+];
+
 #[test]
 fn domain_layer_has_no_application_or_adapter_dependencies() {
     assert_no_forbidden_references(BoundaryRule {
@@ -257,6 +273,18 @@ fn inbound_adapters_do_not_mutate_parallel_durable_state_directly() {
         ],
         temporary_allowances: &[],
     });
+}
+
+#[test]
+fn tui_post_turn_execution_uses_planning_post_turn_facade() {
+    assert_no_forbidden_references_in_paths(
+        "TUI post-turn execution must call planning post-turn facade DTOs instead of composing low-level planning workflow",
+        &[
+            "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
+            "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution",
+        ],
+        TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS,
+    );
 }
 
 #[test]
@@ -388,6 +416,53 @@ fn assert_no_forbidden_references(rule: BoundaryRule) {
                         pattern,
                         text: source_line.text.trim().to_string(),
                     });
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "architecture boundary violations:\n{}",
+        format_violations(&violations)
+    );
+}
+
+fn assert_no_forbidden_references_in_paths(
+    rule_name: &'static str,
+    path_suffixes: &[&str],
+    forbidden_patterns: &[&'static str],
+) {
+    let repo_root = repo_root();
+    let mut violations = Vec::new();
+
+    for path_suffix in path_suffixes {
+        let root = repo_root.join(path_suffix);
+        for path in rust_files_for_path(&root) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+
+            let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!("failed to read {}: {error}", path.display());
+            });
+            let relative_path = relative_path(&repo_root, &path);
+
+            for source_line in production_lines(&source) {
+                if is_comment_only_line(&source_line.text) {
+                    continue;
+                }
+
+                for pattern in forbidden_patterns {
+                    if source_line.text.contains(pattern) {
+                        violations.push(BoundaryViolation {
+                            rule: rule_name,
+                            path: relative_path.clone(),
+                            line: source_line.number,
+                            pattern,
+                            text: source_line.text.trim().to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -658,6 +733,16 @@ fn rust_files_under(root: &Path) -> Vec<PathBuf> {
     collect_rust_files(root, &mut files);
     files.sort();
     files
+}
+
+fn rust_files_for_path(root: &Path) -> Vec<PathBuf> {
+    if root.is_file() {
+        if root.extension().and_then(|value| value.to_str()) == Some("rs") {
+            return vec![root.to_path_buf()];
+        }
+        return Vec::new();
+    }
+    rust_files_under(root)
 }
 
 fn collect_rust_files(path: &Path, files: &mut Vec<PathBuf>) {

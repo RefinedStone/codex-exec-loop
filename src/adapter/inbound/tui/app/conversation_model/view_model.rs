@@ -14,10 +14,13 @@ mod messages;
 #[path = "view_model/status.rs"]
 mod status;
 
+#[cfg(test)]
 use crate::application::service::planning::{
-    PlanningAutoFollowBlockReason, PlanningRepairRequest, PlanningRuntimeAutoFollowDecision,
-    PlanningRuntimeAutoFollowRequest, PlanningRuntimeSnapshot, PlanningRuntimeUseCases,
-    PlanningTaskHandoff,
+    PlanningAutoFollowBlockReason, PlanningRuntimeAutoFollowDecision,
+    PlanningRuntimeAutoFollowRequest, PlanningRuntimeUseCases,
+};
+use crate::application::service::planning::{
+    PlanningRepairRequest, PlanningRuntimeSnapshot, PlanningTaskHandoff,
 };
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
@@ -25,7 +28,9 @@ use crate::domain::conversation::{
 };
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
-use super::auto_follow::{AutoFollowDecision, AutoFollowSkipReason, AutoFollowState};
+#[cfg(test)]
+use super::auto_follow::AutoFollowDecision;
+use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
 use super::turn_activity::TurnActivityState;
 
 // Shell rendering keeps this wrapper around load failures so the outer app can
@@ -543,6 +548,7 @@ impl ConversationViewModel {
     ) -> AutoFollowDecision {
         self.decide_auto_follow_with_snapshot(planning_runtime, &self.planning_runtime_snapshot)
     }
+    #[cfg(test)]
     pub(crate) fn decide_auto_follow_with_snapshot(
         &self,
         planning_runtime: &PlanningRuntimeUseCases,
