@@ -140,6 +140,7 @@ pub use self::task_tool::{
 };
 // use case 묶음 재수출은 PlanningFeature의 필드 타입을 외부에서도 명시하거나 테스트 fixture에서 사용할 수 있게 한다.
 pub use self::use_cases::{
+    PlanningPostTurnReconciliationOutcome, PlanningPostTurnReconciliationRequest,
     PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningTurnExecutionSnapshotCapture,
     PlanningTurnExecutionSnapshotCaptureRequest, PlanningTurnExecutionSnapshotCaptureState,
     PlanningWorkerUseCases, PlanningWorkspaceUseCases,

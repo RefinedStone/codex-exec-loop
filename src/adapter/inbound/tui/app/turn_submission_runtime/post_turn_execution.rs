@@ -11,19 +11,16 @@ use super::super::{
     NativeTuiApp, PlanningWorkerPanelState, PlanningWorkerStatus,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::PlanningProposalPromotionRequest;
-use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
 use crate::application::service::planning::{
-    PlanningExecutionSnapshot, PlanningReconciliationResult,
+    PlanningExecutionSnapshot, PlanningPostTurnReconciliationRequest,
+    PlanningProposalPromotionRequest, PlanningServices,
 };
 use crate::application::service::planning::{
     PlanningQueueRefreshMode, PlanningQueueRefreshRequest,
 };
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
-};
-use crate::application::service::planning::{
-    PlanningTurnExecutionSnapshotCapture, PlanningTurnExecutionSnapshotCaptureState,
 };
 use crate::application::service::post_turn_decision::{
     PostTurnAutoFollowStopReason, PostTurnDecision as ApplicationPostTurnDecision,
@@ -191,13 +188,18 @@ impl PostTurnEvaluationExecutor {
                 ],
             )
         });
-        let reconciliation_result = self.reconcile_planning_after_turn(request);
-        let mut runtime_notices = reconciliation_result.notices.clone();
-        let mut runtime_snapshot = self.runtime_snapshot_after_reconciliation(
-            conversation,
-            request,
-            &reconciliation_result,
+        let reconciliation_outcome = self.planning_feature.runtime.reconcile_post_turn(
+            PlanningPostTurnReconciliationRequest {
+                workspace_directory: &request.workspace_directory,
+                completed_turn_id: &request.completed_turn_id,
+                changed_planning_file_paths: &request.changed_planning_file_paths,
+                execution_snapshot_capture: request.execution_snapshot_capture.as_ref(),
+                current_runtime_snapshot: &conversation.planning_runtime_snapshot,
+            },
         );
+        let reconciliation_result = reconciliation_outcome.reconciliation_result;
+        let mut runtime_notices = reconciliation_result.notices.clone();
+        let mut runtime_snapshot = reconciliation_outcome.runtime_snapshot;
         let continuation_enabled = !conversation
             .auto_follow_state
             .post_turn_continuation_paused();
@@ -295,74 +297,6 @@ impl PostTurnEvaluationExecutor {
             planning_worker_panel_state: self.planning_worker_panel_state,
         }
     }
-    fn runtime_snapshot_after_reconciliation(
-        &self,
-        conversation: &ConversationViewModel,
-        request: &PostTurnEvaluationRequest,
-        reconciliation_result: &PlanningReconciliationResult,
-    ) -> PlanningRuntimeSnapshot {
-        if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
-            PlanningRuntimeSnapshot::invalid(block_reason)
-        } else if request.changed_planning_file_paths.is_empty() {
-            conversation.planning_runtime_snapshot.clone()
-        } else {
-            self.planning_feature
-                .runtime
-                .load_runtime_snapshot_or_invalid(&request.workspace_directory)
-        }
-    }
-
-    // Reconciliation runs only for paths covered by the protected execution
-    // snapshot. Without a matching snapshot, auto-follow is blocked because
-    // the host cannot safely restore planning authority after a turn mutation.
-    #[tracing::instrument(level = "trace", skip(self))]
-    fn reconcile_planning_after_turn(
-        &mut self,
-        request: &PostTurnEvaluationRequest,
-    ) -> PlanningReconciliationResult {
-        let requires_execution_snapshot = request
-            .changed_planning_file_paths
-            .iter()
-            .any(|path| PlanningExecutionSnapshot::captures_path(path));
-        if !requires_execution_snapshot {
-            return PlanningReconciliationResult::default();
-        }
-        let Some(capture) = request.execution_snapshot_capture.as_ref() else {
-            return blocked_reconciliation_result(
-                "planning reconciliation could not restore protected planning files because the execution snapshot was unavailable"
-                    .to_string(),
-            );
-        };
-        if capture.workspace_directory != request.workspace_directory {
-            return blocked_reconciliation_result(format!(
-                "planning reconciliation ignored a stale execution snapshot captured for {} while the completed turn resolved in {}",
-                capture.workspace_directory, request.workspace_directory
-            ));
-        }
-        let execution_snapshot = match &capture.state {
-            PlanningTurnExecutionSnapshotCaptureState::Ready(snapshot) => snapshot,
-            PlanningTurnExecutionSnapshotCaptureState::CaptureFailed(error_message) => {
-                return blocked_reconciliation_result(error_message.clone());
-            }
-        };
-        match self.planning_feature.runtime.reconcile_after_turn(
-            &request.workspace_directory,
-            &request.completed_turn_id,
-            &request.changed_planning_file_paths,
-            execution_snapshot,
-        ) {
-            Ok(result) => result,
-            Err(error) => PlanningReconciliationResult {
-                notices: vec![format!("planning reconciliation failed: {error}")],
-                auto_follow_block_reason: Some(
-                    "planning reconciliation failed; auto-follow stays paused until the planning workspace is repaired"
-                        .to_string(),
-                ),
-                ..PlanningReconciliationResult::default()
-            },
-        }
-    }
-
     // Planning queue refresh is the normal auto-follow path after a main-session
     // reply. It skips non-ready workspaces, honors queue-idle policy, records
     // worker panel state, and promotes justified proposals into the executable
@@ -1060,14 +994,6 @@ fn planning_workspace_directory<'a>(
         draft_workspace_directory
     }
 }
-fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResult {
-    PlanningReconciliationResult {
-        notices: vec![message.clone()],
-        auto_follow_block_reason: Some(message),
-        ..PlanningReconciliationResult::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -218,6 +218,19 @@ pub enum PlanningTurnExecutionSnapshotCaptureState {
     Ready(PlanningExecutionSnapshot),
     CaptureFailed(String),
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnReconciliationRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub completed_turn_id: &'a str,
+    pub changed_planning_file_paths: &'a [String],
+    pub execution_snapshot_capture: Option<&'a PlanningTurnExecutionSnapshotCapture>,
+    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningPostTurnReconciliationOutcome {
+    pub reconciliation_result: PlanningReconciliationResult,
+    pub runtime_snapshot: PlanningRuntimeSnapshot,
+}
 impl PlanningRuntimeUseCases {
     pub(crate) fn new(
         runtime_facade: PlanningRuntimeFacadeService,
@@ -348,6 +361,79 @@ impl PlanningRuntimeUseCases {
             changed_planning_file_paths,
             execution_snapshot,
         )
+    }
+    pub fn reconcile_post_turn(
+        &self,
+        request: PlanningPostTurnReconciliationRequest<'_>,
+    ) -> PlanningPostTurnReconciliationOutcome {
+        let reconciliation_result = self.reconcile_post_turn_result(&request);
+        let runtime_snapshot =
+            if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
+                PlanningRuntimeSnapshot::invalid(block_reason)
+            } else if request.changed_planning_file_paths.is_empty() {
+                request.current_runtime_snapshot.clone()
+            } else {
+                self.load_runtime_snapshot_or_invalid(request.workspace_directory)
+            };
+        PlanningPostTurnReconciliationOutcome {
+            reconciliation_result,
+            runtime_snapshot,
+        }
+    }
+
+    fn reconcile_post_turn_result(
+        &self,
+        request: &PlanningPostTurnReconciliationRequest<'_>,
+    ) -> PlanningReconciliationResult {
+        let requires_execution_snapshot = request
+            .changed_planning_file_paths
+            .iter()
+            .any(|path| PlanningExecutionSnapshot::captures_path(path));
+        if !requires_execution_snapshot {
+            return PlanningReconciliationResult::default();
+        }
+        let Some(capture) = request.execution_snapshot_capture else {
+            return blocked_reconciliation_result(
+                "planning reconciliation could not restore protected planning files because the execution snapshot was unavailable"
+                    .to_string(),
+            );
+        };
+        if capture.workspace_directory != request.workspace_directory {
+            return blocked_reconciliation_result(format!(
+                "planning reconciliation ignored a stale execution snapshot captured for {} while the completed turn resolved in {}",
+                capture.workspace_directory, request.workspace_directory
+            ));
+        }
+        let execution_snapshot = match &capture.state {
+            PlanningTurnExecutionSnapshotCaptureState::Ready(snapshot) => snapshot,
+            PlanningTurnExecutionSnapshotCaptureState::CaptureFailed(error_message) => {
+                return blocked_reconciliation_result(error_message.clone());
+            }
+        };
+        match self.reconcile_after_turn(
+            request.workspace_directory,
+            request.completed_turn_id,
+            request.changed_planning_file_paths,
+            execution_snapshot,
+        ) {
+            Ok(result) => result,
+            Err(error) => PlanningReconciliationResult {
+                notices: vec![format!("planning reconciliation failed: {error}")],
+                auto_follow_block_reason: Some(
+                    "planning reconciliation failed; auto-follow stays paused until the planning workspace is repaired"
+                        .to_string(),
+                ),
+                ..PlanningReconciliationResult::default()
+            },
+        }
+    }
+}
+
+fn blocked_reconciliation_result(message: String) -> PlanningReconciliationResult {
+    PlanningReconciliationResult {
+        notices: vec![message.clone()],
+        auto_follow_block_reason: Some(message),
+        ..PlanningReconciliationResult::default()
     }
 }
 #[derive(Clone)]
