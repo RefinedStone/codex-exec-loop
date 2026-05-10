@@ -202,6 +202,25 @@ fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
 }
 
 #[test]
+fn core_layer_does_not_bypass_parallel_control_plane_gate() {
+    // Parallel mode already has an application single-writer gate. Core may eventually
+    // expose a projection of that state, but it must not own the raw service, host
+    // internals, runtime store, or gate-owned wake/effect machinery.
+    assert_no_forbidden_references(BoundaryRule {
+        name: "core must not bypass the parallel control-plane single-writer gate",
+        root: "src/core",
+        forbidden_patterns: &[
+            "ParallelModeService",
+            "ParallelModeControlPlaneService",
+            "ParallelModeControlPlaneRuntime",
+            "ParallelModeControlPlaneRuntimeStore",
+            "ParallelModeControlPlaneWake",
+            "ParallelModeControlPlaneEffectId",
+        ],
+    });
+}
+
+#[test]
 fn tui_startup_checks_enter_through_core_runtime() {
     // Static guard for the startup migration: TUI may request startup checks, but execution belongs
     // to CoreRuntime/CoreEffectRunner so completion re-enters core before TUI state changes.

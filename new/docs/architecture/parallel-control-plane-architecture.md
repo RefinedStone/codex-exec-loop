@@ -29,6 +29,11 @@ runtime reducer를 통과한다는 책임 경계를 뜻한다. 별도 actor queu
 ordering/backpressure/shutdown 문제가 현재 regression으로 제어되지 않을 때만 다시
 검토한다.
 
+`src/core` 통합도 이 결정을 우회하지 않는다. core는 parallel control-plane의 두 번째
+runtime, 두 번째 queue actor, 또는 raw `ParallelModeService` 소유자가 되면 안 된다. 이후
+core snapshot에 parallel projection을 붙인다면 application `ParallelModeControlPlaneHandle`
+을 통해 command/event를 보내고, control-plane이 만든 presentation snapshot만 복사한다.
+
 ## 문제 정의
 
 현재 parallel 흐름은 여러 책임이 한 흐름 안에서 겹치기 쉽다.
@@ -210,6 +215,10 @@ src/application/service/parallel_mode
 - application gate는 business rule을 직접 판단하지 않는다.
 - application gate는 side effect와 ordering의 주인이다.
 - 현재 gate는 mutex facade다. mailbox actor가 아니다.
+
+core와 연결할 때도 이 gate가 유일한 mutation entrypoint다. core는 command routing 또는
+read-only projection publication만 담당하고, slot lease, dispatch wake, stale completion
+drop, worker launch 여부를 다시 판단하지 않는다.
 
 ### Domain Aggregate
 

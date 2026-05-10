@@ -357,6 +357,13 @@ app-server stream event, turn completion, runtime notice도 core input/event를 
 통과하지만, turn stream reduction과 prompt submission은 아직 TUI runtime path에 남아
 있다.
 
+Parallel migration은 다른 흐름처럼 core state로 바로 흡수하지 않는다. parallel mode는
+이미 application `ParallelModeControlPlaneHandle`이 mutex-serialized single-writer gate를
+맡고 있으므로, core가 통합하더라도 raw `ParallelModeService`,
+`ParallelModeControlPlaneService`, runtime store, 별도 mpsc actor를 직접 소유하면 안 된다.
+core가 이후 parallel 상태를 노출한다면 application control-plane handle에 command를 보내고
+presentation snapshot/event만 받아 `AppSnapshot` projection으로 복사하는 형태여야 한다.
+
 ## 상태 소유권 표
 
 | 상태 | 현재 위치 | 목표 소유자 | 이유 |
@@ -367,7 +374,7 @@ app-server stream event, turn completion, runtime notice도 core input/event를 
 | turn stream reduction | TUI runtime path | core runtime | app-server stream은 UI가 아니라 app runtime event다. |
 | post-turn automation | TUI post-turn path | core runtime | turn completion 이후 정책은 화면과 독립적이다. |
 | planning runtime snapshot | TUI app cache | core app state 또는 application projection | 여러 surface가 같은 planning 상태를 본다. |
-| parallel-mode status | TUI app cache/application | application/core projection | control-plane 상태는 UI-only가 아니다. |
+| parallel-mode status | TUI app cache/application control-plane | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출해야 한다. |
 | overlay open/close | TUI | TUI | presentation state다. |
 | prompt input buffer | TUI | TUI | terminal editing state다. |
 | selection/cursor/scroll | TUI | TUI | render interaction state다. |
