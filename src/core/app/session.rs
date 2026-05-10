@@ -31,8 +31,9 @@ pub enum SessionCatalogSnapshot {
     Failed { message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SessionCatalogState {
+    #[default]
     Idle,
     Loading,
     Ready(SessionCatalogReadySnapshot),
@@ -49,12 +50,6 @@ impl SessionCatalogState {
                 message: message.clone(),
             },
         }
-    }
-}
-
-impl Default for SessionCatalogState {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 

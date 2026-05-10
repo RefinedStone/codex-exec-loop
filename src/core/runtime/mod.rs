@@ -3,6 +3,8 @@
  * inbound adapters should receive CoreInput/AppEvent/Snapshot contracts, while
  * runtime workers convert application service completion into CoreInput.
  */
+pub mod driver;
 pub mod effect_runner;
 
+pub use driver::{CoreEffectExecutor, CoreRuntime};
 pub use effect_runner::CoreEffectRunner;

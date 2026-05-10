@@ -26,8 +26,9 @@ pub enum StartupSnapshot {
     Failed { message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum StartupState {
+    #[default]
     Idle,
     Loading,
     Ready(StartupReadySnapshot),
@@ -44,12 +45,6 @@ impl StartupState {
                 message: message.clone(),
             },
         }
-    }
-}
-
-impl Default for StartupState {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 

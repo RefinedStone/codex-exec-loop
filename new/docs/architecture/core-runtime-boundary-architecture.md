@@ -92,6 +92,7 @@ src/
       state.rs
       controller.rs
     runtime/
+      driver.rs
       background.rs
       effect_runner.rs
       stream_reducer.rs
@@ -159,6 +160,7 @@ domain -> adapter/application/framework
 - `AppCommand`를 받는다.
 - application service를 호출한다.
 - app-level state를 갱신한다.
+- background completion queue를 다시 `CoreInput`으로 drain한다.
 - background effect를 시작하거나 effect runner에 위임한다.
 - streaming event를 app event로 줄인다.
 - `AppSnapshot` 또는 `AppEvent`를 inbound adapter에 제공한다.

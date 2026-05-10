@@ -7,6 +7,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::core::app::SessionCatalogReadySnapshot;
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
+use crate::core::runtime::CoreEffectExecutor;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -58,6 +59,12 @@ impl CoreEffectRunner {
                 session_catalog_completion(session_service.load_session_catalog(request));
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
+    }
+}
+
+impl CoreEffectExecutor for CoreEffectRunner {
+    fn run_effect(&self, effect: CoreEffect) {
+        CoreEffectRunner::run_effect(self, effect);
     }
 }
 
