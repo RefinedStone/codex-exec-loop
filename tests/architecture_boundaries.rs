@@ -184,6 +184,24 @@ fn application_layer_has_no_ui_framework_dependencies() {
 }
 
 #[test]
+fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
+    // Static guard: core is a headless application runtime. It may coordinate application services,
+    // but it must not become a TUI, HTTP, Telegram, or concrete outbound adapter layer.
+    assert_no_forbidden_references(BoundaryRule {
+        name: "core must stay headless and depend on application contracts instead of adapters",
+        root: "src/core",
+        forbidden_patterns: &[
+            "ratatui",
+            "crossterm",
+            "axum",
+            "crate::adapter::inbound",
+            "crate::adapter::outbound",
+            "telegram_bot",
+        ],
+    });
+}
+
+#[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
     // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
     // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.
