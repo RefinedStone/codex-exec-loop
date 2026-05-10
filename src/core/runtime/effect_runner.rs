@@ -3,20 +3,29 @@ use std::thread;
 
 use anyhow::Result;
 
+use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::core::app::SessionCatalogReadySnapshot;
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 #[derive(Clone)]
 pub struct CoreEffectRunner {
     startup_service: StartupService,
+    session_service: SessionService,
     input_sender: Sender<CoreInput>,
 }
 
 impl CoreEffectRunner {
-    pub fn new(startup_service: StartupService, input_sender: Sender<CoreInput>) -> Self {
+    pub fn new(
+        startup_service: StartupService,
+        session_service: SessionService,
+        input_sender: Sender<CoreInput>,
+    ) -> Self {
         Self {
             startup_service,
+            session_service,
             input_sender,
         }
     }
@@ -33,7 +42,22 @@ impl CoreEffectRunner {
     pub fn run_effect(&self, effect: CoreEffect) {
         match effect {
             CoreEffect::RunStartupChecks => self.spawn_startup_checks(),
+            CoreEffect::LoadSessionCatalog {
+                limit,
+                workspace_directory,
+            } => self.spawn_session_catalog_load(limit, workspace_directory),
         }
+    }
+
+    pub fn spawn_session_catalog_load(&self, limit: usize, workspace_directory: String) {
+        let session_service = self.session_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
+            let completion =
+                session_catalog_completion(session_service.load_session_catalog(request));
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
     }
 }
 
@@ -45,9 +69,18 @@ fn startup_checks_completion(result: Result<StartupDiagnostics>) -> CoreEffectCo
     )
 }
 
+fn session_catalog_completion(result: Result<SessionCatalog>) -> CoreEffectCompletion {
+    CoreEffectCompletion::SessionCatalogLoaded(
+        result
+            .map(SessionCatalogReadySnapshot::from_catalog)
+            .map_err(|error| error.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalogTier};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     #[test]
@@ -83,6 +116,35 @@ mod tests {
         assert_eq!(
             startup_checks_completion(Err(anyhow::anyhow!("codex missing"))),
             CoreEffectCompletion::StartupChecksLoaded(Err("codex missing".to_string()))
+        );
+    }
+
+    #[test]
+    fn session_catalog_success_maps_to_core_completion() {
+        let catalog = RecentSessions {
+            items: Vec::new(),
+            warnings: vec!["partial catalog".to_string()],
+            next_cursor: None,
+        }
+        .into();
+
+        assert_eq!(
+            session_catalog_completion(Ok(catalog)),
+            CoreEffectCompletion::SessionCatalogLoaded(Ok(SessionCatalogReadySnapshot {
+                tier_label: SessionCatalogTier::ProviderBackedCatalog
+                    .label()
+                    .to_string(),
+                item_count: 0,
+                warnings: vec!["partial catalog".to_string()],
+            }))
+        );
+    }
+
+    #[test]
+    fn session_catalog_error_maps_to_core_completion() {
+        assert_eq!(
+            session_catalog_completion(Err(anyhow::anyhow!("catalog unavailable"))),
+            CoreEffectCompletion::SessionCatalogLoaded(Err("catalog unavailable".to_string()))
         );
     }
 }

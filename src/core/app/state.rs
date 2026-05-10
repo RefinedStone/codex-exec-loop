@@ -1,9 +1,13 @@
-use super::{AppSnapshot, StartupReadySnapshot, StartupState};
+use super::{
+    AppSnapshot, SessionCatalogReadySnapshot, SessionCatalogState, StartupReadySnapshot,
+    StartupState,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
     revision: u64,
     startup: StartupState,
+    session_catalog: SessionCatalogState,
 }
 
 impl AppState {
@@ -11,6 +15,7 @@ impl AppState {
         Self {
             revision: 0,
             startup: StartupState::Idle,
+            session_catalog: SessionCatalogState::Idle,
         }
     }
 
@@ -18,6 +23,7 @@ impl AppState {
         AppSnapshot {
             revision: self.revision,
             startup: self.startup.snapshot(),
+            session_catalog: self.session_catalog.snapshot(),
         }
     }
 
@@ -30,6 +36,22 @@ impl AppState {
         self.startup = match result {
             Ok(ready) => StartupState::Ready(ready),
             Err(message) => StartupState::Failed(message),
+        };
+        self.advance_revision();
+    }
+
+    pub fn mark_session_catalog_loading(&mut self) {
+        self.session_catalog = SessionCatalogState::Loading;
+        self.advance_revision();
+    }
+
+    pub fn apply_session_catalog_result(
+        &mut self,
+        result: Result<SessionCatalogReadySnapshot, String>,
+    ) {
+        self.session_catalog = match result {
+            Ok(ready) => SessionCatalogState::Ready(ready),
+            Err(message) => SessionCatalogState::Failed(message),
         };
         self.advance_revision();
     }
@@ -48,7 +70,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::StartupSnapshot;
+    use crate::core::app::{SessionCatalogSnapshot, StartupSnapshot};
 
     #[test]
     fn new_state_projects_initial_snapshot() {
@@ -66,6 +88,23 @@ mod tests {
             AppSnapshot {
                 revision: 1,
                 startup: StartupSnapshot::Loading,
+                session_catalog: SessionCatalogSnapshot::Idle,
+            }
+        );
+    }
+
+    #[test]
+    fn session_loading_advances_revision() {
+        let mut state = AppState::new();
+
+        state.mark_session_catalog_loading();
+
+        assert_eq!(
+            state.snapshot(),
+            AppSnapshot {
+                revision: 1,
+                startup: StartupSnapshot::Idle,
+                session_catalog: SessionCatalogSnapshot::Loading,
             }
         );
     }

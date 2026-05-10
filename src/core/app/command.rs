@@ -7,4 +7,8 @@ pub enum AppCommand {
      */
     Noop,
     RunStartupChecks,
+    LoadSessionCatalog {
+        limit: usize,
+        workspace_directory: String,
+    },
 }
