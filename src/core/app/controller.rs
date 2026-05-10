@@ -62,6 +62,11 @@ impl CoreController {
                 self.state.apply_conversation_result(result);
                 self.conversation_changed_outcome(Vec::new())
             }
+            CoreInput::ConversationStreamUpdated(event) => CoreDispatchOutcome {
+                events: vec![AppEvent::ConversationStreamUpdated(event)],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
         }
     }
 
@@ -355,6 +360,24 @@ mod tests {
                     message: "thread unavailable".to_string()
                 }
             )]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_stream_event_passes_through_core_without_state_revision() {
+        let mut controller = CoreController::new();
+        let stream_event = crate::application::service::conversation_runtime_event::ConversationStreamEvent::StatusUpdated {
+            text: "thinking".to_string(),
+        };
+
+        let outcome =
+            controller.handle_input(CoreInput::ConversationStreamUpdated(stream_event.clone()));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationStreamUpdated(stream_event)]
         );
         assert!(outcome.effects.is_empty());
     }

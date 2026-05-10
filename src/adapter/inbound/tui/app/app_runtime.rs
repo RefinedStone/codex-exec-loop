@@ -19,7 +19,7 @@ use crate::application::service::startup_service::StartupService;
 use crate::core::app::StartupReadySnapshot;
 use crate::core::app::{
     AppCommand, AppEvent, ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome,
-    SessionCatalogSnapshot, StartupSnapshot,
+    CoreInput, SessionCatalogSnapshot, StartupSnapshot,
 };
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::ConversationSnapshot;
@@ -421,8 +421,16 @@ impl NativeTuiApp {
             AppEvent::ConversationChanged(CoreConversationSnapshot::Failed { message }) => {
                 self.apply_loaded_conversation_result(Err(message));
             }
+            AppEvent::ConversationStreamUpdated(event) => {
+                self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(event));
+            }
             AppEvent::SnapshotChanged(_) => {}
         }
+    }
+
+    pub(super) fn dispatch_core_input(&mut self, input: CoreInput) {
+        let outcome = self.core_runtime.dispatch_input(input);
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn apply_loaded_conversation_result(

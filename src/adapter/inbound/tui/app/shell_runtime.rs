@@ -4,6 +4,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
 
+use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::post_turn_automation::PostTurnAutomationBackgroundResult;
@@ -105,9 +106,8 @@ impl ShellRuntime {
                     self.app.apply_loaded_conversation_result(result);
                 }
                 BackgroundMessage::ConversationStream(event) => {
-                    self.app.dispatch_conversation_runtime(
-                        ConversationRuntimeEvent::StreamUpdated(event),
-                    );
+                    self.app
+                        .dispatch_core_input(CoreInput::ConversationStreamUpdated(event));
                 }
                 BackgroundMessage::ConversationTurnCompleted {
                     turn_id,

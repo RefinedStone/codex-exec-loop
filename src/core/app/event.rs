@@ -3,11 +3,13 @@ use super::{
     SessionCatalogSnapshot,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
     Command(super::AppCommand),
     EffectCompleted(CoreEffectCompletion),
+    ConversationStreamUpdated(ConversationStreamEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,4 +30,5 @@ pub enum AppEvent {
     StartupChanged(StartupSnapshot),
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
+    ConversationStreamUpdated(ConversationStreamEvent),
 }

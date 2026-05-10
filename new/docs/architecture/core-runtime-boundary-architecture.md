@@ -353,7 +353,8 @@ projection을 추가했고, session 선택 뒤 conversation snapshot load 실행
 `CoreRuntime`/`CoreEffectRunner`를 통과하는 단계까지 진행됐다. TUI reducer는 아직
 `Loading/Ready/Failed` presentation transition을 적용하고 prompt input, cursor, inline
 command palette, transcript rendering cache, active overlay selection을 계속 소유한다.
-turn stream reduction과 prompt submission은 아직 TUI runtime path에 남아 있다.
+app-server stream event도 core input/event를 한 번 통과하지만, turn stream reduction과
+prompt submission은 아직 TUI runtime path에 남아 있다.
 
 ## 상태 소유권 표
 

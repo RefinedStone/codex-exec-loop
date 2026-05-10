@@ -60,7 +60,7 @@ where
         outcomes
     }
 
-    fn dispatch_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
+    pub fn dispatch_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         let outcome = self.controller.handle_input(input);
         self.run_effects(&outcome);
         outcome

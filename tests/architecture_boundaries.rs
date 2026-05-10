@@ -235,6 +235,17 @@ fn tui_conversation_loads_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_conversation_stream_events_enter_through_core_runtime() {
+    // Static guard for turn-stream preparation: shell runtime should not feed app-server
+    // stream events directly to the TUI conversation reducer.
+    assert_no_forbidden_references_in_paths(
+        "TUI conversation stream events must re-enter core before reducer application",
+        &["src/adapter/inbound/tui/app/shell_runtime.rs"],
+        &["ConversationRuntimeEvent::StreamUpdated"],
+    );
+}
+
+#[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
     // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
     // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.
