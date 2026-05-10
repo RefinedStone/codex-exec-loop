@@ -31,14 +31,12 @@ impl NativeTuiApp {
     pub(super) fn can_open_session_list(&self) -> bool {
         matches!(
             &self.startup_state,
-            StartupState::Ready(diagnostics) if diagnostics.can_continue()
+            StartupState::Ready(ready) if ready.can_continue
         )
     }
     pub(super) fn shell_action_availability(&self) -> ShellActionAvailability {
         match &self.startup_state {
-            StartupState::Ready(diagnostics) if diagnostics.can_continue() => {
-                ShellActionAvailability::Ready
-            }
+            StartupState::Ready(ready) if ready.can_continue => ShellActionAvailability::Ready,
             StartupState::Idle | StartupState::Loading => ShellActionAvailability::Pending,
             StartupState::Ready(_) | StartupState::Failed(_) => ShellActionAvailability::Blocked,
         }

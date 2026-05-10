@@ -1,12 +1,11 @@
 use ratatui::text::Line;
 
+use crate::core::app::{StartupAttachmentSnapshot, StartupReadySnapshot};
 use crate::domain::recent_sessions::SessionCatalogTier;
-use crate::domain::startup_diagnostics::StartupDiagnostics;
-use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 /*
  * capability_copy.rs는 capability_projection, session_browser, tail/status panel이 공유하는
- * operator-facing 문구 registry다. StartupDiagnostics와 SessionCatalog는 domain 상태를 소유하고,
+ * operator-facing 문구 registry다. StartupReadySnapshot과 SessionCatalog는 app capability 상태를 소유하고,
  * 이 파일은 그 상태가 overlay마다 다른 단어로 번역되는 것을 막아 startup gate와 recent-session
  * capability를 같은 vocabulary로 보여 준다.
  */
@@ -41,7 +40,7 @@ pub(super) fn startup_overlay_running_checks_label() -> &'static str {
 
 pub(super) fn startup_overlay_readiness_label(can_continue: bool) -> &'static str {
     /*
-     * can_continue는 StartupDiagnostics의 필수 gate 네 가지를 접은 결과다. false는 단순 crash만이
+     * can_continue는 startup 필수 gate 네 가지를 접은 결과다. false는 단순 crash만이
      * 아니라 workspace/account/app-server처럼 operator 조치가 필요한 degraded startup도 포함하므로
      * overlay label은 "failed"보다 넓은 "needs attention"으로 둔다.
      */
@@ -77,7 +76,7 @@ pub(super) fn startup_check_loading_lines() -> Vec<Line<'static>> {
     ]
 }
 
-pub(super) fn startup_diagnostics_summary_line(diagnostics: &StartupDiagnostics) -> String {
+pub(super) fn startup_diagnostics_summary_line(startup: &StartupReadySnapshot) -> String {
     /*
      * inline tail은 full startup check list를 반복할 공간이 없다. 여기서는 prompt submission에 직접
      * 영향을 주는 codex/app-server/account gate만 한 줄로 압축해, 사용자가 현재 막힌 축을 빠르게
@@ -85,17 +84,17 @@ pub(super) fn startup_diagnostics_summary_line(diagnostics: &StartupDiagnostics)
      */
     format!(
         "diagnostics: codex {}  |  app-server {}  |  account {}",
-        inline_diagnostic_status(diagnostics.codex_binary_ok, "ok", "check"),
-        inline_diagnostic_status(diagnostics.initialize_ok, "ok", "check"),
-        inline_diagnostic_status(diagnostics.account_ok, "ok", "attention"),
+        inline_diagnostic_status(startup.codex_binary.ok, "ok", "check"),
+        inline_diagnostic_status(startup.app_server_initialize.ok, "ok", "check"),
+        inline_diagnostic_status(startup.account.ok, "ok", "attention"),
     )
 }
 
-pub(super) fn startup_attachment_summary_line(diagnostics: &StartupDiagnostics) -> String {
-    attachment_profile_summary_line(diagnostics.attachment_profile)
+pub(super) fn startup_attachment_summary_line(startup: &StartupReadySnapshot) -> String {
+    attachment_profile_summary_line(&startup.attachment)
 }
 
-pub(super) fn attachment_profile_summary_line(profile: TerminalBridgeAttachmentProfile) -> String {
+pub(super) fn attachment_profile_summary_line(attachment: &StartupAttachmentSnapshot) -> String {
     /*
      * attachment/recovery는 pass/fail readiness가 아니라 현재 terminal bridge가 어떤 방식으로
      * 붙었고 다시 붙을 수 있는지를 설명하는 capability다. startup summary에 같이 두면 launch profile과
@@ -103,8 +102,7 @@ pub(super) fn attachment_profile_summary_line(profile: TerminalBridgeAttachmentP
      */
     format!(
         "attachment: {}  |  recovery: {}",
-        profile.mode.label(),
-        profile.recovery_anchor.label()
+        attachment.mode_label, attachment.recovery_anchor_label
     )
 }
 

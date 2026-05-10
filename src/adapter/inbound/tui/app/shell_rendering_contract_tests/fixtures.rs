@@ -14,6 +14,7 @@ use crate::application::service::planning::{
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::core::app::StartupReadySnapshot;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -146,7 +147,13 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
     app
 }
 
-pub(crate) fn sample_startup_diagnostics() -> StartupDiagnostics {
+pub(crate) fn sample_startup_diagnostics() -> Box<StartupReadySnapshot> {
+    Box::new(StartupReadySnapshot::from_diagnostics(
+        sample_startup_diagnostics_source(),
+    ))
+}
+
+fn sample_startup_diagnostics_source() -> StartupDiagnostics {
     /*
      * This is the “fully ready” startup projection used by tests that need the shell beyond the
      * bootstrap screen. Keeping cwd/workspace/profile aligned with make_test_app prevents layout

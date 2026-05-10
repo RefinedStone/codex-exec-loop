@@ -28,6 +28,7 @@ use crate::application::service::planning::{
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::core::app::StartupReadySnapshot;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
@@ -301,8 +302,8 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
         launch_count,
     }
 }
-fn sample_startup_diagnostics(workspace_path: &str) -> StartupDiagnostics {
-    StartupDiagnostics {
+fn sample_startup_diagnostics(workspace_path: &str) -> Box<StartupReadySnapshot> {
+    Box::new(StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
         cwd: workspace_path.to_string(),
         codex_binary_ok: true,
         codex_binary_detail: "ok".to_string(),
@@ -316,7 +317,7 @@ fn sample_startup_diagnostics(workspace_path: &str) -> StartupDiagnostics {
         account_detail: "ok".to_string(),
         warnings: Vec::new(),
         schema_snapshot: "schema".to_string(),
-    }
+    }))
 }
 fn create_temp_workspace(prefix: &str) -> String {
     let unique_suffix = std::time::SystemTime::now()

@@ -337,6 +337,9 @@ TUI는 startup check를 직접 thread spawn하지 않는다. TUI는 `RunStartupC
 workspace, probe 결과, attachment label, warning, schema snapshot을 UI/transport
 독립 projection으로 풀어 둔다. 그래서 TUI는 이후 domain diagnostics를 직접 들고 있지
 않아도 기존 startup overlay 정보를 잃지 않는다.
+마이그레이션 중간 단계에서는 TUI가 아직 startup effect를 직접 실행하더라도, reducer와
+rendering state는 `StartupReadySnapshot`을 읽어 domain diagnostics 보관 책임을 core 쪽
+계약으로 옮긴다.
 
 ## 상태 소유권 표
 

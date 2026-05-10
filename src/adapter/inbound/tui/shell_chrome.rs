@@ -1,5 +1,5 @@
+use crate::core::app::StartupReadySnapshot;
 use crate::domain::recent_sessions::SessionCatalog;
-use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 /*
  * shell chrome은 단일 conversation transcript 밖에 있는 TUI 상태를 reducer가 소유하게 하는 경계다.
@@ -31,7 +31,7 @@ pub enum ExitConfirmationState {
 pub enum StartupState {
     Idle,
     Loading,
-    Ready(StartupDiagnostics),
+    Ready(Box<StartupReadySnapshot>),
     Failed(String),
 }
 
@@ -69,7 +69,7 @@ impl ShellChromeState {
     pub fn can_open_session_list(&self) -> bool {
         matches!(
             &self.startup_state,
-            StartupState::Ready(diagnostics) if diagnostics.can_continue()
+            StartupState::Ready(ready) if ready.can_continue
         )
     }
 }
@@ -89,7 +89,7 @@ impl Default for ShellChromeState {
 pub enum ShellChromeEvent {
     StartupCheckRequested,
     StartupLoaded {
-        result: Result<StartupDiagnostics, String>,
+        result: Result<Box<StartupReadySnapshot>, String>,
         session_page_size: usize,
     },
     SessionsRequested {
@@ -153,11 +153,11 @@ pub fn reduce_shell_chrome(
             result,
             session_page_size,
         } => match result {
-            Ok(diagnostics) => {
-                // diagnostics를 state 안으로 move하기 전에 session preload gate와 workspace scope에 필요한 값을 빼 둔다.
-                let can_continue = diagnostics.can_continue();
-                let workspace_path = diagnostics.workspace_path.clone();
-                state.startup_state = StartupState::Ready(diagnostics);
+            Ok(ready) => {
+                // ready snapshot을 state 안으로 move하기 전에 session preload gate와 workspace scope에 필요한 값을 빼 둔다.
+                let can_continue = ready.can_continue;
+                let workspace_path = ready.workspace_path.clone();
+                state.startup_state = StartupState::Ready(ready);
                 // startup 성공은 session browser를 한 번 prime하지만, 이미 load/ready 상태인 catalog를 강제로 refresh하지 않는다.
                 if can_continue && matches!(state.session_state, SessionState::Idle) {
                     state.session_state = SessionState::Loading;
@@ -324,6 +324,7 @@ mod tests {
         ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
         ShellOverlay, StartupState, reduce_shell_chrome,
     };
+    use crate::core::app::StartupReadySnapshot;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -526,7 +527,19 @@ mod tests {
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::Supersession);
         assert!(reduced.effects.is_empty());
     }
-    fn sample_startup_diagnostics() -> StartupDiagnostics {
+    fn sample_startup_diagnostics() -> Box<StartupReadySnapshot> {
+        Box::new(StartupReadySnapshot::from_diagnostics(
+            sample_startup_diagnostics_source(),
+        ))
+    }
+    fn sample_blocked_startup_diagnostics() -> Box<StartupReadySnapshot> {
+        Box::new(StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
+            account_ok: false,
+            account_detail: "login required".to_string(),
+            ..sample_startup_diagnostics_source()
+        }))
+    }
+    fn sample_startup_diagnostics_source() -> StartupDiagnostics {
         StartupDiagnostics {
             cwd: "/tmp/root".to_string(),
             codex_binary_ok: true,
@@ -541,13 +554,6 @@ mod tests {
             account_detail: "logged in".to_string(),
             warnings: Vec::new(),
             schema_snapshot: StartupDiagnostics::bundled_schema_snapshot_label(),
-        }
-    }
-    fn sample_blocked_startup_diagnostics() -> StartupDiagnostics {
-        StartupDiagnostics {
-            account_ok: false,
-            account_detail: "login required".to_string(),
-            ..sample_startup_diagnostics()
         }
     }
     fn sample_session(id: &str) -> SessionSummary {

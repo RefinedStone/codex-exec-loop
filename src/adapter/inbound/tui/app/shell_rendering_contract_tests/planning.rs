@@ -5,6 +5,7 @@ use crate::application::service::planning::{
     PlanningBootstrapMode, PlanningDraftEditorFile, PlanningDraftEditorSession,
     PlanningInitStageResult,
 };
+use crate::core::app::StartupReadySnapshot;
 use crate::domain::planning::PlanningValidationReport;
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -30,21 +31,23 @@ fn inline_planning_init_inspection_renders_existing_auto_seeded_workspace_inside
     ));
     std::fs::create_dir_all(&workspace_dir).expect("temp workspace should be created");
     let workspace_dir = workspace_dir.to_string_lossy().to_string();
-    app.startup_state = StartupState::Ready(StartupDiagnostics {
-        cwd: workspace_dir.clone(),
-        codex_binary_ok: true,
-        codex_binary_detail: "codex".to_string(),
-        workspace_ok: true,
-        workspace_path: workspace_dir.clone(),
-        workspace_detail: "workspace found".to_string(),
-        attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
-        initialize_ok: true,
-        initialize_detail: "app-server initialize ok".to_string(),
-        account_ok: true,
-        account_detail: "account ok".to_string(),
-        warnings: Vec::new(),
-        schema_snapshot: "snapshot.json".to_string(),
-    });
+    app.startup_state = StartupState::Ready(Box::new(StartupReadySnapshot::from_diagnostics(
+        StartupDiagnostics {
+            cwd: workspace_dir.clone(),
+            codex_binary_ok: true,
+            codex_binary_detail: "codex".to_string(),
+            workspace_ok: true,
+            workspace_path: workspace_dir.clone(),
+            workspace_detail: "workspace found".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+            initialize_ok: true,
+            initialize_detail: "app-server initialize ok".to_string(),
+            account_ok: true,
+            account_detail: "account ok".to_string(),
+            warnings: Vec::new(),
+            schema_snapshot: "snapshot.json".to_string(),
+        },
+    )));
     app.sync_draft_shell_workspace(&workspace_dir);
     app.show_planning_init_overlay();
 

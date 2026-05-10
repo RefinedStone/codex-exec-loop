@@ -16,11 +16,11 @@ use crate::application::service::planning::{
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::core::app::StartupReadySnapshot;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
-use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 use super::conversation_runtime::ConversationPostTurnEvaluation;
 use super::{
@@ -44,7 +44,7 @@ use super::{
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(super) enum BackgroundMessage {
-    StartupLoaded(Result<StartupDiagnostics, String>),
+    StartupLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionsLoaded(Result<SessionCatalog, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
@@ -414,7 +414,11 @@ impl NativeTuiApp {
                 let tx = self.tx.clone();
                 let service = self.application.startup();
                 thread::spawn(move || {
-                    let result = service.run_checks().map_err(|error| error.to_string());
+                    let result = service
+                        .run_checks()
+                        .map(StartupReadySnapshot::from_diagnostics)
+                        .map(Box::new)
+                        .map_err(|error| error.to_string());
                     let _ = tx.send(BackgroundMessage::StartupLoaded(result));
                 });
             }

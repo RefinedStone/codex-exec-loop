@@ -38,12 +38,12 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
             ]),
             Line::from(startup_probe_loading_summary_line()),
         ],
-        StartupState::Ready(diagnostics) => vec![
+        StartupState::Ready(ready) => vec![
             Line::from(vec![
                 Span::styled("status: ", AkraTheme::muted()),
                 Span::styled(
-                    startup_overlay_readiness_label(diagnostics.can_continue()),
-                    if diagnostics.can_continue() {
+                    startup_overlay_readiness_label(ready.can_continue),
+                    if ready.can_continue {
                         AkraTheme::success()
                     } else {
                         AkraTheme::warning()
@@ -54,10 +54,8 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
              * cwd와 attachment profile은 startup check가 끝난 뒤의 execution context다.
              * 세부 diagnostics list와 별개로 상단에 고정해 operator가 현재 thread 연결 방식을 빠르게 확인한다.
              */
-            Line::from(format!("cwd: {}", diagnostics.cwd)),
-            Line::from(attachment_profile_summary_line(
-                diagnostics.attachment_profile,
-            )),
+            Line::from(format!("cwd: {}", ready.cwd)),
+            Line::from(attachment_profile_summary_line(&ready.attachment)),
         ],
         StartupState::Failed(message) => vec![
             Line::from(vec![
@@ -87,42 +85,30 @@ pub(super) fn build_startup_check_lines_from_state(
     match startup_state {
         StartupState::Idle => vec![Line::from(startup_check_not_started_line())],
         StartupState::Loading => startup_check_loading_lines(),
-        StartupState::Ready(diagnostics) => vec![
+        StartupState::Ready(ready) => vec![
             diagnostic_item(
                 "codex binary",
-                diagnostics.codex_binary_ok,
-                &diagnostics.codex_binary_detail,
+                ready.codex_binary.ok,
+                &ready.codex_binary.detail,
             ),
-            diagnostic_item(
-                "workspace",
-                diagnostics.workspace_ok,
-                &diagnostics.workspace_detail,
-            ),
+            diagnostic_item("workspace", ready.workspace.ok, &ready.workspace.detail),
             diagnostic_item(
                 "app-server initialize",
-                diagnostics.initialize_ok,
-                &diagnostics.initialize_detail,
+                ready.app_server_initialize.ok,
+                &ready.app_server_initialize.detail,
             ),
             /*
              * attachment mode와 recovery anchor는 pass/fail probe가 아니라 선택된 launch profile이다.
              * 그래도 capability panel에서 함께 보여야 startup 이후 session recovery 동작을 예측할 수 있다.
              */
-            diagnostic_item(
-                "attachment mode",
-                true,
-                diagnostics.attachment_profile.mode.label(),
-            ),
+            diagnostic_item("attachment mode", true, &ready.attachment.mode_label),
             diagnostic_item(
                 "recovery anchor",
                 true,
-                diagnostics.attachment_profile.recovery_anchor.label(),
+                &ready.attachment.recovery_anchor_label,
             ),
-            diagnostic_item(
-                "account/read",
-                diagnostics.account_ok,
-                &diagnostics.account_detail,
-            ),
-            Line::from(format!("schema snapshot: {}", diagnostics.schema_snapshot)),
+            diagnostic_item("account/read", ready.account.ok, &ready.account.detail),
+            Line::from(format!("schema snapshot: {}", ready.schema_snapshot)),
         ],
         StartupState::Failed(message) => vec![Line::from(format!("startup error: {message}"))],
     }
@@ -144,7 +130,7 @@ pub(super) fn build_startup_warning_lines_from_state(
      * 직접 보여 주고, 나머지 상태는 operator가 볼 수 있는 "no warnings" placeholder를 유지한다.
      */
     match startup_state {
-        StartupState::Ready(diagnostics) if !diagnostics.warnings.is_empty() => diagnostics
+        StartupState::Ready(ready) if !ready.warnings.is_empty() => ready
             .warnings
             .iter()
             .cloned()

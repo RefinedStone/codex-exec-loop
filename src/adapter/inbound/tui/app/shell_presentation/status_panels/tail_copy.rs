@@ -353,11 +353,11 @@ fn build_inline_startup_screen_lines_with_context(
                 context.startup_state,
             ));
         }
-        StartupState::Ready(diagnostics) => {
-            lines.push(Line::from(format!("workspace: {}", diagnostics.cwd)));
-            lines.push(Line::from(startup_diagnostics_summary_line(diagnostics)));
-            lines.push(Line::from(startup_attachment_summary_line(diagnostics)));
-            if let Some(first_warning) = diagnostics.warnings.first() {
+        StartupState::Ready(ready) => {
+            lines.push(Line::from(format!("workspace: {}", ready.cwd)));
+            lines.push(Line::from(startup_diagnostics_summary_line(ready)));
+            lines.push(Line::from(startup_attachment_summary_line(ready)));
+            if let Some(first_warning) = ready.warnings.first() {
                 lines.push(Line::from(format!(
                     "warning: {}",
                     compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
