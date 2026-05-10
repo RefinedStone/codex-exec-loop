@@ -333,6 +333,10 @@ TUI
 
 TUI는 startup check를 직접 thread spawn하지 않는다. TUI는 `RunStartupChecks`라는
 의도를 보내고, `StartupSnapshot`을 받아 화면에 표시한다.
+`StartupReadySnapshot`은 domain `StartupDiagnostics`를 그대로 보관하는 대신 cwd,
+workspace, probe 결과, attachment label, warning, schema snapshot을 UI/transport
+독립 projection으로 풀어 둔다. 그래서 TUI는 이후 domain diagnostics를 직접 들고 있지
+않아도 기존 startup overlay 정보를 잃지 않는다.
 
 ## 상태 소유권 표
 

@@ -32,7 +32,7 @@ impl AppState {
         self.advance_revision();
     }
 
-    pub fn apply_startup_result(&mut self, result: Result<StartupReadySnapshot, String>) {
+    pub fn apply_startup_result(&mut self, result: Result<Box<StartupReadySnapshot>, String>) {
         self.startup = match result {
             Ok(ready) => StartupState::Ready(ready),
             Err(message) => StartupState::Failed(message),

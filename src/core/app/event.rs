@@ -9,7 +9,7 @@ pub enum CoreInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreEffectCompletion {
-    StartupChecksLoaded(Result<StartupReadySnapshot, String>),
+    StartupChecksLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
 }
 

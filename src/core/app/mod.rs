@@ -18,5 +18,8 @@ pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};
 pub use snapshot::AppSnapshot;
-pub use startup::{StartupReadySnapshot, StartupSnapshot, StartupState};
+pub use startup::{
+    StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+    StartupState,
+};
 pub use state::AppState;

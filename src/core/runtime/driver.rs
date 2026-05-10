@@ -82,7 +82,8 @@ mod tests {
     use super::*;
     use crate::core::app::{
         AppEvent, CoreEffectCompletion, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
-        StartupReadySnapshot, StartupSnapshot,
+        StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
+        StartupSnapshot,
     };
 
     #[derive(Clone, Default)]
@@ -128,13 +129,35 @@ mod tests {
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         let ready = StartupReadySnapshot {
+            cwd: "/tmp/workspace".to_string(),
             workspace_path: "/tmp/workspace".to_string(),
             can_continue: true,
+            codex_binary: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "/usr/bin/codex".to_string(),
+            },
+            workspace: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "git repo: /tmp/workspace".to_string(),
+            },
+            app_server_initialize: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "initialized".to_string(),
+            },
+            account: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "authenticated".to_string(),
+            },
+            attachment: StartupAttachmentSnapshot {
+                mode_label: "provider-launched".to_string(),
+                recovery_anchor_label: "provider-thread-id".to_string(),
+            },
             warnings: Vec::new(),
+            schema_snapshot: "embedded schema".to_string(),
         };
 
         tx.send(CoreInput::EffectCompleted(
-            CoreEffectCompletion::StartupChecksLoaded(Ok(ready.clone())),
+            CoreEffectCompletion::StartupChecksLoaded(Ok(Box::new(ready.clone()))),
         ))
         .unwrap();
 
@@ -143,11 +166,14 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(
             outcomes[0].events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(
+            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(Box::new(
                 ready.clone()
-            ))]
+            )))]
         );
-        assert_eq!(runtime.snapshot().startup, StartupSnapshot::Ready(ready));
+        assert_eq!(
+            runtime.snapshot().startup,
+            StartupSnapshot::Ready(Box::new(ready))
+        );
         assert!(effects.recorded_effects().is_empty());
     }
 

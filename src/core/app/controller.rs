@@ -88,7 +88,9 @@ impl Default for CoreController {
 mod tests {
     use super::*;
     use crate::core::app::{SessionCatalogReadySnapshot, SessionCatalogSnapshot};
-    use crate::core::app::{StartupReadySnapshot, StartupSnapshot};
+    use crate::core::app::{
+        StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+    };
 
     #[test]
     fn new_controller_exposes_initial_snapshot() {
@@ -127,26 +129,22 @@ mod tests {
     #[test]
     fn startup_completion_marks_startup_ready() {
         let mut controller = CoreController::new();
-        let ready_snapshot = StartupReadySnapshot {
-            workspace_path: "/tmp/workspace".to_string(),
-            can_continue: true,
-            warnings: vec!["non fatal".to_string()],
-        };
+        let ready_snapshot = sample_startup_ready_snapshot();
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::StartupChecksLoaded(Ok(ready_snapshot.clone())),
+            CoreEffectCompletion::StartupChecksLoaded(Ok(Box::new(ready_snapshot.clone()))),
         ));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
             outcome.snapshot.startup,
-            StartupSnapshot::Ready(ready_snapshot.clone())
+            StartupSnapshot::Ready(Box::new(ready_snapshot.clone()))
         );
         assert_eq!(
             outcome.events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(
+            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(Box::new(
                 ready_snapshot
-            ))]
+            )))]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -255,5 +253,35 @@ mod tests {
             )]
         );
         assert!(outcome.effects.is_empty());
+    }
+
+    fn sample_startup_ready_snapshot() -> StartupReadySnapshot {
+        StartupReadySnapshot {
+            cwd: "/tmp/workspace".to_string(),
+            workspace_path: "/tmp/workspace".to_string(),
+            can_continue: true,
+            codex_binary: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "/usr/bin/codex".to_string(),
+            },
+            workspace: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "git repo: /tmp/workspace".to_string(),
+            },
+            app_server_initialize: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "initialized".to_string(),
+            },
+            account: StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "authenticated".to_string(),
+            },
+            attachment: StartupAttachmentSnapshot {
+                mode_label: "provider-launched".to_string(),
+                recovery_anchor_label: "provider-thread-id".to_string(),
+            },
+            warnings: vec!["non fatal".to_string()],
+            schema_snapshot: "embedded schema".to_string(),
+        }
     }
 }

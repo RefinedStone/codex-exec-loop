@@ -72,6 +72,7 @@ fn startup_checks_completion(result: Result<StartupDiagnostics>) -> CoreEffectCo
     CoreEffectCompletion::StartupChecksLoaded(
         result
             .map(StartupReadySnapshot::from_diagnostics)
+            .map(Box::new)
             .map_err(|error| error.to_string()),
     )
 }
@@ -110,11 +111,33 @@ mod tests {
 
         assert_eq!(
             startup_checks_completion(Ok(diagnostics)),
-            CoreEffectCompletion::StartupChecksLoaded(Ok(StartupReadySnapshot {
+            CoreEffectCompletion::StartupChecksLoaded(Ok(Box::new(StartupReadySnapshot {
+                cwd: "/tmp/workspace".to_string(),
                 workspace_path: "/tmp/workspace".to_string(),
                 can_continue: true,
+                codex_binary: crate::core::app::StartupDiagnosticSnapshot {
+                    ok: true,
+                    detail: "/usr/bin/codex".to_string(),
+                },
+                workspace: crate::core::app::StartupDiagnosticSnapshot {
+                    ok: true,
+                    detail: "git repo: /tmp/workspace".to_string(),
+                },
+                app_server_initialize: crate::core::app::StartupDiagnosticSnapshot {
+                    ok: true,
+                    detail: "initialized".to_string(),
+                },
+                account: crate::core::app::StartupDiagnosticSnapshot {
+                    ok: true,
+                    detail: "authenticated".to_string(),
+                },
+                attachment: crate::core::app::StartupAttachmentSnapshot {
+                    mode_label: "provider-launched".to_string(),
+                    recovery_anchor_label: "provider-thread-id".to_string(),
+                },
                 warnings: Vec::new(),
-            }))
+                schema_snapshot: "embedded schema".to_string(),
+            })))
         );
     }
 
