@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // ConversationSnapshot은 app-server 세션을 TUI view model로 넘길 때 쓰는 도메인 단위의
 // "현재 대화 전체 상태"이다. adapter가 raw event stream을 줄여 만든 결과를 application/UI 경계에 전달한다.
 pub struct ConversationSnapshot {
@@ -16,7 +16,7 @@ pub struct ConversationSnapshot {
     pub runtime_notices: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // ConversationMessage는 transcript의 한 항목이다. 텍스트뿐 아니라 phase, item_id,
 // display_label을 함께 둬 streaming event와 최종 transcript rendering을 같은 타입으로 연결한다.
 pub struct ConversationMessage {

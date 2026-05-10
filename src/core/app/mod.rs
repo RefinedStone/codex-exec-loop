@@ -5,6 +5,7 @@
  */
 pub mod command;
 pub mod controller;
+pub mod conversation;
 pub mod effect;
 pub mod event;
 pub mod session;
@@ -14,6 +15,7 @@ pub mod state;
 
 pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
+pub use conversation::{ConversationReadySnapshot, ConversationSnapshot, ConversationState};
 pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};

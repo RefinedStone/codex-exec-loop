@@ -54,6 +54,10 @@ impl CoreController {
                 self.state.apply_session_catalog_result(result);
                 self.session_catalog_changed_outcome(Vec::new())
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::ConversationLoaded(result)) => {
+                self.state.apply_conversation_result(result);
+                self.conversation_changed_outcome(Vec::new())
+            }
         }
     }
 
@@ -76,6 +80,15 @@ impl CoreController {
             snapshot,
         }
     }
+
+    fn conversation_changed_outcome(&self, effects: Vec<CoreEffect>) -> CoreDispatchOutcome {
+        let snapshot = self.snapshot();
+        CoreDispatchOutcome {
+            events: vec![AppEvent::ConversationChanged(snapshot.conversation.clone())],
+            effects,
+            snapshot,
+        }
+    }
 }
 
 impl Default for CoreController {
@@ -87,9 +100,16 @@ impl Default for CoreController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::{SessionCatalogReadySnapshot, SessionCatalogSnapshot};
+    use crate::core::app::{
+        ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
+        SessionCatalogSnapshot,
+    };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+    };
+    use crate::domain::conversation::{
+        ConversationMessage, ConversationMessageKind,
+        ConversationSnapshot as DomainConversationSnapshot,
     };
     use crate::domain::recent_sessions::RecentSessions;
 
@@ -264,6 +284,55 @@ mod tests {
         assert!(outcome.effects.is_empty());
     }
 
+    #[test]
+    fn conversation_completion_marks_ready() {
+        let mut controller = CoreController::new();
+        let ready = sample_conversation_ready_snapshot();
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded(Ok(Box::new(ready.clone()))),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.snapshot.conversation,
+            ConversationSnapshot::Ready(Box::new(ready.clone()))
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationChanged(ConversationSnapshot::Ready(
+                Box::new(ready)
+            ))]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_completion_marks_failed() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded(Err("thread unavailable".to_string())),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.snapshot.conversation,
+            ConversationSnapshot::Failed {
+                message: "thread unavailable".to_string()
+            }
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationChanged(
+                ConversationSnapshot::Failed {
+                    message: "thread unavailable".to_string()
+                }
+            )]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
     fn sample_startup_ready_snapshot() -> StartupReadySnapshot {
         StartupReadySnapshot {
             cwd: "/tmp/workspace".to_string(),
@@ -292,5 +361,22 @@ mod tests {
             warnings: vec!["non fatal".to_string()],
             schema_snapshot: "embedded schema".to_string(),
         }
+    }
+
+    fn sample_conversation_ready_snapshot() -> ConversationReadySnapshot {
+        DomainConversationSnapshot {
+            thread_id: "thread-1".to_string(),
+            title: "Core runtime".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: vec![ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                "ready",
+                None,
+                None,
+            )],
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        }
+        .into()
     }
 }

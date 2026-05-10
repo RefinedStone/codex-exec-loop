@@ -1,6 +1,6 @@
 use super::{
-    AppSnapshot, SessionCatalogReadySnapshot, SessionCatalogState, StartupReadySnapshot,
-    StartupState,
+    AppSnapshot, ConversationReadySnapshot, ConversationState, SessionCatalogReadySnapshot,
+    SessionCatalogState, StartupReadySnapshot, StartupState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,6 +8,7 @@ pub struct AppState {
     revision: u64,
     startup: StartupState,
     session_catalog: SessionCatalogState,
+    conversation: ConversationState,
 }
 
 impl AppState {
@@ -16,6 +17,7 @@ impl AppState {
             revision: 0,
             startup: StartupState::Idle,
             session_catalog: SessionCatalogState::Idle,
+            conversation: ConversationState::Idle,
         }
     }
 
@@ -24,6 +26,7 @@ impl AppState {
             revision: self.revision,
             startup: self.startup.snapshot(),
             session_catalog: self.session_catalog.snapshot(),
+            conversation: self.conversation.snapshot(),
         }
     }
 
@@ -56,6 +59,22 @@ impl AppState {
         self.advance_revision();
     }
 
+    pub fn mark_conversation_loading(&mut self) {
+        self.conversation = ConversationState::Loading;
+        self.advance_revision();
+    }
+
+    pub fn apply_conversation_result(
+        &mut self,
+        result: Result<Box<ConversationReadySnapshot>, String>,
+    ) {
+        self.conversation = match result {
+            Ok(ready) => ConversationState::Ready(ready),
+            Err(message) => ConversationState::Failed(message),
+        };
+        self.advance_revision();
+    }
+
     fn advance_revision(&mut self) {
         self.revision += 1;
     }
@@ -70,7 +89,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::{SessionCatalogSnapshot, StartupSnapshot};
+    use crate::core::app::{ConversationSnapshot, SessionCatalogSnapshot, StartupSnapshot};
 
     #[test]
     fn new_state_projects_initial_snapshot() {
@@ -89,6 +108,7 @@ mod tests {
                 revision: 1,
                 startup: StartupSnapshot::Loading,
                 session_catalog: SessionCatalogSnapshot::Idle,
+                conversation: ConversationSnapshot::Idle,
             }
         );
     }
@@ -105,6 +125,24 @@ mod tests {
                 revision: 1,
                 startup: StartupSnapshot::Idle,
                 session_catalog: SessionCatalogSnapshot::Loading,
+                conversation: ConversationSnapshot::Idle,
+            }
+        );
+    }
+
+    #[test]
+    fn conversation_loading_advances_revision() {
+        let mut state = AppState::new();
+
+        state.mark_conversation_loading();
+
+        assert_eq!(
+            state.snapshot(),
+            AppSnapshot {
+                revision: 1,
+                startup: StartupSnapshot::Idle,
+                session_catalog: SessionCatalogSnapshot::Idle,
+                conversation: ConversationSnapshot::Loading,
             }
         );
     }

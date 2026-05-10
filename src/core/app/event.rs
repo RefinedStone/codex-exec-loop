@@ -1,4 +1,7 @@
-use super::{AppSnapshot, SessionCatalogReadySnapshot, SessionCatalogSnapshot};
+use super::{
+    AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
+    SessionCatalogSnapshot,
+};
 use super::{StartupReadySnapshot, StartupSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +14,7 @@ pub enum CoreInput {
 pub enum CoreEffectCompletion {
     StartupChecksLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
+    ConversationLoaded(Result<Box<ConversationReadySnapshot>, String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,4 +27,5 @@ pub enum AppEvent {
     SnapshotChanged(AppSnapshot),
     StartupChanged(StartupSnapshot),
     SessionCatalogChanged(SessionCatalogSnapshot),
+    ConversationChanged(ConversationSnapshot),
 }
