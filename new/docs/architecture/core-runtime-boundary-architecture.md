@@ -206,6 +206,93 @@ pub struct AppSnapshot {
 이 타입들은 UI/transport 독립이어야 한다. 필요하면 serialization 가능한 DTO는 별도
 protocol layer로 나중에 분리한다. 처음부터 HTTP/SSE 프로토콜을 목표로 삼지 않는다.
 
+## Core Input Event의 종류
+
+`core`가 처리하는 입력은 사용자 명령만이 아니다. TUI/Admin/CLI 같은 inbound
+adapter에서 온 command, 외부 stream에서 온 event, application 내부 background
+effect가 완료되며 생기는 completion event를 모두 같은 app runtime 입력으로 다룬다.
+
+```text
+CoreInput
+  - Command(AppCommand)
+  - ExternalEvent(...)
+  - EffectCompleted(...)
+```
+
+### 1. User Command
+
+사용자 또는 외부 surface가 의도를 보낸다.
+
+```text
+TUI key / CLI args / Admin HTTP / Telegram message
+  -> inbound adapter
+  -> AppCommand
+  -> core.dispatch(command)
+```
+
+예시:
+
+- `RunStartupChecks`
+- `LoadSessionCatalog`
+- `SubmitTurn`
+- `EnableParallelMode`
+- `StopAllSessions`
+
+### 2. External Stream Event
+
+외부 시스템이 stream/SSE/notification을 보낸다. 이때 outbound adapter가 raw event를
+application/core가 이해할 수 있는 event로 낮춘다. outbound adapter가 TUI를 직접
+호출하거나 core state를 직접 변경하면 안 된다.
+
+```text
+external SSE / app-server notification / worker stream
+  -> outbound adapter
+  -> application-level stream event
+  -> core input event sink
+  -> core state update
+  -> AppEvent/AppSnapshot
+  -> inbound TUI render
+```
+
+예시:
+
+- assistant token delta
+- app-server turn notification
+- worker progress message
+- worker stream failure
+- turn completed notification
+
+### 3. Internal Completion Event
+
+application/core가 시작한 background effect도 나중에 완료 event로 core에 재진입해야
+한다. 이 event는 외부 SSE가 아니지만 app state를 바꾸는 비동기 입력이다.
+
+```text
+AppCommand
+  -> core state = Loading/InFlight
+  -> application service/effect runner starts background work
+  -> background work completes
+  -> EffectCompleted event
+  -> core state = Ready/Failed/Updated
+  -> AppEvent/AppSnapshot
+  -> inbound adapter render/response
+```
+
+예시:
+
+- `StartupService::run_checks()` 완료
+- session catalog load 완료
+- conversation snapshot load 완료
+- post-turn evaluation 완료
+- planning repair/refresh 완료
+- parallel supervisor refresh 완료
+- parallel orchestrator wake/tick 완료
+- parallel worker completion 처리
+
+이 규칙의 목적은 “비동기 작업이 끝난 thread가 곧바로 TUI state를 수정하는” 경로를
+없애는 것이다. completion은 반드시 core input event로 환원하고, core만 app state를
+변경한다.
+
 ## StartupCheckRequested 기준 목표 흐름
 
 현재 흐름:
