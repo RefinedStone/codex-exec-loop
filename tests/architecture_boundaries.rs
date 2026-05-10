@@ -202,6 +202,17 @@ fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
 }
 
 #[test]
+fn tui_startup_checks_enter_through_core_runtime() {
+    // Static guard for the startup migration: TUI may request startup checks, but execution belongs
+    // to CoreRuntime/CoreEffectRunner so completion re-enters core before TUI state changes.
+    assert_no_forbidden_references_in_paths(
+        "TUI startup checks must be dispatched through core runtime, not StartupService directly",
+        &["src/adapter/inbound/tui/app/app_runtime.rs"],
+        &[".run_checks(", "NativeTuiStartupHandle"],
+    );
+}
+
+#[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
     // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
     // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.

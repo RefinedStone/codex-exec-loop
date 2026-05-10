@@ -9,7 +9,7 @@ use crate::domain::operator_alert::OperatorAlert;
 use super::post_turn_automation::PostTurnAutomationBackgroundResult;
 use super::{
     AutoFollowOverlayUiEvent, BackgroundMessage, ConversationLifecycleEvent,
-    ConversationRuntimeEvent, NativeTuiApp, SESSION_PAGE_SIZE, ShellChromeEvent,
+    ConversationRuntimeEvent, NativeTuiApp, ShellChromeEvent,
 };
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -87,18 +87,17 @@ impl ShellRuntime {
             drained_background_messages += 1;
             redraw_requested = true;
             match message {
+                #[cfg(test)]
                 BackgroundMessage::StartupLoaded(result) => {
                     let workspace_directory = match &result {
-                        Ok(diagnostics) => Some(diagnostics.workspace_path.clone()),
+                        Ok(ready) => Some(ready.workspace_path.clone()),
                         Err(_) => None,
                     };
                     self.app
                         .dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
                             result,
-                            session_page_size: SESSION_PAGE_SIZE,
+                            session_page_size: super::SESSION_PAGE_SIZE,
                         });
-                    // Startup may resolve a workspace before any conversation is loaded, so the
-                    // draft shell follows that workspace immediately.
                     if let Some(workspace_directory) = workspace_directory {
                         self.app.sync_draft_shell_workspace(&workspace_directory);
                     }
@@ -188,6 +187,9 @@ impl ShellRuntime {
         self.background_drain_limited =
             drained_background_messages == BACKGROUND_MESSAGE_DRAIN_BUDGET;
 
+        redraw_requested |= self
+            .app
+            .poll_core_runtime_inputs(BACKGROUND_MESSAGE_DRAIN_BUDGET);
         redraw_requested |= self.app.maybe_start_github_review_poll(now);
         let live_activity_pulse = self.app.live_activity_pulse(now);
         if live_activity_pulse != self.last_live_activity_pulse {

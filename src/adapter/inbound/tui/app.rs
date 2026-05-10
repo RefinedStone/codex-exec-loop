@@ -7,6 +7,7 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::application::service::planning::PlanningTaskIntakeRequest;
+use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
 };
@@ -290,6 +291,7 @@ struct NativeTuiApp {
     pending_task_intake_command: Option<InlineShellCommandInput>,
     active_session: Option<SessionSummary>,
     application: NativeTuiApplicationHandle,
+    core_runtime: CoreRuntime<CoreEffectRunner>,
     turn_control_truth: ConversationRuntimeControlTruth,
     planning_worker_panel_state: PlanningWorkerPanelState,
     planning_worker_visibility: PlanningWorkerVisibility,

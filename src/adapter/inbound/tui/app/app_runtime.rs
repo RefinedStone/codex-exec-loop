@@ -16,7 +16,10 @@ use crate::application::service::planning::{
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+#[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
+use crate::core::app::{AppCommand, AppEvent, CoreDispatchOutcome, StartupSnapshot};
+use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
@@ -44,6 +47,7 @@ use super::{
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(super) enum BackgroundMessage {
+    #[cfg(test)]
     StartupLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionsLoaded(Result<SessionCatalog, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
@@ -99,7 +103,6 @@ impl NativeTuiAppRuntimeChannels {
 
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
-    startup: NativeTuiStartupHandle,
     sessions: NativeTuiSessionCatalogHandle,
     conversations: NativeTuiConversationHandle,
     parallel_turns: ParallelModeTurnService,
@@ -108,23 +111,17 @@ pub(super) struct NativeTuiApplicationHandle {
 
 impl NativeTuiApplicationHandle {
     fn new(
-        startup: StartupService,
         sessions: SessionService,
         conversations: ConversationService,
         parallel_turns: ParallelModeTurnService,
         planning_feature: PlanningServices,
     ) -> Self {
         Self {
-            startup: NativeTuiStartupHandle::new(startup),
             sessions: NativeTuiSessionCatalogHandle::new(sessions),
             conversations: NativeTuiConversationHandle::new(conversations),
             parallel_turns,
             planning_feature: NativeTuiPlanningHandle::new(planning_feature),
         }
-    }
-
-    pub(super) fn startup(&self) -> NativeTuiStartupHandle {
-        self.startup.clone()
     }
 
     pub(super) fn sessions(&self) -> NativeTuiSessionCatalogHandle {
@@ -157,23 +154,6 @@ impl NativeTuiApplicationHandle {
 
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.conversations.request_stop_all_sessions()
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct NativeTuiStartupHandle {
-    service: StartupService,
-}
-
-impl NativeTuiStartupHandle {
-    fn new(service: StartupService) -> Self {
-        Self { service }
-    }
-
-    pub(super) fn run_checks(
-        &self,
-    ) -> anyhow::Result<crate::domain::startup_diagnostics::StartupDiagnostics> {
-        self.service.run_checks()
     }
 }
 
@@ -322,8 +302,14 @@ impl NativeTuiApp {
             parallel_mode_control_plane,
             runtime_channels,
         } = parallel_mode_binding;
+        let (core_input_sender, core_input_receiver) = mpsc::channel();
+        let core_effect_runner = CoreEffectRunner::new(
+            startup_service.clone(),
+            session_service.clone(),
+            core_input_sender,
+        );
+        let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
         let application = NativeTuiApplicationHandle::new(
-            startup_service,
             session_service,
             conversation_service,
             parallel_turns,
@@ -367,6 +353,7 @@ impl NativeTuiApp {
             pending_task_intake_command: None,
             active_session: None,
             application,
+            core_runtime,
             turn_control_truth,
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
@@ -408,19 +395,56 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn poll_core_runtime_inputs(&mut self, max_inputs: usize) -> bool {
+        let outcomes = self.core_runtime.drain_pending_inputs(max_inputs);
+        let changed = !outcomes.is_empty();
+        for outcome in outcomes {
+            self.apply_core_dispatch_outcome(outcome);
+        }
+        changed
+    }
+
+    fn apply_core_dispatch_outcome(&mut self, outcome: CoreDispatchOutcome) {
+        for event in outcome.events {
+            self.apply_core_event(event);
+        }
+    }
+
+    fn apply_core_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::StartupChanged(StartupSnapshot::Idle) => {
+                self.startup_state = StartupState::Idle;
+            }
+            AppEvent::StartupChanged(StartupSnapshot::Loading) => {
+                self.startup_state = StartupState::Loading;
+            }
+            AppEvent::StartupChanged(StartupSnapshot::Ready(ready)) => {
+                let workspace_directory = ready.workspace_path.clone();
+                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
+                    result: Ok(ready),
+                    session_page_size: SESSION_PAGE_SIZE,
+                });
+                self.sync_draft_shell_workspace(&workspace_directory);
+                self.resolve_startup_submit_queue();
+            }
+            AppEvent::StartupChanged(StartupSnapshot::Failed { message }) => {
+                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
+                    result: Err(message),
+                    session_page_size: SESSION_PAGE_SIZE,
+                });
+                self.resolve_startup_submit_queue();
+            }
+            AppEvent::SnapshotChanged(_) | AppEvent::SessionCatalogChanged(_) => {}
+        }
+    }
+
     fn execute_shell_chrome_effect(&mut self, effect: ShellChromeEffect) {
         match effect {
             ShellChromeEffect::RunStartupChecks => {
-                let tx = self.tx.clone();
-                let service = self.application.startup();
-                thread::spawn(move || {
-                    let result = service
-                        .run_checks()
-                        .map(StartupReadySnapshot::from_diagnostics)
-                        .map(Box::new)
-                        .map_err(|error| error.to_string());
-                    let _ = tx.send(BackgroundMessage::StartupLoaded(result));
-                });
+                let outcome = self
+                    .core_runtime
+                    .dispatch_command(AppCommand::RunStartupChecks);
+                self.apply_core_dispatch_outcome(outcome);
             }
             ShellChromeEffect::LoadSessionCatalog {
                 limit,
