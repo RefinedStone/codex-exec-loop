@@ -4,7 +4,7 @@ use chrono::{Local, TimeZone};
 
 // SessionSummary는 outbound app-server ThreadRecord를 TUI가 다룰 수 있는 domain 요약으로 낮춘 값이다.
 // session browser search/sort, shell chrome selection, conversation lifecycle attach가 모두 이 구조체를 기준으로 움직인다.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
     // id는 app-server thread/session을 다시 열 때 사용하는 안정 식별자다. UI에서는 short_id로
     // 줄여 보여 주지만, attach/load 요청에는 전체 id가 보존되어야 한다.

@@ -2,6 +2,7 @@ use crate::domain::recent_sessions::SessionCatalog;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCatalogReadySnapshot {
+    pub catalog: Box<SessionCatalog>,
     pub tier_label: String,
     pub item_count: usize,
     pub warnings: Vec<String>,
@@ -16,6 +17,7 @@ impl SessionCatalogReadySnapshot {
             .unwrap_or(0);
         let warnings = catalog.warnings().to_vec();
         Self {
+            catalog: Box::new(catalog),
             tier_label,
             item_count,
             warnings,
@@ -70,6 +72,14 @@ mod tests {
         assert_eq!(
             SessionCatalogReadySnapshot::from_catalog(catalog),
             SessionCatalogReadySnapshot {
+                catalog: Box::new(
+                    RecentSessions {
+                        items: Vec::new(),
+                        warnings: vec!["partial catalog".to_string()],
+                        next_cursor: None,
+                    }
+                    .into()
+                ),
                 tier_label: SessionCatalogTier::ProviderBackedCatalog
                     .label()
                     .to_string(),

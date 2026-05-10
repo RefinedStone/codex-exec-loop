@@ -161,6 +161,14 @@ mod tests {
         assert_eq!(
             session_catalog_completion(Ok(catalog)),
             CoreEffectCompletion::SessionCatalogLoaded(Ok(SessionCatalogReadySnapshot {
+                catalog: Box::new(
+                    RecentSessions {
+                        items: Vec::new(),
+                        warnings: vec!["partial catalog".to_string()],
+                        next_cursor: None,
+                    }
+                    .into(),
+                ),
                 tier_label: SessionCatalogTier::ProviderBackedCatalog
                     .label()
                     .to_string(),

@@ -34,7 +34,7 @@ impl SessionCatalogRequest {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // RecentSessions는 catalog가 실제로 준비됐을 때의 payload이다. 각 item은 `SessionSummary`
 // display/domain helper를 갖고, warnings와 next_cursor는 provider catalog의 부가 신호를 그대로 보존한다.
 pub struct RecentSessions {
@@ -76,7 +76,7 @@ impl SessionCatalogTier {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // SessionCatalogStatus는 목록 payload가 없거나 제한적일 때도 UI가 이유와 tier를 잃지 않도록
 // 묶는 상태 객체이다. Unsupported와 Partial이 같은 필드를 공유하므로 별도 struct로 중복을 줄인다.
 pub struct SessionCatalogStatus {
@@ -90,7 +90,7 @@ pub struct SessionCatalogStatus {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // SessionCatalog는 recent-session capability의 전체 결과를 세 가지 상태로 닫아 둔다.
 // shell chrome reducer와 presentation은 이 enum만 보면 목록 UI를 열지, fallback copy를 보여 줄지 결정한다.
 pub enum SessionCatalog {

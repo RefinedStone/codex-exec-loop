@@ -91,6 +91,7 @@ mod tests {
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
     };
+    use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
     fn new_controller_exposes_initial_snapshot() {
@@ -206,8 +207,16 @@ mod tests {
     fn session_catalog_completion_marks_ready() {
         let mut controller = CoreController::new();
         let ready = SessionCatalogReadySnapshot {
+            catalog: Box::new(
+                RecentSessions {
+                    items: Vec::new(),
+                    warnings: vec!["partial row".to_string()],
+                    next_cursor: None,
+                }
+                .into(),
+            ),
             tier_label: "provider-backed catalog".to_string(),
-            item_count: 2,
+            item_count: 0,
             warnings: vec!["partial row".to_string()],
         };
 

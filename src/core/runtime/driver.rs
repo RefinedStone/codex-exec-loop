@@ -85,6 +85,7 @@ mod tests {
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
         StartupSnapshot,
     };
+    use crate::domain::recent_sessions::RecentSessions;
 
     #[derive(Clone, Default)]
     struct RecordingEffectExecutor {
@@ -185,8 +186,16 @@ mod tests {
 
         tx.send(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionCatalogLoaded(Ok(SessionCatalogReadySnapshot {
+                catalog: Box::new(
+                    RecentSessions {
+                        items: Vec::new(),
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                ),
                 tier_label: "provider-backed catalog".to_string(),
-                item_count: 2,
+                item_count: 0,
                 warnings: Vec::new(),
             })),
         ))
@@ -202,8 +211,16 @@ mod tests {
         assert_eq!(
             runtime.snapshot().session_catalog,
             SessionCatalogSnapshot::Ready(SessionCatalogReadySnapshot {
+                catalog: Box::new(
+                    RecentSessions {
+                        items: Vec::new(),
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                ),
                 tier_label: "provider-backed catalog".to_string(),
-                item_count: 2,
+                item_count: 0,
                 warnings: Vec::new(),
             })
         );
