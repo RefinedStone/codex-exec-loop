@@ -8,7 +8,7 @@ use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::post_turn_automation::PostTurnAutomationBackgroundResult;
-use super::{BackgroundMessage, ConversationRuntimeEvent, NativeTuiApp, ShellChromeEvent};
+use super::{BackgroundMessage, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
 
@@ -114,18 +114,16 @@ impl ShellRuntime {
                     changed_planning_file_paths,
                     execution_snapshot_capture,
                 } => {
-                    self.app.dispatch_conversation_runtime(
-                        ConversationRuntimeEvent::StreamTurnCompleted {
+                    self.app
+                        .dispatch_core_input(CoreInput::ConversationTurnCompleted {
                             turn_id,
                             changed_planning_file_paths,
-                            execution_snapshot_capture: Some(execution_snapshot_capture),
-                        },
-                    );
+                            execution_snapshot_capture,
+                        });
                 }
                 BackgroundMessage::ConversationRuntimeNotice(notice) => {
-                    self.app.dispatch_conversation_runtime(
-                        ConversationRuntimeEvent::StreamExecutionObserved { notice },
-                    );
+                    self.app
+                        .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
                 }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);

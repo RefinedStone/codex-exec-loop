@@ -424,6 +424,22 @@ impl NativeTuiApp {
             AppEvent::ConversationStreamUpdated(event) => {
                 self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(event));
             }
+            AppEvent::ConversationTurnCompleted {
+                turn_id,
+                changed_planning_file_paths,
+                execution_snapshot_capture,
+            } => {
+                self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamTurnCompleted {
+                    turn_id,
+                    changed_planning_file_paths,
+                    execution_snapshot_capture: Some(execution_snapshot_capture),
+                });
+            }
+            AppEvent::ConversationRuntimeNotice(notice) => {
+                self.dispatch_conversation_runtime(
+                    ConversationRuntimeEvent::StreamExecutionObserved { notice },
+                );
+            }
             AppEvent::SnapshotChanged(_) => {}
         }
     }

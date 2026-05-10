@@ -67,6 +67,24 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
+            CoreInput::ConversationTurnCompleted {
+                turn_id,
+                changed_planning_file_paths,
+                execution_snapshot_capture,
+            } => CoreDispatchOutcome {
+                events: vec![AppEvent::ConversationTurnCompleted {
+                    turn_id,
+                    changed_planning_file_paths,
+                    execution_snapshot_capture,
+                }],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
+            CoreInput::ConversationRuntimeNotice(notice) => CoreDispatchOutcome {
+                events: vec![AppEvent::ConversationRuntimeNotice(notice)],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
         }
     }
 
@@ -378,6 +396,51 @@ mod tests {
         assert_eq!(
             outcome.events,
             vec![AppEvent::ConversationStreamUpdated(stream_event)]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_turn_completion_passes_through_core_without_state_revision() {
+        let mut controller = CoreController::new();
+        let execution_snapshot_capture =
+            crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::capture_failed(
+                "/tmp/workspace",
+                "planning capture failed".to_string(),
+            );
+
+        let outcome = controller.handle_input(CoreInput::ConversationTurnCompleted {
+            turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+            execution_snapshot_capture: execution_snapshot_capture.clone(),
+        });
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationTurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+                execution_snapshot_capture,
+            }]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_runtime_notice_passes_through_core_without_state_revision() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::ConversationRuntimeNotice(
+            "reattached runtime".to_string(),
+        ));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationRuntimeNotice(
+                "reattached runtime".to_string()
+            )]
         );
         assert!(outcome.effects.is_empty());
     }

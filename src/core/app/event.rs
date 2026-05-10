@@ -4,12 +4,19 @@ use super::{
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
     Command(super::AppCommand),
     EffectCompleted(CoreEffectCompletion),
     ConversationStreamUpdated(ConversationStreamEvent),
+    ConversationTurnCompleted {
+        turn_id: String,
+        changed_planning_file_paths: Vec<String>,
+        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
+    },
+    ConversationRuntimeNotice(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,4 +38,10 @@ pub enum AppEvent {
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
     ConversationStreamUpdated(ConversationStreamEvent),
+    ConversationTurnCompleted {
+        turn_id: String,
+        changed_planning_file_paths: Vec<String>,
+        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
+    },
+    ConversationRuntimeNotice(String),
 }
