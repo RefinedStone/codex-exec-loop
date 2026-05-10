@@ -5,6 +5,7 @@
  */
 pub mod command;
 pub mod controller;
+pub mod effect;
 pub mod event;
 pub mod snapshot;
 pub mod startup;
@@ -12,6 +13,7 @@ pub mod state;
 
 pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
+pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
 pub use snapshot::AppSnapshot;
 pub use startup::{StartupReadySnapshot, StartupSnapshot, StartupState};

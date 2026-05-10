@@ -4,7 +4,7 @@ use std::thread;
 use anyhow::Result;
 
 use crate::application::service::startup_service::StartupService;
-use crate::core::app::{CoreEffectCompletion, CoreInput, StartupReadySnapshot};
+use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
 #[derive(Clone)]
@@ -28,6 +28,12 @@ impl CoreEffectRunner {
             let completion = startup_checks_completion(startup_service.run_checks());
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
+    }
+
+    pub fn run_effect(&self, effect: CoreEffect) {
+        match effect {
+            CoreEffect::RunStartupChecks => self.spawn_startup_checks(),
+        }
     }
 }
 

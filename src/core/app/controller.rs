@@ -1,8 +1,11 @@
-use super::{AppCommand, AppEvent, AppSnapshot, AppState, CoreEffectCompletion, CoreInput};
+use super::{
+    AppCommand, AppEvent, AppSnapshot, AppState, CoreEffect, CoreEffectCompletion, CoreInput,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreDispatchOutcome {
     pub events: Vec<AppEvent>,
+    pub effects: Vec<CoreEffect>,
     pub snapshot: AppSnapshot,
 }
 
@@ -26,23 +29,25 @@ impl CoreController {
         match input {
             CoreInput::Command(AppCommand::Noop) => CoreDispatchOutcome {
                 events: Vec::new(),
+                effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
             CoreInput::Command(AppCommand::RunStartupChecks) => {
                 self.state.mark_startup_loading();
-                self.startup_changed_outcome()
+                self.startup_changed_outcome(vec![CoreEffect::RunStartupChecks])
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded(result)) => {
                 self.state.apply_startup_result(result);
-                self.startup_changed_outcome()
+                self.startup_changed_outcome(Vec::new())
             }
         }
     }
 
-    fn startup_changed_outcome(&self) -> CoreDispatchOutcome {
+    fn startup_changed_outcome(&self, effects: Vec<CoreEffect>) -> CoreDispatchOutcome {
         let snapshot = self.snapshot();
         CoreDispatchOutcome {
             events: vec![AppEvent::StartupChanged(snapshot.startup.clone())],
+            effects,
             snapshot,
         }
     }
@@ -73,6 +78,7 @@ mod tests {
         let outcome = controller.handle_input(CoreInput::Command(AppCommand::Noop));
 
         assert!(outcome.events.is_empty());
+        assert!(outcome.effects.is_empty());
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(controller.snapshot(), AppSnapshot::initial());
     }
@@ -89,6 +95,7 @@ mod tests {
             outcome.events,
             vec![AppEvent::StartupChanged(StartupSnapshot::Loading)]
         );
+        assert_eq!(outcome.effects, vec![CoreEffect::RunStartupChecks]);
     }
 
     #[test]
@@ -115,6 +122,7 @@ mod tests {
                 ready_snapshot
             ))]
         );
+        assert!(outcome.effects.is_empty());
     }
 
     #[test]
@@ -138,5 +146,6 @@ mod tests {
                 message: "codex missing".to_string()
             })]
         );
+        assert!(outcome.effects.is_empty());
     }
 }
