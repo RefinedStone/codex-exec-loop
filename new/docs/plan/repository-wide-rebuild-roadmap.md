@@ -2,9 +2,10 @@
 
 ## 문서 지위
 
-`new/docs`에서 현재 읽어야 하는 문서는 세 개뿐이다.
+`new/docs`에서 현재 읽어야 하는 기준 문서는 아래뿐이다.
 
 - [../architecture/parallel-control-plane-architecture.md](../architecture/parallel-control-plane-architecture.md)
+- [../architecture/core-runtime-boundary-architecture.md](../architecture/core-runtime-boundary-architecture.md)
 - [parallel-control-plane-migration-plan.md](./parallel-control-plane-migration-plan.md)
 - 이 문서
 
@@ -50,7 +51,7 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 ## 문서 운영 규칙
 
-- 새 `new/docs` 문서를 추가하지 않는다.
+- 새 `new/docs` 문서는 명시적인 architecture decision이나 사용자 요청이 있을 때만 추가한다.
 - 새 작업은 이 문서의 R-slice를 갱신한다.
 - 완료된 내용은 이 문서에서 제거한다.
 - 아직 구현되지 않은 내용만 남긴다.
