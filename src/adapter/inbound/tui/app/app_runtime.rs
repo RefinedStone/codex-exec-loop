@@ -1,5 +1,4 @@
 use std::sync::mpsc;
-use std::thread;
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
@@ -19,7 +18,8 @@ use crate::application::service::startup_service::StartupService;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 use crate::core::app::{
-    AppCommand, AppEvent, CoreDispatchOutcome, SessionCatalogSnapshot, StartupSnapshot,
+    AppCommand, AppEvent, ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome,
+    SessionCatalogSnapshot, StartupSnapshot,
 };
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::ConversationSnapshot;
@@ -50,6 +50,7 @@ use super::{
 pub(super) enum BackgroundMessage {
     #[cfg(test)]
     StartupLoaded(Result<Box<StartupReadySnapshot>, String>),
+    #[cfg(test)]
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
     ConversationTurnCompleted {
@@ -121,10 +122,6 @@ impl NativeTuiApplicationHandle {
         }
     }
 
-    pub(super) fn conversations(&self) -> NativeTuiConversationHandle {
-        self.conversations.clone()
-    }
-
     pub(super) fn conversation_streams(&self) -> NativeTuiConversationStreamHandle {
         self.conversations.streams()
     }
@@ -158,10 +155,6 @@ pub(super) struct NativeTuiConversationHandle {
 impl NativeTuiConversationHandle {
     fn new(service: ConversationService) -> Self {
         Self { service }
-    }
-
-    pub(super) fn load_snapshot(&self, thread_id: &str) -> anyhow::Result<ConversationSnapshot> {
-        self.service.load_snapshot(thread_id)
     }
 
     pub(super) fn streams(&self) -> NativeTuiConversationStreamHandle {
@@ -281,6 +274,7 @@ impl NativeTuiApp {
         let core_effect_runner = CoreEffectRunner::new(
             startup_service.clone(),
             session_service.clone(),
+            conversation_service.clone(),
             core_input_sender,
         );
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
@@ -419,9 +413,38 @@ impl NativeTuiApp {
                 self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
                 self.session_overlay_ui_state.reset();
             }
-            AppEvent::ConversationChanged(_) => {}
+            AppEvent::ConversationChanged(CoreConversationSnapshot::Idle) => {}
+            AppEvent::ConversationChanged(CoreConversationSnapshot::Loading) => {}
+            AppEvent::ConversationChanged(CoreConversationSnapshot::Ready(ready)) => {
+                self.apply_loaded_conversation_result(Ok(*ready.conversation));
+            }
+            AppEvent::ConversationChanged(CoreConversationSnapshot::Failed { message }) => {
+                self.apply_loaded_conversation_result(Err(message));
+            }
             AppEvent::SnapshotChanged(_) => {}
         }
+    }
+
+    pub(super) fn apply_loaded_conversation_result(
+        &mut self,
+        result: Result<ConversationSnapshot, String>,
+    ) {
+        let loaded_successfully = result.is_ok();
+        let draft_workspace_directory = self.current_workspace_directory();
+        self.reset_planning_worker_panel_state();
+        self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::ConversationLoaded {
+            result,
+            draft_workspace_directory,
+        });
+        self.refresh_ready_conversation_planning_runtime_snapshot();
+        if loaded_successfully {
+            self.surface_resumed_session_planning_context();
+        }
+        // A loaded conversation resets follow-up copy because auto-turn affordances
+        // belong to the active thread, not the previous shell contents.
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
+            max_auto_turns: self.current_max_auto_turns_label(),
+        });
     }
 
     fn execute_shell_chrome_effect(&mut self, effect: ShellChromeEffect) {
@@ -485,14 +508,10 @@ impl NativeTuiApp {
     fn execute_conversation_lifecycle_effect(&mut self, effect: ConversationLifecycleEffect) {
         match effect {
             ConversationLifecycleEffect::LoadConversation { thread_id } => {
-                let tx = self.tx.clone();
-                let service = self.application.conversations();
-                thread::spawn(move || {
-                    let result = service
-                        .load_snapshot(&thread_id)
-                        .map_err(|error| error.to_string());
-                    let _ = tx.send(BackgroundMessage::ConversationLoaded(result));
-                });
+                let outcome = self
+                    .core_runtime
+                    .dispatch_command(AppCommand::LoadConversation { thread_id });
+                self.apply_core_dispatch_outcome(outcome);
             }
         }
     }

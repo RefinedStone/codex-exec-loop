@@ -224,6 +224,17 @@ fn tui_session_catalog_loads_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_conversation_loads_enter_through_core_runtime() {
+    // Static guard for the conversation lifecycle migration: TUI may keep presentation
+    // state and reducers, but snapshot loading must enter CoreRuntime/CoreEffectRunner.
+    assert_no_forbidden_references_in_paths(
+        "TUI conversation loads must be dispatched through core runtime, not ConversationService directly",
+        &["src/adapter/inbound/tui/app/app_runtime.rs"],
+        &[".load_snapshot("],
+    );
+}
+
+#[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
     // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
     // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.

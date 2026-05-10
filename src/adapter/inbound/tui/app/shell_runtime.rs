@@ -7,10 +7,7 @@ use crossterm::style::Print;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::post_turn_automation::PostTurnAutomationBackgroundResult;
-use super::{
-    AutoFollowOverlayUiEvent, BackgroundMessage, ConversationLifecycleEvent,
-    ConversationRuntimeEvent, NativeTuiApp, ShellChromeEvent,
-};
+use super::{BackgroundMessage, ConversationRuntimeEvent, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
 
@@ -103,28 +100,9 @@ impl ShellRuntime {
                     }
                     self.app.resolve_startup_submit_queue();
                 }
+                #[cfg(test)]
                 BackgroundMessage::ConversationLoaded(result) => {
-                    let loaded_successfully = result.is_ok();
-                    let draft_workspace_directory = self.app.current_workspace_directory();
-                    self.app.reset_planning_worker_panel_state();
-                    self.app.dispatch_conversation_lifecycle(
-                        ConversationLifecycleEvent::ConversationLoaded {
-                            result,
-                            draft_workspace_directory,
-                        },
-                    );
-                    self.app
-                        .refresh_ready_conversation_planning_runtime_snapshot();
-                    if loaded_successfully {
-                        self.app.surface_resumed_session_planning_context();
-                    }
-                    // A loaded conversation resets follow-up copy because auto-turn affordances
-                    // belong to the active thread, not the previous shell contents.
-                    self.app.dispatch_auto_follow_overlay_ui(
-                        AutoFollowOverlayUiEvent::ContentReset {
-                            max_auto_turns: self.app.current_max_auto_turns_label(),
-                        },
-                    );
+                    self.app.apply_loaded_conversation_result(result);
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.app.dispatch_conversation_runtime(

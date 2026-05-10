@@ -3,11 +3,13 @@ use std::thread;
 
 use anyhow::Result;
 
+use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::core::app::SessionCatalogReadySnapshot;
+use crate::core::app::{ConversationReadySnapshot, SessionCatalogReadySnapshot};
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -15,6 +17,7 @@ use crate::domain::startup_diagnostics::StartupDiagnostics;
 pub struct CoreEffectRunner {
     startup_service: StartupService,
     session_service: SessionService,
+    conversation_service: ConversationService,
     input_sender: Sender<CoreInput>,
 }
 
@@ -22,11 +25,13 @@ impl CoreEffectRunner {
     pub fn new(
         startup_service: StartupService,
         session_service: SessionService,
+        conversation_service: ConversationService,
         input_sender: Sender<CoreInput>,
     ) -> Self {
         Self {
             startup_service,
             session_service,
+            conversation_service,
             input_sender,
         }
     }
@@ -47,6 +52,7 @@ impl CoreEffectRunner {
                 limit,
                 workspace_directory,
             } => self.spawn_session_catalog_load(limit, workspace_directory),
+            CoreEffect::LoadConversation { thread_id } => self.spawn_conversation_load(thread_id),
         }
     }
 
@@ -57,6 +63,17 @@ impl CoreEffectRunner {
             let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
             let completion =
                 session_catalog_completion(session_service.load_session_catalog(request));
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_conversation_load(&self, thread_id: String) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let completion = conversation_snapshot_completion(
+                conversation_service.load_snapshot(thread_id.as_str()),
+            );
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -85,9 +102,19 @@ fn session_catalog_completion(result: Result<SessionCatalog>) -> CoreEffectCompl
     )
 }
 
+fn conversation_snapshot_completion(result: Result<ConversationSnapshot>) -> CoreEffectCompletion {
+    CoreEffectCompletion::ConversationLoaded(
+        result
+            .map(ConversationReadySnapshot::from)
+            .map(Box::new)
+            .map_err(|error| error.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalogTier};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -183,6 +210,38 @@ mod tests {
         assert_eq!(
             session_catalog_completion(Err(anyhow::anyhow!("catalog unavailable"))),
             CoreEffectCompletion::SessionCatalogLoaded(Err("catalog unavailable".to_string()))
+        );
+    }
+
+    #[test]
+    fn conversation_snapshot_success_maps_to_core_completion() {
+        let conversation = ConversationSnapshot {
+            thread_id: "thread-1".to_string(),
+            title: "Core runtime".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: vec![ConversationMessage::new(
+                ConversationMessageKind::User,
+                "hello",
+                None,
+                None,
+            )],
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        };
+
+        assert_eq!(
+            conversation_snapshot_completion(Ok(conversation.clone())),
+            CoreEffectCompletion::ConversationLoaded(Ok(Box::new(
+                ConversationReadySnapshot::from(conversation)
+            )))
+        );
+    }
+
+    #[test]
+    fn conversation_snapshot_error_maps_to_core_completion() {
+        assert_eq!(
+            conversation_snapshot_completion(Err(anyhow::anyhow!("thread unavailable"))),
+            CoreEffectCompletion::ConversationLoaded(Err("thread unavailable".to_string()))
         );
     }
 }

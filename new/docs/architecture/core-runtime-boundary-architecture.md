@@ -348,12 +348,12 @@ Session catalog migration은 core snapshot이 catalog summary뿐 아니라 boxed
 open/close, selection, browser UI state를 계속 소유하지만 catalog load thread를 직접
 만들지 않는다.
 
-Conversation migration은 아직 TUI reducer가 실제 lifecycle, prompt input, stream
-reduction을 소유한다. 현재 준비 단계에서는 core `AppSnapshot`에 read-only
-conversation lifecycle projection만 추가해, 이후 `ConversationService::load_snapshot()`
-completion을 core input으로 되돌릴 수 있는 상태 shape를 먼저 고정한다. prompt buffer,
-cursor, inline command palette, transcript rendering cache, active overlay selection은 계속
-TUI presentation state로 남긴다.
+Conversation migration은 core `AppSnapshot`에 read-only conversation lifecycle
+projection을 추가했고, session 선택 뒤 conversation snapshot load 실행도
+`CoreRuntime`/`CoreEffectRunner`를 통과하는 단계까지 진행됐다. TUI reducer는 아직
+`Loading/Ready/Failed` presentation transition을 적용하고 prompt input, cursor, inline
+command palette, transcript rendering cache, active overlay selection을 계속 소유한다.
+turn stream reduction과 prompt submission은 아직 TUI runtime path에 남아 있다.
 
 ## 상태 소유권 표
 

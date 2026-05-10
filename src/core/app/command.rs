@@ -11,4 +11,7 @@ pub enum AppCommand {
         limit: usize,
         workspace_directory: String,
     },
+    LoadConversation {
+        thread_id: String,
+    },
 }

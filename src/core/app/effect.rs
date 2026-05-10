@@ -5,4 +5,7 @@ pub enum CoreEffect {
         limit: usize,
         workspace_directory: String,
     },
+    LoadConversation {
+        thread_id: String,
+    },
 }

@@ -46,6 +46,10 @@ impl CoreController {
                     workspace_directory,
                 }])
             }
+            CoreInput::Command(AppCommand::LoadConversation { thread_id }) => {
+                self.state.mark_conversation_loading();
+                self.conversation_changed_outcome(vec![CoreEffect::LoadConversation { thread_id }])
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded(result)) => {
                 self.state.apply_startup_result(result);
                 self.startup_changed_outcome(Vec::new())
@@ -219,6 +223,28 @@ mod tests {
             vec![CoreEffect::LoadSessionCatalog {
                 limit: 10,
                 workspace_directory: "/tmp/workspace".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn load_conversation_marks_conversation_loading() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+        }));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.conversation, ConversationSnapshot::Loading);
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationChanged(ConversationSnapshot::Loading)]
+        );
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::LoadConversation {
+                thread_id: "thread-1".to_string()
             }]
         );
     }
