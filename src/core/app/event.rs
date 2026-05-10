@@ -1,8 +1,14 @@
-use super::AppSnapshot;
+use super::{AppSnapshot, StartupReadySnapshot, StartupSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
     Command(super::AppCommand),
+    EffectCompleted(CoreEffectCompletion),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreEffectCompletion {
+    StartupChecksLoaded(Result<StartupReadySnapshot, String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,4 +19,5 @@ pub enum AppEvent {
      * same core-to-inbound adapter direction.
      */
     SnapshotChanged(AppSnapshot),
+    StartupChanged(StartupSnapshot),
 }

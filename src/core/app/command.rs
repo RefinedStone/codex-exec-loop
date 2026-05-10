@@ -6,4 +6,5 @@ pub enum AppCommand {
      * as startup/session/conversation orchestration.
      */
     Noop,
+    RunStartupChecks,
 }

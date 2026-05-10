@@ -1,4 +1,4 @@
-use super::{AppCommand, AppEvent, AppSnapshot, AppState, CoreInput};
+use super::{AppCommand, AppEvent, AppSnapshot, AppState, CoreEffectCompletion, CoreInput};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreDispatchOutcome {
@@ -28,6 +28,22 @@ impl CoreController {
                 events: Vec::new(),
                 snapshot: self.snapshot(),
             },
+            CoreInput::Command(AppCommand::RunStartupChecks) => {
+                self.state.mark_startup_loading();
+                self.startup_changed_outcome()
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded(result)) => {
+                self.state.apply_startup_result(result);
+                self.startup_changed_outcome()
+            }
+        }
+    }
+
+    fn startup_changed_outcome(&self) -> CoreDispatchOutcome {
+        let snapshot = self.snapshot();
+        CoreDispatchOutcome {
+            events: vec![AppEvent::StartupChanged(snapshot.startup.clone())],
+            snapshot,
         }
     }
 }
@@ -41,6 +57,7 @@ impl Default for CoreController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::app::{StartupReadySnapshot, StartupSnapshot};
 
     #[test]
     fn new_controller_exposes_initial_snapshot() {
@@ -58,5 +75,68 @@ mod tests {
         assert!(outcome.events.is_empty());
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(controller.snapshot(), AppSnapshot::initial());
+    }
+
+    #[test]
+    fn run_startup_checks_marks_startup_loading() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.startup, StartupSnapshot::Loading);
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::StartupChanged(StartupSnapshot::Loading)]
+        );
+    }
+
+    #[test]
+    fn startup_completion_marks_startup_ready() {
+        let mut controller = CoreController::new();
+        let ready_snapshot = StartupReadySnapshot {
+            workspace_path: "/tmp/workspace".to_string(),
+            can_continue: true,
+            warnings: vec!["non fatal".to_string()],
+        };
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded(Ok(ready_snapshot.clone())),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.snapshot.startup,
+            StartupSnapshot::Ready(ready_snapshot.clone())
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(
+                ready_snapshot
+            ))]
+        );
+    }
+
+    #[test]
+    fn startup_completion_marks_startup_failed() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded(Err("codex missing".to_string())),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.snapshot.startup,
+            StartupSnapshot::Failed {
+                message: "codex missing".to_string()
+            }
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::StartupChanged(StartupSnapshot::Failed {
+                message: "codex missing".to_string()
+            })]
+        );
     }
 }
