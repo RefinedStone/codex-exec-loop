@@ -103,11 +103,6 @@ impl ShellRuntime {
                     }
                     self.app.resolve_startup_submit_queue();
                 }
-                BackgroundMessage::SessionsLoaded(result) => {
-                    self.app
-                        .dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(result));
-                    self.app.session_overlay_ui_state.reset();
-                }
                 BackgroundMessage::ConversationLoaded(result) => {
                     let loaded_successfully = result.is_ok();
                     let draft_workspace_directory = self.app.current_workspace_directory();

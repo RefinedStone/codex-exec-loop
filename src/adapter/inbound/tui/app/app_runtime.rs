@@ -18,12 +18,13 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
-use crate::core::app::{AppCommand, AppEvent, CoreDispatchOutcome, StartupSnapshot};
+use crate::core::app::{
+    AppCommand, AppEvent, CoreDispatchOutcome, SessionCatalogSnapshot, StartupSnapshot,
+};
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
-use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 
 use super::conversation_runtime::ConversationPostTurnEvaluation;
 use super::{
@@ -49,7 +50,6 @@ use super::{
 pub(super) enum BackgroundMessage {
     #[cfg(test)]
     StartupLoaded(Result<Box<StartupReadySnapshot>, String>),
-    SessionsLoaded(Result<SessionCatalog, String>),
     ConversationLoaded(Result<ConversationSnapshot, String>),
     ConversationStream(ConversationStreamEvent),
     ConversationTurnCompleted {
@@ -103,7 +103,6 @@ impl NativeTuiAppRuntimeChannels {
 
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
-    sessions: NativeTuiSessionCatalogHandle,
     conversations: NativeTuiConversationHandle,
     parallel_turns: ParallelModeTurnService,
     planning_feature: NativeTuiPlanningHandle,
@@ -111,21 +110,15 @@ pub(super) struct NativeTuiApplicationHandle {
 
 impl NativeTuiApplicationHandle {
     fn new(
-        sessions: SessionService,
         conversations: ConversationService,
         parallel_turns: ParallelModeTurnService,
         planning_feature: PlanningServices,
     ) -> Self {
         Self {
-            sessions: NativeTuiSessionCatalogHandle::new(sessions),
             conversations: NativeTuiConversationHandle::new(conversations),
             parallel_turns,
             planning_feature: NativeTuiPlanningHandle::new(planning_feature),
         }
-    }
-
-    pub(super) fn sessions(&self) -> NativeTuiSessionCatalogHandle {
-        self.sessions.clone()
     }
 
     pub(super) fn conversations(&self) -> NativeTuiConversationHandle {
@@ -154,24 +147,6 @@ impl NativeTuiApplicationHandle {
 
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.conversations.request_stop_all_sessions()
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct NativeTuiSessionCatalogHandle {
-    service: SessionService,
-}
-
-impl NativeTuiSessionCatalogHandle {
-    fn new(service: SessionService) -> Self {
-        Self { service }
-    }
-
-    pub(super) fn load_session_catalog(
-        &self,
-        request: SessionCatalogRequest,
-    ) -> anyhow::Result<SessionCatalog> {
-        self.service.load_session_catalog(request)
     }
 }
 
@@ -309,12 +284,8 @@ impl NativeTuiApp {
             core_input_sender,
         );
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
-        let application = NativeTuiApplicationHandle::new(
-            session_service,
-            conversation_service,
-            parallel_turns,
-            planning_feature,
-        );
+        let application =
+            NativeTuiApplicationHandle::new(conversation_service, parallel_turns, planning_feature);
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
@@ -434,7 +405,21 @@ impl NativeTuiApp {
                 });
                 self.resolve_startup_submit_queue();
             }
-            AppEvent::SnapshotChanged(_) | AppEvent::SessionCatalogChanged(_) => {}
+            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Idle) => {
+                self.session_state = SessionState::Idle;
+            }
+            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Loading) => {
+                self.session_state = SessionState::Loading;
+            }
+            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Ready(ready)) => {
+                self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Ok(*ready.catalog)));
+                self.session_overlay_ui_state.reset();
+            }
+            AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Failed { message }) => {
+                self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
+                self.session_overlay_ui_state.reset();
+            }
+            AppEvent::SnapshotChanged(_) => {}
         }
     }
 
@@ -450,19 +435,17 @@ impl NativeTuiApp {
                 limit,
                 current_workspace_directory,
             } => {
-                let tx = self.tx.clone();
-                let service = self.application.sessions();
                 // Session overlay requests are scoped to the visible conversation
                 // workspace unless the reducer explicitly supplied another root.
                 let workspace_directory = current_workspace_directory
                     .unwrap_or_else(|| self.current_workspace_directory());
-                let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
-                thread::spawn(move || {
-                    let result = service
-                        .load_session_catalog(request)
-                        .map_err(|error| error.to_string());
-                    let _ = tx.send(BackgroundMessage::SessionsLoaded(result));
-                });
+                let outcome = self
+                    .core_runtime
+                    .dispatch_command(AppCommand::LoadSessionCatalog {
+                        limit,
+                        workspace_directory,
+                    });
+                self.apply_core_dispatch_outcome(outcome);
             }
         }
     }

@@ -343,9 +343,10 @@ workspace, probe 결과, attachment label, warning, schema snapshot을 UI/transp
 먹을 수 있는 startup snapshot event로 적용한다.
 
 Session catalog migration은 core snapshot이 catalog summary뿐 아니라 boxed
-`SessionCatalog` payload도 보존하는 단계까지 준비됐다. 이 payload는 TUI browser가 row,
-fallback, warning, selection repair를 기존 domain projection으로 계속 계산할 수 있게 해
-다음 slice에서 session load effect 실행 주체만 core로 옮겨도 표시 정보가 줄지 않게 한다.
+`SessionCatalog` payload도 보존하고, `LoadSessionCatalog` effect 실행도
+`CoreRuntime`/`CoreEffectRunner`를 통과하는 단계까지 진행됐다. TUI는 session overlay
+open/close, selection, browser UI state를 계속 소유하지만 catalog load thread를 직접
+만들지 않는다.
 
 ## 상태 소유권 표
 

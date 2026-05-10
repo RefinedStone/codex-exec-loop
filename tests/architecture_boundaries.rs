@@ -213,6 +213,17 @@ fn tui_startup_checks_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_session_catalog_loads_enter_through_core_runtime() {
+    // Static guard for the session migration: TUI owns overlay state and selection, while session
+    // catalog loading runs through CoreRuntime/CoreEffectRunner before TUI receives catalog state.
+    assert_no_forbidden_references_in_paths(
+        "TUI session catalog loads must be dispatched through core runtime, not SessionService directly",
+        &["src/adapter/inbound/tui/app/app_runtime.rs"],
+        &[".load_session_catalog(", "NativeTuiSessionCatalogHandle"],
+    );
+}
+
+#[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
     // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
     // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.
