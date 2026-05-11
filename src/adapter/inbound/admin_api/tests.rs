@@ -261,6 +261,9 @@ fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
         "rgba(53, 208, 127, 0.82)",
         "rgba(53, 208, 127, 0.22)",
         "color: #f7fff9",
+        ".task-ticket.status-done",
+        "rgba(152, 171, 196, 0.09)",
+        "color: #d4dde8",
     ] {
         assert!(
             TASKS_TEMPLATE.contains(token),

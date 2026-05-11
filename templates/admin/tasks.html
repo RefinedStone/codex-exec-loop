@@ -328,9 +328,9 @@
   }
   .status-pill.done,
   .status-pill.cancelled {
-    border-color: rgba(152, 171, 196, 0.36);
-    color: var(--task-muted);
-    background: rgba(152, 171, 196, 0.08);
+    border-color: rgba(152, 171, 196, 0.32);
+    color: #b4c0ce;
+    background: rgba(152, 171, 196, 0.1);
   }
   .task-ticket.status-blocked,
   .task-ticket.status-awaiting_user {
@@ -351,6 +351,19 @@
   }
   .task-ticket.status-ready .task-ticket-title {
     color: #f7fff9;
+  }
+  .task-ticket.status-done {
+    border-color: rgba(152, 171, 196, 0.26);
+    background:
+      linear-gradient(90deg, rgba(152, 171, 196, 0.09), rgba(152, 171, 196, 0.04) 42%, rgba(255,255,255,0.035)),
+      linear-gradient(180deg, rgba(19, 27, 38, 0.92), rgba(9, 16, 26, 0.96));
+  }
+  .task-ticket.status-done .task-ticket-title {
+    color: #d4dde8;
+  }
+  .task-ticket.status-done .task-ticket-id,
+  .task-ticket.status-done .task-chip {
+    color: #9daaba;
   }
   .danger-zone {
     padding-top: 12px;
