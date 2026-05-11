@@ -595,33 +595,79 @@
     position: relative;
     display: grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
+    width: 48px;
+    height: 48px;
     color: #f7fbff;
-    background: rgba(53, 208, 127, 0.15);
+    background-color: rgba(53, 208, 127, 0.15);
     border: 1px solid rgba(53, 208, 127, 0.35);
     border-radius: 8px;
     background-image: url("/assets/admin/admin-character-sprites.svg");
-    background-size: 528px 96px;
+    background-repeat: no-repeat;
+    background-position: 0 0;
+    background-size: 672px 96px;
+    image-rendering: pixelated;
     font-size: 10px;
     font-weight: 900;
+    overflow: visible;
     text-shadow: 0 1px 0 #06101d, 1px 0 0 #06101d, -1px 0 0 #06101d, 0 -1px 0 #06101d;
+  }
+  .agent-sprite::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    right: -3px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid rgba(255,255,255,0.5);
+    background: var(--game-green);
+    box-shadow: 1px 1px 0 rgba(0,0,0,0.35);
   }
   .agent-sprite .sprite-label {
     position: absolute;
-    left: 2px;
-    right: 2px;
-    bottom: 2px;
+    right: -5px;
+    bottom: -4px;
+    max-width: 42px;
+    padding: 1px 4px;
+    border: 1px solid rgba(255,255,255,0.22);
+    background: rgba(7, 16, 29, 0.92);
+    color: #f7fbff;
     overflow: hidden;
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .severity-danger .agent-sprite { background: rgba(255, 107, 107, 0.18); border-color: rgba(255, 107, 107, 0.42); }
-  .severity-warning .agent-sprite { background: rgba(245, 200, 75, 0.18); border-color: rgba(245, 200, 75, 0.42); }
-  .severity-normal .agent-sprite { background: rgba(53, 208, 127, 0.15); border-color: rgba(53, 208, 127, 0.35); }
-  .agent-sprite.role-distributor { background: rgba(157, 124, 255, 0.18); border-color: rgba(157, 124, 255, 0.42); }
-  .agent-sprite.role-events { background: rgba(93, 169, 255, 0.18); border-color: rgba(93, 169, 255, 0.42); }
+  .agent-sprite.avatar-Artificer { background-position: 0 0; }
+  .agent-sprite.avatar-Scribe { background-position: -48px 0; }
+  .agent-sprite.avatar-Ranger { background-position: -96px 0; }
+  .agent-sprite.avatar-Guardian { background-position: -144px 0; }
+  .agent-sprite.avatar-Seer { background-position: -192px 0; }
+  .agent-sprite.avatar-Runner { background-position: -240px 0; }
+  .severity-danger .agent-sprite {
+    background-color: rgba(255, 107, 107, 0.18);
+    border-color: rgba(255, 107, 107, 0.42);
+  }
+  .severity-danger .agent-sprite::after { background: var(--game-red); }
+  .severity-warning .agent-sprite {
+    background-color: rgba(245, 200, 75, 0.18);
+    border-color: rgba(245, 200, 75, 0.42);
+  }
+  .severity-warning .agent-sprite::after { background: var(--game-yellow); }
+  .severity-normal .agent-sprite {
+    background-color: rgba(53, 208, 127, 0.15);
+    border-color: rgba(53, 208, 127, 0.35);
+  }
+  .agent-sprite.role-distributor {
+    background-color: rgba(157, 124, 255, 0.18);
+    border-color: rgba(157, 124, 255, 0.42);
+    background-position: -288px 0;
+  }
+  .agent-sprite.role-distributor::after { background: var(--game-violet); }
+  .agent-sprite.role-events {
+    background-color: rgba(93, 169, 255, 0.18);
+    border-color: rgba(93, 169, 255, 0.42);
+    background-position: -336px 0;
+  }
+  .agent-sprite.role-events::after { background: var(--game-blue); }
   .object-label {
     display: grid;
     gap: 2px;
@@ -1353,7 +1399,7 @@
         title="{{ agent.branch_name }} / {{ agent.task_title }} / {{ agent.latest_summary }}"
       >
         <span class="speech">{{ agent.bubble_label }}</span>
-        <span class="agent-sprite" aria-hidden="true"><span class="sprite-label">{{ agent.display_name }}</span></span>
+        <span class="agent-sprite avatar-{{ agent.class_label }}" aria-hidden="true"><span class="sprite-label">{{ agent.display_name }}</span></span>
         <div class="object-label">
           <strong>{{ agent.agent_id }}</strong>
           <span>{{ agent.task_title }}</span>
@@ -1829,6 +1875,10 @@
   const optionalText = (value, fallback = "-") => {
     const text = formatValue(value, fallback);
     return text.trim() === "" ? fallback : text;
+  };
+  const agentAvatarClass = (classLabel) => {
+    const normalized = optionalText(classLabel, "Runner").replace(/[^A-Za-z0-9_-]/g, "");
+    return `avatar-${normalized || "Runner"}`;
   };
   const createText = (tagName, className, value) => {
     const node = document.createElement(tagName);
@@ -2454,7 +2504,7 @@
     });
     button.title = `${optionalText(agent.branchName)} / ${optionalText(agent.taskTitle)} / ${optionalText(agent.latestSummary)}`;
     const sprite = document.createElement("span");
-    sprite.className = "agent-sprite";
+    sprite.className = `agent-sprite ${agentAvatarClass(agent.classLabel)}`;
     sprite.setAttribute("aria-hidden", "true");
     sprite.appendChild(createText("span", "sprite-label", agent.displayName));
     const label = document.createElement("div");
