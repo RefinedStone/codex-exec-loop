@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::{PriorityQueueBuildError, PriorityQueueService};
+use super::{DirectionQueueLabel, PriorityQueueBuildError, PriorityQueueService};
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskStatus,
@@ -662,4 +662,340 @@ fn rejects_multiple_in_progress_tasks_during_queue_build() {
             task_ids: vec!["task-1".to_string(), "task-2".to_string()],
         }
     );
+}
+
+#[test]
+fn build_error_display_uses_operator_copy_and_blank_reference_placeholder() {
+    // queue build error는 repair/status surface까지 그대로 올라갈 수 있으므로 enum shape뿐 아니라
+    // 사람이 읽는 copy도 고정한다. blank reference는 빈 문자열로 사라지지 않고 명시 placeholder를 쓴다.
+    assert_eq!(
+        PriorityQueueBuildError::MultipleInProgressTasks {
+            task_ids: vec!["task-1".to_string(), "task-2".to_string()],
+        }
+        .to_string(),
+        "task authority may contain at most one in_progress task; found 2: task-1, task-2"
+    );
+    assert_eq!(
+        PriorityQueueBuildError::UnknownDirection {
+            task_id: "task-1".to_string(),
+            direction_id: "missing-direction".to_string(),
+        }
+        .to_string(),
+        "task task-1 references unknown direction_id missing-direction"
+    );
+    assert_eq!(
+        PriorityQueueBuildError::MissingDependency {
+            task_id: "task-1".to_string(),
+            dependency_id: String::new(),
+        }
+        .to_string(),
+        "task task-1 references unknown dependency <blank>"
+    );
+    assert_eq!(
+        PriorityQueueBuildError::MissingBlocker {
+            task_id: "task-1".to_string(),
+            blocker_id: String::new(),
+        }
+        .to_string(),
+        "task task-1 references unknown blocker <blank>"
+    );
+    assert_eq!(
+        PriorityQueueBuildError::InvalidUpdatedAt {
+            task_id: "task-1".to_string(),
+            updated_at: String::new(),
+        }
+        .to_string(),
+        "task task-1 must use RFC3339 updated_at for queue ordering, got <blank>"
+    );
+}
+
+#[test]
+fn rejects_missing_blocker_references_instead_of_skipping_them() {
+    // blocker edge도 queue ordering에 직접 쓰인다. 참조가 사라진 graph는 skipped reason으로
+    // 추측하지 않고 projection 생성 전에 authority corruption으로 보고한다.
+    let queue_service = PriorityQueueService::new();
+    let directions = directions(&[("direction-a", DirectionState::Active)]);
+    let mut blocked_task = task(
+        "blocked-task",
+        "direction-a",
+        TaskStatus::Ready,
+        30,
+        0,
+        "2026-04-09T09:00:00Z",
+    );
+    blocked_task.blocked_by = vec!["missing-blocker".to_string()];
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![blocked_task],
+    };
+    let error = queue_service
+        .build_projection(&directions, &task_authority)
+        .expect_err("queue build should reject missing blocker references");
+
+    assert_eq!(
+        error,
+        PriorityQueueBuildError::MissingBlocker {
+            task_id: "blocked-task".to_string(),
+            blocker_id: "missing-blocker".to_string(),
+        }
+    );
+}
+
+#[test]
+fn proposed_tasks_with_unresolved_blockers_are_skipped_not_promoted() {
+    // proposed queue는 "지금 promote할 수 있는 후보"만 담는다. blocker가 아직 열려 있으면
+    // active task와 같은 reason vocabulary로 skipped에 남아야 한다.
+    let queue_service = PriorityQueueService::new();
+    let directions = directions(&[("direction-a", DirectionState::Active)]);
+    let mut blocked_proposal = task(
+        "blocked-proposal",
+        "direction-a",
+        TaskStatus::Proposed,
+        70,
+        0,
+        "2026-04-09T10:00:00Z",
+    );
+    blocked_proposal.blocked_by = vec!["review-open".to_string()];
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![
+            task(
+                "review-open",
+                "direction-a",
+                TaskStatus::Ready,
+                20,
+                0,
+                "2026-04-09T09:00:00Z",
+            ),
+            blocked_proposal,
+            task(
+                "ready-proposal",
+                "direction-a",
+                TaskStatus::Proposed,
+                60,
+                0,
+                "2026-04-09T11:00:00Z",
+            ),
+        ],
+    };
+    let snapshot = queue_service
+        .build_projection(&directions, &task_authority)
+        .expect("queue projection should build");
+
+    assert_eq!(
+        snapshot
+            .proposed_tasks
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ready-proposal"]
+    );
+    let skipped = snapshot
+        .skipped_tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task.reason.as_str()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        skipped["blocked-proposal"],
+        "blocked by tasks: review-open(ready)"
+    );
+}
+
+#[test]
+fn orders_proposed_tasks_by_priority_age_and_task_id() {
+    // proposed lane도 deterministic해야 한다. 같은 priority에서는 오래된 제안을 먼저 보이고,
+    // timestamp까지 같으면 task id로 최종 tie-break를 고정한다.
+    let queue_service = PriorityQueueService::new();
+    let directions = directions(&[("direction-a", DirectionState::Active)]);
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![
+            task(
+                "proposal-b",
+                "direction-a",
+                TaskStatus::Proposed,
+                50,
+                0,
+                "2026-04-09T09:00:00Z",
+            ),
+            task(
+                "proposal-oldest",
+                "direction-a",
+                TaskStatus::Proposed,
+                50,
+                0,
+                "2026-04-09T08:00:00Z",
+            ),
+            task(
+                "proposal-a",
+                "direction-a",
+                TaskStatus::Proposed,
+                50,
+                0,
+                "2026-04-09T09:00:00Z",
+            ),
+            task(
+                "proposal-high",
+                "direction-a",
+                TaskStatus::Proposed,
+                60,
+                0,
+                "2026-04-09T10:00:00Z",
+            ),
+        ],
+    };
+    let snapshot = queue_service
+        .build_projection(&directions, &task_authority)
+        .expect("queue projection should build");
+
+    assert_eq!(
+        snapshot
+            .proposed_tasks
+            .iter()
+            .map(|task| (task.rank, task.task_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, "proposal-high"),
+            (2, "proposal-oldest"),
+            (3, "proposal-a"),
+            (4, "proposal-b"),
+        ]
+    );
+}
+
+#[test]
+fn done_directions_and_non_executable_statuses_are_explained_as_skipped_tasks() {
+    // queue projection은 inactive direction과 non-executable status를 모두 skipped로 남긴다.
+    // 이 copy가 있어야 TUI/repair surface가 빈 queue를 단순 idle로 오해하지 않는다.
+    let queue_service = PriorityQueueService::new();
+    let directions = directions(&[
+        ("direction-a", DirectionState::Active),
+        ("direction-done", DirectionState::Done),
+    ]);
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![
+            task(
+                "done-direction-ready",
+                "direction-done",
+                TaskStatus::Ready,
+                70,
+                0,
+                "2026-04-09T08:00:00Z",
+            ),
+            task(
+                "blocked-status",
+                "direction-a",
+                TaskStatus::Blocked,
+                60,
+                0,
+                "2026-04-09T09:00:00Z",
+            ),
+            task(
+                "done-status",
+                "direction-a",
+                TaskStatus::Done,
+                50,
+                0,
+                "2026-04-09T10:00:00Z",
+            ),
+            task(
+                "cancelled-status",
+                "direction-a",
+                TaskStatus::Cancelled,
+                40,
+                0,
+                "2026-04-09T11:00:00Z",
+            ),
+            task(
+                "awaiting-user-status",
+                "direction-a",
+                TaskStatus::AwaitingUser,
+                30,
+                0,
+                "2026-04-09T12:00:00Z",
+            ),
+        ],
+    };
+    let snapshot = queue_service
+        .build_projection(&directions, &task_authority)
+        .expect("queue projection should build");
+
+    assert!(snapshot.active_tasks.is_empty());
+    assert!(snapshot.proposed_tasks.is_empty());
+    let skipped = snapshot
+        .skipped_tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task.reason.as_str()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        skipped["done-direction-ready"],
+        "direction direction-done is done"
+    );
+    assert_eq!(
+        skipped["blocked-status"],
+        "status blocked is not executable"
+    );
+    assert_eq!(skipped["done-status"], "status done is not executable");
+    assert_eq!(
+        skipped["cancelled-status"],
+        "status cancelled is not executable"
+    );
+    assert_eq!(
+        skipped["awaiting-user-status"],
+        "status awaiting_user is not executable"
+    );
+}
+
+#[test]
+fn direction_queue_label_covers_all_direction_states() {
+    // helper는 skipped copy의 source다. Active는 현재 projection path에서는 호출되지 않지만,
+    // 새 state가 추가될 때 label 누락이 조용히 생기지 않게 내부 contract로 고정한다.
+    let catalog = directions(&[
+        ("direction-active", DirectionState::Active),
+        ("direction-paused", DirectionState::Paused),
+        ("direction-done", DirectionState::Done),
+    ]);
+
+    assert_eq!(catalog.directions[0].state_label(), "active");
+    assert_eq!(catalog.directions[1].state_label(), "paused");
+    assert_eq!(catalog.directions[2].state_label(), "done");
+}
+
+#[test]
+#[should_panic(expected = "queue build preflight should validate dependency references")]
+fn unresolved_dependency_reason_panics_when_preflight_invariant_is_broken() {
+    // public entrypoint는 이 상태를 Result error로 막는다. private helper를 직접 호출해
+    // preflight 이후 invariant가 깨졌을 때 fail-fast한다는 내부 전제를 문서화한다.
+    let queue_service = PriorityQueueService::new();
+    let mut blocked_task = task(
+        "blocked-task",
+        "direction-a",
+        TaskStatus::Ready,
+        30,
+        0,
+        "2026-04-09T09:00:00Z",
+    );
+    blocked_task.depends_on = vec!["missing-dependency".to_string()];
+
+    let _ = queue_service.unresolved_dependency_reason(&blocked_task, &HashMap::new());
+}
+
+#[test]
+#[should_panic(expected = "queue build preflight should validate blocker references")]
+fn unresolved_blocker_reason_panics_when_preflight_invariant_is_broken() {
+    // blocker helper도 같은 invariant를 공유한다. missing node를 skip으로 추측하면 안 되므로
+    // preflight 밖에서 호출되면 즉시 panic하는 contract를 고정한다.
+    let queue_service = PriorityQueueService::new();
+    let mut blocked_task = task(
+        "blocked-task",
+        "direction-a",
+        TaskStatus::Ready,
+        30,
+        0,
+        "2026-04-09T09:00:00Z",
+    );
+    blocked_task.blocked_by = vec!["missing-blocker".to_string()];
+
+    let _ = queue_service.unresolved_blocker_reason(&blocked_task, &HashMap::new());
 }
