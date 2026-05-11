@@ -725,3 +725,547 @@ fn merge_reconciliation_results(
         .or(secondary.auto_follow_block_reason);
     primary
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::{Result, anyhow};
+
+    use super::*;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
+    use crate::application::port::outbound::planning_worker_port::{
+        PlanningWorkerRequest, PlanningWorkerResponse,
+    };
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
+    use crate::application::service::planning::repair::reconciliation::PlanningReconciliationService;
+    use crate::application::service::planning::runtime::policy::PlanningRuntimePolicyService;
+    use crate::application::service::planning::runtime::prompt::PlanningPromptService;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
+    use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+    use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PLANNING_FORMAT_VERSION, PriorityQueueProjection, QueueIdleConfig, TaskActor,
+        TaskAuthorityDocument,
+    };
+
+    static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[derive(Default)]
+    struct RecordingPlanningWorkerPort {
+        response: Mutex<Option<PlanningWorkerResponse>>,
+        requests: Mutex<Vec<PlanningWorkerRequest>>,
+    }
+
+    impl RecordingPlanningWorkerPort {
+        fn new(response: PlanningWorkerResponse) -> Self {
+            Self {
+                response: Mutex::new(Some(response)),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requests(&self) -> Vec<PlanningWorkerRequest> {
+            self.requests
+                .lock()
+                .expect("recorded worker requests should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl PlanningWorkerPort for RecordingPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> Result<PlanningWorkerResponse> {
+            self.requests
+                .lock()
+                .expect("recorded worker requests should not be poisoned")
+                .push(request);
+            self.response
+                .lock()
+                .expect("worker response should not be poisoned")
+                .clone()
+                .ok_or_else(|| anyhow!("test worker response was not configured"))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingPlanningWorkspacePort {
+        record: Mutex<PlanningWorkspaceLoadRecord>,
+        commits: Mutex<Vec<PlanningWorkspaceLoadRecord>>,
+        optional_files: Mutex<BTreeMap<String, String>>,
+    }
+
+    impl RecordingPlanningWorkspacePort {
+        fn new(result_output_markdown: &str) -> Self {
+            Self {
+                record: Mutex::new(PlanningWorkspaceLoadRecord {
+                    result_output_markdown: Some(result_output_markdown.to_string()),
+                }),
+                commits: Mutex::new(Vec::new()),
+                optional_files: Mutex::new(BTreeMap::new()),
+            }
+        }
+
+        fn commits(&self) -> Vec<PlanningWorkspaceLoadRecord> {
+            self.commits
+                .lock()
+                .expect("recorded workspace commits should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl PlanningWorkspacePort for RecordingPlanningWorkspacePort {
+        fn stage_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _files: &[PlanningDraftFileRecord],
+        ) -> Result<PlanningDraftStageRecord> {
+            Err(anyhow!(
+                "stage_planning_draft_files should not be used by orchestration tests"
+            ))
+        }
+
+        fn load_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+        ) -> Result<PlanningDraftLoadRecord> {
+            Err(anyhow!(
+                "load_planning_draft_files should not be used by orchestration tests"
+            ))
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow!(
+                "replace_planning_draft_file should not be used by orchestration tests"
+            ))
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Ok(self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned")
+                .clone())
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Err(anyhow!(
+                "load_planning_workspace_candidate_files should not be used by orchestration tests"
+            ))
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            *self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned") = record.clone();
+            self.commits
+                .lock()
+                .expect("recorded workspace commits should not be poisoned")
+                .push(record.clone());
+            Ok(())
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            Ok(self
+                .optional_files
+                .lock()
+                .expect("optional planning file map should not be poisoned")
+                .get(relative_path)
+                .cloned())
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<Option<String>> {
+            Err(anyhow!(
+                "load_optional_planning_candidate_file should not be used by orchestration tests"
+            ))
+        }
+
+        fn replace_planning_workspace_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+            _body: Option<&str>,
+        ) -> Result<()> {
+            Err(anyhow!(
+                "replace_planning_workspace_file should not be used by orchestration tests"
+            ))
+        }
+
+        fn remove_planning_workspace_entry(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<()> {
+            Err(anyhow!(
+                "remove_planning_workspace_entry should not be used by orchestration tests"
+            ))
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            _workspace_dir: &str,
+            _archive_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow!(
+                "archive_rejected_planning_file should not be used by orchestration tests"
+            ))
+        }
+    }
+
+    #[test]
+    fn refresh_worker_commits_task_commands_and_restores_protected_files() {
+        let workspace = workspace("command-commit");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker_message = r#"Worker planned follow-up.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Cover worker orchestration","description":"Exercise orchestration command commit and reconciliation.","direction_relation_note":"keeps worker orchestration covered"}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-1".to_string()),
+            turn_id: Some("worker-turn-1".to_string()),
+            final_agent_message: Some(worker_message.to_string()),
+            changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
+        }));
+        let service = orchestration_service(worker.clone(), workspace_port.clone(), repo.clone());
+
+        let outcome = service
+            .refresh_queue_from_reply(PlanningQueueRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-1"),
+                completed_turn_id: "parent-turn-1",
+                latest_user_message: Some("please continue"),
+                latest_main_reply: "done",
+                previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestMainReply,
+            })
+            .expect("worker refresh should succeed");
+
+        assert!(outcome.task_authority_changed);
+        assert_eq!(
+            outcome.worker_summary.as_deref(),
+            Some("Worker planned follow-up.")
+        );
+        assert_eq!(outcome.worker_response.as_deref(), Some(worker_message));
+        assert!(outcome.repair_request.is_none());
+        assert!(outcome.rejected_summary.is_none());
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice == "planning worker committed 1 task command(s)")
+        );
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice
+                    == "planning reconciliation restored protected planning files")
+        );
+        assert!(
+            outcome.notices.iter().any(
+                |notice| notice == "planning worker refresh summary: Worker planned follow-up."
+            )
+        );
+        assert_eq!(workspace_port.commits().len(), 1);
+        assert_eq!(
+            workspace_port.commits()[0]
+                .result_output_markdown
+                .as_deref(),
+            Some("# Result Output\n- Summarize completed work.")
+        );
+
+        let committed = repo
+            .load_task_authority_snapshot(&workspace)
+            .expect("task snapshot should load")
+            .expect("task snapshot should exist");
+        assert_eq!(committed.task_authority.tasks.len(), 1);
+        let task = &committed.task_authority.tasks[0];
+        assert_eq!(task.title, "Cover worker orchestration");
+        assert_eq!(task.created_by, TaskActor::Worker);
+        assert_eq!(task.last_updated_by, TaskActor::Worker);
+        assert_eq!(task.source_turn_id.as_deref(), Some("worker-turn-1"));
+        assert_eq!(
+            task.provenance.origin_session_kind,
+            Some(OriginSessionKind::Planner)
+        );
+        assert_eq!(
+            task.provenance.thread_id.as_deref(),
+            Some("worker-thread-1")
+        );
+        assert_eq!(task.provenance.turn_id.as_deref(), Some("worker-turn-1"));
+        assert_eq!(
+            task.provenance.parent_thread_id.as_deref(),
+            Some("parent-thread-1")
+        );
+        assert_eq!(
+            task.provenance.parent_turn_id.as_deref(),
+            Some("parent-turn-1")
+        );
+
+        let requests = worker.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].operation, PlanningWorkerOperation::RefreshQueue);
+        assert_eq!(requests[0].workspace_directory, workspace);
+        assert!(requests[0].prompt.contains("please continue"));
+        assert!(requests[0].prompt.contains("source_of_truth=accepted DB"));
+    }
+
+    #[test]
+    fn invalid_worker_task_commands_build_repair_request_without_mutating_authority() {
+        let workspace = workspace("invalid-command");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker_message = r#"The worker tried to update planning.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Missing op"}}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-2".to_string()),
+            turn_id: Some("worker-turn-2".to_string()),
+            final_agent_message: Some(worker_message.to_string()),
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let service = orchestration_service(worker, workspace_port.clone(), repo.clone());
+
+        let outcome = service
+            .refresh_queue_from_reply(PlanningQueueRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-2"),
+                completed_turn_id: "parent-turn-2",
+                latest_user_message: None,
+                latest_main_reply: "done",
+                previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestMainReply,
+            })
+            .expect("invalid command payload should be converted into repair request");
+
+        assert!(!outcome.task_authority_changed);
+        assert_eq!(
+            outcome.worker_summary.as_deref(),
+            Some("The worker tried to update planning.")
+        );
+        assert!(outcome.rejected_summary.is_some_and(|summary| {
+            summary.contains("planning worker returned invalid planning_task_commands")
+                && summary.contains("missing field `op`")
+        }));
+        let repair_request = outcome
+            .repair_request
+            .expect("invalid commands should produce a repair request");
+        assert!(
+            repair_request
+                .failure_summary
+                .contains("missing field `op`")
+        );
+        assert!(
+            repair_request
+                .accepted_task_authority_json
+                .contains("\"tasks\": []")
+        );
+        assert!(
+            repair_request
+                .accepted_queue_projection_json
+                .contains("\"next_task\": null")
+        );
+        assert!(
+            repair_request
+                .rejected_task_authority_json
+                .as_deref()
+                .is_some_and(|payload| payload.contains("\"planning_task_commands\""))
+        );
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice.contains("missing field `op`"))
+        );
+        assert!(workspace_port.commits().is_empty());
+        assert!(
+            repo.load_task_authority_snapshot(&workspace)
+                .expect("task snapshot should load")
+                .expect("task snapshot should exist")
+                .task_authority
+                .tasks
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn authority_status_and_reconciliation_merge_keep_operational_details() {
+        assert_eq!(authority_load_status::<()>(Ok(Some(()))), "loaded");
+        assert_eq!(authority_load_status::<()>(Ok(None)), "missing");
+        assert_eq!(
+            authority_load_status::<()>(Err(anyhow!("db unavailable"))),
+            "error: db unavailable"
+        );
+
+        let primary = PlanningReconciliationResult {
+            notices: vec!["authority notice".to_string()],
+            rejected_task_authority: true,
+            queue_projection_action: Some(
+                crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning,
+            ),
+            auto_follow_block_reason: Some("authority blocked".to_string()),
+            ..PlanningReconciliationResult::default()
+        };
+        let secondary = PlanningReconciliationResult {
+            notices: vec!["file notice".to_string()],
+            rejected_task_authority: false,
+            auto_follow_block_reason: Some("file blocked".to_string()),
+            ..PlanningReconciliationResult::default()
+        };
+
+        let merged = merge_reconciliation_results(primary, secondary);
+
+        assert_eq!(
+            merged.notices,
+            vec!["authority notice".to_string(), "file notice".to_string()]
+        );
+        assert!(merged.rejected_task_authority);
+        assert_eq!(
+            merged.auto_follow_block_reason.as_deref(),
+            Some("authority blocked")
+        );
+        assert!(merged.queue_projection_action.is_some());
+    }
+
+    fn orchestration_service(
+        worker: Arc<dyn PlanningWorkerPort>,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        repo: Arc<NoopPlanningTaskRepositoryPort>,
+    ) -> PlanningWorkerOrchestrationService {
+        let validation = PlanningValidationService::new();
+        let priority_queue = crate::domain::planning::PriorityQueueService::new();
+        let prompt = PlanningPromptService::with_task_repository(
+            workspace_port.clone(),
+            validation.clone(),
+            priority_queue.clone(),
+            repo.clone(),
+        );
+        let reconciliation = PlanningReconciliationService::with_task_repository(
+            workspace_port,
+            validation,
+            priority_queue,
+            repo.clone(),
+        );
+        let runtime_facade = PlanningRuntimeFacadeService::new(
+            prompt,
+            reconciliation,
+            PlanningRuntimePolicyService::new(),
+            TurnPromptAssemblyService::new(),
+        );
+        PlanningWorkerOrchestrationService::new(
+            worker,
+            runtime_facade,
+            Arc::new(NoopPlanningAuthorityPort::default()),
+            repo,
+        )
+    }
+
+    fn workspace(label: &str) -> String {
+        format!(
+            "/tmp/akra-planning-worker-orchestration-{label}-{}-{}",
+            std::process::id(),
+            NEXT_WORKSPACE_ID.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    fn seed_authority(repo: &NoopPlanningTaskRepositoryPort, workspace: &str) {
+        repo.clear_direction_authority_snapshot(workspace)
+            .expect("direction snapshot should clear");
+        repo.clear_task_authority_snapshot(workspace)
+            .expect("task snapshot should clear");
+        repo.commit_direction_authority_snapshot(
+            workspace,
+            PlanningDirectionAuthorityCommit {
+                observed_planning_revision: None,
+                directions: &directions(),
+            },
+        )
+        .expect("direction snapshot should commit");
+        repo.commit_task_authority_snapshot(
+            workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &TaskAuthorityDocument {
+                    version: PLANNING_FORMAT_VERSION,
+                    tasks: Vec::new(),
+                },
+                queue_projection: &PriorityQueueProjection {
+                    next_task: None,
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: Vec::new(),
+                },
+            },
+        )
+        .expect("task snapshot should commit");
+    }
+
+    fn directions() -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: "general-workstream".to_string(),
+                title: "General".to_string(),
+                summary: "Handle general planning work.".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        }
+    }
+}
