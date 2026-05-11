@@ -1,5 +1,6 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, CoreEffect, CoreEffectCompletion, CoreInput,
+    TurnStreamState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,12 +13,14 @@ pub struct CoreDispatchOutcome {
 #[derive(Debug, Clone)]
 pub struct CoreController {
     state: AppState,
+    turn_stream_state: TurnStreamState,
 }
 
 impl CoreController {
     pub fn new() -> Self {
         Self {
             state: AppState::new(),
+            turn_stream_state: TurnStreamState::new(),
         }
     }
 
@@ -67,29 +70,38 @@ impl CoreController {
                 self.state.apply_conversation_result(result);
                 self.conversation_changed_outcome(Vec::new())
             }
-            CoreInput::ConversationStreamUpdated(event) => CoreDispatchOutcome {
-                events: vec![AppEvent::ConversationStreamUpdated(event)],
-                effects: Vec::new(),
-                snapshot: self.snapshot(),
-            },
+            CoreInput::ConversationStreamUpdated(event) => {
+                let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::ConversationTurnCompleted {
                 turn_id,
                 changed_planning_file_paths,
                 execution_snapshot_capture,
-            } => CoreDispatchOutcome {
-                events: vec![AppEvent::ConversationTurnCompleted {
+            } => {
+                let stream_snapshot = self.turn_stream_state.apply_turn_completed(
                     turn_id,
                     changed_planning_file_paths,
                     execution_snapshot_capture,
-                }],
-                effects: Vec::new(),
-                snapshot: self.snapshot(),
-            },
-            CoreInput::ConversationRuntimeNotice(notice) => CoreDispatchOutcome {
-                events: vec![AppEvent::ConversationRuntimeNotice(notice)],
-                effects: Vec::new(),
-                snapshot: self.snapshot(),
-            },
+                );
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::ConversationRuntimeNotice(notice) => {
+                let stream_snapshot = self.turn_stream_state.apply_runtime_notice(notice);
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::ConversationTurnWorkspaceChanged {
                 workspace_directory,
             } => CoreDispatchOutcome {
@@ -151,7 +163,8 @@ mod tests {
         SessionCatalogSnapshot,
     };
     use crate::core::app::{
-        StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+        StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
+        StartupSnapshot, TurnStreamUpdate,
     };
     use crate::domain::conversation::{
         ConversationMessage, ConversationMessageKind,
@@ -421,25 +434,32 @@ mod tests {
     }
 
     #[test]
-    fn conversation_stream_event_passes_through_core_without_state_revision() {
+    fn conversation_stream_event_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
-        let stream_event = crate::application::service::conversation_runtime_event::ConversationStreamEvent::StatusUpdated {
+        let stream_event =
+            crate::application::service::conversation_runtime_event::ConversationStreamEvent::StatusUpdated {
             text: "thinking".to_string(),
         };
 
-        let outcome =
-            controller.handle_input(CoreInput::ConversationStreamUpdated(stream_event.clone()));
+        let outcome = controller.handle_input(CoreInput::ConversationStreamUpdated(stream_event));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
+        else {
+            panic!("stream event should emit a turn stream snapshot");
+        };
+        assert_eq!(stream_snapshot.revision, 1);
         assert_eq!(
-            outcome.events,
-            vec![AppEvent::ConversationStreamUpdated(stream_event)]
+            stream_snapshot.update,
+            TurnStreamUpdate::StatusUpdated {
+                text: "thinking".to_string()
+            }
         );
         assert!(outcome.effects.is_empty());
     }
 
     #[test]
-    fn conversation_turn_completion_passes_through_core_without_state_revision() {
+    fn conversation_turn_completion_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
         let execution_snapshot_capture =
             crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::capture_failed(
@@ -454,19 +474,24 @@ mod tests {
         });
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
+        else {
+            panic!("turn completion should emit a turn stream snapshot");
+        };
         assert_eq!(
-            outcome.events,
-            vec![AppEvent::ConversationTurnCompleted {
+            stream_snapshot.update,
+            TurnStreamUpdate::TurnCompleted {
                 turn_id: "turn-1".to_string(),
                 changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
-                execution_snapshot_capture,
-            }]
+                execution_snapshot_capture: Some(execution_snapshot_capture),
+                status_text: "turn completed".to_string(),
+            }
         );
         assert!(outcome.effects.is_empty());
     }
 
     #[test]
-    fn conversation_runtime_notice_passes_through_core_without_state_revision() {
+    fn conversation_runtime_notice_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
 
         let outcome = controller.handle_input(CoreInput::ConversationRuntimeNotice(
@@ -474,11 +499,15 @@ mod tests {
         ));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
+        else {
+            panic!("runtime notice should emit a turn stream snapshot");
+        };
         assert_eq!(
-            outcome.events,
-            vec![AppEvent::ConversationRuntimeNotice(
-                "reattached runtime".to_string()
-            )]
+            stream_snapshot.update,
+            TurnStreamUpdate::RuntimeNotice {
+                notice: "reattached runtime".to_string()
+            }
         );
         assert!(outcome.effects.is_empty());
     }

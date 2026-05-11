@@ -1,3 +1,4 @@
+use super::TurnStreamSnapshot;
 use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
@@ -41,15 +42,7 @@ pub enum AppEvent {
     StartupChanged(StartupSnapshot),
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
-    ConversationStreamUpdated(ConversationStreamEvent),
-    ConversationTurnCompleted {
-        turn_id: String,
-        changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
-    },
-    ConversationRuntimeNotice(String),
-    ConversationTurnWorkspaceChanged {
-        workspace_directory: String,
-    },
+    TurnStreamSnapshotChanged(TurnStreamSnapshot),
+    ConversationTurnWorkspaceChanged { workspace_directory: String },
     ParallelModeSupervisorSnapshotInvalidated,
 }

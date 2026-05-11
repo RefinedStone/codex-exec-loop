@@ -108,7 +108,7 @@ impl NativeTuiApp {
             }
             ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice } => {
                 self.dispatch_conversation_runtime(
-                    ConversationRuntimeEvent::StreamExecutionObserved { notice },
+                    ConversationRuntimeEvent::RuntimeNoticeObserved { notice },
                 );
             }
             ParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed => {}

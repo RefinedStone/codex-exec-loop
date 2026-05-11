@@ -1,8 +1,8 @@
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::post_turn_decision::{
     PostTurnAutoPromptRoute, PostTurnAutoPromptRouteRequest, PostTurnAutoPromptSuppressionReason,
     decide_post_turn_auto_prompt_route,
 };
+use crate::core::app::TurnStreamUpdate;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 
 use super::conversation_runtime::{
@@ -47,14 +47,16 @@ impl NativeTuiApp {
         &self,
         event: &ConversationRuntimeEvent,
     ) -> ConversationRuntimeAutomationContext {
+        let failed_stream_snapshot = matches!(
+            event,
+            ConversationRuntimeEvent::StreamSnapshotApplied(snapshot)
+                if matches!(&snapshot.update, TurnStreamUpdate::Failed { .. })
+        );
         ConversationRuntimeAutomationContext {
             route_after_reduction: matches!(
                 event,
                 ConversationRuntimeEvent::PostTurnAutomationEvaluated { .. }
-                    | ConversationRuntimeEvent::StreamUpdated(
-                        ConversationStreamEvent::Failed { .. }
-                    )
-            ),
+            ) || failed_stream_snapshot,
             parallel_mode_post_turn_queue_signal: self.parallel_mode_post_turn_queue_signal(event),
         }
     }

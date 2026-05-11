@@ -382,23 +382,9 @@ impl NativeTuiApp {
             AppEvent::ConversationChanged(CoreConversationSnapshot::Failed { message }) => {
                 self.apply_loaded_conversation_result(Err(message));
             }
-            AppEvent::ConversationStreamUpdated(event) => {
-                self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamUpdated(event));
-            }
-            AppEvent::ConversationTurnCompleted {
-                turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-            } => {
-                self.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamTurnCompleted {
-                    turn_id,
-                    changed_planning_file_paths,
-                    execution_snapshot_capture: Some(execution_snapshot_capture),
-                });
-            }
-            AppEvent::ConversationRuntimeNotice(notice) => {
+            AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
                 self.dispatch_conversation_runtime(
-                    ConversationRuntimeEvent::StreamExecutionObserved { notice },
+                    ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(stream_snapshot)),
                 );
             }
             AppEvent::ConversationTurnWorkspaceChanged {

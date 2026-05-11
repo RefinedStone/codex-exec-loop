@@ -14,10 +14,10 @@ use super::conversation_model::{AutoFollowSkipReason, ConversationViewModel, Pla
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::{
     PlanningRuntimeSnapshot, PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
 };
+use crate::core::app::{TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use crate::domain::operator_alert::OperatorAlert;
@@ -27,22 +27,17 @@ use serde_json::json;
 pub(super) enum ConversationRuntimeEvent {
     /*
      * Runtime events are facts that already happened at the TUI boundary. Manual
-     * and auto-follow submissions enter through SubmitPrompt, provider messages
-     * enter through StreamUpdated, and post-turn automation results return through
-     * PostTurnAutomationEvaluated.
+     * and auto-follow submissions enter through SubmitPrompt, core stream
+     * snapshots enter through StreamSnapshotApplied, and post-turn automation
+     * results return through PostTurnAutomationEvaluated.
      */
     SubmitPrompt {
         prompt: String,
         transcript_text: String,
         origin: PromptOrigin,
     },
-    StreamUpdated(ConversationStreamEvent),
-    StreamTurnCompleted {
-        turn_id: String,
-        changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
-    },
-    StreamExecutionObserved {
+    StreamSnapshotApplied(Box<TurnStreamSnapshot>),
+    RuntimeNoticeObserved {
         notice: String,
     },
     PostTurnAutomationEvaluated {
@@ -293,34 +288,38 @@ pub(super) fn reduce_conversation_runtime(
                 prompt_origin: origin,
             });
         }
-        ConversationRuntimeEvent::StreamUpdated(event) => match event {
-            ConversationStreamEvent::AttachmentObserved { profile } => {
+        ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => match snapshot.update {
+            TurnStreamUpdate::AttachmentObserved { profile } => {
                 // Attachment information is a runtime notice, not a transcript
                 // row, because it describes bridge recovery rather than model
                 // conversation content.
                 state.extend_runtime_notices([attachment_runtime_notice(profile)]);
             }
-            ConversationStreamEvent::ThreadPrepared {
+            TurnStreamUpdate::ThreadPrepared {
                 thread_id,
                 title,
                 cwd,
+                status_text: _,
             } => {
                 // Thread preparation binds provider identity and cwd to the
                 // conversation before turn events start appending transcript.
                 state.record_thread_prepared(thread_id, title, cwd);
             }
-            ConversationStreamEvent::TurnStarted { turn_id } => {
+            TurnStreamUpdate::TurnStarted {
+                turn_id,
+                status_text: _,
+            } => {
                 // Turn id is later used by TurnCompleted and auto-follow
                 // provenance, so it is recorded as soon as the provider reports
                 // start.
                 state.record_turn_started(turn_id);
             }
-            ConversationStreamEvent::StatusUpdated { text } => {
+            TurnStreamUpdate::StatusUpdated { text } => {
                 // Provider status copy owns the main status line while a turn is
                 // active, but it does not become durable transcript history.
                 state.status_text = text;
             }
-            ConversationStreamEvent::AgentMessageDelta {
+            TurnStreamUpdate::AgentMessageDelta {
                 item_id,
                 phase,
                 delta,
@@ -330,7 +329,7 @@ pub(super) fn reduce_conversation_runtime(
                 // rows as final history.
                 state.push_live_agent_delta(item_id, phase, delta);
             }
-            ConversationStreamEvent::AgentMessageCompleted {
+            TurnStreamUpdate::AgentMessageCompleted {
                 item_id,
                 phase,
                 text,
@@ -339,13 +338,13 @@ pub(super) fn reduce_conversation_runtime(
                 // transcript row for the provider item.
                 state.complete_live_agent_message(item_id, phase, text);
             }
-            ConversationStreamEvent::ToolActivity { activity } => {
+            TurnStreamUpdate::ToolActivity { activity } => {
                 // Tool activity feeds both compact live counters and ordered
                 // transcript notices so shell tail and transcript agree.
                 state.turn_activity.register_tool_activity(&activity);
                 state.buffer_tool_message(activity.text);
             }
-            ConversationStreamEvent::ApprovalReviewUpdated { review } => {
+            TurnStreamUpdate::ApprovalReviewUpdated { review } => {
                 // Some provider statuses require approval outside the visible
                 // shell. Add a runtime notice before updating the stored review
                 // so footer/status panes can explain the handoff.
@@ -357,9 +356,11 @@ pub(super) fn reduce_conversation_runtime(
                 }
                 state.update_approval_review(review);
             }
-            ConversationStreamEvent::TurnCompleted {
+            TurnStreamUpdate::TurnCompleted {
                 turn_id,
                 changed_planning_file_paths,
+                execution_snapshot_capture,
+                status_text: _,
             } => {
                 // Turn completion closes the provider stream but does not decide
                 // whether to auto-follow. That policy needs fresh planning state,
@@ -370,32 +371,25 @@ pub(super) fn reduce_conversation_runtime(
                     &mut effects,
                     turn_id,
                     changed_planning_file_paths,
-                    None,
+                    execution_snapshot_capture,
                 );
             }
-            ConversationStreamEvent::Failed { message } => {
+            TurnStreamUpdate::Failed {
+                message,
+                status_text: _,
+            } => {
                 // Failure ends the active turn locally. No post-turn evaluation
                 // is scheduled because planning side effects may be incomplete.
                 state.fail_turn(message);
             }
+            TurnStreamUpdate::RuntimeNotice { notice } => {
+                // Execution-layer notices come from effect runners, not provider
+                // stream events. They are still runtime notices so the user can see
+                // background execution failures in the same place.
+                state.extend_runtime_notices([notice]);
+            }
         },
-        ConversationRuntimeEvent::StreamTurnCompleted {
-            turn_id,
-            changed_planning_file_paths,
-            execution_snapshot_capture,
-        } => {
-            queue_post_turn_evaluation(
-                &mut state,
-                &mut effects,
-                turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-            );
-        }
-        ConversationRuntimeEvent::StreamExecutionObserved { notice } => {
-            // Execution-layer notices come from effect runners, not provider
-            // stream events. They are still runtime notices so the user can see
-            // background execution failures in the same place.
+        ConversationRuntimeEvent::RuntimeNoticeObserved { notice } => {
             state.extend_runtime_notices([notice]);
         }
         ConversationRuntimeEvent::PostTurnAutomationEvaluated { evaluation } => {
@@ -512,9 +506,18 @@ fn queue_post_turn_evaluation(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{AutoFollowSubmitContext, PromptOrigin};
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::planning::{
         PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
     };
+    use crate::core::app::TurnStreamState;
+
+    fn stream_snapshot_event(event: ConversationStreamEvent) -> ConversationRuntimeEvent {
+        let mut stream_state = TurnStreamState::new();
+        ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
+            stream_state.apply_stream_event(event),
+        ))
+    }
 
     #[test]
     fn auto_follow_turn_completion_advances_done_progress() {
@@ -539,7 +542,7 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             reduction.state,
-            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnStarted {
+            stream_snapshot_event(ConversationStreamEvent::TurnStarted {
                 turn_id: "turn-auto-1".to_string(),
             }),
         );
@@ -550,7 +553,7 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             reduction.state,
-            ConversationRuntimeEvent::StreamUpdated(ConversationStreamEvent::TurnCompleted {
+            stream_snapshot_event(ConversationStreamEvent::TurnCompleted {
                 turn_id: "turn-auto-1".to_string(),
                 changed_planning_file_paths: Vec::new(),
             }),
@@ -575,11 +578,13 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             state,
-            ConversationRuntimeEvent::StreamTurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
-                execution_snapshot_capture: Some(snapshot_capture.clone()),
-            },
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
+                TurnStreamState::new().apply_turn_completed(
+                    "turn-1".to_string(),
+                    vec!["new/docs/plan.md".to_string()],
+                    snapshot_capture.clone(),
+                ),
+            )),
         );
 
         let post_turn_effect = reduction
