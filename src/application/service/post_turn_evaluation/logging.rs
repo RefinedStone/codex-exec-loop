@@ -1,8 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use super::super::super::conversation_runtime::{
-    PostTurnContinuationAction, PostTurnEvaluationProvenance,
-};
+use super::{PostTurnContinuationAction, PostTurnEvaluationProvenance};
 use crate::application::service::planning::PlanningRuntimeProjection;
 
 pub(super) fn post_turn_event_detail<I>(
@@ -185,9 +183,8 @@ pub(super) fn post_turn_action_decision(action: &PostTurnContinuationAction) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::super::PostTurnAutoFollowSkipReason;
     use super::*;
-    use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
-    use crate::adapter::inbound::tui::app::conversation_runtime::PostTurnContinuationAction;
     use crate::application::service::planning::PlanningRuntimeProjection;
 
     #[test]
@@ -228,7 +225,7 @@ mod tests {
     #[test]
     fn post_turn_action_detail_hides_full_queued_prompt_text() {
         let action = PostTurnContinuationAction::SkipAutoFollow {
-            reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
+            reason: PostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop,
         };
 
         let detail = post_turn_action_log_detail(

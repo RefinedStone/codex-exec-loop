@@ -58,6 +58,11 @@ impl CoreController {
                 effects: vec![CoreEffect::SubmitTurn(request)],
                 snapshot: self.snapshot(),
             },
+            CoreInput::Command(AppCommand::EvaluatePostTurn(request)) => CoreDispatchOutcome {
+                events: Vec::new(),
+                effects: vec![CoreEffect::EvaluatePostTurn(request)],
+                snapshot: self.snapshot(),
+            },
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded(result)) => {
                 self.state.apply_startup_result(result);
                 self.startup_changed_outcome(Vec::new())
@@ -72,9 +77,9 @@ impl CoreController {
                 self.conversation_changed_outcome(Vec::new())
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
-                completion,
+                execution,
             )) => CoreDispatchOutcome {
-                events: vec![AppEvent::PostTurnEvaluationCompleted(completion)],
+                events: vec![AppEvent::PostTurnEvaluationCompleted(execution)],
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
@@ -581,19 +586,16 @@ mod tests {
     #[test]
     fn post_turn_evaluation_completion_passes_through_core_without_state_revision() {
         let mut controller = CoreController::new();
-        let completion = crate::core::app::PostTurnEvaluationCompletion {
-            thread_id: "thread-1".to_string(),
-            completed_turn_id: "turn-1".to_string(),
-        };
+        let execution = Box::new(sample_post_turn_execution());
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(completion.clone()),
+            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
         ));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
-            vec![AppEvent::PostTurnEvaluationCompleted(completion)]
+            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -741,5 +743,29 @@ mod tests {
             runtime_notices: Vec::new(),
         }
         .into()
+    }
+
+    fn sample_post_turn_execution()
+    -> crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution {
+        use crate::application::service::post_turn_evaluation::{
+            PlanningWorkerPanelState, PostTurnAutoFollowSkipReason, PostTurnContinuationAction,
+            PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
+        };
+
+        crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution {
+            thread_id: "thread-1".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            evaluation: PostTurnEvaluationOutcome {
+                provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
+                runtime_projection: PlanningRuntimeProjection::invalid("planning blocked"),
+                planning_repair_state: None,
+                runtime_notices: Vec::new(),
+                action: PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
+                },
+                operator_alerts: Vec::new(),
+            },
+            planning_worker_panel_state: PlanningWorkerPanelState::default(),
+        }
     }
 }

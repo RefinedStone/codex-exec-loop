@@ -284,12 +284,7 @@ pub(super) fn reset_pool_for_parallel_enable(
     );
     let initial_reset_dispatch_block_task_ids =
         if policy == ParallelModePoolResetPolicy::ForceDisposable {
-            context
-                .task_dispatch_blocks
-                .iter()
-                .map(|block| block.task_id.trim().to_string())
-                .filter(|task_id| !task_id.is_empty())
-                .collect::<Vec<_>>()
+            disposable_runtime_task_ids(&context)
         } else {
             Vec::new()
         };
@@ -475,6 +470,32 @@ pub(super) fn reset_pool_for_parallel_enable(
     }
 
     Ok(report)
+}
+
+fn disposable_runtime_task_ids(context: &PoolRuntimeContext) -> Vec<String> {
+    let mut task_ids = BTreeSet::new();
+    task_ids.extend(
+        context
+            .slot_leases
+            .values()
+            .map(|lease| lease.task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty()),
+    );
+    task_ids.extend(
+        context
+            .session_details
+            .iter()
+            .map(|detail| detail.task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty()),
+    );
+    task_ids.extend(
+        context
+            .distributor_queue_records
+            .iter()
+            .map(|record| record.task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty()),
+    );
+    task_ids.into_iter().collect()
 }
 
 fn reset_slot_worktree_to_akra_with_retry(

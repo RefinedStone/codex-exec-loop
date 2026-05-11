@@ -6,6 +6,9 @@ use anyhow::Result;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningRuntimeUseCases;
+use crate::application::service::post_turn_evaluation::{
+    POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService,
+};
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::core::app::{ConversationReadySnapshot, SessionCatalogReadySnapshot};
@@ -22,6 +25,7 @@ pub struct CoreEffectRunner {
     conversation_service: ConversationService,
     planning_runtime: PlanningRuntimeUseCases,
     parallel_mode_turn_service: ParallelModeTurnService,
+    post_turn_evaluation_service: PostTurnEvaluationService,
     input_sender: Sender<CoreInput>,
 }
 
@@ -32,6 +36,7 @@ impl CoreEffectRunner {
         conversation_service: ConversationService,
         planning_runtime: PlanningRuntimeUseCases,
         parallel_mode_turn_service: ParallelModeTurnService,
+        post_turn_evaluation_service: PostTurnEvaluationService,
         input_sender: Sender<CoreInput>,
     ) -> Self {
         Self {
@@ -40,6 +45,7 @@ impl CoreEffectRunner {
             conversation_service,
             planning_runtime,
             parallel_mode_turn_service,
+            post_turn_evaluation_service,
             input_sender,
         }
     }
@@ -62,6 +68,7 @@ impl CoreEffectRunner {
             } => self.spawn_session_catalog_load(limit, workspace_directory),
             CoreEffect::LoadConversation { thread_id } => self.spawn_conversation_load(thread_id),
             CoreEffect::SubmitTurn(request) => self.spawn_turn_submission(request),
+            CoreEffect::EvaluatePostTurn(request) => self.spawn_post_turn_evaluation(*request),
         }
     }
 
@@ -95,6 +102,20 @@ impl CoreEffectRunner {
             self.parallel_mode_turn_service.clone(),
             self.input_sender.clone(),
         );
+    }
+
+    pub fn spawn_post_turn_evaluation(
+        &self,
+        request: crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest,
+    ) {
+        let service = self.post_turn_evaluation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let execution = service.evaluate_with_timeout(request, POST_TURN_EVALUATION_TIMEOUT);
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution)),
+            ));
+        });
     }
 }
 

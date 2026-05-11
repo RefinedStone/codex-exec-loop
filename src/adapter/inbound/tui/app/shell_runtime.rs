@@ -4,9 +4,10 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
 
-use crate::core::app::{CoreEffectCompletion, CoreInput, PostTurnEvaluationCompletion};
+use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
+#[cfg(test)]
 use super::post_turn_continuation::PostTurnEvaluationCompletionPayload;
 use super::{BackgroundMessage, NativeTuiApp, ShellChromeEvent};
 
@@ -135,6 +136,7 @@ impl ShellRuntime {
                     self.app
                         .apply_parallel_mode_control_plane_background_event(event);
                 }
+                #[cfg(test)]
                 BackgroundMessage::PostTurnEvaluationCompleted {
                     thread_id,
                     completed_turn_id,
@@ -142,19 +144,11 @@ impl ShellRuntime {
                     planning_worker_panel_state,
                 } => {
                     let result = PostTurnEvaluationCompletionPayload {
-                        thread_id: thread_id.clone(),
-                        completed_turn_id: completed_turn_id.clone(),
+                        thread_id,
+                        completed_turn_id,
                         evaluation,
                         planning_worker_panel_state,
                     };
-                    self.app.dispatch_core_input(CoreInput::EffectCompleted(
-                        CoreEffectCompletion::PostTurnEvaluationCompleted(
-                            PostTurnEvaluationCompletion {
-                                thread_id,
-                                completed_turn_id,
-                            },
-                        ),
-                    ));
                     self.app
                         .apply_post_turn_evaluation_completion_payload(result);
                 }

@@ -5,7 +5,7 @@
  * copy.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OperatorAlert {
+pub struct OperatorAlert {
     pub(crate) kind: OperatorAlertKind,
     pub(crate) title: String,
     pub(crate) detail: String,
