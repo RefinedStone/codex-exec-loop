@@ -274,11 +274,86 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_application_projection, map_queue_preview};
-    use crate::application::service::planning::{
-        PlanningApplicationProjection, PlanningRuntimeProjection,
+    use super::{
+        map_application_projection, map_directions_summary, map_doctor_report, map_management_view,
+        map_queue_preview, map_validation_report,
     };
-    use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
+    use crate::application::service::planning::{
+        DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
+        DirectionsSupportingFileStatus, PlanningApplicationProjection, PlanningDoctorReport,
+        PlanningRuntimeProjection,
+    };
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PLANNING_FORMAT_VERSION, PlanningFileKind, PlanningValidationReport,
+        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
+        QueueIdlePolicy, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
+        TaskStatus,
+    };
+
+    #[test]
+    fn management_view_maps_direction_task_rows_and_trimmed_task_counts() {
+        let directions = DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::Stop,
+                prompt_path: String::new(),
+            },
+            directions: vec![
+                direction("dir-active", DirectionState::Active),
+                direction("dir-paused", DirectionState::Paused),
+                direction("dir-done", DirectionState::Done),
+            ],
+        };
+        let task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task(
+                "task-1",
+                " dir-active ",
+                vec!["task-a", "task-b"],
+                vec!["task-c"],
+            )],
+        };
+
+        let view = map_management_view(&directions, &task_authority, "dir-active");
+
+        assert_eq!(view.default_direction_id, "dir-active");
+        assert_eq!(
+            view.directions
+                .iter()
+                .map(|direction| (
+                    direction.id.as_str(),
+                    direction.state.as_str(),
+                    direction.task_count
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("dir-active", "active", 1),
+                ("dir-paused", "paused", 0),
+                ("dir-done", "done", 0)
+            ]
+        );
+        assert_eq!(view.directions[0].success_criteria_text, "done\nverified");
+        assert_eq!(view.directions[0].scope_hints_text, "scope-a\nscope-b");
+        assert_eq!(view.tasks[0].direction_id, " dir-active ");
+        assert_eq!(view.tasks[0].depends_on_text, "task-a\ntask-b");
+        assert_eq!(view.tasks[0].blocked_by_text, "task-c");
+    }
+
+    #[test]
+    fn doctor_report_projection_keeps_path_issue_fields_stable() {
+        let report = PlanningDoctorReport::path_issue("workspace path does not exist".to_string());
+
+        let view = map_doctor_report(&report);
+
+        assert_eq!(view.planning_state, "invalid");
+        assert_eq!(view.issue.as_deref(), Some("workspace path does not exist"));
+        assert_eq!(view.queue_idle_policy, None);
+        assert_eq!(view.queue_summary, None);
+        assert_eq!(view.proposal_summary, None);
+        assert_eq!(view.health, None);
+        assert_eq!(view.note, None);
+    }
 
     #[test]
     fn admin_queue_preview_reads_domain_projection_without_reordering() {
@@ -343,6 +418,24 @@ mod tests {
     }
 
     #[test]
+    fn admin_queue_preview_reports_idle_when_projection_has_no_head() {
+        let projection = PriorityQueueProjection {
+            next_task: None,
+            active_tasks: Vec::new(),
+            proposed_tasks: Vec::new(),
+            skipped_tasks: vec![skipped_task("skipped-1", "Skipped", TaskStatus::Blocked)],
+        };
+
+        let preview = map_queue_preview(&projection);
+
+        assert_eq!(preview.queue_summary, "queue head: none");
+        assert_eq!(preview.proposal_summary, None);
+        assert!(preview.queue_head.is_none());
+        assert!(preview.visible_tasks.is_empty());
+        assert!(preview.proposed_tasks.is_empty());
+    }
+
+    #[test]
     fn admin_runtime_summary_uses_application_projection_queue_lanes() {
         let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
@@ -390,6 +483,209 @@ mod tests {
         assert_eq!(summary.proposed_tasks[0].status, "proposed");
     }
 
+    #[test]
+    fn admin_runtime_summary_limits_application_projection_lanes() {
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "Planning Context".to_string(),
+            "queue ready".to_string(),
+            None,
+            Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
+            PriorityQueueProjection {
+                next_task: Some(queue_task(1, "task-1", "Current task", TaskStatus::Ready)),
+                active_tasks: (1..=6)
+                    .map(|rank| {
+                        queue_task(
+                            rank,
+                            &format!("task-{rank}"),
+                            &format!("Active task {rank}"),
+                            TaskStatus::Ready,
+                        )
+                    })
+                    .collect(),
+                proposed_tasks: (1..=6)
+                    .map(|rank| {
+                        queue_task(
+                            rank,
+                            &format!("proposal-{rank}"),
+                            &format!("Proposal {rank}"),
+                            TaskStatus::Proposed,
+                        )
+                    })
+                    .collect(),
+                skipped_tasks: Vec::new(),
+            },
+        );
+
+        let summary = map_application_projection(
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection),
+        );
+
+        assert_eq!(summary.visible_tasks.len(), 5);
+        assert_eq!(summary.proposed_tasks.len(), 5);
+        assert_eq!(summary.visible_tasks[4].task_id, "task-5");
+        assert_eq!(summary.proposed_tasks[4].task_id, "proposal-5");
+    }
+
+    #[test]
+    fn directions_summary_maps_status_labels_attention_and_parse_error() {
+        let summary = DirectionsMaintenanceSummary {
+            directions: vec![
+                direction_summary(
+                    "dir-unset",
+                    None,
+                    DirectionsSupportingFileStatus::MissingMapping,
+                ),
+                direction_summary(
+                    "dir-ready",
+                    Some(".codex-exec-loop/planning/directions/ready.md"),
+                    DirectionsSupportingFileStatus::Ready,
+                ),
+                direction_summary(
+                    "dir-broken",
+                    Some("../outside.md"),
+                    DirectionsSupportingFileStatus::BrokenMapping,
+                ),
+            ],
+            missing_detail_doc_count: 1,
+            broken_detail_doc_count: 1,
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: Some(".codex-exec-loop/planning/prompts/queue.md".to_string()),
+            queue_idle_prompt_status: DirectionsSupportingFileStatus::BrokenMapping,
+            parse_error: Some("directions did not parse".to_string()),
+        };
+
+        let view = map_directions_summary(summary);
+
+        assert_eq!(view.missing_detail_doc_count, 1);
+        assert_eq!(view.broken_detail_doc_count, 1);
+        assert_eq!(view.queue_idle_policy, "review_and_enqueue");
+        assert_eq!(
+            view.queue_idle_prompt_path.as_deref(),
+            Some(".codex-exec-loop/planning/prompts/queue.md")
+        );
+        assert_eq!(view.queue_idle_prompt_status, "broken");
+        assert_eq!(
+            view.parse_error.as_deref(),
+            Some("directions did not parse")
+        );
+        assert_eq!(view.directions[0].detail_doc_status, "unset");
+        assert!(view.directions[0].needs_attention);
+        assert_eq!(view.directions[1].detail_doc_status, "ready");
+        assert!(!view.directions[1].needs_attention);
+        assert_eq!(view.directions[2].detail_doc_status, "broken");
+        assert!(view.directions[2].needs_attention);
+    }
+
+    #[test]
+    fn validation_report_maps_counts_severity_and_file_kind_labels() {
+        let mut report = PlanningValidationReport::new();
+        report.push_error(
+            PlanningFileKind::Directions,
+            "bad_direction",
+            "direction is invalid",
+        );
+        report.push_warning(
+            PlanningFileKind::TaskAuthority,
+            "task_warning",
+            "task is degraded",
+        );
+        report.push_warning(
+            PlanningFileKind::ResultOutput,
+            "result_warning",
+            "result output is degraded",
+        );
+
+        let view = map_validation_report(&report);
+
+        assert!(!view.is_valid);
+        assert_eq!(view.error_count, 1);
+        assert_eq!(view.warning_count, 2);
+        assert_eq!(
+            view.issues
+                .iter()
+                .map(|issue| {
+                    (
+                        issue.severity.as_str(),
+                        issue.file_kind.as_str(),
+                        issue.code.as_str(),
+                        issue.message.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "error",
+                    "directions",
+                    "bad_direction",
+                    "direction is invalid"
+                ),
+                (
+                    "warning",
+                    "task_authority",
+                    "task_warning",
+                    "task is degraded"
+                ),
+                (
+                    "warning",
+                    "result_output",
+                    "result_warning",
+                    "result output is degraded"
+                ),
+            ]
+        );
+    }
+
+    fn direction(id: &str, state: DirectionState) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: format!("Direction {id}"),
+            summary: format!("Summary for {id}"),
+            success_criteria: vec!["done".to_string(), "verified".to_string()],
+            scope_hints: vec!["scope-a".to_string(), "scope-b".to_string()],
+            detail_doc_path: format!(".codex-exec-loop/planning/directions/{id}.md"),
+            state,
+        }
+    }
+
+    fn direction_summary(
+        id: &str,
+        detail_doc_path: Option<&str>,
+        detail_doc_status: DirectionsSupportingFileStatus,
+    ) -> DirectionsMaintenanceDirectionSummary {
+        DirectionsMaintenanceDirectionSummary {
+            id: id.to_string(),
+            title: format!("Direction {id}"),
+            detail_doc_path: detail_doc_path.map(str::to_string),
+            detail_doc_status,
+        }
+    }
+
+    fn task(
+        id: &str,
+        direction_id: &str,
+        depends_on: Vec<&str>,
+        blocked_by: Vec<&str>,
+    ) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            direction_relation_note: "relates to the direction".to_string(),
+            title: format!("Task {id}"),
+            description: "Do the task".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: depends_on.into_iter().map(str::to_string).collect(),
+            blocked_by: blocked_by.into_iter().map(str::to_string).collect(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+
     fn queue_task(
         rank: usize,
         task_id: &str,
@@ -406,6 +702,20 @@ mod tests {
             combined_priority: 100 - rank as i32,
             updated_at: "2026-05-08T00:00:00Z".to_string(),
             rank_reasons: vec![format!("domain-rank={rank}")],
+        }
+    }
+
+    fn skipped_task(
+        task_id: &str,
+        task_title: &str,
+        status: TaskStatus,
+    ) -> PriorityQueueSkippedTask {
+        PriorityQueueSkippedTask {
+            task_id: task_id.to_string(),
+            task_title: task_title.to_string(),
+            direction_id: "direction-a".to_string(),
+            status,
+            reason: "blocked by another task".to_string(),
         }
     }
 }
