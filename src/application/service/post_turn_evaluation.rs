@@ -934,12 +934,20 @@ mod tests {
     use crate::adapter::outbound::github::GithubAutomationAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
-    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_worker_port::{
+        NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
+    };
     use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::application::service::planning::{
+        PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
+        PlanningRuntimeWorkspaceStatus,
+    };
     use crate::domain::planning::{
         PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
     };
+    use std::fs;
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn post_turn_evaluator_boundary_uses_context_not_conversation_model() {
@@ -1228,13 +1236,166 @@ mod tests {
         assert!(decision.operator_alerts.is_empty());
     }
 
+    #[test]
+    fn official_completion_capture_failure_updates_panel_state() {
+        let mut executor = test_executor();
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.changed_planning_file_paths = vec![".codex-exec-loop/planning/result.md".into()];
+
+        let report = executor.begin_official_completion_if_needed(&context, &request);
+
+        assert!(report.is_none());
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("parallel completion capture failed: repository inspection failed")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref(),
+            Some("queue head: Queue head")
+        );
+    }
+
+    #[test]
+    fn official_completion_refresh_blocks_when_planning_workspace_is_unavailable() {
+        let blocked_workspace = TempPlanningWorkspaceBlocker::new("official-refresh-blocked");
+        let mut executor = test_executor();
+        let context = test_context(ready_projection(Some(queue_task())));
+        let request = test_request(context.clone());
+        let contract = official_completion_contract();
+
+        let outcome = executor.run_official_completion_refresh(
+            &context,
+            &request,
+            &blocked_workspace.path,
+            &context.current_runtime_projection,
+            &contract,
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        let failure_detail = executor
+            .planning_worker_panel_state
+            .last_summary
+            .as_deref()
+            .expect("blocked refresh should record a panel failure detail");
+        assert!(failure_detail.starts_with("failed to load planning workspace: failed to create "));
+        assert!(failure_detail.contains(&blocked_workspace.path));
+        assert_eq!(
+            outcome.runtime_projection.failure_reason(),
+            Some(failure_detail)
+        );
+        assert!(outcome.runtime_notices.is_empty());
+    }
+
+    #[test]
+    fn official_completion_refresh_records_worker_execution_failure() {
+        let workspace = TempPlanningWorkspace::new("official-refresh-worker-failure");
+        let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+        let contract = official_completion_contract();
+
+        let outcome = executor.run_official_completion_refresh(
+            &context,
+            &request,
+            &workspace.path,
+            &context.current_runtime_projection,
+            &contract,
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("official-refresh")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("official completion refresh failed: worker boom")
+        );
+        assert_eq!(
+            outcome.runtime_projection.auto_follow_pause_reason(),
+            Some("official completion refresh failed: worker boom")
+        );
+        assert!(outcome.runtime_notices.iter().any(|notice| {
+            notice.contains("official completion refreshing state could not be recorded")
+        }));
+    }
+
+    #[test]
+    fn official_completion_refresh_success_finalizes_slot_and_preserves_worker_summary() {
+        let workspace = TempPlanningWorkspace::new("official-refresh-success");
+        let mut executor = test_executor();
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+        let contract = official_completion_contract();
+
+        let outcome = executor.run_official_completion_refresh(
+            &context,
+            &request,
+            &workspace.path,
+            &context.current_runtime_projection,
+            &contract,
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("official-refresh")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("planning worker disabled")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_notice_detail
+                .as_deref(),
+            None
+        );
+        assert_eq!(
+            outcome.runtime_projection.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+    }
+
     fn test_executor() -> PostTurnEvaluationExecutor {
+        test_executor_with_worker(Arc::new(NoopPlanningWorkerPort))
+    }
+
+    fn test_executor_with_worker(
+        planning_worker_port: Arc<dyn PlanningWorkerPort>,
+    ) -> PostTurnEvaluationExecutor {
         PostTurnEvaluationExecutor::new(
             PlanningServices::from_ports(
                 Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
                 Arc::new(NoopPlanningAuthorityPort::default()),
                 Arc::new(NoopPlanningTaskRepositoryPort),
-                Arc::new(NoopPlanningWorkerPort),
+                planning_worker_port,
             ),
             ParallelModeTurnService::new(ParallelModeService::new(
                 Arc::new(SqlitePlanningAuthorityAdapter::new()),
@@ -1294,6 +1455,86 @@ mod tests {
             combined_priority: 80,
             updated_at: "2026-05-12T00:00:00Z".to_string(),
             rank_reasons: vec!["ready".to_string()],
+        }
+    }
+
+    fn official_completion_contract() -> PlanningOfficialCompletionRefreshContract {
+        PlanningOfficialCompletionRefreshContract::new(
+            "turn-1",
+            7,
+            PlanningOfficialCompletionRefreshPayload::new(
+                "agent-1",
+                "task-1",
+                "Queue head",
+                "agent/task-1",
+                "/tmp/slot-worktree",
+                "abc123",
+                "validation passed",
+                "agent finished queue head",
+                Some("agent finished queue head".to_string()),
+                None,
+                "2026-05-12T00:00:00Z",
+            ),
+        )
+    }
+
+    struct FailingPlanningWorkerPort;
+
+    impl PlanningWorkerPort for FailingPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            _request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            Err(anyhow::anyhow!("worker boom"))
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct TempPlanningWorkspaceBlocker {
+        path: String,
+    }
+
+    impl TempPlanningWorkspaceBlocker {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::write(&path, "not a directory")
+                .expect("temp planning workspace blocker file should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspaceBlocker {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
         }
     }
 }
