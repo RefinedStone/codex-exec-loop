@@ -2706,19 +2706,15 @@
   };
 
   const dashboardSignature = (dashboard) => JSON.stringify({
-    agents: asArray(dashboard.agents?.entries).map((agent) => [agent.agentId, agent.slotId, agent.lifecycleState, agent.latestSummary]),
-    pool: asArray(dashboard.pool?.slots).map((slot) => [slot.slotId, slot.state, slot.ownerLabel, slot.note]),
-    distributor: [dashboard.distributor?.barrierState, dashboard.distributor?.queueDepth, dashboard.distributor?.headSummary],
-    campaign: [dashboard.campaign?.activeLaneCount, dashboard.campaign?.visibleAttemptCount, dashboard.campaign?.signalCount],
-    task: dashboard.selectedTask ? [dashboard.selectedTask.taskId, dashboard.selectedTask.state, dashboard.selectedTask.progressPercent] : [],
-    metrics: [
-      dashboard.metrics?.poolUtilizationPercent,
-      dashboard.metrics?.activeAgentCount,
-      dashboard.metrics?.waitingTaskCount,
-      asArray(dashboard.metrics?.badges).join(",")
-    ],
-    workspace: [dashboard.workspace?.readiness, dashboard.workspace?.topNotice],
-    eventFeed: [dashboard.eventFeed?.totalEventCount, dashboard.eventFeed?.visibleEventCount]
+    agents: dashboard.agents || null,
+    pool: dashboard.pool || null,
+    distributor: dashboard.distributor || null,
+    campaign: dashboard.campaign || null,
+    selectedTask: dashboard.selectedTask || null,
+    metrics: dashboard.metrics || null,
+    workspace: dashboard.workspace || null,
+    eventFeed: dashboard.eventFeed || null,
+    events: asArray(dashboard.events)
   });
 
   const renderDashboardPanels = (dashboard) => {
