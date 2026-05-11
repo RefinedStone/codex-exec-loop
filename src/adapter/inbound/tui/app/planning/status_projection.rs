@@ -48,15 +48,20 @@ pub(crate) fn build_planning_status_surface_projection(
     supplemental_detail_len: usize,
     always_show: bool,
 ) -> PlanningStatusSurfaceProjection {
+    let runtime_projection = app.planning_runtime_projection_snapshot();
     PlanningStatusSurfaceProjection {
         summary_line: build_planning_summary_line(
             app,
             conversation,
+            &runtime_projection,
             summary_detail_len,
             always_show,
         ),
         notice_line: build_planning_notice_line(conversation, supplemental_detail_len),
-        queue_framing_lines: build_queue_framing_lines(conversation, supplemental_detail_len),
+        queue_framing_lines: build_queue_framing_lines(
+            &runtime_projection,
+            supplemental_detail_len,
+        ),
     }
 }
 
@@ -94,6 +99,7 @@ pub(crate) fn build_resumed_session_status_text(
 pub(crate) fn build_planning_summary_line(
     app: &NativeTuiApp,
     conversation: &ConversationViewModel,
+    runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<String> {
@@ -101,7 +107,7 @@ pub(crate) fn build_planning_summary_line(
         .planning()
         .runtime()
         .build_summary_line(PlanningRuntimeSummaryLineRequest {
-            projection: &conversation.planning_runtime_projection,
+            projection: runtime_projection,
             has_running_turn: conversation.has_running_turn(),
             is_repairing: conversation.planning_repair_state.is_some(),
             repair_failure_summary: conversation
@@ -132,13 +138,10 @@ pub(crate) fn build_planning_notice_line(
 }
 
 pub(crate) fn build_queue_framing_lines(
-    conversation: &ConversationViewModel,
+    runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
 ) -> Vec<Line<'static>> {
-    build_queue_framing_lines_from_projection(
-        &conversation.planning_runtime_projection,
-        max_detail_len,
-    )
+    build_queue_framing_lines_from_projection(runtime_projection, max_detail_len)
 }
 
 pub(crate) fn build_queue_framing_lines_from_projection(

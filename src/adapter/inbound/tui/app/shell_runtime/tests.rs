@@ -294,6 +294,10 @@ fn tui_projection_rendering_reads_core_snapshot_before_legacy_cache() {
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
     const PLAN_INDICATOR_RS: &str =
         include_str!("../shell_presentation/status_panels/plan_indicator.rs");
+    const QUEUE_OVERLAY_RS: &str = include_str!("../shell_presentation/overlays/popup/queue.rs");
+    const PLANNING_STATUS_PROJECTION_RS: &str = include_str!("../planning/status_projection.rs");
+    const PLANNING_EXISTING_WORKSPACE_RS: &str =
+        include_str!("../shell_presentation/overlays/popup/planning_existing_workspace.rs");
 
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_readiness_snapshot"));
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_supervisor_snapshot"));
@@ -303,6 +307,14 @@ fn tui_projection_rendering_reads_core_snapshot_before_legacy_cache() {
         !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
     );
     assert!(!PLAN_INDICATOR_RS.contains("load_planning_runtime_projection"));
+    for source in [
+        PLAN_INDICATOR_RS,
+        QUEUE_OVERLAY_RS,
+        PLANNING_STATUS_PROJECTION_RS,
+        PLANNING_EXISTING_WORKSPACE_RS,
+    ] {
+        assert!(!source.contains("conversation.planning_runtime_projection"));
+    }
 }
 
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {

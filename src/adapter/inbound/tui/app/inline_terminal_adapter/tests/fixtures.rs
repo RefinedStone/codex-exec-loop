@@ -130,6 +130,8 @@ pub(super) fn make_test_app() -> NativeTuiApp {
     conversation.cwd = "/tmp/root".to_string();
     conversation.draft_workspace_directory = "/tmp/root".to_string();
     // The neutral planning baseline makes tests opt in explicitly when they need queue, pause, or task state.
-    conversation.replace_planning_runtime_projection(PlanningRuntimeProjection::uninitialized());
+    app.replace_ready_conversation_planning_runtime_projection(
+        PlanningRuntimeProjection::uninitialized(),
+    );
     app
 }

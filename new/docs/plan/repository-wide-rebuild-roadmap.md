@@ -51,10 +51,13 @@ parallel-mode 표시 accessor는 core `AppSnapshot.planning_parallel.parallel_mo
 먼저 읽고 TUI cache는 전환용 fallback으로만 둔다. planning footer의
 loading/failed 경로도 render 중 application service를 다시 호출하지 않고 core
 snapshot projection을 읽는다.
+Ready conversation의 planning footer, queue overlay, planning status tail, existing
+workspace popup도 core planning projection을 읽는다. conversation cache는
+auto-follow/reducer 판단용 전환 cache로 남아 있다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| planning/parallel projection consumption | parallel rendering은 core-first가 됐지만 TUI write-through cache가 남아 있다. Ready conversation planning rendering도 아직 conversation cache를 primary로 읽는다. |
+| planning/parallel projection consumption | Ready conversation rendering은 core-first가 됐지만 TUI conversation cache와 parallel write-through cache가 reducer/event compatibility 용도로 남아 있다. |
 | runtime vocabulary | 다음 slice도 필요한 Command/Input/Effect/Completion/Event/Snapshot을 쓰되, 기준 문서 의미와 domain language에 맞춰 같은 개념에 여러 이름을 붙이지 않아야 한다. |
 
 ## 실행 Backlog
@@ -63,7 +66,8 @@ snapshot projection을 읽는다.
 | --- | --- | --- |
 | CORE-MANUAL-INTAKE-01 | done | manual prompt intake/bootstrap을 core command/effect로 이동하고 TUI는 prompt buffer와 overlay만 소유한다. |
 | CORE-PROJECTION-02 | done | parallel rendering source와 loading/failed planning indicator를 `AppSnapshot` projection 우선 읽기로 전환한다. |
-| CORE-CACHE-03 | next | parallel write-through cache와 Ready conversation planning cache를 더 줄여 render source를 core/application projection으로 수렴한다. |
+| CORE-READY-PLANNING-03 | done | Ready conversation planning rendering source를 core planning projection으로 전환한다. |
+| CORE-PARALLEL-CACHE-04 | next | parallel write-through cache를 줄여 event application은 core projection만 갱신하고 TUI field fallback을 제거한다. |
 
 ## 문서 운영 규칙
 

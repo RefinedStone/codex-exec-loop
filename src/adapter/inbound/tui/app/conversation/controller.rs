@@ -90,8 +90,10 @@ impl NativeTuiApp {
         self.sync_core_planning_runtime_projection(planning_runtime_projection);
     }
 
-    // core effect completions already passed through the headless app state, so this
-    // path only refreshes the TUI-owned projection cache used by render/reducer code.
+    // Keep the transitional conversation cache and core render projection aligned.
+    // Some callers arrive after a core effect already updated the snapshot; repeated
+    // projection input is idempotent, so this remains safe while render paths move
+    // away from the conversation cache.
     pub(crate) fn replace_ready_conversation_planning_runtime_projection(
         &mut self,
         planning_runtime_projection: PlanningRuntimeProjection,
@@ -99,8 +101,9 @@ impl NativeTuiApp {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        conversation.replace_planning_runtime_projection(planning_runtime_projection);
+        conversation.replace_planning_runtime_projection(planning_runtime_projection.clone());
         self.conversation_state = ConversationState::ready(conversation);
+        self.sync_core_planning_runtime_projection(planning_runtime_projection);
     }
 
     // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.

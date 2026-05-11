@@ -33,10 +33,7 @@ fn queue_overlay_matches_snapshot() {
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        panic!("test app should start in a ready conversation state");
-    };
-    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
+    app.replace_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context\nQueue Summary",
         "Queue Summary",
     ));
@@ -85,13 +82,14 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
         &mut app,
         "previous transcript should remain visible in viewport replay mode",
     );
+    let runtime_projection = sample_planning_runtime_projection(
+        "Planning Context",
+        "queue head: rank 1 / terminal-bridge plan",
+    );
+    app.replace_ready_conversation_planning_runtime_projection(runtime_projection);
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
-        "Planning Context",
-        "queue head: rank 1 / terminal-bridge plan",
-    ));
     conversation.record_turn_started("turn-1".to_string());
     conversation.push_live_agent_delta(
         "agent-1".to_string(),
@@ -212,10 +210,7 @@ fn vt100_queue_overlay_matches_snapshot() {
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
-        panic!("test app should start in a ready conversation state");
-    };
-    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
+    app.replace_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context\nQueue Summary",
         "Queue Summary",
     ));

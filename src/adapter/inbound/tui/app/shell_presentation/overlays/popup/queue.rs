@@ -55,10 +55,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             key_lines: build_queue_overlay_key_lines(),
         },
         ConversationState::Ready(conversation) => {
-            // Ready conversation만 runtime projection을 갖는다. popup은 여기서 read model을 빌려 presentation copy만 만든다.
-            let runtime_projection = &conversation.planning_runtime_projection;
+            // Ready conversation state only gates availability. The runtime read model itself comes from core.
+            let runtime_projection = app.planning_runtime_projection_snapshot();
             let projection =
-                PlanningApplicationProjection::from_runtime_projection(runtime_projection);
+                PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
             /*
              * 새 queue projection이 있으면 active task preview 전체를 보여 준다. 오래된 projection이나
              * compatibility path처럼 projection이 없을 때만 legacy queue_head 한 줄로 fallback한다.
