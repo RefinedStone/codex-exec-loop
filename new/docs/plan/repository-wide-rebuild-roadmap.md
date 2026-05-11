@@ -44,16 +44,15 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| post-turn continuation | post-turn evaluator spawn/result payload/application guard가 아직 TUI path에 있다. |
+| post-turn continuation | completion payload 용어와 stale/duplicate guard는 정리됐지만, evaluator spawn/timeout owner가 아직 TUI path에 있다. |
 | manual prompt intake/bootstrap | planning intake와 first-use planning scaffold 실행을 TUI turn submission path가 직접 호출한다. |
 | planning/parallel projection consumption | core `AppSnapshot`에 projection은 있지만 TUI가 여전히 별도 cache를 primary source처럼 갱신한다. |
-| runtime vocabulary | Command/Input/Effect/Completion/Event/Snapshot 용어를 기준 문서 의미로 제한하고 legacy 이름을 줄여야 한다. |
+| runtime vocabulary | post-turn legacy 용어는 제거했다. 다음 slice도 Command/Input/Effect/Completion/Event/Snapshot 의미를 기준 문서대로 제한해야 한다. |
 
 ## 실행 Backlog
 
 | Slice | 목표 |
 | --- | --- |
-| CORE-POSTTURN-02 | post-turn completion 용어를 `EvaluationCompleted`/`CompletionPayload`로 통일하고 pending TUI queue 재발을 막는다. |
 | CORE-POSTTURN-03 | post-turn evaluator 실행과 timeout completion을 core/application effect completion으로 옮긴다. |
 | CORE-MANUAL-INTAKE-01 | manual prompt intake/bootstrap을 core command/effect로 이동하고 TUI는 prompt buffer와 overlay만 소유한다. |
 | CORE-PROJECTION-02 | planning/parallel rendering source를 `AppSnapshot` projection으로 수렴하고 TUI duplicate cache를 줄인다. |

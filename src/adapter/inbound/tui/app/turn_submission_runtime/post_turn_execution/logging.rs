@@ -1,15 +1,12 @@
 use serde_json::{Map, Value, json};
 
-use super::super::super::ConversationViewModel;
 use super::super::super::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationProvenance,
 };
-use super::PostTurnEvaluationRequest;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
 
 pub(super) fn post_turn_event_detail<I>(
-    conversation: &ConversationViewModel,
-    request: &PostTurnEvaluationRequest,
+    context: PostTurnWorkerLogContext<'_>,
     operation: &str,
     phase: &str,
     decision: Option<&str>,
@@ -20,9 +17,9 @@ where
     I: IntoIterator<Item = (&'static str, Value)>,
 {
     let mut detail = core_post_turn_fields(
-        Some(conversation.thread_id.as_str()),
-        request.completed_turn_id.as_str(),
-        request.workspace_directory.as_str(),
+        Some(context.thread_id),
+        context.completed_turn_id,
+        context.workspace_directory,
         operation,
         phase,
         decision,
@@ -82,14 +79,12 @@ where
 }
 
 pub(super) fn planning_worker_refresh_skipped_detail(
-    conversation: &ConversationViewModel,
-    request: &PostTurnEvaluationRequest,
+    context: PostTurnWorkerLogContext<'_>,
     reason: &str,
     runtime: &PlanningRuntimeSnapshot,
 ) -> Value {
     post_turn_event_detail(
-        conversation,
-        request,
+        context,
         "refresh",
         "skipped",
         Some("skip"),
