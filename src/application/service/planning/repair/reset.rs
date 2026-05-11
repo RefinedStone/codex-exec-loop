@@ -396,9 +396,19 @@ fn removed_path_strings(paths: &[&str]) -> Vec<String> {
 }
 
 #[cfg(test)]
-// 현재 unit coverage는 공개 target variant만 고정하고, 동작은 inbound reset flow에서 검증한다.
 mod tests {
-    use super::PlanningResetTarget;
+    use super::*;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+    };
+    use crate::domain::planning::{
+        DirectionDefinition, DirectionState, OriginSessionKind, PLANNING_FORMAT_VERSION,
+        QueueIdleConfig, QueueIdlePolicy, TaskActor, TaskDefinition, TaskMutationProvenance,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     // reset caller가 공개 enum matching으로 연결된 동안 target variant가 사라지지 않게 고정한다.
@@ -412,5 +422,423 @@ mod tests {
             PlanningResetTarget::Directions
         ));
         assert!(matches!(PlanningResetTarget::All, PlanningResetTarget::All));
+    }
+
+    #[test]
+    fn reset_target_labels_match_command_vocabulary() {
+        assert_eq!(PlanningResetTarget::Queue.label(), "queue");
+        assert_eq!(PlanningResetTarget::Directions.label(), "directions");
+        assert_eq!(PlanningResetTarget::All.label(), "all");
+    }
+
+    #[test]
+    fn reset_workspace_rejects_missing_active_workspace() {
+        let fixture = ResetFixture::new("missing-workspace");
+
+        let error = fixture
+            .service
+            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
+            .expect_err("reset should not bootstrap a missing workspace");
+
+        assert_eq!(
+            error.to_string(),
+            "planning workspace is unavailable; initialize planning first"
+        );
+    }
+
+    #[test]
+    fn queue_reset_clears_task_authority_when_direction_context_is_missing() {
+        let fixture = ResetFixture::new("queue-clear-missing-context");
+        fixture.write_result_output("# Result Output\n\n- Keep the operator contract.\n");
+        let directions =
+            direction_catalog(vec![direction("active-direction", DirectionState::Active)]);
+        fixture.seed_task_authority(
+            &directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task("live-task", "active-direction", TaskStatus::Ready)],
+            },
+        );
+
+        let result = fixture
+            .service
+            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
+            .expect("queue reset should clear task authority without direction context");
+
+        assert_eq!(result.target, PlanningResetTarget::Queue);
+        assert!(result.rewritten_paths.is_empty());
+        assert!(result.removed_paths.is_empty());
+        assert!(
+            fixture
+                .repository
+                .load_task_authority_snapshot(fixture.workspace.path_str())
+                .expect("task authority snapshot should load")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn queue_reset_replaces_tasks_with_bootstrap_empty_authority_when_context_is_valid() {
+        let fixture = ResetFixture::new("queue-reset-empty-authority");
+        let bootstrap = fixture.bootstrap_artifacts();
+        fixture.write_result_output(&bootstrap.result_output_markdown);
+        fixture.seed_direction_authority(&bootstrap.directions);
+        fixture.seed_task_authority(
+            &bootstrap.directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task("queued-task", "general-workstream", TaskStatus::Ready)],
+            },
+        );
+
+        fixture
+            .service
+            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
+            .expect("queue reset should commit the bootstrap empty task authority");
+
+        let snapshot = fixture
+            .repository
+            .load_task_authority_snapshot(fixture.workspace.path_str())
+            .expect("task authority snapshot should load")
+            .expect("queue reset should keep a task authority snapshot");
+        assert!(snapshot.task_authority.tasks.is_empty());
+        assert!(snapshot.queue_projection.next_task.is_none());
+    }
+
+    #[test]
+    fn directions_reset_is_blocked_by_live_tasks_with_bounded_summary() {
+        let fixture = ResetFixture::new("directions-reset-live-tasks");
+        let directions =
+            direction_catalog(vec![direction("active-direction", DirectionState::Active)]);
+        fixture.write_result_output("# Result Output\n\n- Keep the operator contract.\n");
+        fixture.seed_direction_authority(&directions);
+        fixture.seed_task_authority(
+            &directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![
+                    task("task-a", "active-direction", TaskStatus::Ready),
+                    task("task-b", "active-direction", TaskStatus::InProgress),
+                    task("task-c", "active-direction", TaskStatus::Blocked),
+                    task("task-d", "active-direction", TaskStatus::Proposed),
+                ],
+            },
+        );
+
+        let error = fixture
+            .service
+            .reset_workspace(
+                fixture.workspace.path_str(),
+                PlanningResetTarget::Directions,
+            )
+            .expect_err("directions reset should reject live task authority");
+
+        assert_eq!(
+            error.to_string(),
+            "planning directions reset is blocked by live tasks: task-a(ready), task-b(in_progress), task-c(blocked) (+1 more); use reset all to replace the full workspace instead"
+        );
+    }
+
+    #[test]
+    fn directions_reset_rewrites_prompt_side_artifacts_and_empty_direction_authority() {
+        let fixture = ResetFixture::new("directions-reset-safe");
+        let bootstrap = fixture.bootstrap_artifacts();
+        fixture.write_result_output(&bootstrap.result_output_markdown);
+        fixture.seed_direction_authority(&direction_catalog(vec![direction(
+            "old-direction",
+            DirectionState::Active,
+        )]));
+        fixture.seed_task_authority(
+            &bootstrap.directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: Vec::new(),
+            },
+        );
+        fixture.create_file(
+            Path::new(PLANNING_DIRECTION_DOCS_DIRECTORY).join("old.md"),
+            "old direction detail",
+        );
+        fixture.create_file(
+            Path::new(PLANNING_PROMPTS_DIRECTORY).join("old.md"),
+            "old prompt",
+        );
+
+        let result = fixture
+            .service
+            .reset_workspace(
+                fixture.workspace.path_str(),
+                PlanningResetTarget::Directions,
+            )
+            .expect("safe directions reset should succeed");
+
+        assert_eq!(result.target, PlanningResetTarget::Directions);
+        assert_eq!(
+            result.rewritten_paths,
+            vec![DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()]
+        );
+        assert_eq!(
+            result.removed_paths,
+            removed_path_strings(RESET_DIRECTIONS_REMOVED_PATHS)
+        );
+        assert!(
+            !fixture
+                .workspace
+                .path()
+                .join(PLANNING_DIRECTION_DOCS_DIRECTORY)
+                .exists()
+        );
+        assert!(
+            fixture
+                .workspace
+                .path()
+                .join(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+                .is_file()
+        );
+        let direction_snapshot = fixture
+            .repository
+            .load_direction_authority_snapshot(fixture.workspace.path_str())
+            .expect("direction authority should load")
+            .expect("directions reset should commit direction authority");
+        assert_eq!(direction_snapshot.directions, bootstrap.directions);
+    }
+
+    #[test]
+    fn all_reset_replaces_result_output_and_removes_generated_artifacts() {
+        let fixture = ResetFixture::new("all-reset");
+        let bootstrap = fixture.bootstrap_artifacts();
+        fixture.write_result_output("# Result Output\n\n- Old instructions.\n");
+        fixture.seed_direction_authority(&direction_catalog(vec![direction(
+            "old-direction",
+            DirectionState::Active,
+        )]));
+        fixture.seed_task_authority(
+            &direction_catalog(vec![direction("old-direction", DirectionState::Active)]),
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task("old-task", "old-direction", TaskStatus::Ready)],
+            },
+        );
+        fixture.create_file(
+            Path::new(PLANNING_DRAFTS_DIRECTORY)
+                .join("stale")
+                .join("draft.md"),
+            "stale draft",
+        );
+        fixture.create_file(
+            Path::new(PLANNING_REJECTED_DIRECTORY)
+                .join("stale")
+                .join("rejected.md"),
+            "stale rejected file",
+        );
+
+        let result = fixture
+            .service
+            .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::All)
+            .expect("all reset should replace the full planning scaffold");
+
+        assert_eq!(result.target, PlanningResetTarget::All);
+        assert_eq!(
+            result.rewritten_paths,
+            vec![
+                RESULT_OUTPUT_FILE_PATH.to_string(),
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()
+            ]
+        );
+        assert_eq!(result.removed_paths, reset_all_removed_path_strings());
+        assert_eq!(
+            fs::read_to_string(fixture.workspace.path().join(RESULT_OUTPUT_FILE_PATH))
+                .expect("result output should be readable"),
+            bootstrap.result_output_markdown
+        );
+        assert!(
+            !fixture
+                .workspace
+                .path()
+                .join(PLANNING_DRAFTS_DIRECTORY)
+                .exists()
+        );
+        assert!(
+            !fixture
+                .workspace
+                .path()
+                .join(PLANNING_REJECTED_DIRECTORY)
+                .exists()
+        );
+        let task_snapshot = fixture
+            .repository
+            .load_task_authority_snapshot(fixture.workspace.path_str())
+            .expect("task authority should load")
+            .expect("all reset should commit empty task authority");
+        assert!(task_snapshot.task_authority.tasks.is_empty());
+    }
+
+    fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::ReviewAndEnqueue,
+                prompt_path: DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
+            },
+            directions,
+        }
+    }
+
+    fn direction(id: &str, state: DirectionState) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: format!("Direction {id}"),
+            summary: format!("Summary for {id}"),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state,
+        }
+    }
+
+    fn task(id: &str, direction_id: &str, status: TaskStatus) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            direction_relation_note: "relates to the direction".to_string(),
+            title: format!("Task {id}"),
+            description: "Do the task".to_string(),
+            status,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+
+    struct ResetFixture {
+        workspace: TempPlanningWorkspace,
+        service: PlanningResetService,
+        repository: Arc<dyn PlanningTaskRepositoryPort>,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        priority_queue: PriorityQueueService,
+        bootstrap: PlanningBootstrapService,
+    }
+
+    impl ResetFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let repository: Arc<dyn PlanningTaskRepositoryPort> =
+                Arc::new(NoopPlanningTaskRepositoryPort);
+            let bootstrap = PlanningBootstrapService::new();
+            let validation = PlanningValidationService::new();
+            let priority_queue = PriorityQueueService::new();
+            let service = PlanningResetService::with_task_repository(
+                workspace_port.clone(),
+                bootstrap.clone(),
+                repository.clone(),
+                validation,
+                priority_queue.clone(),
+            );
+            Self {
+                workspace,
+                service,
+                repository,
+                workspace_port,
+                priority_queue,
+                bootstrap,
+            }
+        }
+
+        fn bootstrap_artifacts(&self) -> PlanningBootstrapArtifacts {
+            self.bootstrap
+                .build_artifacts_for_mode(PlanningBootstrapMode::Simple)
+        }
+
+        fn write_result_output(&self, body: &str) {
+            self.workspace_port
+                .replace_planning_workspace_file(
+                    self.workspace.path_str(),
+                    RESULT_OUTPUT_FILE_PATH,
+                    Some(body),
+                )
+                .expect("result output should be written");
+        }
+
+        fn create_file(&self, relative_path: PathBuf, body: &str) {
+            let path = self.workspace.path().join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("fixture parent directory should be created");
+            }
+            fs::write(path, body).expect("fixture file should be written");
+        }
+
+        fn seed_direction_authority(&self, directions: &DirectionCatalogDocument) {
+            self.repository
+                .commit_direction_authority_snapshot(
+                    self.workspace.path_str(),
+                    PlanningDirectionAuthorityCommit {
+                        observed_planning_revision: None,
+                        directions,
+                    },
+                )
+                .expect("direction authority should be seeded");
+        }
+
+        fn seed_task_authority(
+            &self,
+            directions: &DirectionCatalogDocument,
+            task_authority: TaskAuthorityDocument,
+        ) {
+            let queue_projection = self
+                .priority_queue
+                .build_projection(directions, &task_authority)
+                .expect("seed task authority should build a queue projection");
+            self.repository
+                .commit_task_authority_snapshot(
+                    self.workspace.path_str(),
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: None,
+                        task_authority: &task_authority,
+                        queue_projection: &queue_projection,
+                    },
+                )
+                .expect("task authority should be seeded");
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
