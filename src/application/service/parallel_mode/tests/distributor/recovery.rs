@@ -118,7 +118,7 @@ fn readiness_recovery_marks_stale_ledger_refreshing_session_for_manual_recovery(
 
     let readiness = service.inspect_readiness(
         &repo.workspace_dir(),
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
             .with_workspace_present(true),
     );
     assert!(readiness.allows_parallel_mode());
@@ -159,7 +159,7 @@ fn stale_official_refresh_recovery_abandons_only_the_head_order() {
 
     let readiness = service.inspect_readiness(
         &repo.workspace_dir(),
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
             .with_workspace_present(true),
     );
     assert!(readiness.allows_parallel_mode());
@@ -521,7 +521,7 @@ fn supervisor_snapshot_reclassifies_integrated_queue_head_from_store_backed_reco
     let recovered = test_parallel_mode_service();
     let readiness = recovered.inspect_readiness(
         &repo.workspace_dir(),
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
             .with_workspace_present(true),
     );
     let snapshot =

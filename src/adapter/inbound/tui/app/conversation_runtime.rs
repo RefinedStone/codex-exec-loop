@@ -15,7 +15,7 @@ use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
+    PlanningRuntimeProjection, PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
 };
 use crate::core::app::{TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
@@ -82,7 +82,7 @@ pub(super) struct PostTurnEvaluationOutcome {
     pub provenance: PostTurnEvaluationProvenance,
     // Fresh planning projection after the just-finished turn. It replaces the
     // embedded conversation snapshot before auto-follow copy is derived.
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     // Repair state is presentation state, but it is decided by post-turn
     // execution where planning files and runtime diagnostics are inspected.
     pub planning_repair_state: Option<PlanningRepairState>,
@@ -395,7 +395,7 @@ pub(super) fn reduce_conversation_runtime(
         ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } => {
             let PostTurnEvaluationOutcome {
                 provenance,
-                runtime_snapshot,
+                runtime_projection,
                 planning_repair_state,
                 runtime_notices,
                 action,
@@ -403,7 +403,7 @@ pub(super) fn reduce_conversation_runtime(
             } = *evaluation;
             // Apply the new planning view before acting on the decision; queued
             // or skipped auto-follow copy should describe the latest queue state.
-            state.replace_planning_runtime_snapshot(runtime_snapshot);
+            state.replace_planning_runtime_projection(runtime_projection);
             state.planning_repair_state = planning_repair_state;
             state.extend_runtime_notices(runtime_notices);
             match action {
@@ -610,7 +610,7 @@ mod tests {
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-root".to_string()),
-                    runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
+                    runtime_projection: PlanningRuntimeProjection::ready_with_details(
                         "Planning Context".to_string(),
                         "queue idle: no executable planning task".to_string(),
                         None,
@@ -673,7 +673,7 @@ mod tests {
                         "turn-from-provenance".to_string(),
                     )
                     .with_handoff_task(Some(handoff_task.clone())),
-                    runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
+                    runtime_projection: PlanningRuntimeProjection::ready_with_details(
                         "Planning Context".to_string(),
                         "queue has a ready task".to_string(),
                         None,

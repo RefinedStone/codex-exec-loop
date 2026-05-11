@@ -1,6 +1,6 @@
 /*
  * runtime facade는 TUI와 app-server turn execution이 사용하는 application-layer boundary다. planning rule을
- * 다시 구현하지 않고, snapshot loading, auto-follow policy decision, prompt assembly, post-turn reconciliation을
+ * 다시 구현하지 않고, runtime projection loading, auto-follow policy decision, prompt assembly, post-turn reconciliation을
  * inbound adapter가 바로 소비할 return shape로 순서화한다. adapter는 내부 service graph를 모르고 이 facade의
  * 작은 DTO와 method만 알면 된다.
  */
@@ -17,7 +17,7 @@ use crate::application::service::planning::runtime::policy::{
     PlanningRuntimePolicyService,
 };
 use crate::application::service::planning::runtime::prompt::{
-    PlanningPromptService, PlanningRuntimeSnapshot,
+    PlanningPromptService, PlanningRuntimeProjection,
 };
 use crate::application::service::planning::shared::auto_follow_copy::QUEUED_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::prompt_component::PromptDocument;
@@ -37,11 +37,11 @@ pub use crate::application::service::planning::runtime::policy::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// auto-follow decision에는 policy가 참고할 last message/stop keyword와, 중복 load를 피하기 위한 preloaded snapshot이 들어간다.
+// auto-follow decision에는 policy가 참고할 last message/stop keyword와, 중복 load를 피하기 위한 preloaded projection이 들어간다.
 pub struct PlanningRuntimeAutoFollowRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: &'a str,
-    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub projection: &'a PlanningRuntimeProjection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub struct PlanningRuntimeAutoFollowRequest<'a> {
 pub struct PlanningRuntimeAutoFollowPreviewRequest<'a> {
     pub stop_keyword: &'a str,
     pub last_message: Option<&'a str>,
-    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub projection: &'a PlanningRuntimeProjection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,8 +105,8 @@ pub struct PlanningTaskHandoff {
 
 #[derive(Clone)]
 /*
- * facade는 runtime service 사이의 순서를 소유한다. prompt service는 immutable snapshot을 만들고, policy service는
- * snapshot을 status/follow decision으로 바꾸고, turn prompt assembly는 task instruction을 main/sub-session prompt로
+ * facade는 runtime service 사이의 순서를 소유한다. prompt service는 immutable projection을 만들고, policy service는
+ * projection을 status/follow decision으로 바꾸고, turn prompt assembly는 task instruction을 main/sub-session prompt로
  * 감싸며, reconciliation은 turn 이후 protected planning state를 복구한다.
  */
 pub struct PlanningRuntimeFacadeService {
@@ -132,17 +132,17 @@ impl PlanningRuntimeFacadeService {
     }
 
     /*
-     * TUI rendering은 planning file load가 실패해도 panic하면 안 된다. loader error를 invalid snapshot으로 낮추면
+     * TUI rendering은 planning file load가 실패해도 panic하면 안 된다. loader error를 invalid projection으로 낮추면
      * 같은 policy/status path가 blocked planning state와 failure reason을 표시할 수 있다.
      */
-    pub fn load_runtime_snapshot_or_invalid(
+    pub fn load_runtime_projection_or_invalid(
         &self,
         workspace_directory: &str,
-    ) -> PlanningRuntimeSnapshot {
+    ) -> PlanningRuntimeProjection {
         self.planning_prompt_service
-            .load_runtime_snapshot(workspace_directory)
+            .load_runtime_projection(workspace_directory)
             .unwrap_or_else(|error| {
-                PlanningRuntimeSnapshot::invalid(format!(
+                PlanningRuntimeProjection::invalid(format!(
                     "failed to load planning workspace: {error}"
                 ))
             })
@@ -161,9 +161,9 @@ impl PlanningRuntimeFacadeService {
      */
     pub fn build_queued_task_handoff(
         &self,
-        snapshot: &PlanningRuntimeSnapshot,
+        projection: &PlanningRuntimeProjection,
     ) -> Option<PlanningMainSessionHandoff> {
-        let queue_head = snapshot.queue_head()?;
+        let queue_head = projection.queue_head()?;
         Some(self.build_main_session_task_handoff(queue_head))
     }
 
@@ -268,24 +268,22 @@ impl PlanningRuntimeFacadeService {
 
     // preview는 execution과 같은 prompt builder를 사용한다. task가 없을 때만 queue-idle explanatory copy로 대체해,
     // 실제 실행될 prompt와 preview가 서로 다른 규칙을 타지 않게 한다.
-    pub fn queued_task_preview_prompt(&self, snapshot: &PlanningRuntimeSnapshot) -> String {
-        self.build_queued_task_handoff(snapshot)
+    pub fn queued_task_preview_prompt(&self, projection: &PlanningRuntimeProjection) -> String {
+        self.build_queued_task_handoff(projection)
             .map(|handoff| handoff.prompt)
-            .unwrap_or_else(|| {
-                match snapshot.queue_idle_policy() {
+            .unwrap_or_else(|| match projection.queue_idle_policy() {
                     crate::domain::planning::QueueIdlePolicy::Stop => {
                         "The current planning queue has no actionable head and queue-idle policy is stop, so internal continuation will end after the current turn.".to_string()
                     }
                     crate::domain::planning::QueueIdlePolicy::ReviewAndEnqueue => {
                         "A planning worker reviews the direction goals after the current turn and re-enqueues follow-up work only when a justified actionable task exists.".to_string()
                     }
-                }
             })
     }
 
     /*
      * auto-follow를 결정하고, 허용된 queued-task mode에서만 executable prompt를 materialize한다. 추가 queue-head check는
-     * stale snapshot이나 미래 policy 변경이 concrete task 없이 actionable work를 주장하는 상황을 방어한다.
+     * stale projection이나 미래 policy 변경이 concrete task 없이 actionable work를 주장하는 상황을 방어한다.
      */
     pub fn decide_auto_follow(
         &self,
@@ -293,14 +291,14 @@ impl PlanningRuntimeFacadeService {
     ) -> PlanningRuntimeAutoFollowDecision {
         match self
             .planning_runtime_policy_service
-            .decide_auto_follow(request.snapshot)
+            .decide_auto_follow(request.projection)
         {
             PlanningAutoFollowPolicyDecision::Blocked(block_reason) => {
                 PlanningRuntimeAutoFollowDecision::Blocked(block_reason)
             }
             PlanningAutoFollowPolicyDecision::QueuePrompt(
                 PlanningAutoFollowPromptMode::ContinueQueuedTask,
-            ) => match self.build_queued_task_handoff(request.snapshot) {
+            ) => match self.build_queued_task_handoff(request.projection) {
                 Some(handoff) => PlanningRuntimeAutoFollowDecision::QueuePrompt(
                     PlanningRuntimeQueuedAutoFollowPrompt {
                         prompt: handoff.prompt,
@@ -322,11 +320,11 @@ impl PlanningRuntimeFacadeService {
     ) -> PlanningRuntimeAutoFollowPreview {
         let policy_decision = self
             .planning_runtime_policy_service
-            .decide_auto_follow(request.snapshot);
+            .decide_auto_follow(request.projection);
         let planning_view = self
             .planning_runtime_policy_service
-            .build_preview_view_for_decision(policy_decision, request.snapshot);
-        let rendered_prompt = self.queued_task_preview_prompt(request.snapshot);
+            .build_preview_view_for_decision(policy_decision, request.projection);
+        let rendered_prompt = self.queued_task_preview_prompt(request.projection);
         PlanningRuntimeAutoFollowPreview {
             rendered_prompt,
             planning_status_line: format!("planning: {}", planning_view.status_label),

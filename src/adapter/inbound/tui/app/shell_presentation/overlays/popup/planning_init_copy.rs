@@ -12,7 +12,7 @@ use super::super::super::super::{PlanningInitDetailSelection, PlanningInitModeSe
 use super::super::PlanningInitOverlayView;
 use super::copy::{PlanningExistingWorkspaceCopy, PlanningSimpleReviewCopy};
 
-// existing workspace path는 runtime snapshot에서 만든 copy를 받아 warning/summary/options
+// existing workspace path는 runtime projection에서 만든 copy를 받아 warning/summary/options
 // layout으로 바꾼다. app-level snapshot 선택은 위 layer에서 이미 끝났으므로 여기서는
 // stale data policy를 다시 판단하지 않는다.
 pub(super) fn build_existing_workspace_overlay_view(

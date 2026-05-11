@@ -310,9 +310,9 @@ impl NativeTuiApp {
 
     fn ensure_manual_planning_workspace(&mut self, manual_prompt: &str) -> bool {
         let workspace_directory = self.planning_workspace_directory();
-        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
-        if snapshot.workspace_present() {
-            self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        let runtime_projection = self.load_planning_runtime_projection(&workspace_directory);
+        if runtime_projection.workspace_present() {
+            self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                 &workspace_directory,
             );
             return true;
@@ -339,7 +339,7 @@ impl NativeTuiApp {
                     .promote_staged_draft(&workspace_directory, &draft_name)
                 {
                     Ok(result) => {
-                        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                             &workspace_directory,
                         );
                         if result.promoted_file_count > 0 {

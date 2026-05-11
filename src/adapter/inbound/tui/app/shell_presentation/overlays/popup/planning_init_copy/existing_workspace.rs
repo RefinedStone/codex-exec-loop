@@ -4,7 +4,7 @@ use super::super::copy::{PlanningExistingWorkspaceCopy, planning_setup_title_lin
 
 // 이미 accepted planning state가 있는 workspace에서는 init flow가 새 bootstrap scaffold를
 // 다시 만들면 안 된다. 이 builder는 copy DTO만 소비해 "현재 runtime을 관리하라"는
-// guard 화면을 만들고, app/runtime snapshot 선택 정책은 위 projection layer에 남긴다.
+// guard 화면을 만들고, app/runtime projection 선택 정책은 위 projection layer에 남긴다.
 pub(super) fn build_existing_workspace_overlay_view(
     copy: PlanningExistingWorkspaceCopy,
 ) -> PlanningInitOverlayView {

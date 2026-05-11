@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerOperation;
-use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
+use crate::application::service::planning::runtime::prompt::PlanningRuntimeProjection;
 
 pub(super) fn operation_label(operation: PlanningWorkerOperation) -> &'static str {
     match operation {
@@ -16,7 +16,7 @@ pub(super) fn orchestration_event_detail<I>(
     operation: PlanningWorkerOperation,
     phase: &str,
     decision: Option<&str>,
-    runtime: Option<&PlanningRuntimeSnapshot>,
+    runtime: Option<&PlanningRuntimeProjection>,
     fields: I,
 ) -> Value
 where
@@ -32,7 +32,10 @@ where
     detail.insert("phase".to_string(), json!(phase));
     detail.insert("decision".to_string(), json!(decision));
     if let Some(runtime) = runtime {
-        detail.insert("runtime".to_string(), runtime_snapshot_log_detail(runtime));
+        detail.insert(
+            "runtime".to_string(),
+            runtime_projection_log_detail(runtime),
+        );
     }
     for (key, value) in fields {
         detail.insert(key.to_string(), value);
@@ -40,17 +43,17 @@ where
     Value::Object(detail)
 }
 
-fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) -> Value {
+fn runtime_projection_log_detail(projection: &PlanningRuntimeProjection) -> Value {
     json!({
-        "workspace_present": snapshot.workspace_present(),
-        "workspace_status": format!("{:?}", snapshot.workspace_status()),
-        "queue_idle_policy": format!("{:?}", snapshot.queue_idle_policy()),
-        "queue_summary": snapshot.queue_summary(),
-        "proposal_summary": snapshot.proposal_summary(),
-        "failure_reason": snapshot.failure_reason(),
-        "pause_reason": snapshot.auto_follow_pause_reason(),
-        "has_actionable_queue_head": snapshot.has_actionable_queue_head(),
-        "has_proposal_candidates": snapshot.has_proposal_candidates(),
+        "workspace_present": projection.workspace_present(),
+        "workspace_status": format!("{:?}", projection.workspace_status()),
+        "queue_idle_policy": format!("{:?}", projection.queue_idle_policy()),
+        "queue_summary": projection.queue_summary(),
+        "proposal_summary": projection.proposal_summary(),
+        "failure_reason": projection.failure_reason(),
+        "pause_reason": projection.auto_follow_pause_reason(),
+        "has_actionable_queue_head": projection.has_actionable_queue_head(),
+        "has_proposal_candidates": projection.has_proposal_candidates(),
     })
 }
 
@@ -83,7 +86,7 @@ mod tests {
 
     #[test]
     fn orchestration_event_detail_embeds_runtime_under_standard_key() {
-        let runtime = PlanningRuntimeSnapshot::invalid("planning invalid");
+        let runtime = PlanningRuntimeProjection::invalid("planning invalid");
         let detail = orchestration_event_detail(
             "/tmp/workspace",
             "planning-worker-repair-turn-1-1",

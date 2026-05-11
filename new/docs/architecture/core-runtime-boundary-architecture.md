@@ -69,7 +69,7 @@ TUI 밖으로 옮길 수 있는 app orchestration state:
 - conversation lifecycle
 - turn stream orchestration
 - post-turn continuation state
-- planning runtime snapshot
+- planning runtime projection
 - parallel-mode control-plane status
 - background effect ordering
 
@@ -200,7 +200,7 @@ pub struct AppSnapshot {
     pub startup: StartupSnapshot,
     pub sessions: SessionCatalogSnapshot,
     pub conversation: ConversationSnapshot,
-    pub planning: PlanningRuntimeSnapshot,
+    pub planning: PlanningRuntimeProjection,
     pub parallel_mode: ParallelModeSnapshot,
 }
 ```
@@ -399,7 +399,7 @@ presentation snapshot/event만 받아 `AppSnapshot` projection으로 복사하�
 | turn stream reduction | core runtime | core runtime | app-server stream은 UI가 아니라 app runtime event다. |
 | manual prompt intake/bootstrap | TUI turn submission path | core/application runtime | planning task intake는 terminal input 편집 상태와 독립된 use case다. |
 | post-turn continuation/evaluation | TUI evaluator runner + narrow context + core completion re-entry | core runtime/application service | turn completion 이후 정책은 화면과 독립적이다. |
-| planning runtime snapshot | TUI app cache + core projection | core app state 또는 application projection | 여러 surface가 같은 planning 상태를 본다. |
+| planning runtime projection | TUI app cache + core projection | core app state 또는 application projection | 여러 surface가 같은 planning 상태를 본다. |
 | parallel-mode status | application control-plane + TUI cache + core projection | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출해야 한다. |
 | overlay open/close | TUI | TUI | presentation state다. |
 | prompt input buffer | TUI | TUI | terminal editing state다. |

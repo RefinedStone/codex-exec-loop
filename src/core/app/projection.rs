@@ -1,28 +1,28 @@
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningParallelProjection {
-    pub planning_runtime: Box<PlanningRuntimeSnapshot>,
+    pub planning_runtime: Box<PlanningRuntimeProjection>,
     pub parallel_mode: ParallelModeProjection,
 }
 
 impl PlanningParallelProjection {
     pub fn initial() -> Self {
         Self {
-            planning_runtime: Box::new(PlanningRuntimeSnapshot::uninitialized()),
+            planning_runtime: Box::new(PlanningRuntimeProjection::uninitialized()),
             parallel_mode: ParallelModeProjection::default(),
         }
     }
 
-    pub fn apply_planning_runtime_snapshot(
+    pub fn apply_planning_runtime_projection(
         &mut self,
-        snapshot: Box<PlanningRuntimeSnapshot>,
+        projection: Box<PlanningRuntimeProjection>,
     ) -> bool {
-        if self.planning_runtime == snapshot {
+        if self.planning_runtime == projection {
             return false;
         }
-        self.planning_runtime = snapshot;
+        self.planning_runtime = projection;
         true
     }
 

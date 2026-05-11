@@ -109,7 +109,7 @@ pub fn build_planning_repair_prompt(
         .render()
 }
 
-// role line은 mutable evidence를 싣지 않고 repair attempt metadata만 logs/prompt snapshot에서 보이게 한다.
+// role line은 mutable evidence를 싣지 않고 repair attempt metadata만 logs/prompt projection에서 보이게 한다.
 fn repair_role_lines(attempt_number: usize, max_attempts: usize) -> Vec<String> {
     vec![
         "session=planning-repair-only".to_string(),

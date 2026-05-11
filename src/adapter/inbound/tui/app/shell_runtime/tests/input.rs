@@ -518,12 +518,12 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
         ));
-    let planning_snapshot = runtime
+    let planning_projection = runtime
         .app()
         .application
         .planning()
         .runtime()
-        .load_runtime_snapshot_or_invalid(&workspace_directory);
+        .load_runtime_projection_or_invalid(&workspace_directory);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
     };
@@ -538,7 +538,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             completed_turn_id: "turn-1".to_string(),
             evaluation: Box::new(PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-                runtime_snapshot: planning_snapshot,
+                runtime_projection: planning_projection,
                 planning_repair_state: None,
                 runtime_notices: Vec::new(),
                 action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
@@ -591,7 +591,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
 }
 
 #[test]
-fn supersession_uses_planning_workspace_snapshot_after_loading_finishes() {
+fn supersession_uses_planning_workspace_projection_after_loading_finishes() {
     /*
      * Startup shell workspace와 active draft/thread planning workspace가 다를 수 있다.
      * Supersession은 parallel worker가 사용한 planning workspace snapshot을 기준으로 렌더링해야 하며,

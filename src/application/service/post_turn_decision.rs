@@ -1,4 +1,4 @@
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 
@@ -61,9 +61,9 @@ pub(crate) fn decide_post_turn_auto_prompt_route(
 }
 
 pub(crate) fn decide_parallel_official_completion_post_turn(
-    runtime_snapshot: &PlanningRuntimeSnapshot,
+    runtime_projection: &PlanningRuntimeProjection,
 ) -> PostTurnDecision {
-    if runtime_snapshot.queue_is_drained() {
+    if runtime_projection.queue_is_drained() {
         return PostTurnDecision {
             auto_follow_stop_reason: PostTurnAutoFollowStopReason::PlanningQueueDrained,
             parallel_queue_signal: None,
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn parallel_official_completion_reports_drained_queue_as_alert_without_dispatch_signal() {
-        let runtime_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
             "queue idle: no executable planning task".to_string(),
             None,
@@ -104,7 +104,7 @@ mod tests {
             },
         );
 
-        let decision = decide_parallel_official_completion_post_turn(&runtime_snapshot);
+        let decision = decide_parallel_official_completion_post_turn(&runtime_projection);
 
         assert_eq!(
             decision.auto_follow_stop_reason,
@@ -120,9 +120,9 @@ mod tests {
 
     #[test]
     fn parallel_official_completion_keeps_supervisor_signal_when_queue_may_have_work() {
-        let runtime_snapshot = PlanningRuntimeSnapshot::invalid("planning still blocked");
+        let runtime_projection = PlanningRuntimeProjection::invalid("planning still blocked");
 
-        let decision = decide_parallel_official_completion_post_turn(&runtime_snapshot);
+        let decision = decide_parallel_official_completion_post_turn(&runtime_projection);
 
         assert_eq!(
             decision.auto_follow_stop_reason,

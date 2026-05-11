@@ -1,5 +1,5 @@
 use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeSnapshot, PlanningWorkerRunOutcome,
+    PlanningApplicationProjection, PlanningRuntimeProjection, PlanningWorkerRunOutcome,
 };
 
 use super::super::super::PlanningWorkerStatus;
@@ -32,29 +32,30 @@ impl PostTurnEvaluationExecutor {
 
     // Fold a successful worker RPC into the panel cache.
     // A syntactically successful response can still be a failed post-turn outcome when it requests repair or
-    // produces a runtime snapshot that blocks auto-follow, so the status is corrected before rendering sees it.
+    // produces a runtime projection that blocks auto-follow, so the status is corrected before rendering sees it.
     pub(super) fn record_planning_worker_outcome(
         &mut self,
         success_status: PlanningWorkerStatus,
         outcome: &PlanningWorkerRunOutcome,
     ) {
-        self.planning_worker_panel_state.status =
-            if outcome.repair_request.is_some() || outcome.runtime_snapshot.blocks_auto_follow() {
-                // Preserve the caller's operation lane while downgrading success to the matching attention state.
-                match success_status {
-                    PlanningWorkerStatus::RefreshSucceeded => PlanningWorkerStatus::RefreshFailed,
-                    PlanningWorkerStatus::RepairSucceeded => PlanningWorkerStatus::RepairFailed,
-                    _ => success_status,
-                }
-            } else {
-                success_status
-            };
+        self.planning_worker_panel_state.status = if outcome.repair_request.is_some()
+            || outcome.runtime_projection.blocks_auto_follow()
+        {
+            // Preserve the caller's operation lane while downgrading success to the matching attention state.
+            match success_status {
+                PlanningWorkerStatus::RefreshSucceeded => PlanningWorkerStatus::RefreshFailed,
+                PlanningWorkerStatus::RepairSucceeded => PlanningWorkerStatus::RepairFailed,
+                _ => success_status,
+            }
+        } else {
+            success_status
+        };
         // Accepted and rejected summaries stay separate so the panel can explain both the chosen path and discarded alternatives.
         self.planning_worker_panel_state.last_summary = outcome.worker_summary.clone();
         self.planning_worker_panel_state.last_rejected_summary = outcome.rejected_summary.clone();
-        // Queue summary is derived from the applied runtime snapshot, not from worker prose.
+        // Queue summary is derived from the applied runtime projection, not from worker prose.
         self.planning_worker_panel_state.last_queue_summary =
-            planning_worker_queue_summary(&outcome.runtime_snapshot);
+            planning_worker_queue_summary(&outcome.runtime_projection);
         // Notice detail keeps diagnostics after summary-prefixed notices have been de-duplicated.
         self.planning_worker_panel_state.last_notice_detail =
             planning_worker_notice_detail(&outcome.notices);
@@ -64,19 +65,19 @@ impl PostTurnEvaluationExecutor {
         self.planning_worker_panel_state.last_host_detail = None;
     }
 
-    // Record worker or host-side failure while preserving the best runtime snapshot available at the failure point.
+    // Record worker or host-side failure while preserving the best runtime projection available at the failure point.
     pub(super) fn record_planning_worker_failure(
         &mut self,
         status: PlanningWorkerStatus,
         detail: &str,
-        runtime_snapshot: &PlanningRuntimeSnapshot,
+        runtime_projection: &PlanningRuntimeProjection,
     ) {
         // Keep the prompt from the running phase, but clear successful-response fields that no longer apply.
         self.planning_worker_panel_state.status = status;
         self.planning_worker_panel_state.last_summary = Some(detail.to_string());
         self.planning_worker_panel_state.last_rejected_summary = None;
         self.planning_worker_panel_state.last_queue_summary =
-            planning_worker_queue_summary(runtime_snapshot);
+            planning_worker_queue_summary(runtime_projection);
         self.planning_worker_panel_state.last_notice_detail = None;
         self.planning_worker_panel_state.last_response = None;
         self.planning_worker_panel_state.last_host_detail = None;
@@ -84,8 +85,10 @@ impl PostTurnEvaluationExecutor {
 }
 
 // Compact queue state used by both the planning worker panel and post-turn host diagnostics.
-pub(super) fn planning_worker_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
-    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+pub(super) fn planning_worker_queue_summary(
+    runtime_projection: &PlanningRuntimeProjection,
+) -> Option<String> {
+    let projection = PlanningApplicationProjection::from_runtime_projection(runtime_projection);
     planning_worker_queue_summary_from_projection(&projection)
 }
 
@@ -124,31 +127,33 @@ mod tests {
 
     #[test]
     fn planning_worker_queue_summary_projects_queue_head_from_application_projection() {
-        let snapshot = PlanningRuntimeSnapshot::ready(
+        let runtime_projection = PlanningRuntimeProjection::ready(
             "Planning Context".to_string(),
             "queue has 2 ready tasks".to_string(),
             Some(queue_task("task-1", "Implement projection")),
         );
-        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+        let projection =
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
 
         assert_eq!(
             planning_worker_queue_summary_from_projection(&projection).as_deref(),
             Some("queue head: Implement projection")
         );
         assert_eq!(
-            planning_worker_queue_summary(&snapshot).as_deref(),
+            planning_worker_queue_summary(&runtime_projection).as_deref(),
             Some("queue head: Implement projection")
         );
     }
 
     #[test]
     fn planning_worker_queue_summary_projection_falls_back_to_queue_summary() {
-        let snapshot = PlanningRuntimeSnapshot::ready(
+        let runtime_projection = PlanningRuntimeProjection::ready(
             "Planning Context".to_string(),
             "no executable tasks; proposals available".to_string(),
             None,
         );
-        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+        let projection =
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
 
         assert_eq!(
             planning_worker_queue_summary_from_projection(&projection).as_deref(),

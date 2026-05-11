@@ -23,7 +23,7 @@ use crate::domain::planning::{DirectionCatalogDocument, TaskAuthorityDocument, T
 /*
  * Reset은 operator가 명시적으로 선택하는 planning authority의 파괴적 복구 경로다.
  * worker mutation prompt를 거치지 않고 bootstrap에서 만든 새 authority를 일반 planning이 쓰는
- * workspace/repository port로 직접 기록한다. 그래야 reset 이후 runtime snapshot도 동일한
+ * workspace/repository port로 직접 기록한다. 그래야 reset 이후 runtime projection도 동일한
  * 단일 source of truth에서 다시 읽힌다.
  */
 

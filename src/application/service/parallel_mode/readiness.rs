@@ -5,7 +5,7 @@ use super::{
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -335,16 +335,16 @@ planning capability는 병렬 mode가 배정할 queue와 official completion led
 모드의 나머지 capability 판단을 계속할 수 있다.
 */
 pub(super) fn inspect_planning(
-    snapshot: &PlanningRuntimeSnapshot,
+    runtime_projection: &PlanningRuntimeProjection,
 ) -> ParallelModeCapabilitySnapshot {
-    inspect_planning_projection(&PlanningApplicationProjection::from_runtime_snapshot(
-        snapshot,
+    inspect_planning_projection(&PlanningApplicationProjection::from_runtime_projection(
+        runtime_projection,
     ))
 }
 
 /*
 planning application projection은 admin/TUI/CLI가 공유하는 read model이다. parallel readiness가
-이 projection을 받을 수 있으면 inbound adapter가 runtime snapshot 내부를 다시 읽지 않아도 된다.
+이 projection을 받을 수 있으면 inbound adapter가 runtime projection 내부를 다시 읽지 않아도 된다.
 */
 pub(super) fn inspect_planning_projection(
     projection: &PlanningApplicationProjection,

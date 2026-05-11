@@ -80,7 +80,7 @@ impl NativeTuiApp {
         });
     }
     pub(super) fn show_queue_overlay(&mut self) {
-        self.refresh_ready_conversation_planning_runtime_snapshot();
+        self.refresh_ready_conversation_planning_runtime_projection();
         self.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
     }
     pub(super) fn toggle_startup_overlay(&mut self) {
@@ -294,7 +294,7 @@ impl NativeTuiApp {
                 .show_error("Preview a task before committing it.");
             return;
         };
-        // Commit refreshes the conversation's planning runtime snapshot before opening
+        // Commit refreshes the conversation's planning runtime projection before opening
         // the queue overlay, otherwise the queue can render the pre-commit view
         // for one frame.
         match self
@@ -307,7 +307,7 @@ impl NativeTuiApp {
                 let committed_task_id = result.committed_task_id.clone();
                 self.task_intake_overlay_ui_state
                     .record_commit_result(result);
-                self.refresh_ready_conversation_planning_runtime_snapshot();
+                self.refresh_ready_conversation_planning_runtime_projection();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!("task accepted into planning queue: {committed_task_id}"),
                 });

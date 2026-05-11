@@ -4,7 +4,7 @@ use super::{
     PlanningRuntimeStatusProjectionRequest, PlanningRuntimeSummaryLineRequest,
     PlanningRuntimeSummaryRequest,
 };
-use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
+use crate::application::service::planning::runtime::prompt::PlanningRuntimeProjection;
 use crate::domain::planning::{
     PlanningWorkspaceState, PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask,
     TaskStatus,
@@ -28,7 +28,7 @@ fn queue_head() -> PriorityQueueTask {
 }
 
 /*
- * auto-follow 허용 조건은 "planning이 valid하다"보다 좁다. snapshot에 아직 handoff되지
+ * auto-follow 허용 조건은 "planning이 valid하다"보다 좁다. projection에 아직 handoff되지
  * 않은 actionable queue head가 있을 때만 generated continuation을 만든다는 queue-driven
  * 계약을 이 테스트 묶음이 고정한다.
  */
@@ -40,8 +40,8 @@ fn queued_task_blocks_when_planning_is_uninitialized() {
      * 허가처럼 특수 처리하지 못하게 한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::uninitialized();
-    let decision = service.decide_auto_follow(&snapshot);
+    let projection = PlanningRuntimeProjection::uninitialized();
+    let decision = service.decide_auto_follow(&projection);
 
     assert_eq!(
         decision,
@@ -51,7 +51,7 @@ fn queued_task_blocks_when_planning_is_uninitialized() {
     );
     assert_eq!(
         service
-            .build_preview_view_for_decision(decision, &snapshot)
+            .build_preview_view_for_decision(decision, &projection)
             .status_label,
         "queue-empty"
     );
@@ -65,13 +65,13 @@ fn queued_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
      * proposal detail을 남겨 operator가 다음 행동을 볼 수 있게 한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+    let projection = PlanningRuntimeProjection::ready_with_details(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
         None,
     );
-    let decision = service.decide_auto_follow(&snapshot);
+    let decision = service.decide_auto_follow(&projection);
 
     assert_eq!(
         decision,
@@ -79,7 +79,7 @@ fn queued_task_blocks_main_prompt_when_queue_is_empty_with_proposals() {
             PlanningAutoFollowBlockReason::ActionableQueueRequired
         )
     );
-    let preview = service.build_preview_view_for_decision(decision, &snapshot);
+    let preview = service.build_preview_view_for_decision(decision, &projection);
 
     assert_eq!(preview.status_label, "queue-empty");
     assert!(preview.detail.as_deref().is_some_and(|detail| {
@@ -95,13 +95,13 @@ fn queued_task_blocks_ready_no_task_state_without_existing_proposals() {
      * assistant turn에 넘길 direction-owned task가 없다는 점을 automation gate가 표현한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+    let projection = PlanningRuntimeProjection::ready_with_details(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         None,
         None,
     );
-    let decision = service.decide_auto_follow(&snapshot);
+    let decision = service.decide_auto_follow(&projection);
 
     assert_eq!(
         decision,
@@ -111,15 +111,15 @@ fn queued_task_blocks_ready_no_task_state_without_existing_proposals() {
     );
     assert_eq!(
         service
-            .build_preview_view_for_decision(decision, &snapshot)
+            .build_preview_view_for_decision(decision, &projection)
             .status_label,
         "queue-empty"
     );
 }
 
 #[test]
-fn ready_no_task_snapshot_is_drained_only_when_remaining_work_is_terminal() {
-    let drained_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+fn ready_no_task_projection_is_drained_only_when_remaining_work_is_terminal() {
+    let drained_projection = PlanningRuntimeProjection::ready_with_queue_projection(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         None,
@@ -137,9 +137,9 @@ fn ready_no_task_snapshot_is_drained_only_when_remaining_work_is_terminal() {
             }],
         },
     );
-    assert!(drained_snapshot.queue_is_drained());
+    assert!(drained_projection.queue_is_drained());
 
-    let blocked_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+    let blocked_projection = PlanningRuntimeProjection::ready_with_queue_projection(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         None,
@@ -157,18 +157,18 @@ fn ready_no_task_snapshot_is_drained_only_when_remaining_work_is_terminal() {
             }],
         },
     );
-    assert!(!blocked_snapshot.queue_is_drained());
+    assert!(!blocked_projection.queue_is_drained());
 }
 
 #[test]
 fn queued_task_blocks_when_queue_head_and_proposals_are_both_missing() {
     /*
-     * uninitialized snapshot의 preview detail도 actionable queue head 요구를 설명해야 한다.
+     * uninitialized projection의 preview detail도 actionable queue head 요구를 설명해야 한다.
      * 이 회귀는 queue/proposal이 모두 없을 때 caller가 빈 detail을 받아 TUI 안내를 잃지 않게 한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::uninitialized();
-    let decision = service.decide_auto_follow(&snapshot);
+    let projection = PlanningRuntimeProjection::uninitialized();
+    let decision = service.decide_auto_follow(&projection);
 
     assert_eq!(
         decision,
@@ -178,7 +178,7 @@ fn queued_task_blocks_when_queue_head_and_proposals_are_both_missing() {
     );
     assert!(
         service
-            .build_preview_view_for_decision(decision, &snapshot)
+            .build_preview_view_for_decision(decision, &projection)
             .detail
             .as_deref()
             .is_some_and(|detail| {
@@ -191,12 +191,12 @@ fn queued_task_blocks_when_queue_head_and_proposals_are_both_missing() {
 #[test]
 fn repeated_queue_head_blocks_queue_driven_automation() {
     /*
-     * pause reason은 handoff 이후 prompt snapshot에서 온다. 이를 hard block으로 유지해야
+     * pause reason은 handoff 이후 prompt projection에서 온다. 이를 hard block으로 유지해야
      * planning refresh가 queue head를 진전시키지 못한 상황에서 runtime loop가 같은 task를
      * 반복 continuation하지 않는다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready(
+    let projection = PlanningRuntimeProjection::ready(
         "Planning Context".to_string(),
         "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
@@ -206,7 +206,7 @@ fn repeated_queue_head_blocks_queue_driven_automation() {
     );
 
     assert_eq!(
-        service.decide_auto_follow(&snapshot),
+        service.decide_auto_follow(&projection),
         PlanningAutoFollowPolicyDecision::Blocked(PlanningAutoFollowBlockReason::RepeatedQueueHead)
     );
 }
@@ -218,7 +218,7 @@ fn queued_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
      * 실행하려면 먼저 promote/queue intent를 거쳐 authority에 반영되어야 한다는 정책을 반복 확인한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+    let projection = PlanningRuntimeProjection::ready_with_details(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         Some("2 promotable follow-up proposals available: Plan A | +1 more".to_string()),
@@ -226,7 +226,7 @@ fn queued_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
     );
 
     assert_eq!(
-        service.decide_auto_follow(&snapshot),
+        service.decide_auto_follow(&projection),
         PlanningAutoFollowPolicyDecision::Blocked(
             PlanningAutoFollowBlockReason::ActionableQueueRequired
         )
@@ -236,19 +236,19 @@ fn queued_task_never_builds_main_refresh_prompt_when_queue_is_idle() {
 #[test]
 fn ready_queue_head_uses_continue_mode() {
     /*
-     * 유일한 positive auto-follow path다. 실제 queue head가 있는 valid snapshot만 continuation
+     * 유일한 positive auto-follow path다. 실제 queue head가 있는 valid projection만 continuation
      * prompt로 변환된다. proposal이나 idle policy는 먼저 queue_head로 promote되지 않으면 이
      * branch에 도달할 수 없다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready(
+    let projection = PlanningRuntimeProjection::ready(
         "Planning Context".to_string(),
         "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     );
 
     assert_eq!(
-        service.decide_auto_follow(&snapshot),
+        service.decide_auto_follow(&projection),
         PlanningAutoFollowPolicyDecision::QueuePrompt(
             PlanningAutoFollowPromptMode::ContinueQueuedTask
         )
@@ -256,24 +256,24 @@ fn ready_queue_head_uses_continue_mode() {
 }
 
 /*
- * summary projection은 정적인 snapshot 위에 live runtime state를 덮어쓴다. planning file이
+ * summary projection은 정적인 projection 위에 live runtime state를 덮어쓴다. planning file이
  * ready여도 현재 앱이 turn 실행 중이거나 repair 중이면 TUI는 file validity보다 현재 실행 상태를
  * 우선해서 보여 줘야 한다.
  */
 #[test]
 fn summary_view_marks_running_ready_planning_as_executing() {
     /*
-     * queue head가 있는 ready snapshot도 running turn overlay가 있으면 Executing으로 보인다.
+     * queue head가 있는 ready projection도 running turn overlay가 있으면 Executing으로 보인다.
      * status_label의 stale 표현은 planning authority가 아니라 현재 turn 결과를 기다리는 상태임을 나타낸다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready(
+    let projection = PlanningRuntimeProjection::ready(
         "Planning Context".to_string(),
         "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     );
     let summary = service.build_summary_view(PlanningRuntimeSummaryRequest {
-        snapshot: &snapshot,
+        projection: &projection,
         has_running_turn: true,
         is_repairing: false,
         repair_failure_summary: None,
@@ -295,14 +295,14 @@ fn summary_view_keeps_proposal_summary_when_present() {
      * 계속 block되어야 한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+    let projection = PlanningRuntimeProjection::ready_with_details(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         Some("1 promotable follow-up proposal available: Draft sushi roadmap".to_string()),
         None,
     );
     let summary = service.build_summary_view(PlanningRuntimeSummaryRequest {
-        snapshot: &snapshot,
+        projection: &projection,
         has_running_turn: false,
         is_repairing: false,
         repair_failure_summary: None,
@@ -318,14 +318,15 @@ fn summary_view_keeps_proposal_summary_when_present() {
 #[test]
 fn summary_view_prefers_repair_failure_when_present() {
     /*
-     * live repair error는 snapshot validation text보다 우선한다. visible failure가 오래된
+     * live repair error는 projection validation text보다 우선한다. visible failure가 오래된
      * file-load diagnostic이 아니라 가장 최근 automatic repair attempt에 묶이게 하기 위한 순서다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot =
-        PlanningRuntimeSnapshot::invalid("planning validation failed: task authority".to_string());
+    let projection = PlanningRuntimeProjection::invalid(
+        "planning validation failed: task authority".to_string(),
+    );
     let summary = service.build_summary_view(PlanningRuntimeSummaryRequest {
-        snapshot: &snapshot,
+        projection: &projection,
         has_running_turn: false,
         is_repairing: true,
         repair_failure_summary: Some("task authority is missing direction_id"),
@@ -351,7 +352,7 @@ fn summary_line_compacts_repair_queue_and_proposal_details() {
      * 각 segment가 서로 다른 next action을 설명하므로 truncation 이후에도 세 신호가 모두 남아야 한다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+    let projection = PlanningRuntimeProjection::ready_with_details(
         "Planning Context".to_string(),
         "queue idle: no executable planning task".to_string(),
         Some(
@@ -361,7 +362,7 @@ fn summary_line_compacts_repair_queue_and_proposal_details() {
         None,
     );
     let summary_line = service.build_summary_line(PlanningRuntimeSummaryLineRequest {
-        snapshot: &snapshot,
+        projection: &projection,
         has_running_turn: false,
         is_repairing: true,
         repair_failure_summary: Some(
@@ -391,13 +392,13 @@ fn status_projection_uses_queue_head_label_when_actionable_work_exists() {
      * actionable label로 바로 렌더링할 수 있다.
      */
     let service = PlanningRuntimePolicyService::new();
-    let snapshot = PlanningRuntimeSnapshot::ready(
+    let projection = PlanningRuntimeProjection::ready(
         "Planning Context".to_string(),
         "queue head: rank 1 / task-1".to_string(),
         Some(queue_head()),
     );
     let projection = service.build_status_projection(PlanningRuntimeStatusProjectionRequest {
-        snapshot: &snapshot,
+        projection: &projection,
         has_running_turn: false,
         is_repairing: false,
         repair_failure_summary: None,

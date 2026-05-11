@@ -1,12 +1,12 @@
 /*
  * Planning doctor는 planning authority 상태를 읽기 전용으로 진단하는 표면이다.
  * runtime prompt loading은 이미 누락 authority seed, active planning file 검증, queue projection 생성을
- * 알고 있다. 이 모듈은 그 풍부한 runtime snapshot을 CLI/TUI caller가 표시하고 exit-code 판단에
+ * 알고 있다. 이 모듈은 그 풍부한 runtime projection을 CLI/TUI caller가 표시하고 exit-code 판단에
  * 사용할 수 있는 compact report로 낮춘다.
  */
 use crate::application::service::planning::runtime::prompt::PlanningPromptService;
 use crate::application::service::planning::runtime::prompt::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::text::compact_whitespace_detail;
 
@@ -50,7 +50,7 @@ impl PlanningDoctorState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
  * inbound adapter로 반환되는 compact report 객체다.
- * field를 private으로 두어 presentation code가 accessor를 거치게 한다. 그래야 runtime snapshot field와
+ * field를 private으로 두어 presentation code가 accessor를 거치게 한다. 그래야 runtime projection field와
  * doctor 전용 display fallback 사이의 내부 구분에 adapter가 우연히 의존하지 않는다.
  */
 pub struct PlanningDoctorReport {
@@ -63,7 +63,7 @@ pub struct PlanningDoctorReport {
     note: Option<String>,
 }
 impl PlanningDoctorReport {
-    // runtime snapshot loading이 report를 만들기 전에 caller가 workspace path를 거절했을 때 쓴다.
+    // runtime projection loading이 report를 만들기 전에 caller가 workspace path를 거절했을 때 쓴다.
     pub fn path_issue(issue: String) -> Self {
         Self {
             planning_state: PlanningDoctorState::Invalid,
@@ -102,12 +102,12 @@ impl PlanningDoctorReport {
     }
 
     /*
-     * runtime snapshot을 doctor report 계약으로 projection한다.
-     * ready snapshot은 queue policy와 summary를 노출하고, incomplete/invalid snapshot은 queue detail을 숨긴 뒤
+     * runtime projection을 doctor report 계약으로 projection한다.
+     * ready projection은 queue policy와 summary를 노출하고, incomplete/invalid projection은 queue detail을 숨긴 뒤
      * runtime failure reason을 actionable issue로 보존한다.
      */
-    fn from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Self {
-        let planning_state = classify_doctor_state(snapshot);
+    fn from_runtime_projection(projection: &PlanningRuntimeProjection) -> Self {
+        let planning_state = classify_doctor_state(projection);
         let is_ready = matches!(
             planning_state,
             PlanningDoctorState::ReadyWithoutTask | PlanningDoctorState::ReadyWithTask
@@ -125,26 +125,26 @@ impl PlanningDoctorReport {
 
         Self {
             planning_state,
-            queue_idle_policy: is_ready.then(|| snapshot.queue_idle_policy().label().to_string()),
-            queue_summary: is_ready.then(|| doctor_queue_summary(snapshot)).flatten(),
+            queue_idle_policy: is_ready.then(|| projection.queue_idle_policy().label().to_string()),
+            queue_summary: is_ready.then(|| doctor_queue_summary(projection)).flatten(),
             proposal_summary: is_ready
-                .then(|| doctor_proposal_summary(snapshot))
+                .then(|| doctor_proposal_summary(projection))
                 .flatten(),
             health,
             issue: matches!(
                 planning_state,
                 PlanningDoctorState::Incomplete | PlanningDoctorState::Invalid
             )
-            .then(|| snapshot.failure_reason().map(str::to_string))
+            .then(|| projection.failure_reason().map(str::to_string))
             .flatten(),
             note,
         }
     }
 }
 
-// 구체적인 active queue head를 우선하고, head가 없으면 snapshot의 aggregate queue copy로 후퇴한다.
-fn doctor_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
-    snapshot
+// 구체적인 active queue head를 우선하고, head가 없으면 runtime projection의 aggregate queue copy로 후퇴한다.
+fn doctor_queue_summary(projection: &PlanningRuntimeProjection) -> Option<String> {
+    projection
         .queue_head()
         .map(|queue_head| {
             format!(
@@ -152,16 +152,16 @@ fn doctor_queue_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
                 compact_whitespace_detail(queue_head.task_title.trim(), 80)
             )
         })
-        .or_else(|| snapshot.queue_summary().map(str::to_string))
+        .or_else(|| projection.queue_summary().map(str::to_string))
 }
 
 // proposed task summary는 queue summary처럼 generic projection text보다 첫 proposed task title을 먼저 보여 준다.
-fn doctor_proposal_summary(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
-    snapshot
+fn doctor_proposal_summary(projection: &PlanningRuntimeProjection) -> Option<String> {
+    projection
         .queue_projection()
         .and_then(|queue_projection| queue_projection.proposed_tasks.first())
         .map(|task| compact_whitespace_detail(task.task_title.trim(), 80))
-        .or_else(|| snapshot.proposal_summary().map(str::to_string))
+        .or_else(|| projection.proposal_summary().map(str::to_string))
 }
 
 #[derive(Clone)]
@@ -170,7 +170,7 @@ pub struct PlanningDoctorService {
     planning_prompt_service: PlanningPromptService,
 }
 impl PlanningDoctorService {
-    // composition이 prompt service를 주입해 doctor와 worker runtime snapshot이 서로 어긋나지 않게 한다.
+    // composition이 prompt service를 주입해 doctor와 worker runtime projection이 서로 어긋나지 않게 한다.
     pub fn new(planning_prompt_service: PlanningPromptService) -> Self {
         Self {
             planning_prompt_service,
@@ -178,29 +178,29 @@ impl PlanningDoctorService {
     }
 
     /*
-     * runtime snapshot을 load해 workspace를 inspect하고, loader failure는 invalid report로 낮춘다.
+     * runtime projection을 load해 workspace를 inspect하고, loader failure는 invalid report로 낮춘다.
      * 이렇게 하면 CLI caller는 total function을 호출하게 되고, path/IO 문제는 panic이나 부분 formatting error가
      * 아니라 report data가 된다.
      */
     pub fn inspect_workspace(&self, workspace_dir: &str) -> PlanningDoctorReport {
-        let snapshot = self
+        let projection = self
             .planning_prompt_service
-            .load_runtime_snapshot(workspace_dir)
+            .load_runtime_projection(workspace_dir)
             .unwrap_or_else(|error| {
-                PlanningRuntimeSnapshot::invalid(format!(
+                PlanningRuntimeProjection::invalid(format!(
                     "failed to load planning workspace: {error}"
                 ))
             });
-        PlanningDoctorReport::from_snapshot(&snapshot)
+        PlanningDoctorReport::from_runtime_projection(&projection)
     }
 }
 
 // runtime status는 둘 다 Invalid로만 노출하므로, validation prefix로 incomplete와 invalid를 나눈다.
-fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorState {
-    match snapshot.workspace_status() {
+fn classify_doctor_state(projection: &PlanningRuntimeProjection) -> PlanningDoctorState {
+    match projection.workspace_status() {
         PlanningRuntimeWorkspaceStatus::Uninitialized => PlanningDoctorState::Absent,
         PlanningRuntimeWorkspaceStatus::Invalid => {
-            if snapshot
+            if projection
                 .failure_reason()
                 .is_some_and(|reason| reason.starts_with(INCOMPLETE_PREFIX))
             {
@@ -215,7 +215,7 @@ fn classify_doctor_state(snapshot: &PlanningRuntimeSnapshot) -> PlanningDoctorSt
 }
 
 #[cfg(test)]
-// snapshot loading이 기본 planning authority를 seed할 수 있으므로, test는 doctor service 경계를 검증한다.
+// runtime projection loading이 기본 planning authority를 seed할 수 있으므로, test는 doctor service 경계를 검증한다.
 mod tests {
     use std::sync::Arc;
 

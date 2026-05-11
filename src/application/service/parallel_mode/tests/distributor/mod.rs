@@ -262,13 +262,13 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
         );
     }
 
-    let drained_snapshot =
+    let drained_projection =
         service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
-    assert_eq!(drained_snapshot.roster.active_count(), 0);
-    assert_eq!(drained_snapshot.pool.blocked_slots, 0);
-    assert_eq!(drained_snapshot.pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert_eq!(drained_snapshot.distributor.head_summary, "idle");
-    assert_eq!(drained_snapshot.distributor.queue_depth(), 0);
+    assert_eq!(drained_projection.roster.active_count(), 0);
+    assert_eq!(drained_projection.pool.blocked_slots, 0);
+    assert_eq!(drained_projection.pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(drained_projection.distributor.head_summary, "idle");
+    assert_eq!(drained_projection.distributor.queue_depth(), 0);
     let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
     assert_eq!(records.len(), 3);
     assert!(
@@ -1026,18 +1026,18 @@ fn blocked_official_completion_queue_retries_after_integration_worktree_recovers
             .is_empty(),
         "blocked integration worktree should prevent any GitHub delivery operation"
     );
-    let blocked_snapshot =
+    let blocked_projection =
         service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
-    assert_eq!(blocked_snapshot.distributor.head_summary, "queued");
-    assert_eq!(blocked_snapshot.distributor.queue_depth(), 1);
+    assert_eq!(blocked_projection.distributor.head_summary, "queued");
+    assert_eq!(blocked_projection.distributor.queue_depth(), 1);
     assert!(
-        blocked_snapshot
+        blocked_projection
             .distributor
             .orchestrator_status
             .integration_worktree_readiness
             .contains("blocked:"),
         "snapshot should keep the queued head and surface the worktree blocker: {}",
-        blocked_snapshot
+        blocked_projection
             .distributor
             .orchestrator_status
             .integration_worktree_readiness

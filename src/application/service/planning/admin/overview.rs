@@ -62,20 +62,20 @@ impl PlanningAdminFacadeService {
 
     // load_runtime_application_projection은 planning runtime facts의 공통 read model을 돌려주는 compatibility
     // boundary다. admin overview, compact control surface, 이후 CLI/Telegram status path가 같은 projection source를
-    // 공유할 수 있게 runtime snapshot 세부 구조를 여기서 한 번 감춘다.
+    // 공유할 수 있게 runtime projection 세부 구조를 여기서 한 번 감춘다.
     pub fn load_runtime_application_projection(&self) -> Result<PlanningApplicationProjection> {
         let runtime = self
             .planning
             .runtime
-            // `_or_invalid` 변형은 파일이 없거나 읽기 실패가 있어도 UI가 다룰 수 있는 invalid snapshot으로 정규화한다.
-            .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
-        Ok(PlanningApplicationProjection::from_runtime_snapshot(
+            // `_or_invalid` 변형은 파일이 없거나 읽기 실패가 있어도 UI가 다룰 수 있는 invalid projection으로 정규화한다.
+            .load_runtime_projection_or_invalid(self.workspace_dir.as_str());
+        Ok(PlanningApplicationProjection::from_runtime_projection(
             &runtime,
         ))
     }
 
     // load_runtime_summary는 overview의 일부이면서 runtime 상태만 새로고침하는 API에서도 재사용할 수 있는 작은 읽기
-    // 경로다. invalid workspace도 에러 대신 invalid snapshot으로 표현해 UI가 상태 패널을 안정적으로 그리게 한다.
+    // 경로다. invalid workspace도 에러 대신 invalid projection으로 표현해 UI가 상태 패널을 안정적으로 그리게 한다.
     pub fn load_runtime_summary(&self) -> Result<PlanningAdminRuntimeSummary> {
         // admin summary는 application projection을 표시용 admin DTO로 낮춘 값이다. queue/proposal facts를 surface마다
         // 다시 해석하지 않도록 projection source를 명시적으로 공유한다.

@@ -21,7 +21,7 @@ pub(super) fn build_planning_init_overlay_view_for_app(
     // presentation routing을 갱신하게 한다. fallback view를 만들면 wizard state와
     // 화면 copy가 어긋나는 오류가 늦게 드러난다.
     match state.step() {
-        // 기존 planning artifact 감지는 runtime snapshot과 workspace path를 함께 읽는다.
+        // 기존 planning artifact 감지는 runtime projection과 workspace path를 함께 읽는다.
         // 이 단계만 app-level copy builder를 거쳐야 guard 화면의 상태 문구가 최신이다.
         PlanningInitOverlayStep::ExistingWorkspace => {
             build_existing_workspace_overlay_view_for_app(app)

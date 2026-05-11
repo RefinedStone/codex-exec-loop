@@ -33,7 +33,7 @@ use super::runtime::manual_intake::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptIntakeService,
 };
 use super::runtime::policy::PlanningAutoFollowBlockReason;
-use super::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
+use super::runtime::prompt::{PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus};
 use super::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
     planning_task_tool_contract_json,
@@ -237,18 +237,18 @@ pub struct PlanningPostTurnReconciliationRequest<'a> {
     pub completed_turn_id: &'a str,
     pub changed_planning_file_paths: &'a [String],
     pub execution_snapshot_capture: Option<&'a PlanningTurnExecutionSnapshotCapture>,
-    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub current_runtime_projection: &'a PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnReconciliationOutcome {
     pub reconciliation_result: PlanningReconciliationResult,
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnWorkerPanelStartRequest<'a> {
     pub continuation_paused: bool,
     pub changed_planning_file_paths: &'a [String],
-    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub current_runtime_projection: &'a PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningPostTurnWorkerPanelStartState {
@@ -264,7 +264,7 @@ pub struct PlanningPostTurnAutoFollowRequest<'a> {
     pub stop_keyword: &'a str,
     pub stop_keyword_matched: bool,
     pub no_file_changes_stop_matched: bool,
-    pub runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub runtime_projection: &'a PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningPostTurnAutoFollowDecision {
@@ -292,7 +292,7 @@ pub struct PlanningPostTurnQueueRefreshPreparationRequest<'a> {
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: Option<&'a str>,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
-    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub current_runtime_projection: &'a PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningPostTurnQueueRefreshPreparation {
@@ -302,7 +302,7 @@ pub enum PlanningPostTurnQueueRefreshPreparation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnQueueRefreshSkipped {
     pub reason: PlanningPostTurnQueueRefreshSkipReason,
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningPostTurnQueueRefreshSkipReason {
@@ -438,7 +438,7 @@ pub struct PlanningPostTurnRepairRequest<'a> {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnRepairOutcome {
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     pub resolved: bool,
     pub attempts: Vec<PlanningPostTurnRepairAttempt>,
 }
@@ -447,7 +447,7 @@ pub struct PlanningPostTurnRepairAttempt {
     pub attempt_number: usize,
     pub max_attempts: usize,
     pub retry_reason: Option<PlanningRepairRetryReason>,
-    pub started_runtime_snapshot: PlanningRuntimeSnapshot,
+    pub started_runtime_projection: PlanningRuntimeProjection,
     pub worker_prompt: String,
     pub result: PlanningPostTurnRepairAttemptResult,
 }
@@ -469,13 +469,13 @@ pub enum PlanningPostTurnRepairAttemptResult {
 pub struct PlanningPostTurnQueueRefreshFinalizationRequest<'a> {
     pub workspace_directory: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
-    pub previous_runtime_snapshot: &'a PlanningRuntimeSnapshot,
-    pub refreshed_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub previous_runtime_projection: &'a PlanningRuntimeProjection,
+    pub refreshed_runtime_projection: &'a PlanningRuntimeProjection,
     pub queue_idle_derivation: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnQueueRefreshFinalizationOutcome {
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     pub events: Vec<PlanningPostTurnQueueRefreshFinalizationEvent>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -485,14 +485,14 @@ pub enum PlanningPostTurnQueueRefreshFinalizationEvent {
     },
     ProposalPromotionFailed {
         detail: String,
-        runtime_snapshot: PlanningRuntimeSnapshot,
+        runtime_projection: PlanningRuntimeProjection,
     },
     QueueIdleDerivationEmpty {
         detail: String,
     },
     RepeatedQueueHead {
         detail: String,
-        runtime_snapshot: PlanningRuntimeSnapshot,
+        runtime_projection: PlanningRuntimeProjection,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -503,7 +503,7 @@ pub struct PlanningPostTurnOfficialCompletionPreparationRequest<'a> {
     pub latest_user_message: Option<&'a str>,
     pub latest_main_reply: Option<&'a str>,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
-    pub current_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub current_runtime_projection: &'a PlanningRuntimeProjection,
     pub contract: &'a PlanningOfficialCompletionRefreshContract,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -513,9 +513,9 @@ pub enum PlanningPostTurnOfficialCompletionPreparation {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnOfficialCompletionBlocked {
-    pub planning_workspace_snapshot: PlanningRuntimeSnapshot,
+    pub planning_workspace_projection: PlanningRuntimeProjection,
     pub failure_detail: String,
-    pub failure_snapshot: PlanningRuntimeSnapshot,
+    pub failure_projection: PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPreparedOfficialCompletionRefresh {
@@ -525,13 +525,13 @@ pub struct PlanningPreparedOfficialCompletionRefresh {
     latest_main_reply: String,
     previous_handoff_task: Option<PlanningTaskHandoff>,
     contract: PlanningOfficialCompletionRefreshContract,
-    planning_workspace_snapshot: PlanningRuntimeSnapshot,
+    planning_workspace_projection: PlanningRuntimeProjection,
     worker_prompt: String,
 }
 impl PlanningPreparedOfficialCompletionRefresh {
     fn new(
         request: &PlanningPostTurnOfficialCompletionPreparationRequest<'_>,
-        planning_workspace_snapshot: PlanningRuntimeSnapshot,
+        planning_workspace_projection: PlanningRuntimeProjection,
         latest_main_reply: &str,
         worker_prompt: String,
     ) -> Self {
@@ -542,13 +542,13 @@ impl PlanningPreparedOfficialCompletionRefresh {
             latest_main_reply: latest_main_reply.to_string(),
             previous_handoff_task: request.previous_handoff_task.cloned(),
             contract: request.contract.clone(),
-            planning_workspace_snapshot,
+            planning_workspace_projection,
             worker_prompt,
         }
     }
 
-    pub fn planning_workspace_snapshot(&self) -> &PlanningRuntimeSnapshot {
-        &self.planning_workspace_snapshot
+    pub fn planning_workspace_projection(&self) -> &PlanningRuntimeProjection {
+        &self.planning_workspace_projection
     }
 
     pub fn worker_prompt(&self) -> &str {
@@ -586,24 +586,24 @@ impl PlanningPreparedOfficialCompletionRefresh {
 pub struct PlanningPostTurnOfficialCompletionFinalizationRequest<'a> {
     pub planning_workspace_directory: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
-    pub previous_runtime_snapshot: &'a PlanningRuntimeSnapshot,
-    pub refreshed_runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub previous_runtime_projection: &'a PlanningRuntimeProjection,
+    pub refreshed_runtime_projection: &'a PlanningRuntimeProjection,
     pub worker_summary: Option<&'a str>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnOfficialCompletionFinalizationOutcome {
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     pub repeated_queue_head_detail: Option<String>,
     pub blocked_failure_detail: Option<String>,
     pub authority_refresh_outcome: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnOfficialCompletionRepairBlockRequest<'a> {
-    pub runtime_snapshot: &'a PlanningRuntimeSnapshot,
+    pub runtime_projection: &'a PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnOfficialCompletionRepairBlockOutcome {
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     pub failure_detail: &'static str,
 }
 impl PlanningRuntimeUseCases {
@@ -621,7 +621,7 @@ impl PlanningRuntimeUseCases {
     pub fn build_manual_prompt(
         &self,
         operator_prompt: &str,
-        _snapshot: &PlanningRuntimeSnapshot,
+        _projection: &PlanningRuntimeProjection,
     ) -> Option<String> {
         self.runtime_facade.build_manual_prompt(operator_prompt)
     }
@@ -633,10 +633,10 @@ impl PlanningRuntimeUseCases {
     }
     pub fn build_queued_task_handoff(
         &self,
-        snapshot: &PlanningRuntimeSnapshot,
+        projection: &PlanningRuntimeProjection,
     ) -> Option<PlanningMainSessionHandoff> {
-        // queued-task handoff는 caller가 따로 들고 있는 queue state가 아니라 current runtime snapshot에서 파생한다.
-        self.runtime_facade.build_queued_task_handoff(snapshot)
+        // queued-task handoff는 caller가 따로 들고 있는 queue state가 아니라 current runtime projection에서 파생한다.
+        self.runtime_facade.build_queued_task_handoff(projection)
     }
     pub fn build_main_session_task_handoff(
         &self,
@@ -683,9 +683,12 @@ impl PlanningRuntimeUseCases {
         self.runtime_facade
             .build_auto_follow_status_projection(request)
     }
-    pub fn load_runtime_snapshot_or_invalid(&self, workspace_dir: &str) -> PlanningRuntimeSnapshot {
+    pub fn load_runtime_projection_or_invalid(
+        &self,
+        workspace_dir: &str,
+    ) -> PlanningRuntimeProjection {
         self.runtime_facade
-            .load_runtime_snapshot_or_invalid(workspace_dir)
+            .load_runtime_projection_or_invalid(workspace_dir)
     }
     pub fn prepare_task_intake(
         &self,
@@ -742,17 +745,17 @@ impl PlanningRuntimeUseCases {
         request: PlanningPostTurnReconciliationRequest<'_>,
     ) -> PlanningPostTurnReconciliationOutcome {
         let reconciliation_result = self.reconcile_post_turn_result(&request);
-        let runtime_snapshot =
+        let runtime_projection =
             if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
-                PlanningRuntimeSnapshot::invalid(block_reason)
+                PlanningRuntimeProjection::invalid(block_reason)
             } else if request.changed_planning_file_paths.is_empty() {
-                request.current_runtime_snapshot.clone()
+                request.current_runtime_projection.clone()
             } else {
-                self.load_runtime_snapshot_or_invalid(request.workspace_directory)
+                self.load_runtime_projection_or_invalid(request.workspace_directory)
             };
         PlanningPostTurnReconciliationOutcome {
             reconciliation_result,
-            runtime_snapshot,
+            runtime_projection,
         }
     }
 
@@ -817,9 +820,9 @@ impl PlanningRuntimeUseCases {
         {
             return PlanningPostTurnWorkerPanelStartState::RepairRunning;
         }
-        if request.current_runtime_snapshot.workspace_status()
+        if request.current_runtime_projection.workspace_status()
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            && request.current_runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
+            && request.current_runtime_projection.queue_idle_policy() == QueueIdlePolicy::Stop
         {
             return PlanningPostTurnWorkerPanelStartState::PreserveCurrent;
         }
@@ -835,14 +838,14 @@ impl PlanningRuntimeUseCases {
                 PlanningPostTurnAutoFollowSkipReason::PostTurnContinuationPaused,
             );
         }
-        if request.runtime_snapshot.queue_is_drained() {
+        if request.runtime_projection.queue_is_drained() {
             return PlanningPostTurnAutoFollowDecision::Skip(
                 PlanningPostTurnAutoFollowSkipReason::PlanningQueueDrained,
             );
         }
-        if request.runtime_snapshot.workspace_status()
+        if request.runtime_projection.workspace_status()
             == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            && request.runtime_snapshot.queue_idle_policy() == QueueIdlePolicy::Stop
+            && request.runtime_projection.queue_idle_policy() == QueueIdlePolicy::Stop
         {
             return PlanningPostTurnAutoFollowDecision::Skip(
                 PlanningPostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop,
@@ -875,7 +878,7 @@ impl PlanningRuntimeUseCases {
         match self.decide_auto_follow(PlanningRuntimeAutoFollowRequest {
             stop_keyword: request.stop_keyword,
             last_message,
-            snapshot: request.runtime_snapshot,
+            projection: request.runtime_projection,
         }) {
             PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
                 PlanningPostTurnAutoFollowDecision::QueuePrompt(prompt)
@@ -955,17 +958,17 @@ impl PlanningWorkerUseCases {
         &self,
         request: PlanningPostTurnQueueRefreshPreparationRequest<'_>,
     ) -> PlanningPostTurnQueueRefreshPreparation {
-        let runtime_snapshot = request.current_runtime_snapshot;
+        let runtime_projection = request.current_runtime_projection;
         let skipped = |reason| {
             PlanningPostTurnQueueRefreshPreparation::Skipped(Box::new(
                 PlanningPostTurnQueueRefreshSkipped {
                     reason,
-                    runtime_snapshot: runtime_snapshot.clone(),
+                    runtime_projection: runtime_projection.clone(),
                 },
             ))
         };
         if !matches!(
-            runtime_snapshot.workspace_status(),
+            runtime_projection.workspace_status(),
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
                 | PlanningRuntimeWorkspaceStatus::ReadyWithTask
         ) {
@@ -978,7 +981,7 @@ impl PlanningWorkerUseCases {
         else {
             return skipped(PlanningPostTurnQueueRefreshSkipReason::LatestMainReplyEmpty);
         };
-        let mode = match runtime_snapshot.workspace_status() {
+        let mode = match runtime_projection.workspace_status() {
             PlanningRuntimeWorkspaceStatus::ReadyWithTask => {
                 PlanningPreparedQueueRefreshMode::FromLatestMainReply
             }
@@ -1063,16 +1066,16 @@ impl PlanningWorkerUseCases {
         &self,
         request: PlanningPostTurnQueueRefreshFinalizationRequest<'_>,
     ) -> PlanningPostTurnQueueRefreshFinalizationOutcome {
-        let mut runtime_snapshot = request.refreshed_runtime_snapshot.clone();
+        let mut runtime_projection = request.refreshed_runtime_projection.clone();
         let mut events = Vec::new();
-        if !runtime_snapshot.has_actionable_queue_head()
-            && runtime_snapshot.has_proposal_candidates()
+        if !runtime_projection.has_actionable_queue_head()
+            && runtime_projection.has_proposal_candidates()
         {
             match self.promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: request.workspace_directory,
             }) {
                 Ok(outcome) => {
-                    runtime_snapshot = outcome.runtime_snapshot.clone();
+                    runtime_projection = outcome.runtime_projection.clone();
                     events.push(
                         PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionCompleted {
                             outcome,
@@ -1081,24 +1084,24 @@ impl PlanningWorkerUseCases {
                 }
                 Err(error) => {
                     let detail = format!("host proposal promotion failed: {error}");
-                    let invalid_snapshot = PlanningRuntimeSnapshot::invalid(
+                    let invalid_projection = PlanningRuntimeProjection::invalid(
                         PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON,
                     );
                     events.push(
                         PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionFailed {
                             detail,
-                            runtime_snapshot: invalid_snapshot.clone(),
+                            runtime_projection: invalid_projection.clone(),
                         },
                     );
                     return PlanningPostTurnQueueRefreshFinalizationOutcome {
-                        runtime_snapshot: invalid_snapshot,
+                        runtime_projection: invalid_projection,
                         events,
                     };
                 }
             }
         }
-        if !runtime_snapshot.has_actionable_queue_head()
-            && !runtime_snapshot.has_proposal_candidates()
+        if !runtime_projection.has_actionable_queue_head()
+            && !runtime_projection.has_proposal_candidates()
             && request.queue_idle_derivation
         {
             events.push(
@@ -1111,20 +1114,20 @@ impl PlanningWorkerUseCases {
         }
         if let Some(detail) = repeated_queue_head_detail(
             request.previous_handoff_task,
-            request.previous_runtime_snapshot,
-            &runtime_snapshot,
+            request.previous_runtime_projection,
+            &runtime_projection,
         ) {
-            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
+            runtime_projection = runtime_projection.with_auto_follow_pause_reason(detail.clone());
             events.push(
                 PlanningPostTurnQueueRefreshFinalizationEvent::RepeatedQueueHead {
                     detail,
-                    runtime_snapshot: runtime_snapshot.clone(),
+                    runtime_projection: runtime_projection.clone(),
                 },
             );
         }
 
         PlanningPostTurnQueueRefreshFinalizationOutcome {
-            runtime_snapshot,
+            runtime_projection,
             events,
         }
     }
@@ -1139,30 +1142,32 @@ impl PlanningWorkerUseCases {
         &self,
         request: PlanningPostTurnOfficialCompletionPreparationRequest<'_>,
     ) -> PlanningPostTurnOfficialCompletionPreparation {
-        let planning_workspace_snapshot =
+        let planning_workspace_projection =
             if request.planning_workspace_directory == request.turn_workspace_directory {
-                request.current_runtime_snapshot.clone()
+                request.current_runtime_projection.clone()
             } else {
                 self.worker_orchestration
-                    .load_runtime_snapshot_or_invalid(request.planning_workspace_directory)
+                    .load_runtime_projection_or_invalid(request.planning_workspace_directory)
             };
         if matches!(
-            planning_workspace_snapshot.workspace_status(),
+            planning_workspace_projection.workspace_status(),
             PlanningRuntimeWorkspaceStatus::Invalid | PlanningRuntimeWorkspaceStatus::Uninitialized
         ) {
-            let failure_detail = planning_workspace_snapshot
+            let failure_detail = planning_workspace_projection
                 .preview_detail()
                 .unwrap_or(
                     "official completion refresh is blocked because the planning workspace is unavailable",
                 )
                 .to_string();
-            let failure_snapshot =
-                official_completion_failure_snapshot(&planning_workspace_snapshot, &failure_detail);
+            let failure_projection = official_completion_failure_projection(
+                &planning_workspace_projection,
+                &failure_detail,
+            );
             return PlanningPostTurnOfficialCompletionPreparation::Blocked(Box::new(
                 PlanningPostTurnOfficialCompletionBlocked {
-                    planning_workspace_snapshot,
+                    planning_workspace_projection,
                     failure_detail,
-                    failure_snapshot,
+                    failure_projection,
                 },
             ));
         }
@@ -1185,7 +1190,7 @@ impl PlanningWorkerUseCases {
         PlanningPostTurnOfficialCompletionPreparation::Ready(Box::new(
             PlanningPreparedOfficialCompletionRefresh::new(
                 &request,
-                planning_workspace_snapshot,
+                planning_workspace_projection,
                 latest_main_reply,
                 worker_prompt,
             ),
@@ -1202,24 +1207,24 @@ impl PlanningWorkerUseCases {
         &self,
         request: PlanningPostTurnOfficialCompletionFinalizationRequest<'_>,
     ) -> PlanningPostTurnOfficialCompletionFinalizationOutcome {
-        let mut runtime_snapshot = request.refreshed_runtime_snapshot.clone();
+        let mut runtime_projection = request.refreshed_runtime_projection.clone();
         let repeated_queue_head_detail = repeated_queue_head_detail(
             request.previous_handoff_task,
-            request.previous_runtime_snapshot,
-            &runtime_snapshot,
+            request.previous_runtime_projection,
+            &runtime_projection,
         );
         if let Some(detail) = repeated_queue_head_detail.as_ref() {
-            runtime_snapshot = runtime_snapshot.with_auto_follow_pause_reason(detail.clone());
+            runtime_projection = runtime_projection.with_auto_follow_pause_reason(detail.clone());
         }
-        if runtime_snapshot.blocks_auto_follow() {
-            let failure_detail = runtime_snapshot
+        if runtime_projection.blocks_auto_follow() {
+            let failure_detail = runtime_projection
                 .preview_detail()
                 .unwrap_or(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
                 .to_string();
-            let failure_snapshot =
-                official_completion_failure_snapshot(&runtime_snapshot, &failure_detail);
+            let failure_projection =
+                official_completion_failure_projection(&runtime_projection, &failure_detail);
             return PlanningPostTurnOfficialCompletionFinalizationOutcome {
-                runtime_snapshot: failure_snapshot,
+                runtime_projection: failure_projection,
                 repeated_queue_head_detail,
                 blocked_failure_detail: Some(failure_detail),
                 authority_refresh_outcome: None,
@@ -1230,7 +1235,7 @@ impl PlanningWorkerUseCases {
             .map(|summary| format!("official ledger refresh succeeded: {summary}"))
             .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
         PlanningPostTurnOfficialCompletionFinalizationOutcome {
-            runtime_snapshot,
+            runtime_projection,
             repeated_queue_head_detail,
             blocked_failure_detail: None,
             authority_refresh_outcome: Some(authority_refresh_outcome),
@@ -1241,8 +1246,8 @@ impl PlanningWorkerUseCases {
         request: PlanningPostTurnOfficialCompletionRepairBlockRequest<'_>,
     ) -> PlanningPostTurnOfficialCompletionRepairBlockOutcome {
         PlanningPostTurnOfficialCompletionRepairBlockOutcome {
-            runtime_snapshot: official_completion_failure_snapshot(
-                request.runtime_snapshot,
+            runtime_projection: official_completion_failure_projection(
+                request.runtime_projection,
                 OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
             ),
             failure_detail: OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
@@ -1266,16 +1271,16 @@ impl PlanningWorkerUseCases {
         request: PlanningPostTurnRepairRequest<'_>,
     ) -> PlanningPostTurnRepairOutcome {
         let max_attempts = request.max_attempts.max(1);
-        let mut runtime_snapshot = self
+        let mut runtime_projection = self
             .worker_orchestration
-            .load_runtime_snapshot_or_invalid(request.workspace_directory);
+            .load_runtime_projection_or_invalid(request.workspace_directory);
         let mut next_request = request.repair_request.clone();
         let mut next_retry_reason = None;
         let mut attempts = Vec::new();
 
         for attempt_number in 1..=max_attempts {
             let attempt_retry_reason = next_retry_reason;
-            let started_runtime_snapshot = runtime_snapshot.clone();
+            let started_runtime_projection = runtime_projection.clone();
             let worker_request = PlanningLedgerRepairRequest {
                 workspace_directory: request.workspace_directory,
                 parent_thread_id: request.parent_thread_id,
@@ -1294,7 +1299,7 @@ impl PlanningWorkerUseCases {
                 .repair_task_authority(worker_request);
             let result = match worker_outcome {
                 Ok(outcome) => {
-                    runtime_snapshot = outcome.runtime_snapshot.clone();
+                    runtime_projection = outcome.runtime_projection.clone();
                     let next_repair_request = outcome.repair_request.clone();
                     let resolved = next_repair_request.is_none();
                     let exhausted = !resolved && attempt_number == max_attempts;
@@ -1347,7 +1352,7 @@ impl PlanningWorkerUseCases {
                 attempt_number,
                 max_attempts,
                 retry_reason: attempt_retry_reason,
-                started_runtime_snapshot,
+                started_runtime_projection,
                 worker_prompt,
                 result,
             });
@@ -1360,7 +1365,7 @@ impl PlanningWorkerUseCases {
                     })
                 );
                 return PlanningPostTurnRepairOutcome {
-                    runtime_snapshot,
+                    runtime_projection,
                     resolved,
                     attempts,
                 };
@@ -1368,7 +1373,7 @@ impl PlanningWorkerUseCases {
         }
 
         PlanningPostTurnRepairOutcome {
-            runtime_snapshot,
+            runtime_projection,
             resolved: false,
             attempts,
         }
@@ -1383,25 +1388,25 @@ impl PlanningWorkerUseCases {
     }
 }
 
-fn official_completion_failure_snapshot(
-    current_snapshot: &PlanningRuntimeSnapshot,
+fn official_completion_failure_projection(
+    current_projection: &PlanningRuntimeProjection,
     failure_detail: &str,
-) -> PlanningRuntimeSnapshot {
+) -> PlanningRuntimeProjection {
     let detail = if failure_detail.trim().is_empty() {
         OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON
     } else {
         failure_detail
     };
-    current_snapshot.with_auto_follow_pause_reason(detail.to_string())
+    current_projection.with_auto_follow_pause_reason(detail.to_string())
 }
 
 fn repeated_queue_head_detail(
     previous_handoff: Option<&PlanningTaskHandoff>,
-    previous_snapshot: &PlanningRuntimeSnapshot,
-    snapshot: &PlanningRuntimeSnapshot,
+    previous_projection: &PlanningRuntimeProjection,
+    projection: &PlanningRuntimeProjection,
 ) -> Option<String> {
     let previous_handoff = previous_handoff?;
-    let queue_head = snapshot.queue_head()?;
+    let queue_head = projection.queue_head()?;
     if queue_head.task_id.trim() != previous_handoff.task_id.trim() {
         return None;
     }
@@ -1416,8 +1421,8 @@ fn repeated_queue_head_detail(
     }
 
     let queue_head_task_unchanged = match (
-        previous_snapshot.queue_head_task_signature(),
-        snapshot.queue_head_task_signature(),
+        previous_projection.queue_head_task_signature(),
+        projection.queue_head_task_signature(),
     ) {
         (Some(previous), Some(current)) => previous == current,
         (None, None) => true,
@@ -1463,8 +1468,8 @@ mod tests {
         }
     }
 
-    fn snapshot_with_signature(signature: Option<u64>) -> PlanningRuntimeSnapshot {
-        PlanningRuntimeSnapshot::ready(
+    fn projection_with_signature(signature: Option<u64>) -> PlanningRuntimeProjection {
+        PlanningRuntimeProjection::ready(
             "prompt".to_string(),
             "summary".to_string(),
             Some(sample_queue_head()),
@@ -1476,8 +1481,8 @@ mod tests {
     fn post_turn_repeated_queue_head_treats_missing_and_present_signatures_as_changed() {
         let detail = repeated_queue_head_detail(
             Some(&sample_handoff()),
-            &snapshot_with_signature(None),
-            &snapshot_with_signature(Some(7)),
+            &projection_with_signature(None),
+            &projection_with_signature(Some(7)),
         );
 
         assert!(detail.is_none());
@@ -1487,8 +1492,8 @@ mod tests {
     fn post_turn_repeated_queue_head_accepts_both_missing_signatures_as_unchanged() {
         let detail = repeated_queue_head_detail(
             Some(&sample_handoff()),
-            &snapshot_with_signature(None),
-            &snapshot_with_signature(None),
+            &projection_with_signature(None),
+            &projection_with_signature(None),
         );
 
         assert!(detail.is_some());

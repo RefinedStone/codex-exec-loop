@@ -13,11 +13,11 @@ pub(in crate::adapter::inbound::tui::app) enum PlanningWorkerStatus {
     // Refresh recomputes queue head/proposal state after a turn.
     RefreshRunning,
     RefreshSucceeded,
-    // Covers worker failure, repair request, repeated queue head, or invalid snapshot after refresh.
+    // Covers worker failure, repair request, repeated queue head, or invalid projection after refresh.
     RefreshFailed,
-    // Repair attempts to bring invalid or changed planning files back to a usable runtime snapshot.
+    // Repair attempts to bring invalid or changed planning files back to a usable runtime projection.
     RepairRunning,
-    // Repair restored the runtime snapshot enough for follow-up decisions to resume.
+    // Repair restored the runtime projection enough for follow-up decisions to resume.
     RepairSucceeded,
     // Repair failed or left a blocking reason that still requires operator attention.
     RepairFailed,

@@ -12,7 +12,7 @@ use super::super::{
     PlanningWorkerPanelState, PlanningWorkerStatus,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
 use crate::application::service::planning::{
     PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON, PlanningPostTurnAutoFollowDecision,
@@ -66,7 +66,7 @@ struct PostTurnEvaluationContext {
     latest_user_message: Option<String>,
     latest_main_reply: Option<String>,
     previous_handoff_task: Option<PlanningTaskHandoff>,
-    current_runtime_snapshot: PlanningRuntimeSnapshot,
+    current_runtime_projection: PlanningRuntimeProjection,
     continuation_paused: bool,
     can_queue_next: bool,
     stop_keyword: String,
@@ -107,7 +107,7 @@ impl PostTurnEvaluationContext {
             latest_user_message: conversation.latest_user_message_text().map(str::to_string),
             latest_main_reply,
             previous_handoff_task: conversation.last_planning_task_handoff().cloned(),
-            current_runtime_snapshot: conversation.planning_runtime_snapshot.clone(),
+            current_runtime_projection: conversation.planning_runtime_projection.clone(),
             continuation_paused: conversation
                 .auto_follow_state
                 .post_turn_continuation_paused(),
@@ -139,16 +139,16 @@ impl PostTurnEvaluationContext {
 }
 #[derive(Debug, Clone)]
 struct HiddenPlanningRepairOutcome {
-    runtime_snapshot: PlanningRuntimeSnapshot,
+    runtime_projection: PlanningRuntimeProjection,
     resolved: bool,
 }
 #[derive(Debug, Clone)]
 struct PlanningQueueRefreshOutcome {
-    runtime_snapshot: PlanningRuntimeSnapshot,
+    runtime_projection: PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone)]
 struct OfficialCompletionRefreshOutcome {
-    runtime_snapshot: PlanningRuntimeSnapshot,
+    runtime_projection: PlanningRuntimeProjection,
     runtime_notices: Vec<String>,
 }
 #[derive(Debug, Clone)]
@@ -223,7 +223,7 @@ impl PostTurnEvaluationExecutor {
     // The execution order is deliberate: protect planning files first, repair
     // only when continuation can act on the result, finish official parallel
     // completions before planning queue refreshes, then derive the action
-    // from the final runtime snapshot.
+    // from the final runtime projection.
     #[tracing::instrument(level = "trace", skip(self, context))]
     fn run(
         mut self,
@@ -237,7 +237,7 @@ impl PostTurnEvaluationExecutor {
                 "post_turn",
                 "started",
                 Some("evaluate"),
-                Some(&context.current_runtime_snapshot),
+                Some(&context.current_runtime_projection),
                 [
                     (
                         "planning_workspace_directory",
@@ -260,12 +260,12 @@ impl PostTurnEvaluationExecutor {
                 completed_turn_id: &request.completed_turn_id,
                 changed_planning_file_paths: &request.changed_planning_file_paths,
                 execution_snapshot_capture: request.execution_snapshot_capture.as_ref(),
-                current_runtime_snapshot: &context.current_runtime_snapshot,
+                current_runtime_projection: &context.current_runtime_projection,
             },
         );
         let reconciliation_result = reconciliation_outcome.reconciliation_result;
         let mut runtime_notices = reconciliation_result.notices.clone();
-        let mut runtime_snapshot = reconciliation_outcome.runtime_snapshot;
+        let mut runtime_projection = reconciliation_outcome.runtime_projection;
         let continuation_enabled = !context.continuation_paused;
         let official_completion_report = self.begin_official_completion_if_needed(context, request);
         if (continuation_enabled || official_completion_report.is_some())
@@ -278,7 +278,7 @@ impl PostTurnEvaluationExecutor {
                 repair_request,
                 context.previous_handoff_task(),
             );
-            runtime_snapshot = repair_outcome.runtime_snapshot;
+            runtime_projection = repair_outcome.runtime_projection;
         }
         let handled_parallel_completion =
             if let Some(completion_report) = official_completion_report {
@@ -286,27 +286,27 @@ impl PostTurnEvaluationExecutor {
                     context,
                     request,
                     planning_workspace_directory,
-                    &runtime_snapshot,
+                    &runtime_projection,
                     &completion_report,
                 );
                 runtime_notices.extend(official_completion_outcome.runtime_notices.clone());
-                runtime_snapshot = official_completion_outcome.runtime_snapshot;
+                runtime_projection = official_completion_outcome.runtime_projection;
                 true
             } else {
                 false
             };
         if !handled_parallel_completion && continuation_enabled {
             let refresh_outcome =
-                self.run_planning_queue_refresh(context, request, runtime_snapshot.clone());
-            runtime_snapshot = refresh_outcome.runtime_snapshot;
+                self.run_planning_queue_refresh(context, request, runtime_projection.clone());
+            runtime_projection = refresh_outcome.runtime_projection;
         }
         let post_turn_decision = if handled_parallel_completion {
             TuiPostTurnDecision::from_application_decision(
                 request.completed_turn_id.clone(),
-                decide_parallel_official_completion_post_turn(&runtime_snapshot),
+                decide_parallel_official_completion_post_turn(&runtime_projection),
             )
         } else {
-            self.auto_follow_decision_from_snapshot(context, request, &runtime_snapshot)
+            self.auto_follow_decision_from_projection(context, request, &runtime_projection)
         };
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
@@ -314,7 +314,7 @@ impl PostTurnEvaluationExecutor {
                 "post_turn",
                 "completed",
                 Some(post_turn_action_decision(&post_turn_decision.action)),
-                Some(&runtime_snapshot),
+                Some(&runtime_projection),
                 [
                     (
                         "handled_parallel_completion",
@@ -350,7 +350,7 @@ impl PostTurnEvaluationExecutor {
             completed_turn_id: request.completed_turn_id.clone(),
             evaluation: PostTurnEvaluationOutcome {
                 provenance: post_turn_decision.provenance,
-                runtime_snapshot,
+                runtime_projection,
                 planning_repair_state: None,
                 runtime_notices,
                 action: post_turn_decision.action,
@@ -368,7 +368,7 @@ impl PostTurnEvaluationExecutor {
         &mut self,
         context: &PostTurnEvaluationContext,
         request: &PostTurnEvaluationRequest,
-        current_snapshot: PlanningRuntimeSnapshot,
+        current_projection: PlanningRuntimeProjection,
     ) -> PlanningQueueRefreshOutcome {
         let preparation = self
             .planning_feature
@@ -381,7 +381,7 @@ impl PostTurnEvaluationExecutor {
                 latest_user_message: context.latest_user_message.as_deref(),
                 latest_main_reply: context.latest_main_reply.as_deref(),
                 previous_handoff_task: context.previous_handoff_task(),
-                current_runtime_snapshot: &current_snapshot,
+                current_runtime_projection: &current_projection,
             });
         let prepared = match preparation {
             PlanningPostTurnQueueRefreshPreparation::Skipped(skipped) => {
@@ -389,11 +389,11 @@ impl PostTurnEvaluationExecutor {
                     planning_worker_refresh_skipped_detail(
                         context.log_context(request),
                         skipped.reason.log_label(),
-                        &skipped.runtime_snapshot,
+                        &skipped.runtime_projection,
                     )
                 });
                 return PlanningQueueRefreshOutcome {
-                    runtime_snapshot: skipped.runtime_snapshot,
+                    runtime_projection: skipped.runtime_projection,
                 };
             }
             PlanningPostTurnQueueRefreshPreparation::Ready(prepared) => prepared,
@@ -404,7 +404,7 @@ impl PostTurnEvaluationExecutor {
                 "refresh",
                 "started",
                 Some("run_worker"),
-                Some(&current_snapshot),
+                Some(&current_projection),
                 [
                     ("mode", json!(prepared.mode_label())),
                     (
@@ -443,15 +443,16 @@ impl PostTurnEvaluationExecutor {
                 } else {
                     format!("planning worker refresh failed: {error}")
                 };
-                let invalid_snapshot =
-                    PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON);
+                let invalid_projection = PlanningRuntimeProjection::invalid(
+                    PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON,
+                );
                 event_log::emit_lazy("planning_worker_refresh_failed", || {
                     post_turn_event_detail(
                         context.log_context(request),
                         "refresh",
                         "worker_failed",
                         Some("block_auto_follow"),
-                        Some(&invalid_snapshot),
+                        Some(&invalid_projection),
                         [
                             ("mode", json!(prepared.mode_label())),
                             ("error", json!(error.to_string())),
@@ -465,10 +466,10 @@ impl PostTurnEvaluationExecutor {
                 self.record_planning_worker_failure(
                     PlanningWorkerStatus::RefreshFailed,
                     &detail,
-                    &invalid_snapshot,
+                    &invalid_projection,
                 );
                 return PlanningQueueRefreshOutcome {
-                    runtime_snapshot: invalid_snapshot,
+                    runtime_projection: invalid_projection,
                 };
             }
         };
@@ -480,7 +481,7 @@ impl PostTurnEvaluationExecutor {
                 "refresh",
                 "worker_succeeded",
                 Some("apply_outcome"),
-                Some(&outcome.runtime_snapshot),
+                Some(&outcome.runtime_projection),
                 [
                     ("mode", json!(prepared.mode_label())),
                     ("repair_requested", json!(outcome.repair_request.is_some())),
@@ -500,7 +501,7 @@ impl PostTurnEvaluationExecutor {
                 ],
             )
         });
-        let mut runtime_snapshot = outcome.runtime_snapshot.clone();
+        let mut runtime_projection = outcome.runtime_projection.clone();
         if let Some(repair_request) = outcome.repair_request.as_ref() {
             let repair_outcome = self.run_hidden_planning_repairs(
                 context.thread_id.as_str(),
@@ -509,8 +510,8 @@ impl PostTurnEvaluationExecutor {
                 repair_request,
                 context.previous_handoff_task(),
             );
-            runtime_snapshot = if repair_outcome.resolved {
-                repair_outcome.runtime_snapshot
+            runtime_projection = if repair_outcome.resolved {
+                repair_outcome.runtime_projection
             } else {
                 event_log::emit_lazy("planning_worker_refresh_repair_unresolved", || {
                     post_turn_event_detail(
@@ -518,7 +519,7 @@ impl PostTurnEvaluationExecutor {
                         "repair",
                         "unresolved_after_refresh",
                         Some("block_auto_follow"),
-                        Some(&repair_outcome.runtime_snapshot),
+                        Some(&repair_outcome.runtime_projection),
                         [
                             (
                                 "repair_failure_summary",
@@ -531,7 +532,7 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                PlanningRuntimeSnapshot::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
+                PlanningRuntimeProjection::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
             };
         }
         let finalization = self
@@ -540,11 +541,11 @@ impl PostTurnEvaluationExecutor {
             .finalize_post_turn_queue_refresh(PlanningPostTurnQueueRefreshFinalizationRequest {
                 workspace_directory: &request.workspace_directory,
                 previous_handoff_task: context.previous_handoff_task(),
-                previous_runtime_snapshot: &context.current_runtime_snapshot,
-                refreshed_runtime_snapshot: &runtime_snapshot,
+                previous_runtime_projection: &context.current_runtime_projection,
+                refreshed_runtime_projection: &runtime_projection,
                 queue_idle_derivation: prepared.is_queue_idle_derivation(),
             });
-        runtime_snapshot = finalization.runtime_snapshot;
+        runtime_projection = finalization.runtime_projection;
         for event in finalization.events {
             match event {
                 PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionCompleted {
@@ -560,7 +561,7 @@ impl PostTurnEvaluationExecutor {
                                 .as_ref()
                                 .map(|_| "promoted")
                                 .or(Some("no_promotable_proposal")),
-                            Some(&promotion_outcome.runtime_snapshot),
+                            Some(&promotion_outcome.runtime_projection),
                             [(
                                 "promoted_task_title",
                                 json!(promotion_outcome.promoted_task_title.as_deref()),
@@ -568,7 +569,7 @@ impl PostTurnEvaluationExecutor {
                         )
                     });
                     self.planning_worker_panel_state.last_queue_summary =
-                        planning_worker_queue_summary(&promotion_outcome.runtime_snapshot);
+                        planning_worker_queue_summary(&promotion_outcome.runtime_projection);
                     self.planning_worker_panel_state.last_host_detail =
                         promotion_outcome.promoted_task_title.map(|title| {
                             format!(
@@ -578,7 +579,7 @@ impl PostTurnEvaluationExecutor {
                 }
                 PlanningPostTurnQueueRefreshFinalizationEvent::ProposalPromotionFailed {
                     detail,
-                    runtime_snapshot: invalid_snapshot,
+                    runtime_projection: invalid_projection,
                 } => {
                     event_log::emit_lazy("planning_worker_proposal_promotion_failed", || {
                         post_turn_event_detail(
@@ -586,7 +587,7 @@ impl PostTurnEvaluationExecutor {
                             "proposal_promotion",
                             "failed",
                             Some("block_auto_follow"),
-                            Some(&invalid_snapshot),
+                            Some(&invalid_projection),
                             [
                                 ("error", json!(detail.as_str())),
                                 (
@@ -599,10 +600,10 @@ impl PostTurnEvaluationExecutor {
                     self.record_planning_worker_failure(
                         PlanningWorkerStatus::RefreshFailed,
                         &detail,
-                        &invalid_snapshot,
+                        &invalid_projection,
                     );
                     return PlanningQueueRefreshOutcome {
-                        runtime_snapshot: invalid_snapshot,
+                        runtime_projection: invalid_projection,
                     };
                 }
                 PlanningPostTurnQueueRefreshFinalizationEvent::QueueIdleDerivationEmpty {
@@ -612,7 +613,7 @@ impl PostTurnEvaluationExecutor {
                 }
                 PlanningPostTurnQueueRefreshFinalizationEvent::RepeatedQueueHead {
                     detail,
-                    runtime_snapshot: guard_snapshot,
+                    runtime_projection: guard_projection,
                 } => {
                     self.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshFailed;
                     self.planning_worker_panel_state.last_host_detail = Some(detail.clone());
@@ -624,7 +625,7 @@ impl PostTurnEvaluationExecutor {
                                 "refresh",
                                 "repeated_queue_head_guard",
                                 Some("pause_auto_follow"),
-                                Some(&guard_snapshot),
+                                Some(&guard_projection),
                                 [("pause_reason", json!(detail.as_str()))],
                             )
                         },
@@ -633,18 +634,18 @@ impl PostTurnEvaluationExecutor {
             }
         }
 
-        PlanningQueueRefreshOutcome { runtime_snapshot }
+        PlanningQueueRefreshOutcome { runtime_projection }
     }
 
-    // The final action is always derived from the latest snapshot. Explicit
+    // The final action is always derived from the latest runtime projection. Explicit
     // pause states and queue-idle stop policy win before the conversation model
     // is allowed to enqueue another prompt.
     #[tracing::instrument(level = "trace", skip(self, context))]
-    fn auto_follow_decision_from_snapshot(
+    fn auto_follow_decision_from_projection(
         &self,
         context: &PostTurnEvaluationContext,
         request: &PostTurnEvaluationRequest,
-        runtime_snapshot: &PlanningRuntimeSnapshot,
+        runtime_projection: &PlanningRuntimeProjection,
     ) -> TuiPostTurnDecision {
         match self
             .planning_feature
@@ -656,7 +657,7 @@ impl PostTurnEvaluationExecutor {
                 stop_keyword: context.stop_keyword.as_str(),
                 stop_keyword_matched: context.stop_keyword_matched,
                 no_file_changes_stop_matched: context.no_file_changes_stop_matched,
-                runtime_snapshot,
+                runtime_projection,
             }) {
             PlanningPostTurnAutoFollowDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
@@ -665,7 +666,7 @@ impl PostTurnEvaluationExecutor {
                         "auto_follow",
                         "decision",
                         Some("queue"),
-                        Some(runtime_snapshot),
+                        Some(runtime_projection),
                         [
                             ("mode_label", json!(context.mode_label.as_str())),
                             ("prompt_chars", json!(queued_prompt.prompt.chars().count())),
@@ -703,7 +704,7 @@ impl PostTurnEvaluationExecutor {
                         "auto_follow",
                         "decision",
                         Some("skip"),
-                        Some(runtime_snapshot),
+                        Some(runtime_projection),
                         [("reason", json!(format!("{:?}", reason)))],
                     )
                 });
@@ -848,7 +849,7 @@ impl NativeTuiApp {
             .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
                 continuation_paused: context.continuation_paused,
                 changed_planning_file_paths: &request.changed_planning_file_paths,
-                current_runtime_snapshot: &context.current_runtime_snapshot,
+                current_runtime_projection: &context.current_runtime_projection,
             }) {
             PlanningPostTurnWorkerPanelStartState::PreserveCurrent => {}
             PlanningPostTurnWorkerPanelStartState::RepairRunning => {
@@ -877,7 +878,7 @@ fn post_turn_evaluation_timeout_execution(
         completed_turn_id: request.completed_turn_id.clone(),
         evaluation: PostTurnEvaluationOutcome {
             provenance: PostTurnEvaluationProvenance::new(request.completed_turn_id.clone()),
-            runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
+            runtime_projection: PlanningRuntimeProjection::invalid(message.clone()),
             planning_repair_state: None,
             runtime_notices: vec![message.clone()],
             action: PostTurnContinuationAction::SkipAutoFollow {
@@ -943,7 +944,7 @@ mod tests {
 
     #[test]
     fn parallel_completion_reports_drained_queue_when_official_refresh_finishes_all_work() {
-        let runtime_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
             "queue idle: no executable planning task".to_string(),
             None,
@@ -964,7 +965,7 @@ mod tests {
 
         let decision = TuiPostTurnDecision::from_application_decision(
             "turn-1".to_string(),
-            decide_parallel_official_completion_post_turn(&runtime_snapshot),
+            decide_parallel_official_completion_post_turn(&runtime_projection),
         );
         let PostTurnContinuationAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
@@ -982,11 +983,11 @@ mod tests {
 
     #[test]
     fn parallel_completion_keeps_supervisor_handoff_when_queue_still_has_work() {
-        let runtime_snapshot = PlanningRuntimeSnapshot::invalid("planning still blocked");
+        let runtime_projection = PlanningRuntimeProjection::invalid("planning still blocked");
 
         let decision = TuiPostTurnDecision::from_application_decision(
             "turn-1".to_string(),
-            decide_parallel_official_completion_post_turn(&runtime_snapshot),
+            decide_parallel_official_completion_post_turn(&runtime_projection),
         );
         let PostTurnContinuationAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");

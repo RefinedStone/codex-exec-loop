@@ -110,8 +110,8 @@ pub use self::runtime::manual_intake::{
 };
 // auto-follow block reason은 runtime policy가 자동 후속 실행을 막은 이유를 UI copy와 테스트가 분기할 수 있게 공개한다.
 pub use self::runtime::policy::PlanningAutoFollowBlockReason;
-// runtime snapshot/status는 현재 planning workspace가 실행 가능한지, task가 있는지, invalid인지 판단하는 핵심 projection이다.
-pub use self::runtime::prompt::{PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus};
+// runtime projection/status는 현재 planning workspace가 실행 가능한지, task가 있는지, invalid인지 판단하는 핵심 projection이다.
+pub use self::runtime::prompt::{PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus};
 // validation service는 여러 planning service와 테스트가 같은 검증 규칙을 직접 재사용할 수 있게 공개한다.
 pub use self::runtime::validation::PlanningValidationService;
 // queued-task transcript copy는 auto-follow가 다음 작업 지시를 만들 때 쓰는 고정 문구다. UI/worker 경로가 같은 문구를

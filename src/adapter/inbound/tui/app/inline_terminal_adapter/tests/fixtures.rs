@@ -18,7 +18,7 @@ use crate::application::port::outbound::startup_probe_port::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
@@ -130,6 +130,6 @@ pub(super) fn make_test_app() -> NativeTuiApp {
     conversation.cwd = "/tmp/root".to_string();
     conversation.draft_workspace_directory = "/tmp/root".to_string();
     // The neutral planning baseline makes tests opt in explicitly when they need queue, pause, or task state.
-    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::uninitialized());
+    conversation.replace_planning_runtime_projection(PlanningRuntimeProjection::uninitialized());
     app
 }

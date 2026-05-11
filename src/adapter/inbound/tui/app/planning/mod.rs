@@ -6,7 +6,7 @@ mod debug_panel_state;
 // presentation은 planning worker panel state를 실제 TUI line 목록으로 바꾸는 표시 계층이다.
 // controller의 mutation logic과 분리해 rendering copy 변경이 use-case 호출 흐름에 번지지 않게 한다.
 mod presentation;
-// status_projection은 planning runtime snapshot을 TUI 상태 표시 model로 축약한다. shell presentation이 planning
+// status_projection은 planning runtime projection을 TUI 상태 표시 model로 축약한다. shell presentation이 planning
 // domain 구조를 직접 알지 않게 하는 adapter 경계다.
 pub(crate) mod status_projection;
 

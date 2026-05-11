@@ -3,7 +3,7 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::Pa
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeSnapshot,
+    PlanningApplicationProjection, PlanningRuntimeProjection,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
@@ -222,11 +222,11 @@ impl ParallelModeService {
     pub fn inspect_readiness(
         &self,
         workspace_dir: &str,
-        planning_snapshot: &PlanningRuntimeSnapshot,
+        planning_projection: &PlanningRuntimeProjection,
     ) -> ParallelModeReadinessSnapshot {
         self.inspect_readiness_with_planning_capability(
             workspace_dir,
-            inspect_planning(planning_snapshot),
+            inspect_planning(planning_projection),
         )
     }
 
@@ -450,11 +450,11 @@ impl ParallelModeService {
     뽑는다. 이미 lease 중이거나 distributor queue에 있는 task는 excluded로 제거해 같은 task가 중복
     agent에게 배정되지 않게 한다.
     */
-    #[tracing::instrument(level = "trace", skip(self, planning_snapshot))]
+    #[tracing::instrument(level = "trace", skip(self, planning_projection))]
     pub fn build_dispatch_plan(
         &self,
         workspace_dir: &str,
-        planning_snapshot: &PlanningRuntimeSnapshot,
+        planning_projection: &PlanningRuntimeProjection,
         requested_count: usize,
     ) -> Result<ParallelModeDispatchPlan, String> {
         let _ = reconcile_pool_board(
@@ -470,7 +470,7 @@ impl ParallelModeService {
             .count();
         let excluded_task_ids = parallel_dispatch_excluded_task_ids(&context);
         let failed_start_blockers = parallel_failed_start_dispatch_blockers(&context);
-        let (selection, candidates) = planning_snapshot
+        let (selection, candidates) = planning_projection
             .queue_projection()
             .map(|projection| {
                 let active_task_inputs = projection
@@ -531,7 +531,7 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
         event: ParallelModeRuntimeEvent,
-        planning_snapshot: &PlanningRuntimeSnapshot,
+        planning_projection: &PlanningRuntimeProjection,
         epoch_id: Option<u64>,
     ) -> Result<usize, String> {
         if event == ParallelModeRuntimeEvent::ModeDisabled {
@@ -540,18 +540,18 @@ impl ParallelModeService {
                 .cancel_runtime_dispatch_commands(workspace_dir, "parallel mode disabled")
                 .map_err(|error| error.to_string());
         }
-        let queue_head_signature = planning_snapshot
+        let queue_head_signature = planning_projection
             .queue_head_task_signature()
             .map(|signature| signature.to_string())
             .or_else(|| {
-                planning_snapshot
+                planning_projection
                     .queue_head()
                     .map(|task| task.task_id.clone())
             });
         let commands = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
             true,
             event,
-            planning_snapshot.has_actionable_queue_head(),
+            planning_projection.has_actionable_queue_head(),
             queue_head_signature,
             epoch_id,
             current_timestamp(),

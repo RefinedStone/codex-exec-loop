@@ -317,7 +317,7 @@ mod tests {
             !tui.parallel_mode_control_plane
                 .planning()
                 .runtime
-                .load_runtime_snapshot_or_invalid(&workspace_dir)
+                .load_runtime_projection_or_invalid(&workspace_dir)
                 .preview_status_label()
                 .is_empty()
         );

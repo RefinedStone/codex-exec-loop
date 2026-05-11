@@ -8,7 +8,7 @@ use crate::domain::planning::{
 };
 
 /*
- * 이 테스트 묶음은 draft promotion, runtime snapshot, proposal promotion, doctor, reset이
+ * 이 테스트 묶음은 draft promotion, runtime projection, proposal promotion, doctor, reset이
  * 공유하는 application validation boundary를 고정한다. domain validator를 직접 호출하지 않고
  * `PlanningWorkspaceFiles`를 통해 `PlanningValidationService`를 통과시키는 이유는 adapter가
  * operator에게 보여 주는 report code와 동일한 표면을 검증하기 위해서다.

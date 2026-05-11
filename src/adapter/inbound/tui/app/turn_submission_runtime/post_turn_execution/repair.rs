@@ -18,7 +18,7 @@ use super::logging::{PostTurnWorkerLogContext, post_turn_worker_event_detail};
 use super::{HiddenPlanningRepairOutcome, PostTurnEvaluationExecutor};
 
 // Post-turn evaluation 중 planning state가 깨졌을 때 사용자 prompt를 띄우기 전에 내부
-// worker로 복구해 보는 경로다. 실패해도 마지막 runtime snapshot을 보존해 caller가
+// worker로 복구해 보는 경로다. 실패해도 마지막 runtime projection을 보존해 caller가
 // auto-follow pause와 panel copy를 같은 planning state 기준으로 만들 수 있게 한다.
 impl PostTurnEvaluationExecutor {
     // `run_hidden_planning_repairs`는 invalid planning runtime을 자동으로 고치기 위한 제한된
@@ -28,7 +28,7 @@ impl PostTurnEvaluationExecutor {
         &mut self,
         // Thread id ties hidden repair attempts back to the visible conversation without logging prompt text.
         thread_id: &str,
-        // Runtime snapshot load와 worker prompt의 기준 workspace다. Post-turn, official
+        // Runtime projection load와 worker prompt의 기준 workspace다. Post-turn, official
         // completion, planning queue refresh repair가 모두 이 같은 filesystem boundary를 공유한다.
         workspace_directory: &str,
         // Repair가 어느 user/agent turn에서 파생됐는지 ledger와 prompt에 묶는 trace id다.
@@ -57,7 +57,7 @@ impl PostTurnEvaluationExecutor {
             &repair_outcome,
         );
         HiddenPlanningRepairOutcome {
-            runtime_snapshot: repair_outcome.runtime_snapshot,
+            runtime_projection: repair_outcome.runtime_projection,
             resolved: repair_outcome.resolved,
         }
     }
@@ -75,7 +75,7 @@ impl PostTurnEvaluationExecutor {
                     "repair",
                     "attempt_started",
                     Some("run_worker"),
-                    Some(&attempt.started_runtime_snapshot),
+                    Some(&attempt.started_runtime_projection),
                     [
                         ("attempt_number", json!(attempt.attempt_number)),
                         ("max_attempts", json!(attempt.max_attempts)),
@@ -102,7 +102,7 @@ impl PostTurnEvaluationExecutor {
                     self.record_planning_worker_failure(
                         PlanningWorkerStatus::RepairFailed,
                         detail,
-                        &attempt.started_runtime_snapshot,
+                        &attempt.started_runtime_projection,
                     );
                     event_log::emit_lazy("planning_worker_repair_attempt_failed", || {
                         post_turn_worker_event_detail(
@@ -110,7 +110,7 @@ impl PostTurnEvaluationExecutor {
                             "repair",
                             "attempt_failed",
                             Some("abort"),
-                            Some(&attempt.started_runtime_snapshot),
+                            Some(&attempt.started_runtime_projection),
                             [
                                 ("attempt_number", json!(attempt.attempt_number)),
                                 ("max_attempts", json!(attempt.max_attempts)),
@@ -140,7 +140,7 @@ impl PostTurnEvaluationExecutor {
                             } else {
                                 Some("resolved")
                             },
-                            Some(&outcome.runtime_snapshot),
+                            Some(&outcome.runtime_projection),
                             [
                                 ("attempt_number", json!(attempt.attempt_number)),
                                 (
@@ -167,7 +167,7 @@ impl PostTurnEvaluationExecutor {
                                 "repair",
                                 "completed",
                                 Some("resolved"),
-                                Some(&outcome.runtime_snapshot),
+                                Some(&outcome.runtime_projection),
                                 [("attempt_number", json!(attempt.attempt_number))],
                             )
                         });
@@ -179,7 +179,7 @@ impl PostTurnEvaluationExecutor {
                         self.record_planning_worker_failure(
                             PlanningWorkerStatus::RepairFailed,
                             &detail,
-                            &outcome.runtime_snapshot,
+                            &outcome.runtime_projection,
                         );
                         event_log::emit_lazy("planning_worker_repair_exhausted", || {
                             post_turn_worker_event_detail(
@@ -187,7 +187,7 @@ impl PostTurnEvaluationExecutor {
                                 "repair",
                                 "exhausted",
                                 Some("block_auto_follow"),
-                                Some(&outcome.runtime_snapshot),
+                                Some(&outcome.runtime_projection),
                                 [
                                     ("attempt_number", json!(attempt.attempt_number)),
                                     ("max_attempts", json!(attempt.max_attempts)),
@@ -209,7 +209,7 @@ impl PostTurnEvaluationExecutor {
                                 "repair",
                                 "retrying",
                                 Some("retry"),
-                                Some(&outcome.runtime_snapshot),
+                                Some(&outcome.runtime_projection),
                                 [
                                     ("attempt_number", json!(attempt.attempt_number)),
                                     (

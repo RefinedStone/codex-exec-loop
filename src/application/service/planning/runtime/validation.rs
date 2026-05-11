@@ -19,7 +19,7 @@ use crate::domain::planning::{
  *
  * task와 direction의 의미 관계 같은 cross-document invariant는 domain validator가 계속
  * 소유한다. 이 서비스가 application 규칙과 domain 규칙을 하나의 `PlanningValidationReport`
- * 안에 모으는 이유는 TUI, doctor, admin preview, runtime snapshot이 서로 다른 에러 형식을
+ * 안에 모으는 이유는 TUI, doctor, admin preview, runtime projection이 서로 다른 에러 형식을
  * 다시 매핑하지 않고 같은 issue code를 보여 주게 하기 위해서다.
  */
 #[derive(Default, Clone)]

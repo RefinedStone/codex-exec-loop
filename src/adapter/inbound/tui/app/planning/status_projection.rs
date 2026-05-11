@@ -1,6 +1,6 @@
 use super::super::{ConversationViewModel, NativeTuiApp};
 use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeRepairAttempt, PlanningRuntimeSnapshot,
+    PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeRepairAttempt,
     PlanningRuntimeSummaryLineRequest,
 };
 use crate::domain::text::compact_whitespace_detail;
@@ -15,7 +15,7 @@ const STATUS_SEGMENT_SEPARATOR: &str = "  |  ";
 // The surface projection is the presentation boundary for planning runtime
 // state. It deliberately separates persistent status, transient notices, and
 // queue framing so renderers can place each part without reinterpreting the
-// planning domain snapshot.
+// planning runtime projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlanningStatusSurfaceProjection {
     pub(crate) summary_line: Option<String>,
@@ -63,17 +63,20 @@ pub(crate) fn build_planning_status_surface_projection(
 // Resumed sessions need status text before the full inline shell has rendered.
 // Prefer the queue summary because it gives operators immediate handoff context;
 // fall back to the runtime detail only when no queue framing is available.
-pub(crate) fn build_resumed_session_status_text(snapshot: &PlanningRuntimeSnapshot) -> String {
+pub(crate) fn build_resumed_session_status_text(
+    runtime_projection: &PlanningRuntimeProjection,
+) -> String {
     let mut status_text = format!(
         "thread loaded / planning status: {}",
-        snapshot.preview_status_label()
+        runtime_projection.preview_status_label()
     );
-    if let Some(queue_summary) =
-        build_queue_framing_summary_from_snapshot(snapshot, RESUMED_SESSION_DETAIL_LIMIT)
-    {
+    if let Some(queue_summary) = build_queue_framing_summary_from_projection(
+        runtime_projection,
+        RESUMED_SESSION_DETAIL_LIMIT,
+    ) {
         status_text.push_str(" / queue summary: ");
         status_text.push_str(&queue_summary);
-    } else if let Some(detail) = snapshot.preview_detail() {
+    } else if let Some(detail) = runtime_projection.preview_detail() {
         status_text.push_str(" / planning detail: ");
         status_text.push_str(&compact_whitespace_detail(
             detail,
@@ -98,7 +101,7 @@ pub(crate) fn build_planning_summary_line(
         .planning()
         .runtime()
         .build_summary_line(PlanningRuntimeSummaryLineRequest {
-            snapshot: &conversation.planning_runtime_snapshot,
+            projection: &conversation.planning_runtime_projection,
             has_running_turn: conversation.has_running_turn(),
             is_repairing: conversation.planning_repair_state.is_some(),
             repair_failure_summary: conversation
@@ -132,23 +135,26 @@ pub(crate) fn build_queue_framing_lines(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
 ) -> Vec<Line<'static>> {
-    build_queue_framing_lines_from_snapshot(&conversation.planning_runtime_snapshot, max_detail_len)
+    build_queue_framing_lines_from_projection(
+        &conversation.planning_runtime_projection,
+        max_detail_len,
+    )
 }
 
-pub(crate) fn build_queue_framing_lines_from_snapshot(
-    snapshot: &PlanningRuntimeSnapshot,
+pub(crate) fn build_queue_framing_lines_from_projection(
+    runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
 ) -> Vec<Line<'static>> {
-    build_queue_framing_details_from_snapshot(snapshot, max_detail_len)
+    build_queue_framing_details_from_projection(runtime_projection, max_detail_len)
         .map(|details| queue_framing_lines_from_details(&details))
         .unwrap_or_default()
 }
 
-pub(crate) fn build_queue_framing_summary_from_snapshot(
-    snapshot: &PlanningRuntimeSnapshot,
+pub(crate) fn build_queue_framing_summary_from_projection(
+    runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
 ) -> Option<String> {
-    build_queue_framing_details_from_snapshot(snapshot, max_detail_len)
+    build_queue_framing_details_from_projection(runtime_projection, max_detail_len)
         .map(|details| queue_framing_summary_from_details(&details))
 }
 
@@ -229,15 +235,16 @@ fn merge_queue_framing_details(
 }
 
 // Prefer the structured application projection when it exists: it can distinguish
-// the active task from remaining active work and skipped tasks. Older snapshots
+// the active task from remaining active work and skipped tasks. Older projections
 // only have free-form summaries, so the fallback parser merges any available
 // fields with queue-head and proposal data.
-fn build_queue_framing_details_from_snapshot(
-    snapshot: &PlanningRuntimeSnapshot,
+fn build_queue_framing_details_from_projection(
+    runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
 ) -> Option<QueueFramingDetails> {
-    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
-    build_queue_framing_details_from_application_projection(&projection, max_detail_len)
+    let application_projection =
+        PlanningApplicationProjection::from_runtime_projection(runtime_projection);
+    build_queue_framing_details_from_application_projection(&application_projection, max_detail_len)
 }
 
 fn build_queue_framing_details_from_application_projection(
@@ -395,31 +402,31 @@ fn queue_framing_summary_from_parts(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_queue_framing_summary_from_snapshot, build_resumed_session_status_text,
+        build_queue_framing_summary_from_projection, build_resumed_session_status_text,
         compact_queue_framing_summary,
     };
-    use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::domain::planning::{
         PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
     };
     #[test]
     fn resumed_session_status_prefers_queue_summary_projection() {
-        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_details(
             "Planning Context".to_string(),
             "now: Ship resume status  |  next: Review overlays  |  proposed: none  |  blocked: none"
                 .to_string(),
             None,
             None,
         );
-        let status_text = build_resumed_session_status_text(&snapshot);
+        let status_text = build_resumed_session_status_text(&runtime_projection);
 
         assert!(status_text.contains("thread loaded / planning status: ready"));
         assert!(status_text.contains("queue summary: now: Ship resume status"));
         assert!(status_text.contains("next: Review overlays"));
     }
     #[test]
-    fn queue_framing_summary_skips_duplicate_next_when_snapshot_has_no_explicit_next_task() {
-        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+    fn queue_framing_summary_skips_duplicate_next_when_projection_has_no_explicit_next_task() {
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
             "queue ready".to_string(),
             None,
@@ -434,7 +441,7 @@ mod tests {
                 skipped_tasks: Vec::new(),
             },
         );
-        let summary = build_queue_framing_summary_from_snapshot(&snapshot, 96)
+        let summary = build_queue_framing_summary_from_projection(&runtime_projection, 96)
             .expect("queue framing summary should exist");
 
         assert!(summary.contains("now: Ship resume status"));
@@ -443,14 +450,14 @@ mod tests {
     }
     #[test]
     fn queue_framing_summary_merges_partial_queue_summary_with_existing_details() {
-        let snapshot = PlanningRuntimeSnapshot::ready_with_details(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_details(
             "Planning Context".to_string(),
             "now: Review overlays".to_string(),
             Some("Promote follow-up proposal".to_string()),
             None,
         )
         .with_workspace_present(true);
-        let summary = build_queue_framing_summary_from_snapshot(&snapshot, 96)
+        let summary = build_queue_framing_summary_from_projection(&runtime_projection, 96)
             .expect("queue framing summary should exist");
 
         assert_eq!(
@@ -460,7 +467,7 @@ mod tests {
     }
     #[test]
     fn queue_framing_summary_uses_structured_projection_for_proposals_and_blocked_work() {
-        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
             "legacy queue summary should not override structured projection".to_string(),
             Some("legacy proposal summary".to_string()),
@@ -486,7 +493,7 @@ mod tests {
                 ],
             },
         );
-        let summary = build_queue_framing_summary_from_snapshot(&snapshot, 96)
+        let summary = build_queue_framing_summary_from_projection(&runtime_projection, 96)
             .expect("queue framing summary should exist");
 
         assert_eq!(

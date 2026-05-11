@@ -1,12 +1,12 @@
 use super::super::planning::status_projection::build_resumed_session_status_text;
 use super::super::{AutoFollowControlEvent, ConversationState, NativeTuiApp, StartupState};
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::CoreInput;
 
 /*
 conversation controller는 shell startup, editable draft, resumed thread 사이의 workspace boundary를 소유한다.
 startup diagnostics가 shell cwd를 새로 알려 줄 수 있지만 resumed thread는 여전히 다른 workspace에 속할 수 있다.
-그래서 planning runtime snapshot refresh를 render code의 ad hoc 계산으로 흩뜨리지 않고 이 controller 경계에 모아 둔다.
+그래서 planning runtime projection refresh를 render code의 ad hoc 계산으로 흩뜨리지 않고 이 controller 경계에 모아 둔다.
 */
 impl NativeTuiApp {
     // local draft conversation만 shell workspace로 동기화한다. attached session은 기록된 cwd를 그대로 보존한다.
@@ -25,7 +25,7 @@ impl NativeTuiApp {
         self.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
             workspace_directory: workspace_directory.to_string(),
         });
-        self.refresh_ready_conversation_planning_runtime_snapshot();
+        self.refresh_ready_conversation_planning_runtime_projection();
     }
 
     // shell workspace는 startup diagnostics를 우선하고 없으면 process cwd를 쓴다. active thread workspace와 항상 같지는 않다.
@@ -49,39 +49,40 @@ impl NativeTuiApp {
         }
     }
 
-    // planning runtime은 application service로 읽고, IO/parse failure는 invalid snapshot으로 접어 presentation에 전달한다.
-    pub(crate) fn load_planning_runtime_snapshot(
+    // planning runtime은 application service로 읽고, IO/parse failure는 invalid projection으로 접어 presentation에 전달한다.
+    pub(crate) fn load_planning_runtime_projection(
         &self,
         workspace_directory: &str,
-    ) -> PlanningRuntimeSnapshot {
+    ) -> PlanningRuntimeProjection {
         self.application
             .planning()
             .runtime()
-            .load_runtime_snapshot_or_invalid(workspace_directory)
+            .load_runtime_projection_or_invalid(workspace_directory)
     }
 
     // active conversation이 현재 주장하는 workspace에 맞춰 planning status cache를 갱신한다.
-    pub(crate) fn refresh_ready_conversation_planning_runtime_snapshot(&mut self) {
+    pub(crate) fn refresh_ready_conversation_planning_runtime_projection(&mut self) {
         // state replacement 중 self를 계속 빌리지 않도록 선택된 path를 먼저 소유한다.
         let workspace_directory = self.planning_workspace_directory();
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
     }
 
-    // caller가 고른 workspace에 대해 Ready conversation이 가진 cached planning runtime snapshot을 교체한다.
-    pub(crate) fn refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+    // caller가 고른 workspace에 대해 Ready conversation이 가진 cached planning runtime projection을 교체한다.
+    pub(crate) fn refresh_ready_conversation_planning_runtime_projection_for_workspace(
         &mut self,
         workspace_directory: &str,
     ) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        // conversation이 snapshot cache를 소유해야 render path가 filesystem-backed planning service를 직접 호출하지 않는다.
-        let planning_runtime_snapshot = self.load_planning_runtime_snapshot(workspace_directory);
-        conversation.replace_planning_runtime_snapshot(planning_runtime_snapshot.clone());
+        // conversation이 runtime projection cache를 소유해야 render path가 filesystem-backed planning service를 직접 호출하지 않는다.
+        let planning_runtime_projection =
+            self.load_planning_runtime_projection(workspace_directory);
+        conversation.replace_planning_runtime_projection(planning_runtime_projection.clone());
         self.conversation_state = ConversationState::ready(conversation);
-        self.sync_core_planning_runtime_projection(planning_runtime_snapshot);
+        self.sync_core_planning_runtime_projection(planning_runtime_projection);
     }
 
     // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.
@@ -90,7 +91,7 @@ impl NativeTuiApp {
             return;
         };
         conversation.set_status_with_warnings(build_resumed_session_status_text(
-            &conversation.planning_runtime_snapshot,
+            &conversation.planning_runtime_projection,
         ));
         self.conversation_state = ConversationState::ready(conversation);
     }
@@ -99,10 +100,10 @@ impl NativeTuiApp {
 impl NativeTuiApp {
     pub(in crate::adapter::inbound::tui::app) fn sync_core_planning_runtime_projection(
         &mut self,
-        snapshot: PlanningRuntimeSnapshot,
+        projection: PlanningRuntimeProjection,
     ) {
         self.dispatch_core_input(CoreInput::PlanningRuntimeProjectionChanged(Box::new(
-            snapshot,
+            projection,
         )));
     }
 }

@@ -3,14 +3,14 @@ use serde_json::{Map, Value, json};
 use super::super::super::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationProvenance,
 };
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 
 pub(super) fn post_turn_event_detail<I>(
     context: PostTurnWorkerLogContext<'_>,
     operation: &str,
     phase: &str,
     decision: Option<&str>,
-    runtime: Option<&PlanningRuntimeSnapshot>,
+    runtime: Option<&PlanningRuntimeProjection>,
     fields: I,
 ) -> Value
 where
@@ -25,7 +25,10 @@ where
         decision,
     );
     if let Some(runtime) = runtime {
-        detail.insert("runtime".to_string(), runtime_snapshot_log_detail(runtime));
+        detail.insert(
+            "runtime".to_string(),
+            runtime_projection_log_detail(runtime),
+        );
     }
     extend_detail(&mut detail, fields);
     Value::Object(detail)
@@ -57,7 +60,7 @@ pub(super) fn post_turn_worker_event_detail<I>(
     operation: &str,
     phase: &str,
     decision: Option<&str>,
-    runtime: Option<&PlanningRuntimeSnapshot>,
+    runtime: Option<&PlanningRuntimeProjection>,
     fields: I,
 ) -> Value
 where
@@ -72,7 +75,10 @@ where
         decision,
     );
     if let Some(runtime) = runtime {
-        detail.insert("runtime".to_string(), runtime_snapshot_log_detail(runtime));
+        detail.insert(
+            "runtime".to_string(),
+            runtime_projection_log_detail(runtime),
+        );
     }
     extend_detail(&mut detail, fields);
     Value::Object(detail)
@@ -81,7 +87,7 @@ where
 pub(super) fn planning_worker_refresh_skipped_detail(
     context: PostTurnWorkerLogContext<'_>,
     reason: &str,
-    runtime: &PlanningRuntimeSnapshot,
+    runtime: &PlanningRuntimeProjection,
 ) -> Value {
     post_turn_event_detail(
         context,
@@ -123,8 +129,8 @@ where
     }
 }
 
-pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) -> Value {
-    let queue_head = snapshot.queue_head().map(|task| {
+pub(super) fn runtime_projection_log_detail(projection: &PlanningRuntimeProjection) -> Value {
+    let queue_head = projection.queue_head().map(|task| {
         json!({
             "task_id": task.task_id,
             "task_title": task.task_title,
@@ -134,16 +140,16 @@ pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) ->
         })
     });
     json!({
-        "workspace_present": snapshot.workspace_present(),
-        "workspace_status": format!("{:?}", snapshot.workspace_status()),
-        "queue_idle_policy": format!("{:?}", snapshot.queue_idle_policy()),
-        "queue_summary": snapshot.queue_summary(),
-        "proposal_summary": snapshot.proposal_summary(),
+        "workspace_present": projection.workspace_present(),
+        "workspace_status": format!("{:?}", projection.workspace_status()),
+        "queue_idle_policy": format!("{:?}", projection.queue_idle_policy()),
+        "queue_summary": projection.queue_summary(),
+        "proposal_summary": projection.proposal_summary(),
         "queue_head": queue_head,
-        "failure_reason": snapshot.failure_reason(),
-        "pause_reason": snapshot.auto_follow_pause_reason(),
-        "has_actionable_queue_head": snapshot.has_actionable_queue_head(),
-        "has_proposal_candidates": snapshot.has_proposal_candidates(),
+        "failure_reason": projection.failure_reason(),
+        "pause_reason": projection.auto_follow_pause_reason(),
+        "has_actionable_queue_head": projection.has_actionable_queue_head(),
+        "has_proposal_candidates": projection.has_proposal_candidates(),
     })
 }
 
@@ -182,7 +188,7 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
     use crate::adapter::inbound::tui::app::conversation_runtime::PostTurnContinuationAction;
-    use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::application::service::planning::PlanningRuntimeProjection;
 
     #[test]
     fn post_turn_worker_event_detail_keeps_standard_fields_stable() {
@@ -205,8 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_snapshot_log_detail_keeps_runtime_summary_shape_stable() {
-        let detail = runtime_snapshot_log_detail(&PlanningRuntimeSnapshot::invalid(
+    fn runtime_projection_log_detail_keeps_runtime_summary_shape_stable() {
+        let detail = runtime_projection_log_detail(&PlanningRuntimeProjection::invalid(
             "planning state unavailable",
         ));
 

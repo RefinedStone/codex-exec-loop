@@ -627,7 +627,7 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
     }
 
     /*
-    runtime projection snapshot 전체를 로드한다.
+    parallel runtime projection row 묶음을 일관된 snapshot으로 로드한다.
 
     slot lease, invalid lease, session detail, distributor queue, runtime event projection을 한 번에 읽는 port
     표면이다. 구체적인 table join/JSON decode는 runtime projection 모듈이 담당한다.

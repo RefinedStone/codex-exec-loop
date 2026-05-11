@@ -10,7 +10,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
 use crate::application::service::planning::runtime::prompt::{
-    PlanningPromptService, PlanningRuntimeSnapshot,
+    PlanningPromptService, PlanningRuntimeProjection,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::domain::planning::PriorityQueueService;
@@ -32,13 +32,13 @@ pub struct PlanningProposalPromotionRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
- * caller는 proposal이 실제 promote됐는지와 무관하게 fresh runtime snapshot을 받는다. worker orchestration은 service
+ * caller는 proposal이 실제 promote됐는지와 무관하게 fresh runtime projection을 받는다. worker orchestration은 service
  * 반환 뒤 같은 snapshot shape로 render/submit을 이어가고, promoted/title/notices는 authority 변경 여부를 설명하는
  * 보조 정보로만 사용하면 된다.
  */
 pub struct PlanningProposalPromotionOutcome {
     // no-op check 뒤 또는 commit 뒤 다시 읽은 snapshot이다. queue state가 authoritative store를 반영하게 한다.
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     // adapter가 아니라 application service가 만든 operator-facing message다.
     pub notices: Vec<String>,
     // 성공적인 promotion 때만 채워지며, wording을 안정화하기 위해 proposal projection의 title을 복사한다.
@@ -56,7 +56,7 @@ pub struct PlanningProposalPromotionOutcome {
 pub struct PlanningProposalPromotionService {
     // workspace file은 whole-workspace validation에 필요한 result-output content를 제공한다.
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
-    // runtime snapshot reload는 일반 worker turn에서도 쓰는 같은 prompt service에 위임한다.
+    // runtime projection reload는 일반 worker turn에서도 쓰는 같은 prompt service에 위임한다.
     planning_prompt_service: PlanningPromptService,
     // promotion write는 mutation 전 workspace가 valid할 때만 허용된다.
     planning_validation_service: PlanningValidationService,
@@ -93,7 +93,7 @@ impl PlanningProposalPromotionService {
 
     /*
      * executable queue가 비어 있을 때 proposed task 하나만 promote한다. 이 operation은 의도적으로 보수적이다.
-     * ready task가 이미 있거나 promotable proposal이 없으면 authority를 쓰지 않고 current runtime snapshot만 돌려준다.
+     * ready task가 이미 있거나 promotable proposal이 없으면 authority를 쓰지 않고 current runtime projection만 돌려준다.
      * 실제 promote할 때는 mutation 뒤 queue projection을 다시 만들고, load 시 관찰한 revision으로 commit한다.
      */
     pub fn promote_top_proposal_to_ready_if_needed(
@@ -116,9 +116,9 @@ impl PlanningProposalPromotionService {
             PlanningProposalPromotionDecision::Promote(candidate) => candidate,
             PlanningProposalPromotionDecision::Noop(_) => {
                 return Ok(PlanningProposalPromotionOutcome {
-                    runtime_snapshot: self
+                    runtime_projection: self
                         .planning_prompt_service
-                        .load_runtime_snapshot(request.workspace_directory)?,
+                        .load_runtime_projection(request.workspace_directory)?,
                     notices: Vec::new(),
                     promoted_task_title: None,
                     promoted: false,
@@ -161,7 +161,7 @@ impl PlanningProposalPromotionService {
                     queue_projection: &next_queue_projection,
                 },
             )? {
-            // 성공한 commit 뒤에는 refreshed runtime snapshot이 다음 source of truth가 된다.
+            // 성공한 commit 뒤에는 refreshed runtime projection이 다음 source of truth가 된다.
             PlanningTaskAuthorityCommitResult::Committed { .. } => {}
             PlanningTaskAuthorityCommitResult::Conflict {
                 observed_planning_revision,
@@ -174,9 +174,9 @@ impl PlanningProposalPromotionService {
         }
 
         // commit 뒤 reload해서 downstream worker policy가 promoted task를 일반 ready work로 보게 한다.
-        let runtime_snapshot = self
+        let runtime_projection = self
             .planning_prompt_service
-            .load_runtime_snapshot(request.workspace_directory)?;
+            .load_runtime_projection(request.workspace_directory)?;
 
         // notice는 projection title을 사용한다. queue가 operator/worker에게 보여 준 task 표현과 같은 wording을 유지한다.
         let promoted_task_title = promotion_candidate.task_title;
@@ -187,7 +187,7 @@ impl PlanningProposalPromotionService {
         ));
 
         Ok(PlanningProposalPromotionOutcome {
-            runtime_snapshot,
+            runtime_projection,
             notices,
             promoted_task_title: Some(promoted_task_title),
             promoted: true,

@@ -110,15 +110,15 @@ impl NativeTuiApp {
     }
 
     // Planning init chooses between existing-workspace controls and first-run
-    // setup from a fresh service snapshot, then refreshes the ready
-    // conversation snapshot so the inline shell reports the same authority.
+    // setup from a fresh runtime projection, then refreshes the ready
+    // conversation projection so the inline shell reports the same authority.
     pub(in crate::adapter::inbound::tui::app) fn show_planning_init_overlay(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        let snapshot = self.load_planning_runtime_snapshot(&workspace_directory);
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        let runtime_projection = self.load_planning_runtime_projection(&workspace_directory);
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
-        if snapshot.workspace_present() {
+        if runtime_projection.workspace_present() {
             self.planning_init_overlay_ui_state
                 .open_existing_workspace();
         } else {
@@ -128,7 +128,7 @@ impl NativeTuiApp {
         self.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: if snapshot.workspace_present() {
+            status_text: if runtime_projection.workspace_present() {
                 "operator surface: planning setup / existing workspace".to_string()
             } else {
                 "operator surface: planning setup / workspace: not initialized".to_string()
@@ -137,7 +137,7 @@ impl NativeTuiApp {
     }
     pub(in crate::adapter::inbound::tui::app) fn open_first_run_planning_simple_review(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
         self.planning_init_overlay_ui_state
@@ -205,7 +205,7 @@ impl NativeTuiApp {
                         "planning default bootstrap was blocked by validation: {first_error}"
                     );
                 }
-                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                     &workspace_directory,
                 );
                 Ok(())
@@ -263,7 +263,7 @@ impl NativeTuiApp {
             .workspace()
             .inspect_workspace(&workspace_directory);
 
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
         if report.planning_state() == PlanningDoctorState::Absent {
@@ -312,7 +312,7 @@ impl NativeTuiApp {
         {
             Ok(result) => {
                 self.pause_post_turn_continuation();
-                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                     &workspace_directory,
                 );
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -404,7 +404,7 @@ impl NativeTuiApp {
             .planning()
             .workspace()
             .promote_staged_draft(&workspace_directory, &draft_name);
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
         let status_text = match promote_result {

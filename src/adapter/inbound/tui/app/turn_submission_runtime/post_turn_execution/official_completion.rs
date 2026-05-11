@@ -2,12 +2,12 @@
 // when a worker finishes its assigned task.
 use crate::application::service::parallel_mode::ParallelModeOfficialCompletionReport;
 // Official completion refresh turns that report back into planning ledger state and
-// a runtime snapshot the TUI can use for follow-up gating.
+// a runtime projection the TUI can use for follow-up gating.
 use crate::application::service::planning::{
     PlanningPostTurnOfficialCompletionFinalizationRequest,
     PlanningPostTurnOfficialCompletionPreparation,
     PlanningPostTurnOfficialCompletionPreparationRequest,
-    PlanningPostTurnOfficialCompletionRepairBlockRequest, PlanningRuntimeSnapshot,
+    PlanningPostTurnOfficialCompletionRepairBlockRequest, PlanningRuntimeProjection,
 };
 use crate::diagnostics::event_log;
 use serde_json::json;
@@ -40,7 +40,7 @@ impl PostTurnEvaluationExecutor {
      */
     pub(super) fn begin_official_completion_if_needed(
         &mut self,
-        // Context supplies the latest committed agent reply and current runtime snapshot.
+        // Context supplies the latest committed agent reply and current runtime projection.
         context: &PostTurnEvaluationContext,
         // Request anchors the slot workspace and queued turn id used by the supervisor.
         request: &PostTurnEvaluationRequest,
@@ -70,7 +70,7 @@ impl PostTurnEvaluationExecutor {
             Ok(report) => report,
             Err(error) => {
                 // Capture failure means the supervisor could not create the
-                // official-completion report; the current runtime snapshot is
+                // official-completion report; the current runtime projection is
                 // still the most truthful state for the panel.
                 event_log::emit_lazy("official_completion_capture_failed", || {
                     post_turn_event_detail(
@@ -78,7 +78,7 @@ impl PostTurnEvaluationExecutor {
                         "official_completion",
                         "capture_failed",
                         Some("skip_official_refresh"),
-                        Some(&context.current_runtime_snapshot),
+                        Some(&context.current_runtime_projection),
                         [
                             ("error", json!(error.to_string())),
                             (
@@ -91,7 +91,7 @@ impl PostTurnEvaluationExecutor {
                 self.record_planning_worker_failure(
                     PlanningWorkerStatus::RefreshFailed,
                     &format!("parallel completion capture failed: {error}"),
-                    &context.current_runtime_snapshot,
+                    &context.current_runtime_projection,
                 );
                 None
             }
@@ -113,7 +113,7 @@ impl PostTurnEvaluationExecutor {
         // Planning workspace may differ from the slot workspace when supervisor state is external.
         planning_workspace_directory: &str,
         // Current snapshot is reused when the planning workspace is the active turn workspace.
-        current_snapshot: &PlanningRuntimeSnapshot,
+        current_projection: &PlanningRuntimeProjection,
         // Completion report is the official contract captured before this refresh.
         completion_report: &ParallelModeOfficialCompletionReport,
     ) -> OfficialCompletionRefreshOutcome {
@@ -129,7 +129,7 @@ impl PostTurnEvaluationExecutor {
                     latest_user_message: context.latest_user_message.as_deref(),
                     latest_main_reply: context.latest_main_reply.as_deref(),
                     previous_handoff_task: context.previous_handoff_task(),
-                    current_runtime_snapshot: current_snapshot,
+                    current_runtime_projection: current_projection,
                     contract: completion_report,
                 },
             );
@@ -146,7 +146,7 @@ impl PostTurnEvaluationExecutor {
                         "official_completion",
                         "planning_workspace_unavailable",
                         Some("block_slot_finalization"),
-                        Some(&blocked.failure_snapshot),
+                        Some(&blocked.failure_projection),
                         [
                             (
                                 "planning_workspace_directory",
@@ -159,10 +159,10 @@ impl PostTurnEvaluationExecutor {
                 self.record_planning_worker_failure(
                     PlanningWorkerStatus::RefreshFailed,
                     &blocked.failure_detail,
-                    &blocked.failure_snapshot,
+                    &blocked.failure_projection,
                 );
                 return OfficialCompletionRefreshOutcome {
-                    runtime_snapshot: blocked.failure_snapshot,
+                    runtime_projection: blocked.failure_projection,
                     runtime_notices: Vec::new(),
                 };
             }
@@ -184,7 +184,7 @@ impl PostTurnEvaluationExecutor {
                 "official_completion",
                 "refresh_started",
                 Some("run_worker"),
-                Some(prepared.planning_workspace_snapshot()),
+                Some(prepared.planning_workspace_projection()),
                 [
                     (
                         "planning_workspace_directory",
@@ -230,8 +230,8 @@ impl PostTurnEvaluationExecutor {
                 let detail = format!("official completion refresh failed: {error}");
                 self.parallel_mode_turn_service
                     .mark_official_completion_failed(&request.workspace_directory, &detail);
-                let failure_snapshot = prepared
-                    .planning_workspace_snapshot()
+                let failure_projection = prepared
+                    .planning_workspace_projection()
                     .with_auto_follow_pause_reason(detail.clone());
                 event_log::emit_lazy("official_completion_refresh_failed", || {
                     post_turn_event_detail(
@@ -239,7 +239,7 @@ impl PostTurnEvaluationExecutor {
                         "official_completion",
                         "worker_failed",
                         Some("block_slot_finalization"),
-                        Some(&failure_snapshot),
+                        Some(&failure_projection),
                         [
                             (
                                 "planning_workspace_directory",
@@ -253,10 +253,10 @@ impl PostTurnEvaluationExecutor {
                 self.record_planning_worker_failure(
                     PlanningWorkerStatus::RefreshFailed,
                     &detail,
-                    &failure_snapshot,
+                    &failure_projection,
                 );
                 return OfficialCompletionRefreshOutcome {
-                    runtime_snapshot: failure_snapshot,
+                    runtime_projection: failure_projection,
                     runtime_notices,
                 };
             }
@@ -265,14 +265,14 @@ impl PostTurnEvaluationExecutor {
         self.record_planning_worker_outcome(PlanningWorkerStatus::RefreshSucceeded, &outcome);
         // Outcome snapshot may still carry a repair request; keep it mutable so hidden
         // repair and repeated-head checks can refine the final decision snapshot.
-        let mut runtime_snapshot = outcome.runtime_snapshot.clone();
+        let mut runtime_projection = outcome.runtime_projection.clone();
         event_log::emit_lazy("official_completion_refresh_succeeded", || {
             post_turn_event_detail(
                 context.log_context(request),
                 "official_completion",
                 "worker_succeeded",
                 Some("apply_outcome"),
-                Some(&runtime_snapshot),
+                Some(&runtime_projection),
                 [
                     (
                         "planning_workspace_directory",
@@ -308,15 +308,15 @@ impl PostTurnEvaluationExecutor {
                 repair_request,
                 context.previous_handoff_task(),
             );
-            runtime_snapshot = if repair_outcome.resolved {
-                repair_outcome.runtime_snapshot
+            runtime_projection = if repair_outcome.resolved {
+                repair_outcome.runtime_projection
             } else {
                 let repair_block = self
                     .planning_feature
                     .worker()
                     .block_unresolved_post_turn_official_completion_repair(
                         PlanningPostTurnOfficialCompletionRepairBlockRequest {
-                            runtime_snapshot: &repair_outcome.runtime_snapshot,
+                            runtime_projection: &repair_outcome.runtime_projection,
                         },
                     );
                 event_log::emit_lazy("official_completion_repair_unresolved", || {
@@ -325,7 +325,7 @@ impl PostTurnEvaluationExecutor {
                         "repair",
                         "unresolved_after_official_completion",
                         Some("block_slot_finalization"),
-                        Some(&repair_outcome.runtime_snapshot),
+                        Some(&repair_outcome.runtime_projection),
                         [
                             (
                                 "planning_workspace_directory",
@@ -340,7 +340,7 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                repair_block.runtime_snapshot
+                repair_block.runtime_projection
             };
         }
 
@@ -351,12 +351,12 @@ impl PostTurnEvaluationExecutor {
                 PlanningPostTurnOfficialCompletionFinalizationRequest {
                     planning_workspace_directory,
                     previous_handoff_task: context.previous_handoff_task(),
-                    previous_runtime_snapshot: prepared.planning_workspace_snapshot(),
-                    refreshed_runtime_snapshot: &runtime_snapshot,
+                    previous_runtime_projection: prepared.planning_workspace_projection(),
+                    refreshed_runtime_projection: &runtime_projection,
                     worker_summary: outcome.worker_summary.as_deref(),
                 },
             );
-        runtime_snapshot = finalization.runtime_snapshot;
+        runtime_projection = finalization.runtime_projection;
         if let Some(detail) = finalization.repeated_queue_head_detail.as_ref() {
             event_log::emit_lazy("official_completion_paused_repeated_queue_head", || {
                 post_turn_event_detail(
@@ -364,7 +364,7 @@ impl PostTurnEvaluationExecutor {
                     "official_completion",
                     "repeated_queue_head_guard",
                     Some("pause_auto_follow"),
-                    Some(&runtime_snapshot),
+                    Some(&runtime_projection),
                     [
                         (
                             "planning_workspace_directory",
@@ -385,7 +385,7 @@ impl PostTurnEvaluationExecutor {
                     "official_completion",
                     "finalization_blocked",
                     Some("block_slot_finalization"),
-                    Some(&runtime_snapshot),
+                    Some(&runtime_projection),
                     [
                         (
                             "planning_workspace_directory",
@@ -399,10 +399,10 @@ impl PostTurnEvaluationExecutor {
             self.record_planning_worker_failure(
                 PlanningWorkerStatus::RefreshFailed,
                 failure_detail,
-                &runtime_snapshot,
+                &runtime_projection,
             );
             return OfficialCompletionRefreshOutcome {
-                runtime_snapshot,
+                runtime_projection,
                 runtime_notices,
             };
         }
@@ -425,7 +425,7 @@ impl PostTurnEvaluationExecutor {
                 "official_completion",
                 "finalized",
                 Some("finalize_slot"),
-                Some(&runtime_snapshot),
+                Some(&runtime_projection),
                 [
                     (
                         "planning_workspace_directory",
@@ -442,7 +442,7 @@ impl PostTurnEvaluationExecutor {
         });
 
         OfficialCompletionRefreshOutcome {
-            runtime_snapshot,
+            runtime_projection,
             runtime_notices,
         }
     }
