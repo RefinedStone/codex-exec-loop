@@ -55,3 +55,125 @@ impl PlanningAdminFacadeService {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::service::planning::PlanningServices;
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn reset_workspace_reports_target_paths_and_refreshed_doctor() {
+        let fixture = TestAdminFixture::new("admin-reset-seeded");
+        fixture
+            .facade
+            .ensure_default_authority()
+            .expect("default authority should seed files before reset");
+
+        let outcome = fixture
+            .facade
+            .reset_workspace(PlanningResetTarget::All)
+            .expect("full reset should succeed for seeded workspace");
+
+        assert_eq!(outcome.target, "all");
+        assert_eq!(
+            outcome.rewritten_paths,
+            vec![
+                ".codex-exec-loop/planning/result-output.md",
+                ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            ]
+        );
+        assert_eq!(
+            outcome.removed_paths,
+            vec![
+                ".codex-exec-loop/planning/directions",
+                ".codex-exec-loop/planning/prompts",
+                ".codex-exec-loop/planning/drafts",
+                ".codex-exec-loop/planning/rejected",
+            ]
+        );
+        assert_eq!(outcome.doctor.planning_state, "ready_without_task");
+        assert_eq!(
+            outcome.doctor.health.as_deref(),
+            Some("planning workspace is healthy")
+        );
+    }
+
+    #[test]
+    fn reset_workspace_propagates_uninitialized_workspace_error() {
+        let fixture = TestAdminFixture::new("admin-reset-empty");
+
+        let error = fixture
+            .facade
+            .reset_workspace(PlanningResetTarget::Queue)
+            .expect_err("reset should not bootstrap an empty workspace implicitly");
+
+        assert_eq!(
+            error.to_string(),
+            "planning workspace is unavailable; initialize planning first"
+        );
+    }
+
+    struct TestAdminFixture {
+        _workspace: TempPlanningWorkspace,
+        facade: PlanningAdminFacadeService,
+    }
+
+    impl TestAdminFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let authority_port = Arc::new(NoopPlanningAuthorityPort::default());
+            let task_repository_port = Arc::new(NoopPlanningTaskRepositoryPort);
+            let planning = PlanningServices::from_ports(
+                workspace_port.clone(),
+                authority_port.clone(),
+                task_repository_port.clone(),
+                Arc::new(NoopPlanningWorkerPort),
+            );
+            let facade = PlanningAdminFacadeService::from_planning_with_authority(
+                workspace.path.clone(),
+                planning,
+                workspace_port,
+                authority_port,
+                task_repository_port,
+            );
+            Self {
+                _workspace: workspace,
+                facade,
+            }
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}

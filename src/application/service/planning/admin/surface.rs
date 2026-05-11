@@ -388,3 +388,74 @@ pub struct PlanningAdminResetOutcome {
     pub removed_paths: Vec<String>,
     pub doctor: PlanningAdminDoctorSummary,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PlanningAdminDraftKind, PlanningAdminFileKey};
+
+    #[test]
+    fn draft_kind_contracts_keep_labels_routes_and_slugs_stable() {
+        let cases = [
+            (
+                PlanningAdminDraftKind::FullPlanning,
+                "full planning",
+                "Full Planning Draft",
+                "/admin",
+                "full_planning",
+            ),
+            (
+                PlanningAdminDraftKind::QueueIdlePrompt,
+                "queue-idle prompt",
+                "Queue-Idle Prompt Draft",
+                "/admin/directions",
+                "queue_idle_prompt",
+            ),
+            (
+                PlanningAdminDraftKind::DirectionDetail,
+                "direction detail",
+                "Direction Detail Draft",
+                "/admin/directions",
+                "direction_detail",
+            ),
+        ];
+
+        for (kind, label, heading, return_path, slug) in cases {
+            assert_eq!(kind.label(), label);
+            assert_eq!(kind.editor_heading(), heading);
+            assert_eq!(kind.return_path(), return_path);
+            assert_eq!(kind.slug(), slug);
+            assert_eq!(kind.to_string(), slug);
+        }
+    }
+
+    #[test]
+    fn file_key_contracts_keep_editor_labels_languages_and_slugs_stable() {
+        let cases = [
+            (
+                PlanningAdminFileKey::ResultOutput,
+                "Result Output",
+                "markdown",
+                "result_output",
+            ),
+            (
+                PlanningAdminFileKey::QueueIdlePrompt,
+                "Queue-Idle Prompt",
+                "markdown",
+                "queue_idle_prompt",
+            ),
+            (
+                PlanningAdminFileKey::DirectionDetail,
+                "Direction Detail",
+                "markdown",
+                "direction_detail",
+            ),
+        ];
+
+        for (key, label, language, slug) in cases {
+            assert_eq!(key.label(), label);
+            assert_eq!(key.editor_language(), language);
+            assert_eq!(key.slug(), slug);
+            assert_eq!(key.to_string(), slug);
+        }
+    }
+}
