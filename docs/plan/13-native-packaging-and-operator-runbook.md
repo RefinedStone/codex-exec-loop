@@ -131,7 +131,7 @@ Useful env vars:
 After a platform-facing change, record the validation result instead of rewriting the matrix by hand:
 
 ```bash
-./scripts/capture_native_validation.sh \
+bash scripts/capture_native_validation.sh \
   --frontend inline \
   --check-profile terminal-baseline \
   --terminal "iTerm2 3.5" \
@@ -142,7 +142,7 @@ After a platform-facing change, record the validation result instead of rewritin
 If the change touches Phase 1 operator-surface behavior such as status language, resume context, queue or automation explanation, or `akra` / `:` lifecycle commands, use:
 
 ```bash
-./scripts/capture_native_validation.sh \
+bash scripts/capture_native_validation.sh \
   --frontend inline \
   --check-profile phase1-operator-surface \
   --terminal "iTerm2 3.5" \
@@ -153,13 +153,13 @@ If the change touches Phase 1 operator-surface behavior such as status language,
 Coverage summary:
 
 ```bash
-./scripts/summarize_native_validation.sh
+bash scripts/summarize_native_validation.sh
 ```
 
 Markdown summary:
 
 ```bash
-./scripts/summarize_native_validation.sh --format markdown
+bash scripts/summarize_native_validation.sh --format markdown
 ```
 
 ## Release Notes

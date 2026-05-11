@@ -105,6 +105,16 @@ function Get-ValidationChecks {
                 "- lifecycle command parity"
             )
         }
+        "prompt-input-delay-pty" {
+            return @(
+                "- launch with detached PTY backend"
+                "- prompt input echoes without visible delay"
+                "- multiline input stays editable before submit"
+                "- submitted prompt transitions into streaming output"
+                "- completion preserves prompt history and cursor recovery"
+                "- interrupt and recovery remain responsive after delayed input checks"
+            )
+        }
         default {
             throw "Unsupported -CheckProfile '$SelectedProfile'."
         }

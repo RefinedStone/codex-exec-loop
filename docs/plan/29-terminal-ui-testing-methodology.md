@@ -181,6 +181,20 @@ Capture expectation:
   practical
 - record terminal name, multiplexer, OS, render mode, and viewport mode
 
+When the bug class is prompt echo latency or buffered input delay, record the focused
+`prompt-input-delay-pty` profile and summarize it separately:
+
+```bash
+bash scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile prompt-input-delay-pty \
+  --terminal "tmux 3.4 detached PTY" \
+  --result pass \
+  --output-dir docs/validation
+
+bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty
+```
+
 ## Test File Ownership
 
 Keep tests close to the implementation boundary they protect.

@@ -34,7 +34,7 @@ cargo run
 Record a validation row:
 
 ```bash
-./scripts/capture_native_validation.sh \
+bash scripts/capture_native_validation.sh \
   --frontend inline \
   --check-profile terminal-baseline \
   --terminal "iTerm2 3.5" \
@@ -45,7 +45,7 @@ Record a validation row:
 Summarize recorded coverage:
 
 ```bash
-./scripts/summarize_native_validation.sh
+bash scripts/summarize_native_validation.sh
 ```
 
 ## Minimum Matrix
@@ -105,7 +105,7 @@ Use this profile when a change touches:
 Record these rows with:
 
 ```bash
-./scripts/capture_native_validation.sh \
+bash scripts/capture_native_validation.sh \
   --frontend inline \
   --check-profile phase1-operator-surface \
   --terminal "iTerm2 3.5" \
@@ -130,6 +130,56 @@ Run the full `terminal-baseline` checklist plus these additional checks:
    - exercise the relevant external command path with `akra doctor`, `akra init`, and the applicable `akra reset <target>`
    - exercise the matching in-shell path with `:doctor`, `:init`, and the matching `:reset <target>`
    - confirm both command surfaces report the same lifecycle state and safety expectation
+
+### `prompt-input-delay-pty`
+
+Use this profile when prompt echo latency or input buffering changes, especially when the TUI runs
+inside a PTY bridge, multiplexer, or integrated terminal.
+
+Record these rows with:
+
+```bash
+bash scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile prompt-input-delay-pty \
+  --terminal "tmux 3.4 detached PTY" \
+  --result pass \
+  --output-dir docs/validation
+```
+
+Summarize this profile separately from the broad terminal baseline:
+
+```bash
+bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty
+```
+
+Required rows:
+
+| OS | Terminal | Shell | Frontend | Priority |
+| --- | --- | --- | --- | --- |
+| Linux | direct terminal | bash | inline | required |
+| Linux | tmux detached PTY | bash | inline | required |
+| Linux | Zellij | bash | inline | required |
+| Windows | Windows Terminal | PowerShell | inline | required |
+| Windows | Windows Terminal | WSL bash | inline | required |
+
+Optional rows:
+
+| OS | Terminal | Shell | Frontend | Priority |
+| --- | --- | --- | --- | --- |
+| macOS | Terminal.app | zsh | inline | optional |
+| macOS | iTerm2 | zsh | inline | optional |
+| Windows | JetBrains IDE terminal | WSL bash | inline | optional |
+| Linux | VS Code integrated terminal | bash | inline | optional |
+
+Run these checks once per required row:
+
+1. Launch with the detached PTY backend or the terminal bridge that reproduces the latency-sensitive path.
+2. Confirm prompt input echoes without visible delay during startup-pending state.
+3. Confirm `Ctrl+u`, `Ctrl+w`, cursor movement, and multiline input stay responsive before submit.
+4. Submit a prompt and confirm the shell transitions into streaming output without losing buffered input.
+5. Confirm completion preserves prompt history and restores the cursor.
+6. Interrupt or exit after delayed input checks and confirm terminal recovery remains responsive.
 
 ## Record Format
 

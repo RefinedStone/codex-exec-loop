@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/capture_native_validation.sh --frontend <inline|alternate> [options]
+  bash scripts/capture_native_validation.sh --frontend <inline|alternate> [options]
 
 Options:
   --frontend <value>   Validation row frontend label. Required.

@@ -22,7 +22,7 @@ terminal checklist.
 - keep one file per exercised terminal/frontend row, or one compact table for related production
   validation slices
 - preserve the emitted `check_profile` and checklist so rows stay comparable
-- use `./scripts/summarize_native_validation.sh` before calling the matrix complete
+- use `bash scripts/summarize_native_validation.sh` before calling the matrix complete
 
 ## Filename Shape
 
@@ -33,7 +33,7 @@ YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>.txt
 ## Helper Usage
 
 ```bash
-./scripts/capture_native_validation.sh \
+bash scripts/capture_native_validation.sh \
   --frontend inline \
   --check-profile terminal-baseline \
   --terminal "iTerm2 3.5" \
@@ -44,10 +44,21 @@ YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>.txt
 Phase 1 operator-surface validation:
 
 ```bash
-./scripts/capture_native_validation.sh \
+bash scripts/capture_native_validation.sh \
   --frontend inline \
   --check-profile phase1-operator-surface \
   --terminal "iTerm2 3.5" \
+  --result pass \
+  --output-dir docs/validation
+```
+
+Prompt input delay validation:
+
+```bash
+bash scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile prompt-input-delay-pty \
+  --terminal "tmux 3.4 detached PTY" \
   --result pass \
   --output-dir docs/validation
 ```
@@ -66,11 +77,17 @@ Windows PowerShell:
 Coverage summary:
 
 ```bash
-./scripts/summarize_native_validation.sh
+bash scripts/summarize_native_validation.sh
 ```
 
 Markdown summary:
 
 ```bash
-./scripts/summarize_native_validation.sh --format markdown
+bash scripts/summarize_native_validation.sh --format markdown
+```
+
+Prompt input delay summary:
+
+```bash
+bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty
 ```
