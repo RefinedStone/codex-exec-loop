@@ -167,12 +167,25 @@ impl PlanningInitOverlayUiState {
         service layer가 draft directory와 staged file 목록을 만들지만, UI state는 renderer가
         필요한 summary만 보관한다. 실제 promote/edit 작업은 controller가 service API로 다시 위임한다.
         */
+        self.open_simple_review_summary(
+            staged.draft_name,
+            staged.staged_file_count,
+            staged.validation_report,
+        );
+    }
+
+    pub fn open_simple_review_summary(
+        &mut self,
+        draft_name: String,
+        staged_file_count: usize,
+        validation_report: PlanningValidationReport,
+    ) {
         self.mode_selection = PlanningInitModeSelection::Simple;
         self.step = PlanningInitOverlayStep::SimpleReview;
         self.simple_review = Some(PlanningInitSimpleReviewState {
-            draft_name: staged.draft_name,
-            staged_file_count: staged.staged_file_count,
-            validation_report: staged.validation_report,
+            draft_name,
+            staged_file_count,
+            validation_report,
         });
     }
 

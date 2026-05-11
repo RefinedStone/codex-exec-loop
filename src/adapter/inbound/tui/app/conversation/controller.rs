@@ -85,6 +85,19 @@ impl NativeTuiApp {
         self.sync_core_planning_runtime_projection(planning_runtime_projection);
     }
 
+    // core effect completions already passed through the headless app state, so this
+    // path only refreshes the TUI-owned projection cache used by render/reducer code.
+    pub(crate) fn replace_ready_conversation_planning_runtime_projection(
+        &mut self,
+        planning_runtime_projection: PlanningRuntimeProjection,
+    ) {
+        let Some(mut conversation) = self.take_ready_conversation_state() else {
+            return;
+        };
+        conversation.replace_planning_runtime_projection(planning_runtime_projection);
+        self.conversation_state = ConversationState::ready(conversation);
+    }
+
     // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.
     pub(crate) fn surface_resumed_session_planning_context(&mut self) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {

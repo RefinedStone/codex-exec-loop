@@ -40,21 +40,25 @@ state owner는 먼저 분류한 뒤 이동한다.
 전체 상태: `partial`
 
 기존 R-slice 상당수는 완료됐지만, core runtime boundary 기준으로 TUI가 아직
-소유한 orchestration과 duplicate projection cache가 남아 있다. 완료 판정은 아래
-항목이 사라진 뒤에만 가능하다.
+소유한 duplicate projection cache가 남아 있다. 완료 판정은 아래 항목이 사라진
+뒤에만 가능하다.
+
+완료된 이동: manual prompt intake/bootstrap은
+`AppCommand::PrepareManualPrompt` -> `CoreEffect::PrepareManualPrompt` ->
+application `ManualPromptPreparationService` 경로로 들어간다. TUI turn submission
+path는 prompt buffer, stale completion guard, bootstrap review overlay 적용만 맡는다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| manual prompt intake/bootstrap | planning intake와 first-use planning scaffold 실행을 TUI turn submission path가 직접 호출한다. |
 | planning/parallel projection consumption | core `AppSnapshot`에 projection은 있지만 TUI가 여전히 별도 cache를 primary source처럼 갱신한다. |
 | runtime vocabulary | 다음 slice도 필요한 Command/Input/Effect/Completion/Event/Snapshot을 쓰되, 기준 문서 의미와 domain language에 맞춰 같은 개념에 여러 이름을 붙이지 않아야 한다. |
 
 ## 실행 Backlog
 
-| Slice | 목표 |
-| --- | --- |
-| CORE-MANUAL-INTAKE-01 | manual prompt intake/bootstrap을 core command/effect로 이동하고 TUI는 prompt buffer와 overlay만 소유한다. |
-| CORE-PROJECTION-02 | planning/parallel rendering source를 `AppSnapshot` projection으로 수렴하고 TUI duplicate cache를 줄인다. |
+| Slice | 상태 | 목표 |
+| --- | --- | --- |
+| CORE-MANUAL-INTAKE-01 | done | manual prompt intake/bootstrap을 core command/effect로 이동하고 TUI는 prompt buffer와 overlay만 소유한다. |
+| CORE-PROJECTION-02 | next | planning/parallel rendering source를 `AppSnapshot` projection으로 수렴하고 TUI duplicate cache를 줄인다. |
 
 ## 문서 운영 규칙
 

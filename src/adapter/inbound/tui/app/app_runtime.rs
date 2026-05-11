@@ -219,7 +219,7 @@ impl NativeTuiApp {
             startup_service.clone(),
             session_service.clone(),
             conversation_service.clone(),
-            planning_feature.runtime.clone(),
+            planning_feature.clone(),
             parallel_turns.clone(),
             PostTurnEvaluationService::new(planning_feature.clone(), parallel_turns.clone()),
             core_input_sender,
@@ -373,6 +373,9 @@ impl NativeTuiApp {
                 self.dispatch_conversation_runtime(
                     ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(stream_snapshot)),
                 );
+            }
+            AppEvent::ManualPromptPrepared(result) => {
+                self.apply_manual_prompt_preparation(*result);
             }
             AppEvent::PostTurnEvaluationCompleted(execution) => {
                 self.apply_post_turn_evaluation_execution(*execution);

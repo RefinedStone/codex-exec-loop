@@ -4,8 +4,11 @@ use std::thread;
 use anyhow::Result;
 
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::manual_prompt_preparation::{
+    ManualPromptPreparationRequest, ManualPromptPreparationService,
+};
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::PlanningRuntimeUseCases;
+use crate::application::service::planning::{PlanningRuntimeUseCases, PlanningServices};
 use crate::application::service::post_turn_evaluation::{
     POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService,
 };
@@ -25,6 +28,7 @@ pub struct CoreEffectRunner {
     conversation_service: ConversationService,
     planning_runtime: PlanningRuntimeUseCases,
     parallel_mode_turn_service: ParallelModeTurnService,
+    manual_prompt_preparation_service: ManualPromptPreparationService,
     post_turn_evaluation_service: PostTurnEvaluationService,
     input_sender: Sender<CoreInput>,
 }
@@ -34,7 +38,7 @@ impl CoreEffectRunner {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
-        planning_runtime: PlanningRuntimeUseCases,
+        planning_feature: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
         post_turn_evaluation_service: PostTurnEvaluationService,
         input_sender: Sender<CoreInput>,
@@ -43,8 +47,11 @@ impl CoreEffectRunner {
             startup_service,
             session_service,
             conversation_service,
-            planning_runtime,
+            planning_runtime: planning_feature.runtime.clone(),
             parallel_mode_turn_service,
+            manual_prompt_preparation_service: ManualPromptPreparationService::new(
+                planning_feature,
+            ),
             post_turn_evaluation_service,
             input_sender,
         }
@@ -67,6 +74,9 @@ impl CoreEffectRunner {
                 workspace_directory,
             } => self.spawn_session_catalog_load(limit, workspace_directory),
             CoreEffect::LoadConversation { thread_id } => self.spawn_conversation_load(thread_id),
+            CoreEffect::PrepareManualPrompt(request) => {
+                self.spawn_manual_prompt_preparation(*request)
+            }
             CoreEffect::SubmitTurn(request) => self.spawn_turn_submission(request),
             CoreEffect::EvaluatePostTurn(request) => self.spawn_post_turn_evaluation(*request),
         }
@@ -102,6 +112,17 @@ impl CoreEffectRunner {
             self.parallel_mode_turn_service.clone(),
             self.input_sender.clone(),
         );
+    }
+
+    pub fn spawn_manual_prompt_preparation(&self, request: ManualPromptPreparationRequest) {
+        let service = self.manual_prompt_preparation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = service.prepare(request);
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ManualPromptPrepared(Box::new(result)),
+            ));
+        });
     }
 
     pub fn spawn_post_turn_evaluation(

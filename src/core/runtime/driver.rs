@@ -80,6 +80,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+    use crate::application::service::manual_prompt_preparation::ManualPromptPreparationRequest;
     use crate::core::app::{
         AppEvent, CoreEffectCompletion, CorePromptOrigin, SessionCatalogReadySnapshot,
         SessionCatalogSnapshot, StartupAttachmentSnapshot, StartupDiagnosticSnapshot,
@@ -144,6 +145,29 @@ mod tests {
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::SubmitTurn(request)]
+        );
+    }
+
+    #[test]
+    fn prepare_manual_prompt_command_runs_prepare_effect_without_snapshot_change() {
+        let (_tx, rx) = mpsc::channel();
+        let effects = RecordingEffectExecutor::default();
+        let mut runtime = CoreRuntime::new(effects.clone(), rx);
+        let request = ManualPromptPreparationRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            raw_prompt: "ship it".to_string(),
+            parent_thread_id: Some("thread-1".to_string()),
+            parent_turn_id: None,
+        };
+
+        let outcome =
+            runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(request.clone())));
+
+        assert!(outcome.events.is_empty());
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            effects.recorded_effects(),
+            vec![CoreEffect::PrepareManualPrompt(Box::new(request))]
         );
     }
 

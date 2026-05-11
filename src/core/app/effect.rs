@@ -1,4 +1,5 @@
 use super::TurnSubmissionRequest;
+use crate::application::service::manual_prompt_preparation::ManualPromptPreparationRequest;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +12,7 @@ pub enum CoreEffect {
     LoadConversation {
         thread_id: String,
     },
+    PrepareManualPrompt(Box<ManualPromptPreparationRequest>),
     SubmitTurn(TurnSubmissionRequest),
     EvaluatePostTurn(Box<PostTurnEvaluationRequest>),
 }

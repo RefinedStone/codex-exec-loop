@@ -274,6 +274,23 @@ fn tui_conversation_turn_events_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_manual_prompt_preparation_enters_through_core_runtime() {
+    // TUI owns editable prompt text and overlay state, while manual planning bootstrap and intake
+    // execution must run as a core effect backed by application services.
+    assert_no_forbidden_references_in_paths(
+        "TUI manual prompt preparation must enter core instead of calling planning bootstrap/intake directly",
+        &["src/adapter/inbound/tui/app/turn_submission_runtime.rs"],
+        &[
+            "ManualPromptIntakeRequest",
+            ".prepare_manual_prompt_intake(",
+            "fn ensure_manual_planning_workspace",
+            ".stage_simple_mode_draft(",
+            ".promote_staged_draft(",
+        ],
+    );
+}
+
+#[test]
 fn inbound_adapters_only_wire_outbound_adapters_in_explicit_composition_roots() {
     // Static guard: R9 moved production wiring to crate::composition, so inbound adapter imports of outbound
     // implementations are now direct boundary regressions. Behavior smoke lives in production_composition tests.

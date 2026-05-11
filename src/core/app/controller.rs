@@ -53,6 +53,11 @@ impl CoreController {
                 self.state.mark_conversation_loading();
                 self.conversation_changed_outcome(vec![CoreEffect::LoadConversation { thread_id }])
             }
+            CoreInput::Command(AppCommand::PrepareManualPrompt(request)) => CoreDispatchOutcome {
+                events: Vec::new(),
+                effects: vec![CoreEffect::PrepareManualPrompt(request)],
+                snapshot: self.snapshot(),
+            },
             CoreInput::Command(AppCommand::SubmitTurn(request)) => CoreDispatchOutcome {
                 events: Vec::new(),
                 effects: vec![CoreEffect::SubmitTurn(request)],
@@ -75,6 +80,22 @@ impl CoreController {
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
                 self.conversation_changed_outcome(Vec::new())
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
+                let changed = self.state.apply_planning_runtime_projection(Box::new(
+                    result.runtime_projection().clone(),
+                ));
+                let snapshot = self.snapshot();
+                let mut events = Vec::new();
+                if changed {
+                    events.push(AppEvent::SnapshotChanged(snapshot.clone()));
+                }
+                events.push(AppEvent::ManualPromptPrepared(result));
+                CoreDispatchOutcome {
+                    events,
+                    effects: Vec::new(),
+                    snapshot,
+                }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
                 execution,
@@ -196,6 +217,9 @@ impl Default for CoreController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::service::manual_prompt_preparation::{
+        ManualPromptPreparationRequest, ManualPromptPreparationResult,
+    };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
         ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
@@ -360,6 +384,28 @@ mod tests {
 
         assert!(outcome.events.is_empty());
         assert_eq!(outcome.effects, vec![CoreEffect::SubmitTurn(request)]);
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+    }
+
+    #[test]
+    fn prepare_manual_prompt_returns_core_effect_without_state_revision() {
+        let mut controller = CoreController::new();
+        let request = ManualPromptPreparationRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            raw_prompt: "ship it".to_string(),
+            parent_thread_id: Some("thread-1".to_string()),
+            parent_turn_id: Some("turn-1".to_string()),
+        };
+
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(request.clone()),
+        )));
+
+        assert!(outcome.events.is_empty());
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::PrepareManualPrompt(Box::new(request))]
+        );
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
     }
 
@@ -596,6 +642,32 @@ mod tests {
         assert_eq!(
             outcome.events,
             vec![AppEvent::PostTurnEvaluationCompleted(execution)]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn manual_prompt_preparation_completion_updates_projection_and_passes_through() {
+        let mut controller = CoreController::new();
+        let result = Box::new(ManualPromptPreparationResult::Rejected {
+            transcript_text: "ship it".to_string(),
+            runtime_projection: Box::new(PlanningRuntimeProjection::invalid(
+                "planning validation failed",
+            )),
+            reason: "blocked".to_string(),
+        });
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(result.clone()),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            outcome.events,
+            vec![
+                AppEvent::SnapshotChanged(outcome.snapshot.clone()),
+                AppEvent::ManualPromptPrepared(result)
+            ]
         );
         assert!(outcome.effects.is_empty());
     }

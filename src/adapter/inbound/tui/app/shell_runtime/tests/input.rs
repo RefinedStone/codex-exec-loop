@@ -174,6 +174,16 @@ fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finis
         KeyCode::Enter,
         KeyModifiers::empty(),
     )));
+    for _ in 0..250 {
+        runtime.poll_background_messages();
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        if conversation.input_buffer.is_empty() && conversation.status_text == "starting turn" {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
