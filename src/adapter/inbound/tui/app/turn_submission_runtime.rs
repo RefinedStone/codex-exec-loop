@@ -82,7 +82,7 @@ impl NativeTuiApp {
                     &prompt_origin,
                 ),
             )),
-            ConversationRuntimeEffect::EvaluatePostTurnAutomation {
+            ConversationRuntimeEffect::EvaluatePostTurn {
                 workspace_directory,
                 completed_turn_id,
                 changed_planning_file_paths,

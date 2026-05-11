@@ -4,8 +4,8 @@ use super::super::app_runtime::NativeTuiPlanningHandle;
 #[cfg(test)]
 use super::super::conversation_runtime::ConversationRuntimeEvent;
 use super::super::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
-    QueuedAutoPrompt,
+    PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
+    PostTurnQueuedPrompt,
 };
 use super::super::{
     AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
@@ -48,7 +48,7 @@ use logging::{
 };
 
 // Post-turn evaluation is the handoff between a completed Codex turn and the
-// planning/parallel-mode automation that may schedule the next prompt. The
+// planning/parallel-mode continuation that may schedule the next prompt. The
 // executor owns a cloned service set so production can run it off the UI thread
 // while tests run the same sequence synchronously.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,23 +74,23 @@ struct OfficialCompletionRefreshOutcome {
 }
 #[derive(Debug, Clone)]
 struct TuiPostTurnDecision {
-    action: ConversationPostTurnAction,
-    provenance: PostTurnAutomationProvenance,
+    action: PostTurnContinuationAction,
+    provenance: PostTurnEvaluationProvenance,
     operator_alerts: Vec<OperatorAlert>,
 }
 impl TuiPostTurnDecision {
-    fn from_action(completed_turn_id: String, action: ConversationPostTurnAction) -> Self {
+    fn from_action(completed_turn_id: String, action: PostTurnContinuationAction) -> Self {
         let operator_alerts = operator_alerts_for_action(&action);
         Self {
             action,
-            provenance: PostTurnAutomationProvenance::new(completed_turn_id),
+            provenance: PostTurnEvaluationProvenance::new(completed_turn_id),
             operator_alerts,
         }
     }
 
     fn from_action_with_provenance(
-        action: ConversationPostTurnAction,
-        provenance: PostTurnAutomationProvenance,
+        action: PostTurnContinuationAction,
+        provenance: PostTurnEvaluationProvenance,
     ) -> Self {
         let operator_alerts = operator_alerts_for_action(&action);
         Self {
@@ -105,10 +105,10 @@ impl TuiPostTurnDecision {
         decision: ApplicationPostTurnDecision,
     ) -> Self {
         Self {
-            action: ConversationPostTurnAction::SkipAutoFollow {
+            action: PostTurnContinuationAction::SkipAutoFollow {
                 reason: auto_follow_skip_reason_from_post_turn(decision.auto_follow_stop_reason),
             },
-            provenance: PostTurnAutomationProvenance::new(completed_turn_id)
+            provenance: PostTurnEvaluationProvenance::new(completed_turn_id)
                 .with_parallel_queue_signal(decision.parallel_queue_signal),
             operator_alerts: decision.operator_alerts,
         }
@@ -119,7 +119,7 @@ impl TuiPostTurnDecision {
 struct PostTurnEvaluationExecution {
     thread_id: String,
     completed_turn_id: String,
-    evaluation: ConversationPostTurnEvaluation,
+    evaluation: PostTurnEvaluationOutcome,
     planning_worker_panel_state: PlanningWorkerPanelState,
 }
 #[derive(Clone)]
@@ -142,7 +142,7 @@ impl PostTurnEvaluationExecutor {
     }
 
     // The execution order is deliberate: protect planning files first, repair
-    // only when automation can act on the result, finish official parallel
+    // only when continuation can act on the result, finish official parallel
     // completions before planning queue refreshes, then derive the action
     // from the final runtime snapshot.
     #[tracing::instrument(level = "trace", skip(self, conversation))]
@@ -278,7 +278,7 @@ impl PostTurnEvaluationExecutor {
         PostTurnEvaluationExecution {
             thread_id: conversation.thread_id.clone(),
             completed_turn_id: request.completed_turn_id.clone(),
-            evaluation: ConversationPostTurnEvaluation {
+            evaluation: PostTurnEvaluationOutcome {
                 provenance: post_turn_decision.provenance,
                 runtime_snapshot,
                 planning_repair_state: None,
@@ -648,12 +648,12 @@ impl PostTurnEvaluationExecutor {
                     )
                 });
                 TuiPostTurnDecision::from_action_with_provenance(
-                    ConversationPostTurnAction::QueueAutoPrompt(Box::new(QueuedAutoPrompt {
+                    PostTurnContinuationAction::QueueAutoPrompt(Box::new(PostTurnQueuedPrompt {
                         prompt: queued_prompt.prompt,
                         mode_label: conversation.auto_follow_state.mode_label().to_string(),
                         transcript_text: queued_prompt.transcript_text,
                     })),
-                    PostTurnAutomationProvenance::new(request.completed_turn_id.clone())
+                    PostTurnEvaluationProvenance::new(request.completed_turn_id.clone())
                         .with_handoff_task(queued_prompt.handoff_task),
                 )
             }
@@ -672,7 +672,7 @@ impl PostTurnEvaluationExecutor {
                 });
                 TuiPostTurnDecision::from_action(
                     request.completed_turn_id.clone(),
-                    ConversationPostTurnAction::SkipAutoFollow { reason },
+                    PostTurnContinuationAction::SkipAutoFollow { reason },
                 )
             }
         }
@@ -723,13 +723,13 @@ fn auto_follow_skip_reason_from_planning(
     }
 }
 
-fn operator_alerts_for_action(action: &ConversationPostTurnAction) -> Vec<OperatorAlert> {
+fn operator_alerts_for_action(action: &PostTurnContinuationAction) -> Vec<OperatorAlert> {
     match action {
-        ConversationPostTurnAction::SkipAutoFollow {
+        PostTurnContinuationAction::SkipAutoFollow {
             reason: AutoFollowSkipReason::PlanningQueueDrained,
         } => vec![OperatorAlert::planning_queue_drained()],
-        ConversationPostTurnAction::QueueAutoPrompt(_)
-        | ConversationPostTurnAction::SkipAutoFollow { .. } => Vec::new(),
+        PostTurnContinuationAction::QueueAutoPrompt(_)
+        | PostTurnContinuationAction::SkipAutoFollow { .. } => Vec::new(),
     }
 }
 
@@ -754,7 +754,7 @@ impl NativeTuiApp {
             self.planning_worker_panel_state = execution.planning_worker_panel_state;
             self.invalidate_parallel_mode_supervisor_snapshot();
             self.dispatch_conversation_runtime(
-                ConversationRuntimeEvent::PostTurnAutomationEvaluated {
+                ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                     evaluation: Box::new(execution.evaluation),
                 },
             );
@@ -778,7 +778,7 @@ impl NativeTuiApp {
                             &fallback_request,
                         )
                     });
-                let _ = tx.send(BackgroundMessage::PostTurnEvaluated {
+                let _ = tx.send(BackgroundMessage::PostTurnEvaluationCompleted {
                     thread_id: execution.thread_id,
                     completed_turn_id: execution.completed_turn_id,
                     evaluation: Box::new(execution.evaluation),
@@ -794,7 +794,7 @@ impl NativeTuiApp {
         }
     }
 
-    // The panel enters a running state only when automation can make progress.
+    // The panel enters a running state only when post-turn continuation can make progress.
     // Paused continuations and queue-idle stop policy keep the previous operator
     // context visible instead of flashing a worker state that will not run.
     fn mark_post_turn_evaluation_running(
@@ -838,12 +838,12 @@ fn post_turn_evaluation_timeout_execution(
     PostTurnEvaluationExecution {
         thread_id: conversation.thread_id.clone(),
         completed_turn_id: request.completed_turn_id.clone(),
-        evaluation: ConversationPostTurnEvaluation {
-            provenance: PostTurnAutomationProvenance::new(request.completed_turn_id.clone()),
+        evaluation: PostTurnEvaluationOutcome {
+            provenance: PostTurnEvaluationProvenance::new(request.completed_turn_id.clone()),
             runtime_snapshot: PlanningRuntimeSnapshot::invalid(message.clone()),
             planning_repair_state: None,
             runtime_notices: vec![message.clone()],
-            action: ConversationPostTurnAction::SkipAutoFollow {
+            action: PostTurnContinuationAction::SkipAutoFollow {
                 reason: AutoFollowSkipReason::PostTurnEvaluationTimedOut,
             },
             operator_alerts: Vec::new(),
@@ -909,7 +909,7 @@ mod tests {
             "turn-1".to_string(),
             decide_parallel_official_completion_post_turn(&runtime_snapshot),
         );
-        let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
+        let PostTurnContinuationAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
         };
 
@@ -931,7 +931,7 @@ mod tests {
             "turn-1".to_string(),
             decide_parallel_official_completion_post_turn(&runtime_snapshot),
         );
-        let ConversationPostTurnAction::SkipAutoFollow { reason } = decision.action else {
+        let PostTurnContinuationAction::SkipAutoFollow { reason } = decision.action else {
             panic!("parallel completion should skip auto-follow");
         };
 

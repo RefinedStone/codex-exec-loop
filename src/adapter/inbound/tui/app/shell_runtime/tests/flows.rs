@@ -1,8 +1,8 @@
 use super::*;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
-    QueuedAutoPrompt,
+    PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
+    PostTurnQueuedPrompt,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
@@ -410,16 +410,16 @@ impl NativeFlowHarness {
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluated {
+            .send(BackgroundMessage::PostTurnEvaluationCompleted {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    provenance: PostTurnAutomationProvenance::new(turn_id.to_string()),
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
                     runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
-                        QueuedAutoPrompt {
+                    action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                        PostTurnQueuedPrompt {
                             prompt: "run next task".to_string(),
                             mode_label: "flow".to_string(),
                             transcript_text: "next-task".to_string(),
@@ -454,18 +454,18 @@ impl NativeFlowHarness {
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluated {
+            .send(BackgroundMessage::PostTurnEvaluationCompleted {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    provenance: PostTurnAutomationProvenance::new(turn_id.to_string())
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
                         .with_parallel_queue_signal(Some(
                             ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
                         )),
                     runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::SkipAutoFollow {
+                    action: PostTurnContinuationAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::ParallelSessionCompleted,
                     },
                     operator_alerts: Vec::new(),
@@ -492,15 +492,15 @@ impl NativeFlowHarness {
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluated {
+            .send(BackgroundMessage::PostTurnEvaluationCompleted {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: turn_id.to_string(),
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    provenance: PostTurnAutomationProvenance::new(turn_id.to_string()),
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
                     runtime_snapshot: planning_snapshot,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::SkipAutoFollow {
+                    action: PostTurnContinuationAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
                     operator_alerts: vec![OperatorAlert::planning_queue_drained()],

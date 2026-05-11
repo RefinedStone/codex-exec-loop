@@ -2,7 +2,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::super::ConversationViewModel;
 use super::super::super::conversation_runtime::{
-    ConversationPostTurnAction, PostTurnAutomationProvenance,
+    PostTurnContinuationAction, PostTurnEvaluationProvenance,
 };
 use super::PostTurnEvaluationRequest;
 use crate::application::service::planning::PlanningRuntimeSnapshot;
@@ -153,11 +153,11 @@ pub(super) fn runtime_snapshot_log_detail(snapshot: &PlanningRuntimeSnapshot) ->
 }
 
 pub(super) fn post_turn_action_log_detail(
-    action: &ConversationPostTurnAction,
-    provenance: &PostTurnAutomationProvenance,
+    action: &PostTurnContinuationAction,
+    provenance: &PostTurnEvaluationProvenance,
 ) -> Value {
     match action {
-        ConversationPostTurnAction::QueueAutoPrompt(prompt) => json!({
+        PostTurnContinuationAction::QueueAutoPrompt(prompt) => json!({
             "type": "queue_auto_prompt",
             "completed_turn_id": provenance.completed_turn_id,
             "mode_label": prompt.mode_label,
@@ -168,17 +168,17 @@ pub(super) fn post_turn_action_log_detail(
                 .as_ref()
                 .map(|task| task.task_id.as_str()),
         }),
-        ConversationPostTurnAction::SkipAutoFollow { reason } => json!({
+        PostTurnContinuationAction::SkipAutoFollow { reason } => json!({
             "type": "skip_auto_followup",
             "reason": format!("{:?}", reason),
         }),
     }
 }
 
-pub(super) fn post_turn_action_decision(action: &ConversationPostTurnAction) -> &'static str {
+pub(super) fn post_turn_action_decision(action: &PostTurnContinuationAction) -> &'static str {
     match action {
-        ConversationPostTurnAction::QueueAutoPrompt(_) => "queue_auto_prompt",
-        ConversationPostTurnAction::SkipAutoFollow { .. } => "skip_auto_followup",
+        PostTurnContinuationAction::QueueAutoPrompt(_) => "queue_auto_prompt",
+        PostTurnContinuationAction::SkipAutoFollow { .. } => "skip_auto_followup",
     }
 }
 
@@ -186,7 +186,7 @@ pub(super) fn post_turn_action_decision(action: &ConversationPostTurnAction) -> 
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
-    use crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction;
+    use crate::adapter::inbound::tui::app::conversation_runtime::PostTurnContinuationAction;
     use crate::application::service::planning::PlanningRuntimeSnapshot;
 
     #[test]
@@ -226,13 +226,13 @@ mod tests {
 
     #[test]
     fn post_turn_action_detail_hides_full_queued_prompt_text() {
-        let action = ConversationPostTurnAction::SkipAutoFollow {
+        let action = PostTurnContinuationAction::SkipAutoFollow {
             reason: AutoFollowSkipReason::PlanningQueueIdlePolicyStop,
         };
 
         let detail = post_turn_action_log_detail(
             &action,
-            &PostTurnAutomationProvenance::new("turn-1".to_string()),
+            &PostTurnEvaluationProvenance::new("turn-1".to_string()),
         );
 
         assert_eq!(detail["type"], json!("skip_auto_followup"));

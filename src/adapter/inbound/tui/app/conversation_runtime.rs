@@ -1,6 +1,6 @@
 /*
  * conversation_runtime.rs is the reducer/effect boundary for the live TUI
- * conversation. App-server streaming, post-turn planning checks, and auto-follow
+ * conversation. App-server streaming, post-turn evaluation checks, and auto-follow
  * submission all meet here as events, but this module does not perform I/O.
  *
  * The split matters because a single turn can receive keyboard submissions,
@@ -28,8 +28,8 @@ pub(super) enum ConversationRuntimeEvent {
     /*
      * Runtime events are facts that already happened at the TUI boundary. Manual
      * and auto-follow submissions enter through SubmitPrompt, core stream
-     * snapshots enter through StreamSnapshotApplied, and post-turn automation
-     * results return through PostTurnAutomationEvaluated.
+     * snapshots enter through StreamSnapshotApplied, and post-turn evaluation
+     * completions return through PostTurnEvaluationCompleted.
      */
     SubmitPrompt {
         prompt: String,
@@ -40,8 +40,8 @@ pub(super) enum ConversationRuntimeEvent {
     RuntimeNoticeObserved {
         notice: String,
     },
-    PostTurnAutomationEvaluated {
-        evaluation: Box<ConversationPostTurnEvaluation>,
+    PostTurnEvaluationCompleted {
+        evaluation: Box<PostTurnEvaluationOutcome>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +58,7 @@ pub(super) enum ConversationRuntimeEffect {
         prompt: String,
         prompt_origin: PromptOrigin,
     },
-    EvaluatePostTurnAutomation {
+    EvaluatePostTurn {
         workspace_directory: String,
         completed_turn_id: String,
         changed_planning_file_paths: Vec<String>,
@@ -76,10 +76,10 @@ pub(super) enum ConversationRuntimeEffect {
     },
 }
 #[derive(Debug, Clone)]
-pub(super) struct ConversationPostTurnEvaluation {
+pub(super) struct PostTurnEvaluationOutcome {
     // Provenance binds every post-turn decision to the completed turn and
-    // optional handoff signals that downstream automation may consume.
-    pub provenance: PostTurnAutomationProvenance,
+    // optional handoff signals that downstream continuation routing may consume.
+    pub provenance: PostTurnEvaluationProvenance,
     // Fresh planning projection after the just-finished turn. It replaces the
     // embedded conversation snapshot before auto-follow copy is derived.
     pub runtime_snapshot: PlanningRuntimeSnapshot,
@@ -91,18 +91,18 @@ pub(super) struct ConversationPostTurnEvaluation {
     pub runtime_notices: Vec<String>,
     // The post-turn policy either schedules the next internal prompt or records
     // the reason the loop stopped.
-    pub action: ConversationPostTurnAction,
+    pub action: PostTurnContinuationAction,
     // Operator alerts are explicit post-turn outputs, not inferred by the reducer
     // from auto-follow skip copy.
     pub operator_alerts: Vec<OperatorAlert>,
 }
 #[derive(Debug, Clone)]
-pub(super) struct PostTurnAutomationProvenance {
+pub(super) struct PostTurnEvaluationProvenance {
     pub completed_turn_id: String,
     pub handoff_task: Option<PlanningTaskHandoff>,
     pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
 }
-impl PostTurnAutomationProvenance {
+impl PostTurnEvaluationProvenance {
     pub(super) fn new(completed_turn_id: String) -> Self {
         Self {
             completed_turn_id,
@@ -125,7 +125,7 @@ impl PostTurnAutomationProvenance {
     }
 }
 #[derive(Debug, Clone)]
-pub(super) struct QueuedAutoPrompt {
+pub(super) struct PostTurnQueuedPrompt {
     // Prompt sent to app-server. It can include planning context not meant to be
     // shown verbatim in transcript.
     pub prompt: String,
@@ -136,10 +136,10 @@ pub(super) struct QueuedAutoPrompt {
     pub transcript_text: String,
 }
 #[derive(Debug, Clone)]
-pub(super) enum ConversationPostTurnAction {
+pub(super) enum PostTurnContinuationAction {
     // Box keeps the enum small because queued prompts carry several strings and
     // optional handoff identity through the background-message channel.
-    QueueAutoPrompt(Box<QueuedAutoPrompt>),
+    QueueAutoPrompt(Box<PostTurnQueuedPrompt>),
     SkipAutoFollow { reason: AutoFollowSkipReason },
 }
 #[derive(Debug, Clone)]
@@ -392,8 +392,8 @@ pub(super) fn reduce_conversation_runtime(
         ConversationRuntimeEvent::RuntimeNoticeObserved { notice } => {
             state.extend_runtime_notices([notice]);
         }
-        ConversationRuntimeEvent::PostTurnAutomationEvaluated { evaluation } => {
-            let ConversationPostTurnEvaluation {
+        ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } => {
+            let PostTurnEvaluationOutcome {
                 provenance,
                 runtime_snapshot,
                 planning_repair_state,
@@ -407,11 +407,11 @@ pub(super) fn reduce_conversation_runtime(
             state.planning_repair_state = planning_repair_state;
             state.extend_runtime_notices(runtime_notices);
             match action {
-                ConversationPostTurnAction::QueueAutoPrompt(queued_prompt) => {
+                PostTurnContinuationAction::QueueAutoPrompt(queued_prompt) => {
                     // Queueing records the pending loop in visible history before
                     // emitting QueueAutoPrompt. The effect will re-enter this
                     // reducer as SubmitPrompt with PromptOrigin::AutoFollow.
-                    let QueuedAutoPrompt {
+                    let PostTurnQueuedPrompt {
                         prompt,
                         mode_label,
                         transcript_text,
@@ -431,7 +431,7 @@ pub(super) fn reduce_conversation_runtime(
                         handoff_task,
                     });
                 }
-                ConversationPostTurnAction::SkipAutoFollow { reason } => {
+                PostTurnContinuationAction::SkipAutoFollow { reason } => {
                     // Skips are durable status messages because they explain why
                     // the automatic loop stopped and often require operator
                     // action before the next manual prompt.
@@ -494,7 +494,7 @@ fn queue_post_turn_evaluation(
             "changed_planning_file_count": changed_planning_file_count,
         })
     });
-    effects.push(ConversationRuntimeEffect::EvaluatePostTurnAutomation {
+    effects.push(ConversationRuntimeEffect::EvaluatePostTurn {
         workspace_directory,
         completed_turn_id: turn_id,
         changed_planning_file_paths,
@@ -591,7 +591,7 @@ mod tests {
             .effects
             .into_iter()
             .find_map(|effect| match effect {
-                ConversationRuntimeEffect::EvaluatePostTurnAutomation {
+                ConversationRuntimeEffect::EvaluatePostTurn {
                     execution_snapshot_capture,
                     ..
                 } => execution_snapshot_capture,
@@ -607,9 +607,9 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             state,
-            ConversationRuntimeEvent::PostTurnAutomationEvaluated {
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    provenance: PostTurnAutomationProvenance::new("turn-root".to_string()),
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-root".to_string()),
                     runtime_snapshot: PlanningRuntimeSnapshot::ready_with_details(
                         "Planning Context".to_string(),
                         "queue idle: no executable planning task".to_string(),
@@ -618,7 +618,7 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::SkipAutoFollow {
+                    action: PostTurnContinuationAction::SkipAutoFollow {
                         reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
                     operator_alerts: vec![OperatorAlert::planning_queue_drained()],
@@ -667,9 +667,9 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             state,
-            ConversationRuntimeEvent::PostTurnAutomationEvaluated {
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    provenance: PostTurnAutomationProvenance::new(
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new(
                         "turn-from-provenance".to_string(),
                     )
                     .with_handoff_task(Some(handoff_task.clone())),
@@ -681,8 +681,8 @@ mod tests {
                     ),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
-                    action: ConversationPostTurnAction::QueueAutoPrompt(Box::new(
-                        QueuedAutoPrompt {
+                    action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                        PostTurnQueuedPrompt {
                             prompt: "run task".to_string(),
                             mode_label: "planning queue".to_string(),
                             transcript_text: "next-task".to_string(),
