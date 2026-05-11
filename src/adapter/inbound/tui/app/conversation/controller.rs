@@ -65,7 +65,7 @@ impl NativeTuiApp {
         *snapshot.planning_parallel.planning_runtime
     }
 
-    // active conversation이 현재 주장하는 workspace에 맞춰 planning status cache를 갱신한다.
+    // active conversation이 현재 주장하는 workspace에 맞춰 reducer compatibility cache와 core projection을 갱신한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_projection(&mut self) {
         // state replacement 중 self를 계속 빌리지 않도록 선택된 path를 먼저 소유한다.
         let workspace_directory = self.planning_workspace_directory();
@@ -74,46 +74,42 @@ impl NativeTuiApp {
         );
     }
 
-    // caller가 고른 workspace에 대해 Ready conversation이 가진 cached planning runtime projection을 교체한다.
+    // caller가 고른 workspace에 대해 Ready conversation reducer cache와 core projection을 함께 갱신한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_projection_for_workspace(
         &mut self,
         workspace_directory: &str,
     ) {
-        let Some(mut conversation) = self.take_ready_conversation_state() else {
-            return;
-        };
-        // conversation이 runtime projection cache를 소유해야 render path가 filesystem-backed planning service를 직접 호출하지 않는다.
+        // auto-follow reducers still need a compatibility cache, while rendering reads core projection.
         let planning_runtime_projection =
             self.load_planning_runtime_projection(workspace_directory);
-        conversation.replace_planning_runtime_projection(planning_runtime_projection.clone());
-        self.conversation_state = ConversationState::ready(conversation);
-        self.sync_core_planning_runtime_projection(planning_runtime_projection);
+        self.sync_ready_conversation_planning_runtime_projection(planning_runtime_projection);
     }
 
-    // Keep the transitional conversation cache and core render projection aligned.
+    // Keep the transitional reducer cache and core render projection aligned.
     // Some callers arrive after a core effect already updated the snapshot; repeated
     // projection input is idempotent, so this remains safe while render paths move
     // away from the conversation cache.
-    pub(crate) fn replace_ready_conversation_planning_runtime_projection(
+    pub(crate) fn sync_ready_conversation_planning_runtime_projection(
         &mut self,
         planning_runtime_projection: PlanningRuntimeProjection,
     ) {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        conversation.replace_planning_runtime_projection(planning_runtime_projection.clone());
+        conversation
+            .replace_cached_planning_runtime_projection(planning_runtime_projection.clone());
         self.conversation_state = ConversationState::ready(conversation);
         self.sync_core_planning_runtime_projection(planning_runtime_projection);
     }
 
     // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.
     pub(crate) fn surface_resumed_session_planning_context(&mut self) {
+        let runtime_projection = self.planning_runtime_projection_snapshot();
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        conversation.set_status_with_warnings(build_resumed_session_status_text(
-            &conversation.planning_runtime_projection,
-        ));
+        conversation
+            .set_status_with_warnings(build_resumed_session_status_text(&runtime_projection));
         self.conversation_state = ConversationState::ready(conversation);
     }
 }

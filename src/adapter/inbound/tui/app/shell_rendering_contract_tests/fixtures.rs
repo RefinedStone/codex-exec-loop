@@ -143,7 +143,7 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
     };
     conversation.cwd = "/tmp/root".to_string();
     conversation.draft_workspace_directory = "/tmp/root".to_string();
-    app.replace_ready_conversation_planning_runtime_projection(
+    app.sync_ready_conversation_planning_runtime_projection(
         PlanningRuntimeProjection::uninitialized(),
     );
     app

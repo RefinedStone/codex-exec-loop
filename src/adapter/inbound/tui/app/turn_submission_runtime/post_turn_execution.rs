@@ -126,7 +126,7 @@ fn post_turn_context_from_conversation(
         latest_user_message: conversation.latest_user_message_text().map(str::to_string),
         latest_main_reply,
         previous_handoff_task: conversation.last_planning_task_handoff().cloned(),
-        current_runtime_projection: conversation.planning_runtime_projection.clone(),
+        current_runtime_projection: conversation.cached_planning_runtime_projection().clone(),
         continuation_paused: conversation
             .auto_follow_state
             .post_turn_continuation_paused(),

@@ -1,7 +1,3 @@
-// conversation model 테스트는 transcript line formatting까지 고정하지만,
-// production 호출부는 더 높은 shell presentation surface를 거쳐야 한다.
-#[cfg(test)]
-pub(super) use super::shell_presentation::format_conversation_lines;
 pub(super) use super::{
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
     INFINITE_AUTO_FOLLOW_MAX_TURNS, INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
@@ -27,11 +23,6 @@ pub(crate) use auto_follow::AutoFollowDecision;
 pub(crate) use auto_follow::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, StopKeywordRule,
 };
-// production rendering은 composed view model을 통해 이 상태를 간접 사용한다.
-// 테스트만 직접 접근해 activity-state mapping을 고정한다.
-#[cfg(test)]
-pub(crate) use turn_activity::TurnActivityState;
-
 // shell은 conversation state, input state, planning-repair state를 이 surface에서
 // 가져오고, 실제 mapping logic은 `view_model.rs` 안에 남긴다.
 pub(crate) use view_model::{

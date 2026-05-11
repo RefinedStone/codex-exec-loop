@@ -1,7 +1,6 @@
 use super::{
-    AutoFollowDecision, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
-    ConversationMessage, ConversationMessageKind, ConversationViewModel, StopKeywordRule,
-    TurnActivityState, format_conversation_lines,
+    AutoFollowDecision, AutoFollowSkipReason, AutoFollowState, ConversationMessage,
+    ConversationMessageKind, ConversationViewModel, StopKeywordRule,
 };
 use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
 use crate::adapter::inbound::tui::app::test_helpers::{
@@ -14,8 +13,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::{PlanningRuntimeProjection, PlanningRuntimeUseCases};
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationRuntimeControlTruth,
-    ConversationSnapshot,
+    ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationSnapshot,
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
@@ -25,36 +23,17 @@ use std::sync::Arc;
 // presentation state: warnings, notices, approval status, and auto-follow
 // decisions.
 fn ready_conversation() -> ConversationViewModel {
-    ConversationViewModel {
-        thread_id: "thread-1".to_string(),
-        title: "Existing session".to_string(),
-        cwd: "/tmp/workspace".to_string(),
-        draft_workspace_directory: "/tmp/workspace".to_string(),
-        messages: Vec::new(),
-        cached_conversation_lines: format_conversation_lines(&[]),
-        live_agent_message: None,
-        buffered_tool_messages: Vec::new(),
-        base_warnings: Vec::new(),
-        warnings: Vec::new(),
-        runtime_notices: Vec::new(),
-        input_buffer: String::new(),
-        inline_shell_command_palette_state: Default::default(),
-        startup_submit_armed: false,
-        active_turn_id: None,
-        active_turn_workspace_directory: None,
-        active_turn_started_at: None,
-        planning_repair_state: None,
-        input_state: ConversationInputState::ReadyToContinue,
-        auto_follow_state: AutoFollowState::new(),
-        planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
-        turn_activity: TurnActivityState::default(),
-        approval_review: None,
-        turn_control_truth: ConversationRuntimeControlTruth::default(),
-        last_auto_follow_activity: None,
-        last_planning_task_handoff: None,
-        last_applied_post_turn_evaluation_id: None,
-        status_text: "thread loaded".to_string(),
-    }
+    ConversationViewModel::from_snapshot(
+        ConversationSnapshot {
+            thread_id: "thread-1".to_string(),
+            title: "Existing session".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        },
+        "/tmp/workspace".to_string(),
+    )
 }
 
 // Auto-follow prompt rendering consults the planning runtime, but these tests
@@ -165,7 +144,7 @@ fn planning_runtime() -> PlanningRuntimeUseCases {
 #[test]
 fn queue_handoff_prompt_renders_for_auto_follow() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
+    conversation.replace_cached_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: task-1",
     ));
@@ -378,7 +357,7 @@ fn auto_follow_stops_without_file_changes_when_rule_is_enabled() {
 #[test]
 fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
+    conversation.replace_cached_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: task-1",
     ));
@@ -411,7 +390,7 @@ fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
 #[test]
 fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_projection(
+    conversation.replace_cached_planning_runtime_projection(
         sample_proposal_only_planning_runtime_projection(
             "Planning Context\nRuntime Follow-up Proposal Rules",
             "queue idle: no executable planning task",
@@ -434,7 +413,7 @@ fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
 #[test]
 fn auto_follow_skips_when_planning_runtime_projection_is_invalid() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_projection(PlanningRuntimeProjection::invalid(
+    conversation.replace_cached_planning_runtime_projection(PlanningRuntimeProjection::invalid(
         "planning validation failed: task authority is invalid",
     ));
     conversation.messages.push(ConversationMessage::new(

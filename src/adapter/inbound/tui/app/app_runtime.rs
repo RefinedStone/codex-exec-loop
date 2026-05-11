@@ -241,8 +241,9 @@ impl NativeTuiApp {
             .planning()
             .runtime()
             .load_runtime_projection_or_invalid(&workspace_directory);
-        initial_conversation
-            .replace_planning_runtime_projection(initial_planning_runtime_projection.clone());
+        initial_conversation.replace_cached_planning_runtime_projection(
+            initial_planning_runtime_projection.clone(),
+        );
         let mut app = Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
@@ -502,11 +503,12 @@ impl NativeTuiApp {
             return false;
         };
 
-        let previous_planning_runtime_projection = conversation.planning_runtime_projection.clone();
+        let previous_planning_runtime_projection =
+            conversation.cached_planning_runtime_projection().clone();
         let reduction = reduce_conversation_runtime(conversation, event);
         let next_planning_runtime_projection = (previous_planning_runtime_projection
-            != reduction.state.planning_runtime_projection)
-            .then(|| reduction.state.planning_runtime_projection.clone());
+            != *reduction.state.cached_planning_runtime_projection())
+        .then(|| reduction.state.cached_planning_runtime_projection().clone());
         let mut effects = reduction.effects;
         let started_stream = effects
             .iter()

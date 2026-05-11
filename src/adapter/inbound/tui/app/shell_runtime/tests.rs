@@ -291,6 +291,7 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
      * projection authority.
      */
     const APP_RS: &str = include_str!("../../app.rs");
+    const CONVERSATION_VIEW_MODEL_RS: &str = include_str!("../conversation_model/view_model.rs");
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
     const PLAN_INDICATOR_RS: &str =
         include_str!("../shell_presentation/status_panels/plan_indicator.rs");
@@ -305,6 +306,8 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
     assert!(!APP_RS.contains("parallel_mode_readiness_snapshot:"));
     assert!(!APP_RS.contains("parallel_mode_supervisor_snapshot:"));
+    assert!(CONVERSATION_VIEW_MODEL_RS.contains("fn cached_planning_runtime_projection"));
+    assert!(!CONVERSATION_VIEW_MODEL_RS.contains("pub(crate) planning_runtime_projection"));
     assert!(
         !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
     );
@@ -536,6 +539,42 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
     );
     fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
+
+#[test]
+fn resumed_session_status_reads_core_projection_before_reducer_cache() {
+    let mut runtime = make_test_runtime();
+    runtime
+        .app_mut()
+        .sync_ready_conversation_planning_runtime_projection(PlanningRuntimeProjection::invalid(
+            "stale reducer cache detail",
+        ));
+    runtime
+        .app_mut()
+        .sync_core_planning_runtime_projection(PlanningRuntimeProjection::ready(
+            "core snapshot prompt".to_string(),
+            "core snapshot summary".to_string(),
+            None,
+        ));
+
+    runtime.app_mut().surface_resumed_session_planning_context();
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(
+        conversation.status_text.contains("planning status: ready"),
+        "status should use core projection: {}",
+        conversation.status_text
+    );
+    assert!(
+        !conversation
+            .status_text
+            .contains("planning status: blocked"),
+        "status should not use reducer cache: {}",
+        conversation.status_text
+    );
+}
+
 #[test]
 fn startup_background_message_updates_app_state() {
     let mut runtime = make_test_runtime();

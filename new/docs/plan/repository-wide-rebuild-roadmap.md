@@ -52,12 +52,13 @@ parallel-mode 표시 accessor는 core `AppSnapshot.planning_parallel.parallel_mo
 loading/failed 경로도 render 중 application service를 다시 호출하지 않고 core
 snapshot projection을 읽는다.
 Ready conversation의 planning footer, queue overlay, planning status tail, existing
-workspace popup도 core planning projection을 읽는다. conversation cache는
-auto-follow/reducer 판단용 전환 cache로 남아 있다.
+workspace popup도 core planning projection을 읽는다. conversation planning cache는
+private reducer/post-turn automation compatibility cache로 축소했고 resumed-session
+status copy도 core projection을 읽는다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| planning/parallel projection consumption | parallel rendering은 core-only projection read path가 됐다. Ready conversation planning cache는 reducer/event compatibility 용도로 아직 남아 있다. |
+| planning/parallel projection consumption | rendering/status copy는 core projection을 읽는다. post-turn evaluation context는 아직 Ready conversation compatibility cache에서 current runtime projection을 읽는다. |
 | runtime vocabulary | 다음 slice도 필요한 Command/Input/Effect/Completion/Event/Snapshot을 쓰되, 기준 문서 의미와 domain language에 맞춰 같은 개념에 여러 이름을 붙이지 않아야 한다. |
 
 ## 실행 Backlog
@@ -68,7 +69,8 @@ auto-follow/reducer 판단용 전환 cache로 남아 있다.
 | CORE-PROJECTION-02 | done | parallel rendering source와 loading/failed planning indicator를 `AppSnapshot` projection 우선 읽기로 전환한다. |
 | CORE-READY-PLANNING-03 | done | Ready conversation planning rendering source를 core planning projection으로 전환한다. |
 | CORE-PARALLEL-CACHE-04 | done | parallel write-through cache를 줄여 event application은 core projection만 갱신하고 TUI field fallback을 제거한다. |
-| CORE-READY-CACHE-05 | next | Ready conversation planning cache를 reducer/event compatibility 범위로 더 좁히고 남은 core projection sync contract를 정리한다. |
+| CORE-READY-CACHE-05 | done | Ready conversation planning cache를 reducer/event compatibility 범위로 더 좁히고 남은 core projection sync contract를 정리한다. |
+| CORE-POST-TURN-PROJECTION-06 | next | post-turn evaluation context의 current runtime projection source를 core projection으로 옮겨 Ready conversation compatibility cache 의존을 줄인다. |
 
 ## 문서 운영 규칙
 

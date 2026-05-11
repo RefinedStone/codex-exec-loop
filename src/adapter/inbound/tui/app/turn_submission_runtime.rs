@@ -223,7 +223,7 @@ impl NativeTuiApp {
         &mut self,
         result: ManualPromptPreparationResult,
     ) {
-        self.replace_ready_conversation_planning_runtime_projection(
+        self.sync_ready_conversation_planning_runtime_projection(
             result.runtime_projection().clone(),
         );
         match result {
