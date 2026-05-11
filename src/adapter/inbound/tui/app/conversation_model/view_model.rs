@@ -33,8 +33,8 @@ use super::auto_follow::AutoFollowDecision;
 use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
 use super::turn_activity::TurnActivityState;
 
-// Shell rendering keeps this wrapper around load failures so the outer app can
-// render an error panel without fabricating an empty conversation model.
+// Shell rendering keeps this presentation mirror around core conversation
+// lifecycle snapshots so loading/failed panels do not fabricate a view model.
 #[derive(Debug, Clone)]
 pub(crate) enum ConversationState {
     Loading,

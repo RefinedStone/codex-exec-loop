@@ -5,7 +5,10 @@
  * conversation 자체가 교체되는 사건만 처리한다.
  */
 use super::{ConversationState, ConversationViewModel};
-use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+use crate::core::app::ConversationSnapshot as CoreConversationSnapshot;
+use crate::domain::conversation::ConversationRuntimeControlTruth;
+#[cfg(test)]
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::session_summary::SessionSummary;
 
 #[derive(Debug, Clone)]
@@ -23,9 +26,9 @@ pub(super) enum ConversationLifecycleEvent {
         // Summary는 shell chrome에 즉시 보관하고, body는 snapshot load effect 뒤에 채운다.
         session: SessionSummary,
     },
-    ConversationLoaded {
-        // Inbound adapter가 app-server/session read 결과를 reducer용 성공/실패 값으로 접는다.
-        result: Result<ConversationSnapshot, String>,
+    CoreConversationSnapshotApplied {
+        // Loading/Ready/Failed lifecycle authority는 core AppSnapshot에서 내려온다.
+        snapshot: CoreConversationSnapshot,
         // Snapshot cwd가 비어 있거나 fallback이 필요할 때 shell 기준 workspace를 유지한다.
         draft_workspace_directory: String,
     },
@@ -62,8 +65,8 @@ pub(super) fn reduce_conversation_lifecycle(
     /*
      * Lifecycle도 runtime reducer와 같은 effect split을 쓴다. State 변화는 여기서 즉시
      * 계산하지만, 실제 app-server thread read는 LoadConversation effect로 밖에 맡긴다.
-     * 그래서 session 선택 UI는 바로 Loading을 표시하고, process 결과는
-     * ConversationLoaded event로 되돌아온다.
+     * 그래서 session 선택 UI는 core가 ConversationChanged(Loading)을 emit한 뒤
+     * loading body를 표시하고, process 결과도 core snapshot event로 되돌아온다.
      */
     let mut effects = Vec::new();
 
@@ -80,26 +83,28 @@ pub(super) fn reduce_conversation_lifecycle(
                 ));
         }
         ConversationLifecycleEvent::SessionChosen { session } => {
-            // Summary는 state로 move되므로 effect용 thread id를 먼저 복사한다.
+            // Summary는 state로 move되므로 effect용 thread id를 먼저 복사한다. Body lifecycle은
+            // 이어서 발생하는 core ConversationChanged(Loading) snapshot이 정한다.
             let thread_id = session.id.clone();
             state.active_session = Some(session);
-            state.conversation_state = ConversationState::Loading;
             effects.push(ConversationLifecycleEffect::LoadConversation { thread_id });
         }
-        ConversationLifecycleEvent::ConversationLoaded {
-            result,
+        ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+            snapshot,
             draft_workspace_directory,
         } => {
-            state.conversation_state = match result {
-                Ok(snapshot) => {
+            state.conversation_state = match snapshot {
+                CoreConversationSnapshot::Idle => state.conversation_state,
+                CoreConversationSnapshot::Loading => ConversationState::Loading,
+                CoreConversationSnapshot::Ready(ready) => {
                     // Loaded snapshot도 shell이 가진 turn-control truth를 주입받아 runtime 제어를 공유한다.
                     ConversationState::ready(ConversationViewModel::from_snapshot_with_truth(
-                        snapshot,
+                        *ready.conversation,
                         draft_workspace_directory,
                         state.turn_control_truth,
                     ))
                 }
-                Err(message) => ConversationState::Failed(message),
+                CoreConversationSnapshot::Failed { message } => ConversationState::Failed(message),
             };
         }
     }
@@ -112,8 +117,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn choosing_session_marks_state_loading_and_emits_load_effect() {
-        // 선택 직후에는 snapshot을 기다리므로 Ready 내용 대신 Loading/effect 계약을 검증한다.
+    fn choosing_session_preserves_body_until_core_loading_snapshot_and_emits_load_effect() {
+        // 선택 intent는 shell chrome만 바꾸고, Loading body는 core snapshot event가 적용한다.
         let state = sample_state();
         let session = sample_session("thread-2");
 
@@ -124,7 +129,7 @@ mod tests {
 
         assert!(matches!(
             reduced.state.conversation_state,
-            ConversationState::Loading
+            ConversationState::Ready(_)
         ));
         assert_eq!(
             reduced
@@ -140,6 +145,64 @@ mod tests {
                 thread_id: "thread-2".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn core_loading_snapshot_marks_state_loading() {
+        let reduced = reduce_conversation_lifecycle(
+            sample_state(),
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+                snapshot: CoreConversationSnapshot::Loading,
+                draft_workspace_directory: "/tmp/root".to_string(),
+            },
+        );
+
+        assert!(matches!(
+            reduced.state.conversation_state,
+            ConversationState::Loading
+        ));
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn core_failed_snapshot_marks_state_failed() {
+        let reduced = reduce_conversation_lifecycle(
+            sample_state(),
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+                snapshot: CoreConversationSnapshot::Failed {
+                    message: "thread unavailable".to_string(),
+                },
+                draft_workspace_directory: "/tmp/root".to_string(),
+            },
+        );
+
+        assert!(matches!(
+            reduced.state.conversation_state,
+            ConversationState::Failed(message) if message == "thread unavailable"
+        ));
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn core_ready_snapshot_builds_ready_view_model() {
+        let reduced = reduce_conversation_lifecycle(
+            sample_state(),
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+                snapshot: CoreConversationSnapshot::Ready(Box::new(
+                    crate::core::app::ConversationReadySnapshot::from(
+                        sample_conversation_snapshot("thread-3"),
+                    ),
+                )),
+                draft_workspace_directory: "/tmp/root".to_string(),
+            },
+        );
+
+        let ConversationState::Ready(conversation) = reduced.state.conversation_state else {
+            panic!("core ready snapshot should create ready conversation");
+        };
+        assert_eq!(conversation.thread_id, "thread-3");
+        assert_eq!(conversation.status_text, "thread loaded");
+        assert!(reduced.effects.is_empty());
     }
 
     #[test]
@@ -173,6 +236,17 @@ mod tests {
             ),
             active_session: None,
             turn_control_truth: ConversationRuntimeControlTruth::default(),
+        }
+    }
+
+    fn sample_conversation_snapshot(thread_id: &str) -> ConversationSnapshot {
+        ConversationSnapshot {
+            thread_id: thread_id.to_string(),
+            title: thread_id.to_string(),
+            cwd: "/tmp/root".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
         }
     }
 

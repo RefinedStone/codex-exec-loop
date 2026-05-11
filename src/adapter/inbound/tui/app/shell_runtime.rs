@@ -104,7 +104,12 @@ impl ShellRuntime {
                 }
                 #[cfg(test)]
                 BackgroundMessage::ConversationLoaded(result) => {
-                    self.app.apply_loaded_conversation_result(result);
+                    let core_result = result.map(|snapshot| {
+                        Box::new(crate::core::app::ConversationReadySnapshot::from(snapshot))
+                    });
+                    self.app.dispatch_core_input(CoreInput::EffectCompleted(
+                        CoreEffectCompletion::ConversationLoaded(core_result),
+                    ));
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.app

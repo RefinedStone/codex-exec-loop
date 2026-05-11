@@ -376,15 +376,17 @@ stream worker spawn, missing terminal event policy, transport/panic handling, st
 event reduction도 core path로 이동했다. Manual prompt intake/bootstrap은
 `PrepareManualPrompt` core effect와 application `ManualPromptPreparationService`로
 이동했고, TUI는 prompt buffer와 bootstrap review overlay 적용만 소유한다. TUI reducer는
-아직 `Loading/Ready/Failed` presentation transition, prompt input, cursor, inline
-command palette, transcript rendering cache, active overlay selection, post-turn
-completion 적용 일부를 계속 소유한다. Post-turn completion 용어와 evaluator worker
-boundary는 core re-entry 기준으로 정리됐고, stale/duplicate completion guard도 core
-turn-stream completion boundary로 이동했다. TUI는 core가 emit한 accepted completion을
-presentation state에 적용한다. evaluator worker 입력은 TUI `ConversationViewModel`
-전체 clone 대신 `PostTurnEvaluationContext`로 좁혀졌다. evaluator spawn/timeout owner는
-core `EvaluatePostTurn` effect와 application `PostTurnEvaluationService`로 이동했고,
-완료는 `CoreEffectCompletion::PostTurnEvaluationCompleted`로 다시 core에 진입한다.
+prompt input, cursor, inline command palette, transcript rendering cache, active overlay
+selection, post-turn completion 적용 일부를 계속 소유한다. 기존 session 선택 뒤
+`Loading/Ready/Failed` conversation body 전환은 core `ConversationChanged` snapshot이
+authority가 되고, TUI reducer는 core-origin snapshot을 presentation state에 적용한다.
+Post-turn completion 용어와 evaluator worker boundary는 core re-entry 기준으로 정리됐고,
+stale/duplicate completion guard도 core turn-stream completion boundary로 이동했다. TUI는
+core가 emit한 accepted completion을 presentation state에 적용한다. evaluator worker 입력은
+TUI `ConversationViewModel` 전체 clone 대신 `PostTurnEvaluationContext`로 좁혀졌다.
+evaluator spawn/timeout owner는 core `EvaluatePostTurn` effect와 application
+`PostTurnEvaluationService`로 이동했고, 완료는
+`CoreEffectCompletion::PostTurnEvaluationCompleted`로 다시 core에 진입한다.
 
 Parallel migration은 다른 흐름처럼 core state로 바로 흡수하지 않는다. parallel mode는
 이미 application `ParallelModeControlPlaneHandle`이 mutex-serialized single-writer gate를
@@ -408,7 +410,7 @@ authority로 읽지 못하게 source guard를 둔다.
 | --- | --- | --- | --- |
 | startup loading/ready/failed | core snapshot/effect runtime | core app state | 완료된 orchestration 기준선이다. TUI는 snapshot 표시만 맡는다. |
 | session catalog lifecycle | core snapshot/effect runtime + TUI overlay selection | core app state | preload/reload 정책은 app lifecycle이다. TUI에는 overlay open/close와 selection만 남긴다. |
-| conversation lifecycle | core snapshot + TUI conversation reducer transition | core app state | 아직 줄일 orchestration이다. `Loading/Ready/Failed`의 lifecycle authority는 core snapshot에서 읽게 한다. |
+| conversation lifecycle | core snapshot + TUI presentation mirror/draft state | core app state | 기존 session load의 `Loading/Ready/Failed` authority는 core snapshot이다. TUI는 core-origin snapshot 적용, 새 draft body, prompt/render cache만 가진다. |
 | turn stream reduction | core runtime | core runtime | 완료된 orchestration 기준선이다. app-server stream은 UI가 아니라 app runtime event다. |
 | manual prompt intake/bootstrap | core effect + application service; TUI overlay application | core/application runtime | planning task intake는 use case다. TUI는 prompt buffer와 review overlay 표시만 가진다. |
 | post-turn continuation/evaluation | core effect/application service + core completion guard + TUI accepted completion application | core runtime/application service | stale/duplicate guard는 core turn-stream completion boundary가 소유한다. TUI는 accepted presentation update만 적용한다. |

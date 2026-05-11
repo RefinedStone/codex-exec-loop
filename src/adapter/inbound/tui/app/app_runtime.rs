@@ -25,6 +25,7 @@ use crate::core::app::{
     CoreInput, SessionCatalogSnapshot, StartupSnapshot,
 };
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
+#[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
@@ -354,13 +355,8 @@ impl NativeTuiApp {
                 self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
                 self.session_overlay_ui_state.reset();
             }
-            AppEvent::ConversationChanged(CoreConversationSnapshot::Idle) => {}
-            AppEvent::ConversationChanged(CoreConversationSnapshot::Loading) => {}
-            AppEvent::ConversationChanged(CoreConversationSnapshot::Ready(ready)) => {
-                self.apply_loaded_conversation_result(Ok(*ready.conversation));
-            }
-            AppEvent::ConversationChanged(CoreConversationSnapshot::Failed { message }) => {
-                self.apply_loaded_conversation_result(Err(message));
+            AppEvent::ConversationChanged(snapshot) => {
+                self.apply_core_conversation_snapshot(snapshot);
             }
             AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
                 self.dispatch_conversation_runtime(
@@ -395,17 +391,25 @@ impl NativeTuiApp {
         self.apply_core_dispatch_outcome(outcome);
     }
 
-    pub(super) fn apply_loaded_conversation_result(
-        &mut self,
-        result: Result<ConversationSnapshot, String>,
-    ) {
-        let loaded_successfully = result.is_ok();
+    pub(super) fn apply_core_conversation_snapshot(&mut self, snapshot: CoreConversationSnapshot) {
+        let loaded_successfully = matches!(&snapshot, CoreConversationSnapshot::Ready(_));
+        let load_finished = matches!(
+            &snapshot,
+            CoreConversationSnapshot::Ready(_) | CoreConversationSnapshot::Failed { .. }
+        );
+        if matches!(&snapshot, CoreConversationSnapshot::Loading) {
+            self.reset_planning_worker_panel_state();
+        }
         let draft_workspace_directory = self.current_workspace_directory();
-        self.reset_planning_worker_panel_state();
-        self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::ConversationLoaded {
-            result,
-            draft_workspace_directory,
-        });
+        self.dispatch_conversation_lifecycle(
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+                snapshot,
+                draft_workspace_directory,
+            },
+        );
+        if !load_finished {
+            return;
+        }
         self.refresh_ready_conversation_planning_runtime_projection();
         if loaded_successfully {
             self.surface_resumed_session_planning_context();
