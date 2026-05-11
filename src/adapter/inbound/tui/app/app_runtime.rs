@@ -26,7 +26,7 @@ use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 
-use super::conversation_runtime::ConversationPostTurnEvaluation;
+use super::conversation_runtime::PostTurnEvaluationOutcome;
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
     AutoFollowOverlayUiState, ConversationInputEvent, ConversationIntentEffect,
@@ -62,10 +62,10 @@ pub(super) enum BackgroundMessage {
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
-    PostTurnEvaluated {
+    PostTurnEvaluationCompleted {
         thread_id: String,
         completed_turn_id: String,
-        evaluation: Box<ConversationPostTurnEvaluation>,
+        evaluation: Box<PostTurnEvaluationOutcome>,
         planning_worker_panel_state: super::PlanningWorkerPanelState,
     },
     GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
@@ -516,7 +516,7 @@ impl NativeTuiApp {
         &mut self,
         event: ConversationRuntimeEvent,
     ) -> bool {
-        let automation_context = self.conversation_runtime_automation_context(&event);
+        let post_turn_context = self.post_turn_continuation_context(&event);
         let Some(conversation) = self.take_ready_conversation_state() else {
             return false;
         };
@@ -534,7 +534,7 @@ impl NativeTuiApp {
         if let Some(snapshot) = next_planning_runtime_snapshot {
             self.sync_core_planning_runtime_projection(snapshot);
         }
-        self.route_conversation_runtime_automation_effects(automation_context, &mut effects);
+        self.route_post_turn_continuation_effects(post_turn_context, &mut effects);
         for effect in effects {
             self.execute_conversation_runtime_effect(effect);
         }

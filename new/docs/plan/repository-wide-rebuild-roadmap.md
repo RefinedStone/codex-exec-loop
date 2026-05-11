@@ -37,17 +37,26 @@ state owner는 먼저 분류한 뒤 이동한다.
 
 ## 현재 판정
 
-전체 상태: `complete`
+전체 상태: `partial`
 
-진행된 것은 다시 문서화하지 않는다. 현재 남은 문제만 관리한다.
+기존 R-slice 상당수는 완료됐지만, core runtime boundary 기준으로 TUI가 아직
+소유한 orchestration이 남아 있다. 완료 판정은 아래 항목이 사라진 뒤에만 가능하다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| 없음 | R1-R10 기준 미완료 항목 없음. |
+| post-turn continuation | post-turn evaluator spawn/result payload/application guard가 아직 TUI path에 있다. |
+| manual prompt intake/bootstrap | planning intake와 first-use planning scaffold 실행을 TUI turn submission path가 직접 호출한다. |
+| planning/parallel projection consumption | core `AppSnapshot`에 projection은 있지만 TUI가 여전히 별도 cache를 primary source처럼 갱신한다. |
+| runtime vocabulary | Command/Input/Effect/Completion/Event/Snapshot 용어를 기준 문서 의미로 제한하고 legacy 이름을 줄여야 한다. |
 
 ## 실행 Backlog
 
-현재 남은 R-slice는 없다.
+| Slice | 목표 |
+| --- | --- |
+| CORE-POSTTURN-02 | post-turn completion 용어를 `EvaluationCompleted`/`CompletionPayload`로 통일하고 pending TUI queue 재발을 막는다. |
+| CORE-POSTTURN-03 | post-turn evaluator 실행과 timeout completion을 core/application effect completion으로 옮긴다. |
+| CORE-MANUAL-INTAKE-01 | manual prompt intake/bootstrap을 core command/effect로 이동하고 TUI는 prompt buffer와 overlay만 소유한다. |
+| CORE-PROJECTION-02 | planning/parallel rendering source를 `AppSnapshot` projection으로 수렴하고 TUI duplicate cache를 줄인다. |
 
 ## 문서 운영 규칙
 

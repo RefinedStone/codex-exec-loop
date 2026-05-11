@@ -7,7 +7,7 @@ use crossterm::style::Print;
 use crate::core::app::{CoreEffectCompletion, CoreInput, PostTurnEvaluationCompletion};
 use crate::domain::operator_alert::OperatorAlert;
 
-use super::post_turn_automation::PostTurnAutomationBackgroundResult;
+use super::post_turn_continuation::PostTurnEvaluationCompletionPayload;
 use super::{BackgroundMessage, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -135,13 +135,13 @@ impl ShellRuntime {
                     self.app
                         .apply_parallel_mode_control_plane_background_event(event);
                 }
-                BackgroundMessage::PostTurnEvaluated {
+                BackgroundMessage::PostTurnEvaluationCompleted {
                     thread_id,
                     completed_turn_id,
                     evaluation,
                     planning_worker_panel_state,
                 } => {
-                    let result = PostTurnAutomationBackgroundResult {
+                    let result = PostTurnEvaluationCompletionPayload {
                         thread_id: thread_id.clone(),
                         completed_turn_id: completed_turn_id.clone(),
                         evaluation,
@@ -155,7 +155,8 @@ impl ShellRuntime {
                             },
                         ),
                     ));
-                    self.app.route_post_turn_automation_result(result);
+                    self.app
+                        .apply_post_turn_evaluation_completion_payload(result);
                 }
                 BackgroundMessage::GithubReviewPollLoaded(result) => {
                     self.app.record_github_review_poll_result(now, result)

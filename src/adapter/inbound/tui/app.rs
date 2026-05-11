@@ -101,8 +101,8 @@ mod planning_reset_shell_command;
 mod planning_shell_command;
 #[path = "app/planning_worker_debug_preview.rs"]
 mod planning_worker_debug_preview;
-#[path = "app/post_turn_automation.rs"]
-mod post_turn_automation;
+#[path = "app/post_turn_continuation.rs"]
+mod post_turn_continuation;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/session_overlay_ui.rs"]

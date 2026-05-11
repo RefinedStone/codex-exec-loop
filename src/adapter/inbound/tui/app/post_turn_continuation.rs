@@ -6,7 +6,7 @@ use crate::core::app::TurnStreamUpdate;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 
 use super::conversation_runtime::{
-    ConversationPostTurnEvaluation, conversation_runtime_auto_prompt_queued,
+    PostTurnEvaluationOutcome, conversation_runtime_auto_prompt_queued,
     suppress_conversation_runtime_auto_prompt,
 };
 use super::{
@@ -14,22 +14,22 @@ use super::{
     PlanningWorkerPanelState,
 };
 
-pub(super) struct PostTurnAutomationBackgroundResult {
+pub(super) struct PostTurnEvaluationCompletionPayload {
     pub(super) thread_id: String,
     pub(super) completed_turn_id: String,
-    pub(super) evaluation: Box<ConversationPostTurnEvaluation>,
+    pub(super) evaluation: Box<PostTurnEvaluationOutcome>,
     pub(super) planning_worker_panel_state: PlanningWorkerPanelState,
 }
 
-pub(super) struct ConversationRuntimeAutomationContext {
+pub(super) struct PostTurnContinuationRoutingContext {
     route_after_reduction: bool,
     parallel_mode_post_turn_queue_signal: Option<ParallelModePostTurnQueueSignal>,
 }
 
 impl NativeTuiApp {
-    pub(super) fn route_post_turn_automation_result(
+    pub(super) fn apply_post_turn_evaluation_completion_payload(
         &mut self,
-        result: PostTurnAutomationBackgroundResult,
+        result: PostTurnEvaluationCompletionPayload,
     ) -> bool {
         if !self.should_apply_post_turn_evaluation(&result.thread_id, &result.completed_turn_id) {
             return false;
@@ -37,33 +37,33 @@ impl NativeTuiApp {
         self.record_post_turn_evaluation_applied(&result.completed_turn_id);
         self.planning_worker_panel_state = result.planning_worker_panel_state;
         self.invalidate_parallel_mode_supervisor_snapshot();
-        self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnAutomationEvaluated {
+        self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluationCompleted {
             evaluation: result.evaluation,
         });
         true
     }
 
-    pub(super) fn conversation_runtime_automation_context(
+    pub(super) fn post_turn_continuation_context(
         &self,
         event: &ConversationRuntimeEvent,
-    ) -> ConversationRuntimeAutomationContext {
+    ) -> PostTurnContinuationRoutingContext {
         let failed_stream_snapshot = matches!(
             event,
             ConversationRuntimeEvent::StreamSnapshotApplied(snapshot)
                 if matches!(&snapshot.update, TurnStreamUpdate::Failed { .. })
         );
-        ConversationRuntimeAutomationContext {
+        PostTurnContinuationRoutingContext {
             route_after_reduction: matches!(
                 event,
-                ConversationRuntimeEvent::PostTurnAutomationEvaluated { .. }
+                ConversationRuntimeEvent::PostTurnEvaluationCompleted { .. }
             ) || failed_stream_snapshot,
             parallel_mode_post_turn_queue_signal: self.parallel_mode_post_turn_queue_signal(event),
         }
     }
 
-    pub(super) fn route_conversation_runtime_automation_effects(
+    pub(super) fn route_post_turn_continuation_effects(
         &mut self,
-        context: ConversationRuntimeAutomationContext,
+        context: PostTurnContinuationRoutingContext,
         effects: &mut Vec<ConversationRuntimeEffect>,
     ) {
         if !context.route_after_reduction {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
-    ConversationPostTurnAction, ConversationPostTurnEvaluation, PostTurnAutomationProvenance,
+    PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
 };
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, NativeTuiParallelModeBinding,
@@ -233,7 +233,7 @@ fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
      * presentation events.
      */
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
-    const POST_TURN_AUTOMATION_RS: &str = include_str!("../post_turn_automation.rs");
+    const POST_TURN_ROUTING_RS: &str = include_str!("../post_turn_continuation.rs");
     const CONTROL_PLANE_HOST_RS: &str =
         include_str!("../../../../../application/service/parallel_mode/control_plane/host.rs");
 
@@ -241,9 +241,9 @@ fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
     assert!(!PARALLEL_MODE_RS.contains("QueueAutoPrompt"));
     assert!(!PARALLEL_MODE_RS.contains("record_auto_follow_parallel_dispatch"));
     assert!(!PARALLEL_MODE_RS.contains("handle_post_turn_queue_continuation"));
-    assert!(POST_TURN_AUTOMATION_RS.contains("decide_post_turn_auto_prompt_route"));
-    assert!(!POST_TURN_AUTOMATION_RS.contains("QueueAutoPrompt"));
-    assert!(!POST_TURN_AUTOMATION_RS.contains(".retain("));
+    assert!(POST_TURN_ROUTING_RS.contains("decide_post_turn_auto_prompt_route"));
+    assert!(!POST_TURN_ROUTING_RS.contains("QueueAutoPrompt"));
+    assert!(!POST_TURN_ROUTING_RS.contains(".retain("));
     assert!(CONTROL_PLANE_HOST_RS.contains("pub fn continue_post_turn_queue"));
     assert!(!CONTROL_PLANE_HOST_RS.contains("pub fn handle_post_turn_queue_continuation"));
 }
@@ -257,14 +257,30 @@ fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
      * application point that applies the result.
      */
     const APP_RS: &str = include_str!("../../app.rs");
-    const POST_TURN_AUTOMATION_RS: &str = include_str!("../post_turn_automation.rs");
+    const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
+    const CONVERSATION_RUNTIME_RS: &str = include_str!("../conversation_runtime.rs");
+    const POST_TURN_ROUTING_RS: &str = include_str!("../post_turn_continuation.rs");
     const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
 
-    assert!(!APP_RS.contains("pending_post_turn_automation_results"));
-    assert!(!POST_TURN_AUTOMATION_RS.contains("route_pending_post_turn_automation_result"));
-    assert!(!POST_TURN_AUTOMATION_RS.contains("enqueue_post_turn_automation_result"));
+    assert!(!APP_RS.contains("pending_post_turn_continuation_results"));
+    assert!(!POST_TURN_ROUTING_RS.contains("route_pending_post_turn_continuation_result"));
+    assert!(!POST_TURN_ROUTING_RS.contains("enqueue_post_turn_continuation_result"));
+    for source in [
+        APP_RUNTIME_RS,
+        CONVERSATION_RUNTIME_RS,
+        POST_TURN_ROUTING_RS,
+        SHELL_RUNTIME_RS,
+    ] {
+        assert!(!source.contains("PostTurnEvaluated"));
+        assert!(!source.contains("PostTurnAutomationBackgroundResult"));
+        assert!(!source.contains("ConversationPostTurnEvaluation"));
+        assert!(!source.contains("ConversationPostTurnAction"));
+        assert!(!source.contains("PostTurnAutomationProvenance"));
+        assert!(!source.contains("QueuedAutoPrompt"));
+        assert!(!source.contains("EvaluatePostTurnAutomation"));
+    }
     assert!(SHELL_RUNTIME_RS.contains("PostTurnEvaluationCompleted"));
-    assert!(SHELL_RUNTIME_RS.contains("route_post_turn_automation_result(result)"));
+    assert!(SHELL_RUNTIME_RS.contains("apply_post_turn_evaluation_completion_payload(result)"));
 }
 
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
@@ -611,17 +627,17 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluated {
+            .send(BackgroundMessage::PostTurnEvaluationCompleted {
                 thread_id: "thread-1".to_string(),
                 completed_turn_id: "turn-1".to_string(),
-                evaluation: Box::new(ConversationPostTurnEvaluation {
-                    provenance: PostTurnAutomationProvenance::new("turn-1".to_string()),
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
                     runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
                         "stale snapshot".to_string(),
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["stale notice".to_string()],
-                    action: crate::adapter::inbound::tui::app::conversation_runtime::ConversationPostTurnAction::SkipAutoFollow {
+                    action: crate::adapter::inbound::tui::app::conversation_runtime::PostTurnContinuationAction::SkipAutoFollow {
                         reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason::PostTurnContinuationPaused,
                     },
                     operator_alerts: Vec::new(),
@@ -663,15 +679,15 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     };
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
-    let build_message = |notice: &str| BackgroundMessage::PostTurnEvaluated {
+    let build_message = |notice: &str| BackgroundMessage::PostTurnEvaluationCompleted {
         thread_id: "thread-1".to_string(),
         completed_turn_id: "turn-1".to_string(),
-        evaluation: Box::new(ConversationPostTurnEvaluation {
-            provenance: PostTurnAutomationProvenance::new("turn-1".to_string()),
+        evaluation: Box::new(PostTurnEvaluationOutcome {
+            provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
             runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
             planning_repair_state: None,
             runtime_notices: vec![notice.to_string()],
-            action: ConversationPostTurnAction::SkipAutoFollow {
+            action: PostTurnContinuationAction::SkipAutoFollow {
                 reason: AutoFollowSkipReason::PlanningBlocked,
             },
             operator_alerts: Vec::new(),
