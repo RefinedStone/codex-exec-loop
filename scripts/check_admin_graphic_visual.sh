@@ -15,6 +15,7 @@ output_dir="${ADMIN_GRAPHIC_OUTPUT_DIR:-target/admin-graphic-visual}"
 server_log="${output_dir}/akra-admin.log"
 admin_html="${output_dir}/admin.html"
 metrics_html="${output_dir}/admin-metrics.html"
+tasks_html="${output_dir}/admin-tasks.html"
 dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
@@ -133,10 +134,12 @@ server_pid="$!"
 base_url="http://127.0.0.1:${port}"
 graphic_url="${base_url}/admin/akra"
 metrics_url="${base_url}/admin/akra/metrics"
+tasks_url="${base_url}/admin/tasks"
 wait_for_server "${graphic_url}"
 
 curl -fsS "${graphic_url}" >"${admin_html}"
 curl -fsS "${metrics_url}" >"${metrics_html}"
+curl -fsS "${tasks_url}" >"${tasks_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
@@ -256,6 +259,27 @@ for token in \
   'Worktree 풀'; do
   require_contains "${metrics_html}" "${token}"
 done
+
+for token in \
+  '<body class="akra-graphic">' \
+  'aria-label="게임발전국 작업 관리"' \
+  'aria-label="작업 관리 탭"' \
+  'class="task-command-deck"' \
+  'class="task-command-grid"' \
+  'class="task-panel task-create-panel"' \
+  'class="task-panel task-proposal-panel"' \
+  'class="task-panel task-board-panel"' \
+  'id="task-list"' \
+  'data-list-filter="task-list"' \
+  '/admin/tasks/upsert' \
+  '/admin/tasks/delete' \
+  '/admin/files/export' \
+  '/admin/files/apply' \
+  '작업 관리'; do
+  require_contains "${tasks_html}" "${token}"
+done
+
+require_not_contains "${tasks_html}" 'Task catalog view'
 
 for token in \
   '"workspace"' \

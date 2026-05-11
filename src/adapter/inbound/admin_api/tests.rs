@@ -209,6 +209,10 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pool\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pipeline\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra/metrics#system\""));
+    assert!(BASE_TEMPLATE.contains(r#"current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks""#));
+    assert!(BASE_TEMPLATE.contains(
+        r#"href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}""#
+    ));
     assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
@@ -229,6 +233,70 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(ADMIN_MOD.contains(".route(\"/admin\", get(pages::dashboard_page))"));
     assert!(ADMIN_MOD.contains(".route(\"/\", get(pages::dashboard_page))"));
     assert!(BASE_TEMPLATE.contains("current_nav == \"dashboard\""));
+}
+
+#[test]
+fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
+    for token in [
+        "class=\"akra-task-console\" aria-label=\"게임발전국 작업 관리\"",
+        "class=\"task-command-deck\"",
+        "class=\"task-tab-strip\" aria-label=\"작업 관리 탭\"",
+        "href=\"/admin/tasks\" class=\"active\" aria-current=\"page\"",
+        "class=\"task-command-grid\"",
+        "class=\"task-panel task-create-panel\"",
+        "class=\"task-panel task-proposal-panel\"",
+        "class=\"task-panel task-board-panel\"",
+        "class=\"task-ticket-list\" id=\"task-list\"",
+        "class=\"task-ticket status-{{ task.status }}\"",
+        "data-list-filter=\"task-list\"",
+        "data-filter-empty=\"task-list\"",
+        "overview.runtime.proposed_tasks",
+        "management.tasks.len()",
+        "management.directions.len()",
+    ] {
+        assert!(
+            TASKS_TEMPLATE.contains(token),
+            "tasks game tab should expose {token}"
+        );
+    }
+
+    for token in [
+        "action=\"/admin/tasks/upsert\"",
+        "action=\"/admin/tasks/delete\"",
+        "action=\"/admin/files/export\"",
+        "action=\"/admin/files/apply\"",
+        "name=\"csrf_token\"",
+        "name=\"id\"",
+        "name=\"title\"",
+        "name=\"direction_id\"",
+        "name=\"status\"",
+        "name=\"base_priority\"",
+        "name=\"dynamic_priority_delta\"",
+        "name=\"priority_reason\"",
+        "name=\"description\"",
+        "name=\"depends_on_text\"",
+        "name=\"blocked_by_text\"",
+    ] {
+        assert!(
+            TASKS_TEMPLATE.contains(token),
+            "tasks game tab should keep admin form contract {token}"
+        );
+    }
+
+    assert_eq!(
+        TASKS_TEMPLATE
+            .matches("action=\"/admin/tasks/upsert\"")
+            .count(),
+        2
+    );
+    assert_eq!(
+        TASKS_TEMPLATE
+            .matches("action=\"/admin/tasks/delete\"")
+            .count(),
+        1
+    );
+    assert!(!TASKS_TEMPLATE.contains("Task catalog view"));
+    assert!(ADMIN_PAGES.contains("page_title: \"작업 관리\".to_string()"));
 }
 
 #[test]
@@ -522,6 +590,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "akra-admin",
         "/admin/akra",
         "/admin/akra/metrics",
+        "/admin/tasks",
+        "admin-tasks.html",
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
@@ -534,6 +604,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "id=\"campaign\"",
         "id=\"attempts\"",
         "id=\"intel\"",
+        "aria-label=\"게임발전국 작업 관리\"",
+        "class=\"task-command-grid\"",
+        "data-list-filter=\"task-list\"",
         "\"campaign\"",
         "\"laneCards\"",
         "\"intelCards\"",
