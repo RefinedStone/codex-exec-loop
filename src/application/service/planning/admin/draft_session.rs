@@ -386,9 +386,14 @@ mod tests {
     use super::*;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
-    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
-    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftLoadFileRecord, PlanningWorkspacePort,
+    };
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning::admin::PlanningAdminDraftFileUpdate;
     use crate::domain::planning::{
@@ -417,6 +422,13 @@ mod tests {
         );
         assert_eq!(
             file_key_for_kind(
+                PlanningAdminDraftKind::QueueIdlePrompt,
+                ".codex-exec-loop/planning/prompts/custom-review.md"
+            ),
+            Some(PlanningAdminFileKey::QueueIdlePrompt)
+        );
+        assert_eq!(
+            file_key_for_kind(
                 PlanningAdminDraftKind::DirectionDetail,
                 ".codex-exec-loop/planning/directions/general.md"
             ),
@@ -426,6 +438,34 @@ mod tests {
             file_key_for_kind(
                 PlanningAdminDraftKind::QueueIdlePrompt,
                 ".codex-exec-loop/planning/directions/general.md"
+            ),
+            None
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::FullPlanning,
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+            ),
+            None
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::QueueIdlePrompt,
+                RESULT_OUTPUT_FILE_PATH
+            ),
+            None
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::DirectionDetail,
+                RESULT_OUTPUT_FILE_PATH
+            ),
+            None
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::DirectionDetail,
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
             ),
             None
         );
@@ -450,6 +490,42 @@ mod tests {
     }
 
     #[test]
+    fn supporting_path_collection_ignores_blank_authority_references() {
+        let mut directions = direction_catalog_with_supporting_paths();
+        directions.queue_idle.prompt_path = "   ".to_string();
+        directions.directions[0].detail_doc_path = "\t".to_string();
+        directions.directions[1].detail_doc_path = " directions/release.md ".to_string();
+        directions.directions.truncate(2);
+
+        assert_eq!(
+            collect_direction_supporting_paths(&directions),
+            vec!["directions/release.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_core_draft_file_error_labels_all_core_file_kinds() {
+        assert_eq!(
+            missing_core_draft_file_error("directions.json", PlanningFileKind::Directions)
+                .to_string(),
+            "draft is missing required directions content at directions.json"
+        );
+        assert_eq!(
+            missing_core_draft_file_error("task-authority.json", PlanningFileKind::TaskAuthority)
+                .to_string(),
+            "draft is missing required task authority content at task-authority.json"
+        );
+        assert_eq!(
+            missing_core_draft_file_error(RESULT_OUTPUT_FILE_PATH, PlanningFileKind::ResultOutput)
+                .to_string(),
+            format!(
+                "draft is missing required result output content at {}",
+                RESULT_OUTPUT_FILE_PATH
+            )
+        );
+    }
+
+    #[test]
     fn create_full_planning_draft_stages_active_result_output_with_validation() {
         let fixture = TestAdminFixture::new("admin-full-draft");
 
@@ -468,6 +544,126 @@ mod tests {
         assert!(session.validation.is_valid);
         assert_eq!(session.validation.error_count, 0);
         assert!(session.queue_preview.is_some());
+    }
+
+    #[test]
+    fn full_planning_draft_skips_missing_supporting_paths_without_empty_staged_files() {
+        let fixture = TestAdminFixture::new("admin-full-draft-missing-support");
+        fixture
+            .facade
+            .ensure_default_authority()
+            .expect("authority seed should be available before custom directions");
+        let mut directions = fixture
+            .task_repository_port
+            .load_direction_authority_snapshot(&fixture.workspace.path)
+            .expect("direction authority should load")
+            .expect("default direction authority should be seeded")
+            .directions;
+        directions.directions.push(DirectionDefinition {
+            id: "missing-support".to_string(),
+            title: "Missing support".to_string(),
+            summary: "References a detail doc that is not present yet.".to_string(),
+            success_criteria: vec!["Missing detail is reported by validation.".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: "directions/missing.md".to_string(),
+            state: DirectionState::Active,
+        });
+        fixture
+            .task_repository_port
+            .commit_direction_authority_snapshot(
+                &fixture.workspace.path,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: &directions,
+                },
+            )
+            .expect("custom direction authority should commit");
+
+        let draft_name = fixture
+            .facade
+            .stage_active_manual_editor_draft()
+            .expect("full draft staging should skip missing supporting files");
+        let loaded = fixture
+            .workspace_port
+            .load_planning_draft_files(&fixture.workspace.path, &draft_name)
+            .expect("staged draft should load");
+
+        assert!(
+            loaded
+                .staged_files
+                .iter()
+                .any(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
+        );
+        assert!(
+            loaded
+                .staged_files
+                .iter()
+                .all(|file| file.active_path != "directions/missing.md")
+        );
+    }
+
+    #[test]
+    fn full_planning_draft_promote_updates_visible_result_output_and_keeps_hidden_prompt() {
+        let fixture = TestAdminFixture::new("admin-full-draft-promote");
+        let session = fixture
+            .facade
+            .create_draft_session(PlanningAdminDraftKind::FullPlanning, None)
+            .expect("full planning draft should open");
+        let original_queue_idle_prompt = fixture
+            .workspace_port
+            .load_optional_planning_file(
+                &fixture.workspace.path,
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
+            )
+            .expect("active queue-idle prompt should load")
+            .expect("queue-idle prompt should be seeded");
+        let edited_result_output =
+            "# Result Output Prompt\n\n- Promoted full planning result contract.\n";
+
+        let (promote_result, promoted_session) = fixture
+            .facade
+            .promote_draft(PlanningAdminDraftMutationRequest {
+                draft_name: session.draft_name.clone(),
+                kind: PlanningAdminDraftKind::FullPlanning,
+                direction_id: None,
+                files: vec![
+                    PlanningAdminDraftFileUpdate {
+                        key: PlanningAdminFileKey::ResultOutput,
+                        body: edited_result_output.to_string(),
+                    },
+                    PlanningAdminDraftFileUpdate {
+                        key: PlanningAdminFileKey::QueueIdlePrompt,
+                        body: "# Ignored Hidden Prompt\n\nThis body must not replace the hidden prompt."
+                            .to_string(),
+                    },
+                ],
+            })
+            .expect("full planning draft promotion should succeed");
+
+        assert_eq!(promote_result.draft_name, session.draft_name);
+        assert_eq!(promote_result.promoted_file_count, 2);
+        assert!(promote_result.validation_report.is_valid());
+        assert_eq!(promoted_session.files.len(), 1);
+        assert_eq!(promoted_session.files[0].body, edited_result_output);
+        assert_eq!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(&fixture.workspace.path, RESULT_OUTPUT_FILE_PATH)
+                .expect("active result output should load")
+                .expect("result output should be promoted"),
+            edited_result_output
+        );
+        assert_eq!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(
+                    &fixture.workspace.path,
+                    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+                )
+                .expect("active queue-idle prompt should load")
+                .expect("queue-idle prompt should remain promoted from staged context"),
+            original_queue_idle_prompt
+        );
     }
 
     #[test]
@@ -561,6 +757,35 @@ mod tests {
     }
 
     #[test]
+    fn invalid_session_view_suppresses_queue_preview_and_keeps_editor_body_visible() {
+        let fixture = TestAdminFixture::new("admin-invalid-session-view");
+        fixture
+            .facade
+            .ensure_default_authority()
+            .expect("authority seed should be available before draft validation");
+        let loaded = PlanningDraftLoadRecord {
+            draft_name: "invalid-result-output-draft".to_string(),
+            draft_directory: "drafts/invalid-result-output-draft".to_string(),
+            staged_files: vec![PlanningDraftLoadFileRecord {
+                active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                staged_path: "drafts/invalid-result-output-draft/result-output.md".to_string(),
+                body: "not a heading".to_string(),
+            }],
+        };
+
+        let session = fixture
+            .facade
+            .build_session_view(PlanningAdminDraftKind::FullPlanning, None, loaded)
+            .expect("invalid draft should still build a session view");
+
+        assert_eq!(session.files.len(), 1);
+        assert_eq!(session.files[0].body, "not a heading");
+        assert!(!session.validation.is_valid);
+        assert!(session.validation.error_count > 0);
+        assert!(session.queue_preview.is_none());
+    }
+
+    #[test]
     fn session_view_requires_effective_result_output_for_validation() {
         let fixture = TestAdminFixture::new("admin-missing-result-output");
         fixture
@@ -634,6 +859,7 @@ mod tests {
         workspace: TempPlanningWorkspace,
         facade: PlanningAdminFacadeService,
         workspace_port: Arc<dyn PlanningWorkspacePort>,
+        task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     }
 
     impl TestAdminFixture {
@@ -654,12 +880,13 @@ mod tests {
                 planning,
                 workspace_port.clone(),
                 authority_port,
-                task_repository_port,
+                task_repository_port.clone(),
             );
             Self {
                 workspace,
                 facade,
                 workspace_port,
+                task_repository_port,
             }
         }
     }

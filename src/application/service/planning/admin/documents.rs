@@ -521,6 +521,29 @@ mod tests {
     }
 
     #[test]
+    fn direction_from_request_accepts_explicit_id_and_done_state() {
+        let directions = direction_catalog(Vec::new());
+
+        let direction = direction_from_request(
+            PlanningAdminDirectionMutationRequest {
+                id: "explicit-id".to_string(),
+                title: " Completed Work ".to_string(),
+                summary: "Done direction".to_string(),
+                success_criteria_text: "archive it".to_string(),
+                scope_hints_text: String::new(),
+                detail_doc_path: String::new(),
+                state: "done".to_string(),
+            },
+            &directions,
+        )
+        .expect("explicit done direction should be accepted");
+
+        assert_eq!(direction.id, "explicit-id");
+        assert_eq!(direction.title, "Completed Work");
+        assert_eq!(direction.state, DirectionState::Done);
+    }
+
+    #[test]
     fn default_direction_selection_prefers_default_then_active_then_first() {
         let catalog = direction_catalog(vec![
             direction("paused-direction", DirectionState::Paused),
@@ -660,6 +683,47 @@ mod tests {
         assert_eq!(reloaded.result_output_markdown, original_result_output);
     }
 
+    #[test]
+    fn operator_document_commit_rejects_stale_direction_revision() {
+        let fixture = TestAdminFixture::new("admin-documents-direction-conflict");
+        let mut stale_documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded operator documents should load");
+        let stale_revision = stale_documents
+            .observed_planning_revision
+            .expect("loaded documents should carry a planning revision");
+        stale_documents.result_output_markdown =
+            "# Result Output\n\nStale edit should not commit.".to_string();
+        let mut concurrent_directions = stale_documents.directions.clone();
+        concurrent_directions
+            .directions
+            .push(direction("concurrent-direction", DirectionState::Active));
+        fixture
+            .task_repository_port
+            .commit_direction_authority_snapshot(
+                fixture.facade.workspace_dir(),
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: &concurrent_directions,
+                },
+            )
+            .expect("concurrent direction edit should commit first");
+
+        let error = fixture
+            .facade
+            .commit_operator_planning_documents(stale_documents)
+            .expect_err("stale direction revision should be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "planning db changed while editing directions (observed revision {stale_revision}, current revision {}); reload and retry",
+                stale_revision + 1
+            )
+        );
+    }
+
     fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {
         DirectionCatalogDocument {
             version: PLANNING_FORMAT_VERSION,
@@ -712,6 +776,7 @@ mod tests {
     struct TestAdminFixture {
         _workspace: TempPlanningWorkspace,
         facade: PlanningAdminFacadeService,
+        task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     }
 
     impl TestAdminFixture {
@@ -733,11 +798,12 @@ mod tests {
                 planning,
                 workspace_port,
                 authority_port,
-                task_repository_port,
+                task_repository_port.clone(),
             );
             Self {
                 _workspace: workspace,
                 facade,
+                task_repository_port,
             }
         }
     }
