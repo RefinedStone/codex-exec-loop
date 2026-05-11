@@ -242,7 +242,7 @@ fn core_layer_only_depends_on_application_domain_and_core_modules() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "future boundary target: core currently coordinates application services directly"]
 fn future_core_layer_is_application_independent() {
     /*
      * Disabled target: if core becomes the innermost app/kernel boundary instead
@@ -257,7 +257,7 @@ fn future_core_layer_is_application_independent() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "future boundary target: core/app still reuses application DTOs"]
 fn future_core_app_contracts_are_application_dto_free() {
     /*
      * Disabled target: core/app should eventually expose core-owned commands,
@@ -272,7 +272,7 @@ fn future_core_app_contracts_are_application_dto_free() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "future boundary target: public core/app contracts are not fully core-owned yet"]
 fn future_core_app_public_contracts_are_core_owned() {
     /*
      * Disabled target: this is the strict version of the core/app boundary. Core
@@ -358,7 +358,7 @@ fn core_app_layer_has_no_effect_execution_dependencies() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "future boundary target: core/runtime still stores raw application services"]
 fn future_core_runtime_does_not_hold_raw_application_services() {
     /*
      * Disabled target: core/runtime may keep the effect boundary, but the concrete
@@ -381,7 +381,7 @@ fn future_core_runtime_does_not_hold_raw_application_services() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "future boundary target: core/runtime still calls application service modules directly"]
 fn future_core_runtime_uses_application_facade_not_service_modules() {
     /*
      * Disabled target: core/runtime should eventually execute one narrow
