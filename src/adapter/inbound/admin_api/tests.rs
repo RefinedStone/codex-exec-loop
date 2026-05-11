@@ -28,6 +28,11 @@ const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
     "../../../../templates/admin/resources/gamebaljeonguk_sprite_pack/gamebaljeonguk_sprite_metadata.json"
 );
 const AKRA_DIORAMA_JS: &str = include_str!("../../../../assets/admin/game/akra-diorama.js");
+const AKRA_DIORAMA_TS: &str = include_str!("../../../../assets/admin/game/src/akra-diorama.ts");
+const ADMIN_GAME_PACKAGE_JSON: &str = include_str!("../../../../assets/admin/game/package.json");
+const ADMIN_GAME_VITE_CONFIG: &str = include_str!("../../../../assets/admin/game/vite.config.ts");
+const ADMIN_GAME_PROMOTE_BUILD: &str =
+    include_str!("../../../../assets/admin/game/scripts/promote-build.mjs");
 const ADMIN_API: &str = include_str!("api.rs");
 const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
@@ -343,10 +348,61 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "rebuildAgentUnits",
         "PIXI.Application",
         "gamebaljeonguk_atlas_64x96.png",
+        "src/akra-diorama.ts",
     ] {
         assert!(
             AKRA_DIORAMA_JS.contains(token),
             "admin game diorama asset should expose {token}"
+        );
+    }
+}
+
+#[test]
+fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
+    for token in [
+        "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
+        "\"check\": \"tsc --noEmit --project tsconfig.json\"",
+        "\"typescript\":",
+        "\"vite\":",
+    ] {
+        assert!(
+            ADMIN_GAME_PACKAGE_JSON.contains(token),
+            "admin game package should keep {token}"
+        );
+    }
+
+    for token in [
+        "entry: \"src/akra-diorama.ts\"",
+        "formats: [\"iife\"]",
+        "fileName: () => \"akra-diorama.js\"",
+        "name: \"AkraAdminDioramaBundle\"",
+        "outDir: \"dist\"",
+    ] {
+        assert!(
+            ADMIN_GAME_VITE_CONFIG.contains(token),
+            "admin game Vite config should keep {token}"
+        );
+    }
+
+    for token in [
+        "type StatusSeverity",
+        "interface DioramaHandle",
+        "declare const PIXI",
+        "const mountDiorama = (): DioramaHandle | null",
+        "window.AkraAdminGame",
+        "PIXI.Assets.load",
+        "app.ticker.add",
+    ] {
+        assert!(
+            AKRA_DIORAMA_TS.contains(token),
+            "admin game TypeScript source should keep {token}"
+        );
+    }
+
+    for token in ["dist/akra-diorama.js", "akra-diorama.js", "copyFileSync"] {
+        assert!(
+            ADMIN_GAME_PROMOTE_BUILD.contains(token),
+            "admin game promote script should keep {token}"
         );
     }
 }
@@ -448,6 +504,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "templates/admin/resources/main-sprite.png",
         "gamebaljeonguk_atlas_64x96.png",
         "ADMIN_GRAPHIC_CAPTURE",
+        "ADMIN_GAME_BUILD",
+        "npm --prefix assets/admin/game run check",
+        "npm --prefix assets/admin/game run build",
         "akra-admin",
         "/admin/akra",
         "/admin/akra/metrics",

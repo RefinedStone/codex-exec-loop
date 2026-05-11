@@ -119,6 +119,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ "${ADMIN_GAME_BUILD:-1}" != "0" ]]; then
+  if [[ ! -d assets/admin/game/node_modules ]]; then
+    npm --prefix assets/admin/game ci
+  fi
+  npm --prefix assets/admin/game run check
+  npm --prefix assets/admin/game run build
+fi
+
 cargo run --quiet --bin akra-admin -- --port "${port}" >"${server_log}" 2>&1 &
 server_pid="$!"
 
