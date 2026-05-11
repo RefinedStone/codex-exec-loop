@@ -118,11 +118,11 @@ interface AkraAdminGameBridge {
 
 const AGENT_FRAME_WIDTH = 128;
 const AGENT_FRAME_HEIGHT = 192;
-const AGENT_SPRITE_SCALE = 0.78;
-const AGENT_SHADOW_WIDTH = 44;
-const AGENT_SHADOW_HEIGHT = 12;
-const AGENT_RING_WIDTH = 36;
-const AGENT_RING_HEIGHT = 10;
+const AGENT_SPRITE_SCALE = 0.55;
+const AGENT_SHADOW_WIDTH = 31;
+const AGENT_SHADOW_HEIGHT = 8;
+const AGENT_RING_WIDTH = 25;
+const AGENT_RING_HEIGHT = 7;
 
 declare const PIXI: {
   Application: new (options: Record<string, unknown>) => PixiApplication;
