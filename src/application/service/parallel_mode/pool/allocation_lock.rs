@@ -3,6 +3,7 @@ use super::{derive_default_pool_root, detect_canonical_repo_root};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 const POOL_ALLOCATION_LOCK_DIR: &str = ".allocation-lock";
@@ -213,6 +214,8 @@ fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
     */
     match std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
     {
         Ok(status) if status.success() => PoolAllocationLockOwnerLiveness::Alive,
