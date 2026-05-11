@@ -189,3 +189,318 @@ fn remove_tasks_for_direction(
     });
     removed_task_ids
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::service::planning::PlanningServices;
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PLANNING_FORMAT_VERSION, QueueIdleConfig, QueueIdlePolicy, TaskActor, TaskDefinition,
+        TaskMutationProvenance, TaskStatus,
+    };
+
+    #[test]
+    fn upsert_command_inserts_then_updates_direction_documents() {
+        let fixture = TestAdminFixture::new("direction-mutation-upsert");
+        let service = PlanningAdminDirectionMutationService::new(&fixture.facade);
+
+        let inserted = service
+            .apply(PlanningAdminDirectionMutationCommand::Upsert(
+                direction_request("", "Release Planning", "active"),
+            ))
+            .expect("new direction should be inserted");
+        let updated = service
+            .apply(PlanningAdminDirectionMutationCommand::Upsert(
+                direction_request("dir-release-planning", "Release Execution", "paused"),
+            ))
+            .expect("existing direction should be updated");
+        let documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should reload after upsert");
+        let direction = documents
+            .directions
+            .directions
+            .iter()
+            .find(|direction| direction.id == "dir-release-planning")
+            .expect("upserted direction should exist");
+
+        assert_eq!(inserted.direction_id, "dir-release-planning");
+        assert!(!inserted.updated);
+        assert!(!inserted.deleted);
+        assert_eq!(inserted.removed_task_count, 0);
+        assert_eq!(updated.direction_id, "dir-release-planning");
+        assert!(updated.updated);
+        assert_eq!(direction.title, "Release Execution");
+        assert_eq!(direction.state, DirectionState::Paused);
+    }
+
+    #[test]
+    fn deleting_default_direction_is_a_noop_that_restores_anchor() {
+        let fixture = TestAdminFixture::new("direction-mutation-default-delete");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded documents should load");
+        documents
+            .directions
+            .directions
+            .retain(|direction| direction.id != DEFAULT_DIRECTION_ID);
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("commit should restore default direction");
+
+        let outcome = PlanningAdminDirectionMutationService::new(&fixture.facade)
+            .apply(PlanningAdminDirectionMutationCommand::Delete(
+                PlanningAdminDirectionDeleteRequest {
+                    id: DEFAULT_DIRECTION_ID.to_string(),
+                },
+            ))
+            .expect("default delete should be accepted as protected noop");
+        let reloaded = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should reload after protected delete");
+
+        assert_eq!(outcome.direction_id, DEFAULT_DIRECTION_ID);
+        assert!(!outcome.updated);
+        assert!(!outcome.deleted);
+        assert_eq!(outcome.removed_task_count, 0);
+        assert!(outcome.removed_task_ids.is_empty());
+        assert!(
+            reloaded
+                .directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == DEFAULT_DIRECTION_ID)
+        );
+    }
+
+    #[test]
+    fn delete_command_removes_direction_tasks_and_dangling_references() {
+        let fixture = TestAdminFixture::new("direction-mutation-delete-cascade");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded documents should load");
+        documents.directions = direction_catalog(vec![
+            direction(DEFAULT_DIRECTION_ID),
+            direction("dir-keep"),
+            direction("dir-remove"),
+        ]);
+        documents.task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![
+                task(
+                    "kept-task",
+                    "dir-keep",
+                    vec!["removed-a", "external-task"],
+                    vec!["removed-b"],
+                ),
+                task("external-task", "dir-keep", Vec::new(), Vec::new()),
+                task("removed-a", " dir-remove ", Vec::new(), Vec::new()),
+                task("removed-b", "dir-remove", vec!["kept-task"], Vec::new()),
+            ],
+        };
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("fixture documents should commit");
+
+        let outcome = PlanningAdminDirectionMutationService::new(&fixture.facade)
+            .apply(PlanningAdminDirectionMutationCommand::Delete(
+                PlanningAdminDirectionDeleteRequest {
+                    id: "dir-remove".to_string(),
+                },
+            ))
+            .expect("non-default direction should be deleted");
+        let reloaded = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should reload after delete");
+        let kept_task = reloaded
+            .task_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "kept-task")
+            .expect("kept task should remain");
+
+        assert!(outcome.deleted);
+        assert_eq!(outcome.removed_task_count, 2);
+        assert_eq!(
+            outcome.removed_task_ids,
+            BTreeSet::from(["removed-a".to_string(), "removed-b".to_string()])
+        );
+        assert!(
+            !reloaded
+                .directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == "dir-remove")
+        );
+        assert_eq!(reloaded.task_authority.tasks.len(), 2);
+        assert_eq!(kept_task.depends_on, vec!["external-task".to_string()]);
+        assert!(kept_task.blocked_by.is_empty());
+    }
+
+    #[test]
+    fn delete_command_rejects_blank_and_missing_direction_ids() {
+        let fixture = TestAdminFixture::new("direction-mutation-delete-errors");
+        let service = PlanningAdminDirectionMutationService::new(&fixture.facade);
+
+        let blank = service
+            .apply(PlanningAdminDirectionMutationCommand::Delete(
+                PlanningAdminDirectionDeleteRequest {
+                    id: "  ".to_string(),
+                },
+            ))
+            .expect_err("blank id should fail before document loading");
+        let missing = service
+            .apply(PlanningAdminDirectionMutationCommand::Delete(
+                PlanningAdminDirectionDeleteRequest {
+                    id: "missing-direction".to_string(),
+                },
+            ))
+            .expect_err("missing id should fail explicitly");
+
+        assert_eq!(blank.to_string(), "direction id is required");
+        assert_eq!(
+            missing.to_string(),
+            "direction `missing-direction` was not found"
+        );
+    }
+
+    fn direction_request(
+        id: &str,
+        title: &str,
+        state: &str,
+    ) -> PlanningAdminDirectionMutationRequest {
+        PlanningAdminDirectionMutationRequest {
+            id: id.to_string(),
+            title: title.to_string(),
+            summary: format!("Summary for {title}"),
+            success_criteria_text: "done".to_string(),
+            scope_hints_text: "scope".to_string(),
+            detail_doc_path: String::new(),
+            state: state.to_string(),
+        }
+    }
+
+    fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::Stop,
+                prompt_path: String::new(),
+            },
+            directions,
+        }
+    }
+
+    fn direction(id: &str) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: format!("Direction {id}"),
+            summary: format!("Summary for {id}"),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state: DirectionState::Active,
+        }
+    }
+
+    fn task(
+        id: &str,
+        direction_id: &str,
+        depends_on: Vec<&str>,
+        blocked_by: Vec<&str>,
+    ) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            direction_relation_note: "relates to the direction".to_string(),
+            title: format!("Task {id}"),
+            description: "Do the task".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: depends_on.into_iter().map(str::to_string).collect(),
+            blocked_by: blocked_by.into_iter().map(str::to_string).collect(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+
+    struct TestAdminFixture {
+        _workspace: TempPlanningWorkspace,
+        facade: PlanningAdminFacadeService,
+    }
+
+    impl TestAdminFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            let authority_port: Arc<dyn PlanningAuthorityPort> = sqlite.clone();
+            let task_repository_port: Arc<dyn PlanningTaskRepositoryPort> = sqlite.clone();
+            let planning = PlanningServices::from_ports(
+                workspace_port.clone(),
+                authority_port.clone(),
+                task_repository_port.clone(),
+                Arc::new(NoopPlanningWorkerPort),
+            );
+            let facade = PlanningAdminFacadeService::from_planning_with_authority(
+                workspace.path.clone(),
+                planning,
+                workspace_port,
+                authority_port,
+                task_repository_port,
+            );
+            Self {
+                _workspace: workspace,
+                facade,
+            }
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
