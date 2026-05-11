@@ -536,6 +536,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  @media (min-width: 861px) {
+    .office-board.is-pixi-mounted .desk > .speech {
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
   .agent-sprite {
     position: relative;
     display: grid;
