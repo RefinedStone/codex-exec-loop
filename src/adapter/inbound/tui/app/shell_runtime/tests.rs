@@ -283,6 +283,28 @@ fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
     assert!(SHELL_RUNTIME_RS.contains("apply_post_turn_evaluation_completion_payload(result)"));
 }
 
+#[test]
+fn tui_projection_rendering_reads_core_snapshot_before_legacy_cache() {
+    /*
+     * Rendering can keep a transitional TUI cache for compatibility, but the
+     * effective read path should consult core AppSnapshot first. This keeps
+     * future surfaces from treating NativeTuiApp cache fields as the durable
+     * projection authority.
+     */
+    const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
+    const PLAN_INDICATOR_RS: &str =
+        include_str!("../shell_presentation/status_panels/plan_indicator.rs");
+
+    assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_readiness_snapshot"));
+    assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_supervisor_snapshot"));
+    assert!(PARALLEL_MODE_RS.contains("self.core_runtime"));
+    assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
+    assert!(
+        !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
+    );
+    assert!(!PLAN_INDICATOR_RS.contains("load_planning_runtime_projection"));
+}
+
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
     let workspace_dir = create_temp_git_repo(prefix);
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());

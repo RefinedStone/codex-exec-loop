@@ -7,6 +7,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnQueuedPrompt,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
+use crate::core::app::CoreInput;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -676,6 +677,71 @@ fn supervisor_invalidation_keeps_cached_board_visible() {
             .pool
             .configured_size,
         3
+    );
+}
+
+#[test]
+fn parallel_projection_accessors_prefer_core_snapshot_over_legacy_tui_cache() {
+    /*
+     * The TUI cache is still accepted as a transitional seed for old tests and
+     * event application, but effective rendering accessors must prefer the core
+     * AppSnapshot projection when both exist for the active workspace.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
+    runtime.app_mut().parallel_mode_readiness_snapshot = Some(ParallelModeReadinessSnapshot::new(
+        workspace_directory.clone(),
+        ParallelModeReadinessState::Blocked,
+        Vec::new(),
+        Some("legacy cache alert".to_string()),
+    ));
+    runtime.app_mut().parallel_mode_supervisor_snapshot =
+        Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Recover,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(1, "/tmp/legacy-pool", "legacy", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "legacy roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "legacy detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "legacy", "legacy"),
+            Some("legacy cache notice".to_string()),
+        ));
+
+    runtime
+        .app_mut()
+        .dispatch_core_input(CoreInput::ParallelModeReadinessProjectionChanged(Some(
+            Box::new(ready_parallel_mode_readiness_snapshot(&workspace_directory)),
+        )));
+    runtime
+        .app_mut()
+        .dispatch_core_input(CoreInput::ParallelModeSupervisorProjectionChanged(Some(
+            Box::new(ParallelModeSupervisorSnapshot::new(
+                ParallelModeSupervisorState::Supervise,
+                workspace_directory,
+                ParallelModePoolBoardSnapshot::new(4, "/tmp/core-pool", "core", Vec::new()),
+                ParallelModeAgentRosterSnapshot::new(Vec::new(), "core roster"),
+                ParallelModeSupervisorDetailSnapshot::new(None, "core detail"),
+                ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "core", "core"),
+                Some("core projection notice".to_string()),
+            )),
+        )));
+
+    let readiness_snapshot = runtime
+        .app()
+        .parallel_mode_readiness_snapshot()
+        .expect("core readiness projection should be visible");
+    let supervisor_snapshot = runtime.app().parallel_mode_supervisor_snapshot();
+
+    assert_eq!(
+        readiness_snapshot.readiness,
+        ParallelModeReadinessState::Ready
+    );
+    assert_eq!(readiness_snapshot.top_alert, None);
+    assert_eq!(supervisor_snapshot.pool.configured_size, 4);
+    assert_eq!(supervisor_snapshot.pool.pool_root_label, "/tmp/core-pool");
+    assert_eq!(
+        supervisor_snapshot.top_notice.as_deref(),
+        Some("core projection notice")
     );
 }
 

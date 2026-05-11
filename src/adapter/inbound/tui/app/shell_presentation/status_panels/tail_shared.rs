@@ -67,7 +67,7 @@ pub(super) fn parallel_mode_alert_line(app: &NativeTuiApp) -> Option<String> {
      * summary line과 분리해 tail/footer가 경고를 한 줄 더 강조할 수 있게 한다.
      */
     app.parallel_mode_readiness_snapshot()
-        .and_then(|snapshot| snapshot.top_alert.as_deref())
+        .and_then(|snapshot| snapshot.top_alert)
         .map(|alert| format!("parallel alert: {alert}"))
 }
 

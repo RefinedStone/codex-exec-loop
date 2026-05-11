@@ -25,25 +25,26 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     };
     let readiness_snapshot = app.parallel_mode_readiness_snapshot();
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
+    let readiness_snapshot_ref = readiness_snapshot.as_ref();
     let activity_frame = supersession_activity_frame();
     let mud_lines =
         build_supersession_mud_view(&supervisor_snapshot, &app.supersession_mud_ui_state);
     /*
-    The app state remains the source of truth for live readiness and supervisor
-    snapshots. This adapter only chooses popup grouping and copy, so service-layer
+    The core app projection remains the first source for live readiness and
+    supervisor snapshots. This adapter only chooses popup grouping and copy, so service-layer
     invariants such as queue ordering, pool reconciliation, and official completion
     refresh stay testable outside ratatui rendering.
     */
     let summary_lines = build_summary_lines(
         app,
         mode_label,
-        readiness_snapshot,
+        readiness_snapshot_ref,
         &supervisor_snapshot,
         activity_frame,
         &mud_lines.summary_lines,
     );
     let capability_lines =
-        build_capability_lines(readiness_snapshot, &supervisor_snapshot, activity_frame);
+        build_capability_lines(readiness_snapshot_ref, &supervisor_snapshot, activity_frame);
     let pool_lines = build_pool_lines_with_mud(
         &supervisor_snapshot.pool,
         activity_frame,
@@ -63,7 +64,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
 
     if app.parallel_mode_enabled() {
         key_lines.push(AkraTheme::key_line("Ctrl+P: parallel off"));
-    } else if readiness_snapshot.is_some_and(|snapshot| snapshot.allows_parallel_mode()) {
+    } else if readiness_snapshot_ref.is_some_and(|snapshot| snapshot.allows_parallel_mode()) {
         key_lines.push(AkraTheme::key_line("next action: type :parallel"));
     } else {
         key_lines.push(AkraTheme::key_line(

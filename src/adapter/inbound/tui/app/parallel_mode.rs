@@ -137,10 +137,8 @@ impl NativeTuiApp {
     pub(crate) fn parallel_mode_enabled(&self) -> bool {
         self.parallel_mode_control_plane.mode_enabled()
     }
-    pub(crate) fn parallel_mode_readiness_snapshot(
-        &self,
-    ) -> Option<&ParallelModeReadinessSnapshot> {
-        self.parallel_mode_readiness_snapshot.as_ref()
+    pub(crate) fn parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
+        self.current_parallel_mode_readiness_projection()
     }
     #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
@@ -200,18 +198,59 @@ impl NativeTuiApp {
     }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.planning_workspace_directory();
-        if let Some(snapshot) = self.parallel_mode_supervisor_snapshot.as_ref()
-            && snapshot.workspace_path == workspace_directory
-        {
-            return snapshot.clone();
+        if let Some(snapshot) = self.current_parallel_mode_supervisor_projection() {
+            return snapshot;
         }
 
+        let readiness_snapshot = self.parallel_mode_readiness_snapshot();
         pending_parallel_mode_supervisor_snapshot(
             &workspace_directory,
             self.parallel_mode_enabled(),
-            self.parallel_mode_readiness_snapshot(),
+            readiness_snapshot.as_ref(),
             ParallelModeLoadingStage::Entering,
         )
+    }
+
+    fn current_parallel_mode_readiness_projection(&self) -> Option<ParallelModeReadinessSnapshot> {
+        let workspace_directory = self.planning_workspace_directory();
+        self.core_parallel_mode_readiness_snapshot()
+            .filter(|snapshot| snapshot.workspace_path == workspace_directory)
+            .or_else(|| {
+                self.parallel_mode_readiness_snapshot
+                    .clone()
+                    .filter(|snapshot| snapshot.workspace_path == workspace_directory)
+            })
+    }
+
+    fn core_parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
+        self.core_runtime
+            .snapshot()
+            .planning_parallel
+            .parallel_mode
+            .readiness
+            .map(|snapshot| *snapshot)
+    }
+
+    fn current_parallel_mode_supervisor_projection(
+        &self,
+    ) -> Option<ParallelModeSupervisorSnapshot> {
+        let workspace_directory = self.planning_workspace_directory();
+        self.core_parallel_mode_supervisor_snapshot()
+            .filter(|snapshot| snapshot.workspace_path == workspace_directory)
+            .or_else(|| {
+                self.parallel_mode_supervisor_snapshot
+                    .clone()
+                    .filter(|snapshot| snapshot.workspace_path == workspace_directory)
+            })
+    }
+
+    fn core_parallel_mode_supervisor_snapshot(&self) -> Option<ParallelModeSupervisorSnapshot> {
+        self.core_runtime
+            .snapshot()
+            .planning_parallel
+            .parallel_mode
+            .supervisor
+            .map(|snapshot| *snapshot)
     }
 
     pub(crate) fn parallel_mode_activity_pulse_visible(&self) -> bool {
@@ -238,7 +277,8 @@ impl NativeTuiApp {
             overlay_event,
             ParallelPanelUiEvent::ModeSet(self.parallel_mode_enabled()),
             ParallelPanelUiEvent::SupervisorSnapshotChanged(
-                self.parallel_mode_supervisor_snapshot.clone().map(Box::new),
+                self.current_parallel_mode_supervisor_projection()
+                    .map(Box::new),
             ),
         ];
         if let Some(reason) = self.last_parallel_mode_dispatch_withheld_reason() {
@@ -252,9 +292,9 @@ impl NativeTuiApp {
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
         // Worker dispatch changes leases asynchronously. Keep the last concrete
         // board on screen and refresh a new snapshot off the input/render path.
-        let readiness_snapshot = self.parallel_mode_readiness_snapshot.clone();
+        let readiness_snapshot = self.parallel_mode_readiness_snapshot();
         let workspace_directory = self.planning_workspace_directory();
-        if self.parallel_mode_supervisor_snapshot.is_none() {
+        if self.current_parallel_mode_supervisor_projection().is_none() {
             self.sync_core_parallel_mode_supervisor_projection(Some(
                 pending_parallel_mode_supervisor_snapshot(
                     &workspace_directory,

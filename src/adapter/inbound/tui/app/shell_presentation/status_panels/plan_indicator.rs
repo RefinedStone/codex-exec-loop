@@ -18,17 +18,16 @@ pub(in super::super) struct PlanModeIndicatorView {
     style: Style,
 }
 
-// Select the freshest planning runtime projection available for the current shell phase and project it into footer copy.
+// Select the planning runtime projection for the current shell phase and project it into footer copy.
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
     match &app.conversation_state {
         // Ready conversations own the runtime projection updated by turn execution, keeping footer copy aligned with auto-follow decisions.
         ConversationState::Ready(conversation) => {
             plan_mode_indicator_from_runtime_projection(&conversation.planning_runtime_projection)
         }
-        // Startup/loading surfaces lack a conversation cache, so reload from the current workspace to avoid a blank indicator.
+        // Startup/loading surfaces lack a conversation cache, so read the headless core projection instead of doing render-path IO.
         ConversationState::Loading | ConversationState::Failed(_) => {
-            let workspace_directory = app.current_workspace_directory();
-            let runtime_projection = app.load_planning_runtime_projection(&workspace_directory);
+            let runtime_projection = app.planning_runtime_projection_snapshot();
             plan_mode_indicator_from_runtime_projection(&runtime_projection)
         }
     }

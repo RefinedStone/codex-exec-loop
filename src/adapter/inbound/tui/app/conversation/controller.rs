@@ -60,6 +60,11 @@ impl NativeTuiApp {
             .load_runtime_projection_or_invalid(workspace_directory)
     }
 
+    pub(crate) fn planning_runtime_projection_snapshot(&self) -> PlanningRuntimeProjection {
+        let snapshot = self.core_runtime.snapshot();
+        *snapshot.planning_parallel.planning_runtime
+    }
+
     // active conversation이 현재 주장하는 workspace에 맞춰 planning status cache를 갱신한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_projection(&mut self) {
         // state replacement 중 self를 계속 빌리지 않도록 선택된 path를 먼저 소유한다.
