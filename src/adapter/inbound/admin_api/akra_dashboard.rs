@@ -7,7 +7,8 @@ use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeDistributorQueueItem, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessSnapshot,
-    ParallelModeReadinessState, ParallelModeRuntimeEventEntry, ParallelModeSupervisorSnapshot,
+    ParallelModeReadinessState, ParallelModeRuntimeEventEntry,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -154,6 +155,7 @@ pub(super) struct SelectedTaskView {
 pub(super) struct DistributorView {
     pub role_label: String,
     pub head_summary: String,
+    pub bubble_label: String,
     pub note: String,
     pub queue_depth: usize,
     pub barrier_state: String,
@@ -384,13 +386,22 @@ fn map_pool(supervisor: &ParallelModeSupervisorSnapshot) -> PoolBoardView {
             .slots
             .iter()
             .enumerate()
-            .map(|(index, slot)| map_pool_slot(index, slot))
+            .map(|(index, slot)| map_pool_slot(index, slot, supervisor))
             .collect(),
     }
 }
 
-fn map_pool_slot(index: usize, slot: &ParallelModePoolSlotSnapshot) -> PoolSlotView {
+fn map_pool_slot(
+    index: usize,
+    slot: &ParallelModePoolSlotSnapshot,
+    supervisor: &ParallelModeSupervisorSnapshot,
+) -> PoolSlotView {
     let (owner_agent_id, task_id) = parse_owner_label(&slot.owner_label);
+    let roster_entry = supervisor
+        .roster
+        .entries
+        .iter()
+        .find(|entry| entry.slot_id == slot.slot_id);
     PoolSlotView {
         slot_id: slot.slot_id.clone(),
         display_slot_label: pool_slot_display_label(&slot.slot_id),
@@ -404,7 +415,7 @@ fn map_pool_slot(index: usize, slot: &ParallelModePoolSlotSnapshot) -> PoolSlotV
         task_id,
         note: pool_slot_note(slot),
         severity: pool_state_severity(slot.state).to_string(),
-        bubble_label: pool_state_bubble(slot.state).to_string(),
+        bubble_label: slot_worker_bubble(slot, roster_entry, &supervisor.detail),
     }
 }
 
@@ -491,6 +502,7 @@ fn map_distributor(supervisor: &ParallelModeSupervisorSnapshot) -> DistributorVi
     DistributorView {
         role_label: "배포 관리자 / serialized distributor".to_string(),
         head_summary: distributor.head_summary.clone(),
+        bubble_label: distributor_bubble(head_state).to_string(),
         note: distributor.note.clone(),
         queue_depth: distributor.queue_depth(),
         barrier_state: distributor.orchestrator_status.barrier_state.clone(),
@@ -920,7 +932,7 @@ fn pool_state_korean_label(state: ParallelModePoolSlotState) -> &'static str {
         ParallelModePoolSlotState::Idle => "여유",
         ParallelModePoolSlotState::Leased => "예약됨",
         ParallelModePoolSlotState::Running => "작업중",
-        ParallelModePoolSlotState::AwaitingCleanup => "정리중",
+        ParallelModePoolSlotState::AwaitingCleanup => "정리 대기",
         ParallelModePoolSlotState::Blocked => "차단됨",
         ParallelModePoolSlotState::Missing => "사라짐",
         ParallelModePoolSlotState::Unavailable => "사용 불가",
@@ -932,10 +944,73 @@ fn pool_state_bubble(state: ParallelModePoolSlotState) -> &'static str {
         ParallelModePoolSlotState::Idle => "노는중",
         ParallelModePoolSlotState::Leased => "점유됨",
         ParallelModePoolSlotState::Running => "작업중",
-        ParallelModePoolSlotState::AwaitingCleanup => "정리중",
+        ParallelModePoolSlotState::AwaitingCleanup => "정리 대기",
         ParallelModePoolSlotState::Blocked => "막힘",
         ParallelModePoolSlotState::Missing => "확인 필요",
         ParallelModePoolSlotState::Unavailable => "잠금",
+    }
+}
+
+fn slot_worker_bubble(
+    slot: &ParallelModePoolSlotSnapshot,
+    roster_entry: Option<&ParallelModeAgentRosterEntry>,
+    detail: &ParallelModeSupervisorDetailSnapshot,
+) -> String {
+    if matches!(
+        slot.state,
+        ParallelModePoolSlotState::Blocked
+            | ParallelModePoolSlotState::AwaitingCleanup
+            | ParallelModePoolSlotState::Missing
+            | ParallelModePoolSlotState::Unavailable
+    ) {
+        return pool_state_bubble(slot.state).to_string();
+    }
+
+    if let Some(session) = detail
+        .session
+        .as_ref()
+        .filter(|session| session.slot_id == slot.slot_id)
+        && let Some(label) = session
+            .history
+            .iter()
+            .rev()
+            .find_map(|entry| worker_lifecycle_bubble(entry.state_label.as_str()))
+            .or_else(|| worker_lifecycle_bubble(session.state_label.as_str()))
+    {
+        return label.to_string();
+    }
+
+    roster_entry
+        .and_then(|entry| worker_lifecycle_bubble(entry.state_label.as_str()))
+        .unwrap_or_else(|| pool_state_bubble(slot.state))
+        .to_string()
+}
+
+fn worker_lifecycle_bubble(state_label: &str) -> Option<&'static str> {
+    match state_label {
+        "assigned" => Some("작업 배정됨"),
+        "starting" => Some("세션 준비 중"),
+        "running" => Some("작업중"),
+        "reported_complete" => Some("결과 제출함"),
+        "ledger_refreshing" => Some("검수 중"),
+        "commit_ready" => Some("검수 통과"),
+        "failed" => Some("실패"),
+        "official_refresh_recovery_needed" => Some("복구 필요"),
+        _ => None,
+    }
+}
+
+fn distributor_bubble(state: ParallelModeQueueItemState) -> &'static str {
+    match state {
+        ParallelModeQueueItemState::Idle => "배포 파이프라인",
+        ParallelModeQueueItemState::Queued => "배포 대기",
+        ParallelModeQueueItemState::Pushing => "origin push 중",
+        ParallelModeQueueItemState::PrPending => "PR 확인 중",
+        ParallelModeQueueItemState::MergePending => "merge 준비 중",
+        ParallelModeQueueItemState::Integrating => "prerelease 통합 중",
+        ParallelModeQueueItemState::Cleaning => "slot 정리 요청",
+        ParallelModeQueueItemState::Done => "배포 완료",
+        ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => "배포 막힘",
     }
 }
 
@@ -1086,9 +1161,9 @@ mod tests {
             ),
             (
                 ParallelModePoolSlotState::AwaitingCleanup,
-                "정리중",
+                "정리 대기",
                 "warning",
-                "정리중",
+                "정리 대기",
             ),
             (
                 ParallelModePoolSlotState::Blocked,
@@ -1139,6 +1214,90 @@ mod tests {
 
         let failed = map_pipeline(ParallelModeQueueItemState::Failed);
         assert!(failed.iter().all(|step| step.state == "failed"));
+    }
+
+    #[test]
+    fn worker_lifecycle_bubble_excludes_distributor_delivery_states() {
+        assert_eq!(worker_lifecycle_bubble("assigned"), Some("작업 배정됨"));
+        assert_eq!(worker_lifecycle_bubble("starting"), Some("세션 준비 중"));
+        assert_eq!(worker_lifecycle_bubble("running"), Some("작업중"));
+        assert_eq!(
+            worker_lifecycle_bubble("reported_complete"),
+            Some("결과 제출함")
+        );
+        assert_eq!(
+            worker_lifecycle_bubble("ledger_refreshing"),
+            Some("검수 중")
+        );
+        assert_eq!(worker_lifecycle_bubble("commit_ready"), Some("검수 통과"));
+
+        for distributor_state in [
+            "merge_queued",
+            "pushing",
+            "pr_pending",
+            "merge_pending",
+            "integrating",
+            "cleanup_pending",
+            "cleaned",
+        ] {
+            assert_eq!(
+                worker_lifecycle_bubble(distributor_state),
+                None,
+                "{distributor_state} should not be spoken by slot workers"
+            );
+        }
+    }
+
+    #[test]
+    fn slot_worker_bubble_prefers_slot_cleanup_state_over_old_worker_history() {
+        let slot = ParallelModePoolSlotSnapshot::new(
+            "slot-1",
+            ParallelModePoolSlotState::AwaitingCleanup,
+            "akra-agent/slot-1/task",
+            "slot-1",
+            "agent-1 / task-1",
+        );
+        let roster_entry = ParallelModeAgentRosterEntry::new(
+            "agent-1",
+            "task",
+            "slot-1",
+            "akra-agent/slot-1/task",
+            "pr_pending",
+            "1m",
+            "pull request is open",
+        );
+        let detail = ParallelModeSupervisorDetailSnapshot::new(
+            None,
+            "no agent session history captured yet",
+        );
+
+        assert_eq!(
+            slot_worker_bubble(&slot, Some(&roster_entry), &detail),
+            "정리 대기"
+        );
+    }
+
+    #[test]
+    fn distributor_bubble_owns_delivery_pipeline_copy() {
+        let cases = [
+            (ParallelModeQueueItemState::Idle, "배포 파이프라인"),
+            (ParallelModeQueueItemState::Queued, "배포 대기"),
+            (ParallelModeQueueItemState::Pushing, "origin push 중"),
+            (ParallelModeQueueItemState::PrPending, "PR 확인 중"),
+            (ParallelModeQueueItemState::MergePending, "merge 준비 중"),
+            (
+                ParallelModeQueueItemState::Integrating,
+                "prerelease 통합 중",
+            ),
+            (ParallelModeQueueItemState::Cleaning, "slot 정리 요청"),
+            (ParallelModeQueueItemState::Done, "배포 완료"),
+            (ParallelModeQueueItemState::Blocked, "배포 막힘"),
+            (ParallelModeQueueItemState::Failed, "배포 막힘"),
+        ];
+
+        for (state, label) in cases {
+            assert_eq!(distributor_bubble(state), label);
+        }
     }
 
     #[test]

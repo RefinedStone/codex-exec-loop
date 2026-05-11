@@ -1293,7 +1293,7 @@
         data-detail-note="{{ dashboard.distributor.note }}"
         title="{{ dashboard.distributor.role_label }} / {{ dashboard.distributor.integration_worktree_readiness }}"
       >
-        <span class="speech">배포 파이프라인</span>
+        <span class="speech">{{ dashboard.distributor.bubble_label }}</span>
         <span class="agent-sprite role-distributor" aria-hidden="true"><span class="sprite-label">D</span></span>
         <div class="object-label">
           <strong>분배관</strong>
@@ -2169,6 +2169,8 @@
       detailNote: distributor.note
     });
     desk.title = `${optionalText(distributor.roleLabel)} / ${optionalText(distributor.integrationWorktreeReadiness)}`;
+    const speech = desk.querySelector(".speech");
+    if (speech) speech.textContent = optionalText(distributor.bubbleLabel, "배포 파이프라인");
     const label = desk.querySelector(".object-label");
     if (label) {
       label.replaceChildren(
