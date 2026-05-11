@@ -27,6 +27,17 @@ pub(super) struct AkraDashboardTemplate {
     pub(super) polling_interval_ms: u64,
 }
 
+#[derive(Template)]
+#[template(path = "admin/akra_metrics.html")]
+pub(super) struct AkraMetricsTemplate {
+    pub(super) page_title: String,
+    pub(super) current_nav: &'static str,
+    pub(super) workspace_dir: String,
+    pub(super) csrf_token: String,
+    pub(super) notice: Option<String>,
+    pub(super) dashboard: AkraAdminDashboardView,
+}
+
 // dashboard는 read-only workspace status 화면이라 overview bundle만 받고 editable management/session state는 받지 않는다.
 #[derive(Template)]
 #[template(path = "admin/dashboard.html")]

@@ -1,0 +1,128 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<style>
+  .akra-metrics-page {
+    --game-panel-strong: rgba(15, 30, 52, 0.98);
+    --game-line: rgba(130, 155, 193, 0.24);
+    --game-ink: #f2f7ff;
+    --game-muted: #98abc4;
+    --game-green: #35d07f;
+    display: grid;
+    gap: 12px;
+    color: var(--game-ink);
+  }
+  .detached-metrics-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: 12px;
+  }
+  .detached-panel {
+    min-height: 320px;
+    padding: 14px;
+    border: 2px solid var(--game-line);
+    border-radius: 0;
+    background: linear-gradient(180deg, var(--game-panel-strong), rgba(8, 18, 32, 0.98));
+    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.6);
+  }
+  .detached-panel .panel-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .detached-panel h3 {
+    margin: 0;
+    font-size: 15px;
+  }
+  .detached-panel small {
+    color: var(--game-muted);
+  }
+  .metric-line {
+    display: grid;
+    gap: 4px;
+    padding: 9px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .metric-line:last-child {
+    border-bottom: 0;
+  }
+  .metric-line strong,
+  .metric-line small {
+    overflow-wrap: anywhere;
+  }
+  .badges,
+  .system-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .badge,
+  .system-chip {
+    padding: 7px 9px;
+    border: 2px solid rgba(53, 208, 127, 0.42);
+    border-radius: 0;
+    color: var(--game-green);
+    background: rgba(53, 208, 127, 0.08);
+    font-size: 12px;
+  }
+  .system-chip {
+    flex: 1 1 150px;
+    text-align: center;
+  }
+  .radar {
+    position: relative;
+    width: 174px;
+    height: 136px;
+    margin: 18px auto 14px;
+    background:
+      radial-gradient(circle, rgba(53,208,127,0.16) 0 28%, transparent 29%),
+      linear-gradient(30deg, transparent 48%, rgba(53,208,127,0.32) 49% 51%, transparent 52%),
+      linear-gradient(90deg, transparent 48%, rgba(53,208,127,0.24) 49% 51%, transparent 52%),
+      linear-gradient(150deg, transparent 48%, rgba(53,208,127,0.24) 49% 51%, transparent 52%);
+    clip-path: polygon(50% 5%, 94% 35%, 78% 92%, 22% 92%, 6% 35%);
+    border: 1px solid rgba(53,208,127,0.34);
+  }
+  .radar::after {
+    content: "";
+    position: absolute;
+    inset: 26px 36px;
+    background: rgba(53,208,127,0.22);
+    clip-path: polygon(50% 0, 88% 40%, 72% 96%, 24% 82%, 8% 38%);
+  }
+  @media (max-width: 920px) {
+    .detached-metrics-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<section class="akra-metrics-page" aria-label="AKRA detached metrics">
+  <div class="detached-metrics-grid">
+    <section class="detached-panel" id="metrics">
+      <div class="panel-title"><h3>길드 성과</h3><small>snapshot</small></div>
+      <div class="radar" aria-hidden="true"></div>
+      <div class="badges">
+        {% for badge in dashboard.metrics.badges %}
+        <span class="badge">{{ badge }}</span>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="detached-panel" id="system">
+      <div class="panel-title"><h3>운영 지표</h3><small>system status</small></div>
+      <div class="metric-line"><small>풀 활용률</small><strong>{{ dashboard.metrics.pool_utilization_percent }}%</strong></div>
+      <div class="metric-line"><small>활성 요원</small><strong>{{ dashboard.metrics.active_agent_count }}</strong></div>
+      <div class="metric-line"><small>대기 작업</small><strong>{{ dashboard.metrics.waiting_task_count }}</strong></div>
+      <div class="metric-line"><small>blocked slot</small><strong>{{ dashboard.metrics.blocked_slot_count }}</strong></div>
+      <div class="metric-line"><small>지표 출처</small><strong>{{ dashboard.metrics.source_label }}</strong><small>{{ dashboard.metrics.mock_metric_note }}</small></div>
+      <div class="system-grid">
+        <span class="system-chip">Git 상태 정상</span>
+        <span class="system-chip">GitHub 연동 정상</span>
+        <span class="system-chip">Worktree 풀 {{ dashboard.workspace.readiness }}</span>
+        <span class="system-chip">저장소 {{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</span>
+      </div>
+    </section>
+  </div>
+</section>
+{% endblock %}

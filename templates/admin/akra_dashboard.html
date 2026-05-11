@@ -17,7 +17,7 @@
     --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
     --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
     --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
-    --office-board-height: 620px;
+    --office-board-height: 720px;
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -238,7 +238,7 @@
   .intel-card.severity-info { border-color: rgba(93, 169, 255, 0.38); background: rgba(93, 169, 255, 0.08); }
   .board-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 316px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     align-items: stretch;
   }
@@ -618,22 +618,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .right-stack,
   .bottom-grid {
     display: grid;
     gap: 12px;
   }
-  .right-stack {
-    grid-template-rows: minmax(290px, 1.15fr) minmax(250px, 0.85fr);
-    max-height: var(--office-board-height);
-  }
   .game-panel {
     padding: 14px;
   }
-  .right-stack .game-panel {
-    overflow: hidden;
-  }
-  .right-stack #events {
+  #events {
+    max-height: 420px;
     overflow: auto;
   }
   .event-row,
@@ -1336,56 +1329,6 @@
       </button>
     </div>
 
-    <aside class="right-stack">
-      <section class="game-panel" id="events">
-        <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}</small></div>
-        {% if dashboard.events.is_empty() %}
-        <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
-        {% else %}
-        {% for event in dashboard.events %}
-        <button
-          type="button"
-          class="event-row severity-{{ event.severity }}"
-          data-event-detail="{{ event.summary }}"
-          data-event-kind="{{ event.event_kind }}"
-          data-event-sequence="{{ event.sequence }}"
-          data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
-          data-projection-kind="{{ event.projection_kind }}"
-          data-projection-key="{{ event.projection_key }}"
-          data-detail-type="event"
-          data-detail-title="이벤트 #{{ event.sequence }}"
-          data-detail-subtitle="{{ event.event_kind }} / rev {{ event.observed_planning_revision }}"
-          data-detail-state="{{ event.severity }}"
-          data-detail-severity="{{ event.severity }}"
-          data-detail-time="{{ event.recorded_at }}"
-          data-detail-projection="{{ event.projection_kind }}:{{ event.projection_key }}"
-          data-detail-summary="{{ event.summary }}"
-          title="{{ event.recorded_at }} / {{ event.summary }}"
-        >
-          <span class="event-icon">{{ event.icon }}</span>
-          <div>
-            <strong>{{ event.event_kind }}</strong>
-            <small>{{ event.recorded_at }} · {{ event.projection_key }}</small>
-            <small>{{ event.summary }}</small>
-          </div>
-        </button>
-        {% endfor %}
-        {% endif %}
-        <div class="event-detail" data-event-drawer hidden>
-          <strong data-event-drawer-title>event detail</strong>
-          <pre data-event-drawer-body></pre>
-        </div>
-      </section>
-      <section class="game-panel" id="metrics">
-        <div class="panel-title"><h3>길드 성과</h3><small>snapshot</small></div>
-        <div class="radar" aria-hidden="true"></div>
-        <div class="badges">
-          {% for badge in dashboard.metrics.badges %}
-          <span class="badge">{{ badge }}</span>
-          {% endfor %}
-        </div>
-      </section>
-    </aside>
   </div>
 
   <div class="bottom-grid">
@@ -1453,18 +1396,43 @@
       {% endif %}
     </section>
 
-    <section class="game-panel" id="system">
-      <div class="panel-title"><h3>운영 지표</h3><small>system status</small></div>
-      <div class="metric-line"><small>풀 활용률</small><strong>{{ dashboard.metrics.pool_utilization_percent }}%</strong></div>
-      <div class="metric-line"><small>활성 요원</small><strong>{{ dashboard.metrics.active_agent_count }}</strong></div>
-      <div class="metric-line"><small>대기 작업</small><strong>{{ dashboard.metrics.waiting_task_count }}</strong></div>
-      <div class="metric-line"><small>blocked slot</small><strong>{{ dashboard.metrics.blocked_slot_count }}</strong></div>
-      <div class="metric-line"><small>지표 출처</small><strong>{{ dashboard.metrics.source_label }}</strong><small>{{ dashboard.metrics.mock_metric_note }}</small></div>
-      <div class="system-grid">
-        <span class="system-chip">Git 상태 정상</span>
-        <span class="system-chip">GitHub 연동 정상</span>
-        <span class="system-chip">Worktree 풀 {{ dashboard.workspace.readiness }}</span>
-        <span class="system-chip">저장소 {{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</span>
+    <section class="game-panel" id="events">
+      <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}</small></div>
+      {% if dashboard.events.is_empty() %}
+      <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
+      {% else %}
+      {% for event in dashboard.events %}
+      <button
+        type="button"
+        class="event-row severity-{{ event.severity }}"
+        data-event-detail="{{ event.summary }}"
+        data-event-kind="{{ event.event_kind }}"
+        data-event-sequence="{{ event.sequence }}"
+        data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
+        data-projection-kind="{{ event.projection_kind }}"
+        data-projection-key="{{ event.projection_key }}"
+        data-detail-type="event"
+        data-detail-title="이벤트 #{{ event.sequence }}"
+        data-detail-subtitle="{{ event.event_kind }} / rev {{ event.observed_planning_revision }}"
+        data-detail-state="{{ event.severity }}"
+        data-detail-severity="{{ event.severity }}"
+        data-detail-time="{{ event.recorded_at }}"
+        data-detail-projection="{{ event.projection_kind }}:{{ event.projection_key }}"
+        data-detail-summary="{{ event.summary }}"
+        title="{{ event.recorded_at }} / {{ event.summary }}"
+      >
+        <span class="event-icon">{{ event.icon }}</span>
+        <div>
+          <strong>{{ event.event_kind }}</strong>
+          <small>{{ event.recorded_at }} · {{ event.projection_key }}</small>
+          <small>{{ event.summary }}</small>
+        </div>
+      </button>
+      {% endfor %}
+      {% endif %}
+      <div class="event-detail" data-event-drawer hidden>
+        <strong data-event-drawer-title>event detail</strong>
+        <pre data-event-drawer-body></pre>
       </div>
     </section>
   </div>
@@ -2242,21 +2210,6 @@
     syncEventBoard(dashboard);
   };
 
-  const renderMetrics = (metrics) => {
-    if (!metrics) return;
-    const radar = document.createElement("div");
-    radar.className = "radar";
-    radar.setAttribute("aria-hidden", "true");
-    const badges = document.createElement("div");
-    badges.className = "badges";
-    badges.append(...asArray(metrics.badges).map((badge) => createText("span", "badge", badge)));
-    updatePanel("#metrics", [
-      panelTitle("길드 성과", "snapshot"),
-      radar,
-      badges
-    ]);
-  };
-
   const renderSelectedTask = (dashboard) => {
     const task = dashboard.selectedTask;
     const children = [panelTitle("작업 상세", "selected session")];
@@ -2345,28 +2298,6 @@
     updatePanel("#pipeline", children);
   };
 
-  const renderSystem = (dashboard) => {
-    const metrics = dashboard.metrics || {};
-    const workspace = dashboard.workspace || {};
-    const chips = document.createElement("div");
-    chips.className = "system-grid";
-    chips.append(
-      createText("span", "system-chip", "Git 상태 정상"),
-      createText("span", "system-chip", "GitHub 연동 정상"),
-      createText("span", "system-chip", `Worktree 풀 ${optionalText(workspace.readiness)}`),
-      createText("span", "system-chip", `저장소 ${workspace.branch || "-"}`)
-    );
-    updatePanel("#system", [
-      panelTitle("운영 지표", "system status"),
-      metricLine("풀 활용률", `${formatValue(metrics.poolUtilizationPercent, "0")}%`),
-      metricLine("활성 요원", metrics.activeAgentCount),
-      metricLine("대기 작업", metrics.waitingTaskCount),
-      metricLine("blocked slot", metrics.blockedSlotCount),
-      metricLine("지표 출처", metrics.sourceLabel, metrics.mockMetricNote),
-      chips
-    ]);
-  };
-
   const dashboardSignature = (dashboard) => JSON.stringify({
     agents: dashboard.agents || null,
     pool: dashboard.pool || null,
@@ -2374,7 +2305,6 @@
     campaign: dashboard.campaign || null,
     selectedTask: dashboard.selectedTask || null,
     kpis: dashboard.kpis || null,
-    metrics: dashboard.metrics || null,
     workspace: dashboard.workspace || null,
     eventFeed: dashboard.eventFeed || null,
     events: asArray(dashboard.events)
@@ -2383,10 +2313,8 @@
   const renderDashboardPanels = (dashboard) => {
     renderCampaign(dashboard);
     renderBoard(dashboard);
-    renderMetrics(dashboard.metrics);
     renderSelectedTask(dashboard);
     renderPipeline(dashboard.distributor);
-    renderSystem(dashboard);
     initializeDetailControls();
     syncSelectedDetail();
     window.dispatchEvent(new CustomEvent("akra:dashboard-rendered", { detail: { dashboard } }));

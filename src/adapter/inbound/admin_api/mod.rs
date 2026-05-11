@@ -135,6 +135,7 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/", get(pages::dashboard_page))
         .route("/admin", get(pages::dashboard_page))
         .route("/admin/akra", get(pages::akra_dashboard_page))
+        .route("/admin/akra/metrics", get(pages::akra_metrics_page))
         .route(
             "/admin/assets/graphics/{asset_name}",
             get(static_assets::admin_graphic_asset),

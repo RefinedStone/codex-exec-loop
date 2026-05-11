@@ -14,6 +14,7 @@ capture_mode="${ADMIN_GRAPHIC_CAPTURE:-auto}"
 output_dir="${ADMIN_GRAPHIC_OUTPUT_DIR:-target/admin-graphic-visual}"
 server_log="${output_dir}/akra-admin.log"
 admin_html="${output_dir}/admin.html"
+metrics_html="${output_dir}/admin-metrics.html"
 dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
@@ -123,9 +124,11 @@ server_pid="$!"
 
 base_url="http://127.0.0.1:${port}"
 graphic_url="${base_url}/admin/akra"
+metrics_url="${base_url}/admin/akra/metrics"
 wait_for_server "${graphic_url}"
 
 curl -fsS "${graphic_url}" >"${admin_html}"
+curl -fsS "${metrics_url}" >"${metrics_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
@@ -151,14 +154,13 @@ for token in \
   'id="attempts"' \
   'id="intel"' \
   'id="pipeline"' \
-  'id="metrics"' \
   '시도 보드' \
   '최근 시도 로그' \
   '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
   'MISSION FLOW' \
   'stage-refresh-btn' \
-  '--office-board-height: 620px' \
+  '--office-board-height: 720px' \
   '/admin/assets/game/akra-diorama.js' \
   'data-admin-graphic' \
   'data-api-base' \
@@ -188,7 +190,7 @@ for token in \
   'stale snapshot' \
   'skeleton-line' \
   'grid-template-columns: repeat(8' \
-  'max-height: var(--office-board-height)' \
+  'grid-template-columns: minmax(0, 1fr)' \
   'overflow: auto' \
   'text-overflow: ellipsis' \
   '@media (max-width: 860px)'; do
@@ -214,6 +216,11 @@ done
 for token in \
   'class="akra-topbar"' \
   'class="ops-status"' \
+  'class="right-stack"' \
+  'id="metrics"' \
+  'id="system"' \
+  '길드 성과' \
+  '운영 지표' \
   'akra_admin' \
   'Last Updated' \
   'control tower is live in read-only supervisor mode' \
@@ -223,6 +230,19 @@ for token in \
   'blocked slot은 operator recovery' \
   'blocked-copy'; do
   require_not_contains "${admin_html}" "${token}"
+done
+
+for token in \
+  '<body class="akra-graphic">' \
+  'aria-label="AKRA detached metrics"' \
+  'id="metrics"' \
+  'id="system"' \
+  '길드 성과' \
+  '운영 지표' \
+  '풀 활용률' \
+  '지표 출처' \
+  'Worktree 풀'; do
+  require_contains "${metrics_html}" "${token}"
 done
 
 for token in \

@@ -826,10 +826,10 @@
       }
     </script>
   </head>
-  <body class="{% if current_nav == "akra_dashboard" %}akra-graphic{% endif %}">
+  <body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" %}akra-graphic{% endif %}">
     <div class="admin-layout">
       <aside class="sidebar">
-        {% if current_nav == "akra_dashboard" %}
+        {% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" %}
         <div class="graphic-brand">
           <span class="graphic-building" aria-hidden="true"></span>
           <div>
@@ -839,14 +839,14 @@
         </div>
         <nav class="nav graphic-nav" aria-label="Admin navigation">
           <div class="nav-label">메뉴</div>
-          <a href="/admin/akra" class="active"><span class="nav-icon">D</span><span>대시보드</span></a>
-          <a href="#pool"><span class="nav-icon">P</span><span>워크트리 풀</span></a>
-          <a href="#agents"><span class="nav-icon">A</span><span>요원 관리</span></a>
-          <a href="#tasks"><span class="nav-icon">T</span><span>작업 관리</span></a>
-          <a href="#pipeline"><span class="nav-icon">R</span><span>배포 파이프라인</span></a>
-          <a href="#events"><span class="nav-icon">E</span><span>이벤트 로그</span></a>
-          <a href="#metrics"><span class="nav-icon">M</span><span>메트릭스</span></a>
-          <a href="#system"><span class="nav-icon">C</span><span>설정</span></a>
+          <a href="/admin/akra" class="{% if current_nav == "akra_dashboard" %}active{% endif %}"><span class="nav-icon">D</span><span>대시보드</span></a>
+          <a href="/admin/akra#pool"><span class="nav-icon">P</span><span>워크트리 풀</span></a>
+          <a href="/admin/akra#agents"><span class="nav-icon">A</span><span>요원 관리</span></a>
+          <a href="/admin/akra#tasks"><span class="nav-icon">T</span><span>작업 관리</span></a>
+          <a href="/admin/akra#pipeline"><span class="nav-icon">R</span><span>배포 파이프라인</span></a>
+          <a href="/admin/akra#events"><span class="nav-icon">E</span><span>이벤트 로그</span></a>
+          <a href="/admin/akra/metrics#metrics" class="{% if current_nav == "akra_metrics" %}active{% endif %}"><span class="nav-icon">M</span><span>메트릭스</span></a>
+          <a href="/admin/akra/metrics#system"><span class="nav-icon">C</span><span>시스템</span></a>
         </nav>
         <div class="graphic-progress">
           <div>

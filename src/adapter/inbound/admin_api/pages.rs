@@ -7,8 +7,8 @@ use super::helpers::{
     notice_location, render_fragment, render_html, verify_form_csrf,
 };
 use super::views::{
-    AkraDashboardTemplate, ControlsTemplate, DashboardTemplate, DirectionsTemplate,
-    DraftStatusTemplate, EditorTemplate, TasksTemplate,
+    AkraDashboardTemplate, AkraMetricsTemplate, ControlsTemplate, DashboardTemplate,
+    DirectionsTemplate, DraftStatusTemplate, EditorTemplate, TasksTemplate,
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
@@ -79,6 +79,30 @@ pub(super) async fn akra_dashboard_page(
             dashboard,
             api_base_url: state.graphic.api_base_url.clone(),
             polling_interval_ms: state.graphic.polling_interval_ms,
+        },
+    )
+}
+
+pub(super) async fn akra_metrics_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    let dashboard = build_akra_dashboard_view(
+        state.facade.as_ref(),
+        state.parallel_mode_control_plane.as_ref(),
+    )
+    .map_err(internal_server_error)?;
+    render_html(
+        jar,
+        AkraMetricsTemplate {
+            page_title: "게임발전국 지표".to_string(),
+            current_nav: "akra_metrics",
+            workspace_dir: state.facade.workspace_dir().to_string(),
+            csrf_token,
+            notice: query.get("notice").cloned(),
+            dashboard,
         },
     )
 }

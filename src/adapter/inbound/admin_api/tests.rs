@@ -19,6 +19,7 @@ const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.htm
 const DASHBOARD_TEMPLATE: &str = include_str!("../../../../templates/admin/dashboard.html");
 const AKRA_DASHBOARD_TEMPLATE: &str =
     include_str!("../../../../templates/admin/akra_dashboard.html");
+const AKRA_METRICS_TEMPLATE: &str = include_str!("../../../../templates/admin/akra_metrics.html");
 const ADMIN_GRAPHIC_VISUAL_SCRIPT: &str =
     include_str!("../../../../scripts/check_admin_graphic_visual.sh");
 const GAMEBALJEONGUK_SPRITE_PACK_README: &str =
@@ -200,9 +201,9 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("aria-label=\"Admin navigation\""));
     assert!(BASE_TEMPLATE.contains("class=\"workspace-chip\""));
     assert!(!BASE_TEMPLATE.contains("legacy"));
-    assert!(BASE_TEMPLATE.contains("href=\"#pool\""));
-    assert!(BASE_TEMPLATE.contains("href=\"#pipeline\""));
-    assert!(BASE_TEMPLATE.contains("href=\"#system\""));
+    assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pool\""));
+    assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pipeline\""));
+    assert!(BASE_TEMPLATE.contains("href=\"/admin/akra/metrics#system\""));
     assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
@@ -233,8 +234,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "워크트리 풀",
         "배포 파이프라인",
         "실시간 이벤트",
-        "운영 지표",
-        "길드 성과",
         "시도 보드",
         "최근 시도 로그",
         "정보 카드",
@@ -295,7 +294,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "campaign: dashboard.campaign || null",
         "selectedTask: dashboard.selectedTask || null",
         "kpis: dashboard.kpis || null",
-        "metrics: dashboard.metrics || null",
         "workspace: dashboard.workspace || null",
         "eventFeed: dashboard.eventFeed || null",
         "events: asArray(dashboard.events)",
@@ -313,7 +311,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "id=\"pool\"",
         "id=\"agents\"",
         "id=\"pipeline\"",
-        "id=\"metrics\"",
         "id=\"campaign\"",
         "id=\"attempts\"",
         "id=\"intel\"",
@@ -326,6 +323,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
 
     for route in [
         ".route(\"/admin/akra\", get(pages::akra_dashboard_page))",
+        ".route(\"/admin/akra/metrics\", get(pages::akra_metrics_page))",
         "\"/api/admin/akra/dashboard\"",
         "\"/api/admin/akra/pool\"",
         "\"/api/admin/akra/agents\"",
@@ -365,8 +363,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "background-image: var(--agent-sprite-sheet)",
         "background-size: 384px 504px",
         "background-position: -288px 0",
-        "--office-board-height: 620px",
-        "max-height: var(--office-board-height)",
+        "--office-board-height: 720px",
+        "grid-template-columns: minmax(0, 1fr)",
         "overflow: auto",
         "text-overflow: ellipsis",
         "@media (max-width: 860px)",
@@ -406,14 +404,21 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     for removed in [
         "class=\"akra-topbar\"",
         "class=\"ops-status\"",
+        "class=\"right-stack\"",
+        "id=\"metrics\"",
+        "id=\"system\"",
         "akra_admin",
         "Last Updated",
+        "길드 성과",
+        "운영 지표",
         "read-only 운영 관제",
         "게임화 정책",
         "도메인 매핑",
         "blocked-copy",
         "renderOpsStatus",
         "syncTopNotice",
+        "renderMetrics",
+        "renderSystem",
         "error-notice",
     ] {
         assert!(
@@ -423,11 +428,29 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     }
 
     for token in [
+        "aria-label=\"AKRA detached metrics\"",
+        "id=\"metrics\"",
+        "id=\"system\"",
+        "길드 성과",
+        "운영 지표",
+        "풀 활용률",
+        "지표 출처",
+        "dashboard.metrics.badges",
+        "dashboard.metrics.pool_utilization_percent",
+    ] {
+        assert!(
+            AKRA_METRICS_TEMPLATE.contains(token),
+            "detached metrics page should expose {token}"
+        );
+    }
+
+    for token in [
         "templates/admin/resources/main-sprite.png",
         "gamebaljeonguk_atlas_64x96.png",
         "ADMIN_GRAPHIC_CAPTURE",
         "akra-admin",
         "/admin/akra",
+        "/admin/akra/metrics",
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
