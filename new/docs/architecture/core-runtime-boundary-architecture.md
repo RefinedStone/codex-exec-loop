@@ -375,11 +375,12 @@ projection을 추가했고, session 선택 뒤 conversation snapshot load 실행
 stream worker spawn, missing terminal event policy, transport/panic handling, stream
 event reduction도 core path로 이동했다. Manual prompt intake/bootstrap은
 `PrepareManualPrompt` core effect와 application `ManualPromptPreparationService`로
-이동했고, TUI는 prompt buffer, stale completion guard, bootstrap review overlay 적용만
-소유한다. TUI reducer는 아직 `Loading/Ready/Failed` presentation transition, prompt
-input, cursor, inline command palette, transcript rendering cache, active overlay
-selection, post-turn continuation 적용을 계속 소유한다. Post-turn completion 용어와
-stale/duplicate guard는 core re-entry 기준으로 정리됐고, evaluator worker 입력은 TUI
+이동했고, TUI는 prompt buffer와 bootstrap review overlay 적용만 소유한다. TUI reducer는
+아직 `Loading/Ready/Failed` presentation transition, prompt input, cursor, inline
+command palette, transcript rendering cache, active overlay selection, post-turn
+completion 적용 일부를 계속 소유한다. Post-turn completion 용어와 evaluator worker
+boundary는 core re-entry 기준으로 정리됐지만, stale/duplicate completion guard는
+core/application completion boundary로 더 줄여야 한다. evaluator worker 입력은 TUI
 `ConversationViewModel` 전체 clone 대신 `PostTurnEvaluationContext`로 좁혀졌다.
 evaluator spawn/timeout owner는 core `EvaluatePostTurn` effect와 application
 `PostTurnEvaluationService`로 이동했고, 완료는
@@ -401,20 +402,22 @@ resumed-session status copy와 post-turn evaluation context도 core planning pro
 
 ## 상태 소유권 표
 
-| 상태 | 현재 위치 | 목표 소유자 | 이유 |
+| 상태 | 현재 위치 | 목표 소유자 | 분류와 다음 기준 |
 | --- | --- | --- | --- |
-| startup loading/ready/failed | TUI shell chrome | core app state | TUI 외 surface도 startup readiness를 공유할 수 있다. |
-| session catalog lifecycle | TUI shell chrome | core app state | preload/reload 정책은 화면보다 app lifecycle에 가깝다. |
-| conversation lifecycle | TUI conversation reducers | core app state | CLI/admin/automation도 현재 conversation 상태를 읽을 수 있다. |
-| turn stream reduction | core runtime | core runtime | app-server stream은 UI가 아니라 app runtime event다. |
-| manual prompt intake/bootstrap | core effect + application service; TUI overlay application | core/application runtime | planning task intake는 terminal input 편집 상태와 독립된 use case다. |
-| post-turn continuation/evaluation | core projection을 읽는 TUI context mapping + core runtime/application service + TUI completion application | core runtime/application service | turn completion 이후 정책은 화면과 독립적이다. |
-| planning runtime projection | core projection + private Ready conversation reducer/event compatibility cache | core app state 또는 application projection | 여러 surface가 같은 planning 상태를 본다. |
-| parallel-mode status | application control-plane + core projection | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출해야 한다. |
-| overlay open/close | TUI | TUI | presentation state다. |
-| prompt input buffer | TUI | TUI | terminal editing state다. |
-| selection/cursor/scroll | TUI | TUI | render interaction state다. |
-| redraw scheduler | TUI frontend/runtime | TUI | terminal frame policy다. |
+| startup loading/ready/failed | core snapshot/effect runtime | core app state | 완료된 orchestration 기준선이다. TUI는 snapshot 표시만 맡는다. |
+| session catalog lifecycle | core snapshot/effect runtime + TUI overlay selection | core app state | preload/reload 정책은 app lifecycle이다. TUI에는 overlay open/close와 selection만 남긴다. |
+| conversation lifecycle | core snapshot + TUI conversation reducer transition | core app state | 아직 줄일 orchestration이다. `Loading/Ready/Failed`의 lifecycle authority는 core snapshot에서 읽게 한다. |
+| turn stream reduction | core runtime | core runtime | 완료된 orchestration 기준선이다. app-server stream은 UI가 아니라 app runtime event다. |
+| manual prompt intake/bootstrap | core effect + application service; TUI overlay application | core/application runtime | planning task intake는 use case다. TUI는 prompt buffer와 review overlay 표시만 가진다. |
+| post-turn continuation/evaluation | core effect/application service + TUI accepted completion application/stale guard 일부 | core runtime/application service | 남은 orchestration이다. stale/duplicate guard는 core/application completion boundary로 옮기고 TUI는 accepted presentation update만 적용한다. |
+| planning runtime projection | core projection + private Ready conversation reducer/event compatibility cache | core app state 또는 application projection | 남은 compatibility cache다. 제거하거나 authority가 아닌 reducer/event projection cache로 이름과 guard를 낮춘다. |
+| parallel-mode status | application control-plane + core projection | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출한다. TUI fallback authority는 두지 않는다. |
+| inline command/overlay/auto-follow routing | TUI shell/input reducers | TUI presentation routing + application/domain decision | 남은 분류 작업이다. UI-only routing은 TUI에 남기고 business policy는 application/domain으로 이동한다. |
+| overlay open/close | TUI | TUI | 남겨도 되는 presentation state다. |
+| prompt input buffer | TUI | TUI | 남겨도 되는 terminal editing state다. |
+| selection/cursor/scroll | TUI | TUI | 남겨도 되는 render interaction state다. |
+| transcript render cache | TUI | TUI | 남겨도 되는 presentation cache다. app lifecycle authority로 쓰면 안 된다. |
+| redraw scheduler | TUI frontend/runtime | TUI | 남겨도 되는 terminal frame policy다. |
 
 ## Hexagonal Architecture와의 관계
 
