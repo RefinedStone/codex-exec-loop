@@ -195,6 +195,7 @@ for token in \
   'data-detail-drawer' \
   'data-refresh-dashboard' \
   'detailSourceKey(node) === nextKey' \
+  'optionalText(distributor.bubbleLabel, "배포 파이프라인")' \
   'openDetailDrawer' \
   'openRefreshDetail' \
   'akra:mission-pulse' \
