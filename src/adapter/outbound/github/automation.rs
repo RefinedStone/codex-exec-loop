@@ -512,3 +512,277 @@ fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
         .next()
         .and_then(|value| value.parse::<u64>().ok())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use serde_json::json;
+
+    use super::{
+        GithubAutomationAdapter, GithubPullRequestJson, parse_pull_request_number_from_url,
+        run_command, run_git, run_git_stdout,
+    };
+    use crate::application::port::outbound::github_automation_port::{
+        GithubAutomationPort, GithubAutomationPullRequest,
+    };
+    use crate::domain::parallel_mode::{
+        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    };
+
+    #[test]
+    fn pull_request_json_maps_only_the_application_port_contract() {
+        let pull_request: GithubAutomationPullRequest =
+            serde_json::from_value::<GithubPullRequestJson>(json!({
+            "number": 1681,
+            "url": "https://github.com/RefinedStone/codex-exec-loop/pull/1681",
+            "state": "OPEN",
+            "baseRefName": "prerelease",
+            "headRefName": "feature/test-coverage",
+            "isDraft": false
+            }))
+            .expect("GitHub PR JSON fixture should deserialize")
+            .into();
+
+        assert_eq!(pull_request.number, 1681);
+        assert_eq!(
+            pull_request.url,
+            "https://github.com/RefinedStone/codex-exec-loop/pull/1681"
+        );
+        assert_eq!(pull_request.state, "OPEN");
+        assert_eq!(pull_request.base_branch, "prerelease");
+        assert_eq!(pull_request.head_branch, "feature/test-coverage");
+        assert!(!pull_request.is_draft);
+    }
+
+    #[test]
+    fn pull_request_number_parser_uses_only_the_last_path_segment() {
+        assert_eq!(
+            parse_pull_request_number_from_url(
+                "https://github.com/RefinedStone/codex-exec-loop/pull/1681\n"
+            ),
+            Some(1681)
+        );
+        assert_eq!(parse_pull_request_number_from_url("1682"), Some(1682));
+        assert_eq!(
+            parse_pull_request_number_from_url(
+                "https://github.com/RefinedStone/codex-exec-loop/pull/not-a-number"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_pull_request_number_from_url(
+                "https://github.com/RefinedStone/codex-exec-loop/pull/1681/"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn run_command_trims_stdout_and_reports_the_best_failure_detail() {
+        let repo_root = unique_temp_dir("github-automation-command");
+        let env_output = run_command(
+            "sh",
+            &["-c", "printf '  %s  \\n' \"$GIT_TERMINAL_PROMPT\""],
+            path_str(&repo_root),
+        )
+        .expect("shell command should run");
+
+        assert_eq!(env_output, "0");
+
+        let stderr_error = run_command(
+            "sh",
+            &["-c", "printf 'stderr-detail' >&2; exit 7"],
+            path_str(&repo_root),
+        )
+        .expect_err("stderr failure should be reported");
+        assert!(stderr_error.to_string().contains("stderr-detail"));
+
+        let stdout_error = run_command(
+            "sh",
+            &["-c", "printf 'stdout-detail'; exit 8"],
+            path_str(&repo_root),
+        )
+        .expect_err("stdout failure should be reported when stderr is empty");
+        assert!(stdout_error.to_string().contains("stdout-detail"));
+
+        let silent_error = run_command("sh", &["-c", "exit 9"], path_str(&repo_root))
+            .expect_err("silent failure should use a stable fallback");
+        assert!(
+            silent_error
+                .to_string()
+                .contains("command exited without output")
+        );
+    }
+
+    #[test]
+    fn push_remote_capability_reports_ready_and_missing_origin_states() {
+        let fixture = GitFixture::new("github-automation-capability");
+        let capability = GithubAutomationAdapter::inspect_push_remote(path_str(&fixture.repo));
+
+        assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
+        assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+        assert!(capability.detail.contains(path_str(&fixture.remote)));
+        assert!(capability.next_action.is_none());
+
+        let repo_without_origin = unique_temp_dir("github-automation-no-origin");
+        git(&repo_without_origin, &["init"]);
+        let missing = GithubAutomationAdapter::inspect_push_remote(path_str(&repo_without_origin));
+
+        assert_eq!(missing.key, ParallelModeCapabilityKey::PushRemote);
+        assert_eq!(missing.state, ParallelModeCapabilityState::Degraded);
+        assert!(
+            missing
+                .detail
+                .contains("push remote `origin` is not configured")
+        );
+        assert!(missing.next_action.is_some());
+    }
+
+    #[test]
+    fn gh_auth_capability_degrades_when_command_surface_is_not_ready() {
+        let gh_binary = ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::GhBinary,
+            ParallelModeCapabilityState::Degraded,
+            "gh missing",
+            Some("install gh".to_string()),
+        );
+
+        let capability = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, ".");
+
+        assert_eq!(capability.key, ParallelModeCapabilityKey::GhAuth);
+        assert_eq!(capability.state, ParallelModeCapabilityState::Degraded);
+        assert!(capability.detail.contains("gh auth is unavailable"));
+        assert!(capability.next_action.is_some());
+    }
+
+    #[test]
+    fn push_methods_publish_local_branches_to_origin() {
+        let fixture = GitFixture::new("github-automation-push");
+        let adapter = GithubAutomationAdapter::new();
+
+        adapter
+            .push_branch(path_str(&fixture.repo), "main", false)
+            .expect("branch push should publish to local origin");
+        assert_eq!(
+            git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            git_stdout(&fixture.repo, &["rev-parse", "main"])
+        );
+
+        fs::write(fixture.repo.join("README.md"), "updated\n")
+            .expect("fixture file should be writable");
+        git(&fixture.repo, &["add", "README.md"]);
+        git(&fixture.repo, &["commit", "-m", "Update readme"]);
+
+        adapter
+            .push_branch(path_str(&fixture.repo), "main", true)
+            .expect("force-with-lease push should publish rewritten branch");
+        adapter
+            .push_integration_branch(path_str(&fixture.repo), "main")
+            .expect("integration push should use the same local origin");
+
+        assert_eq!(
+            git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            git_stdout(&fixture.repo, &["rev-parse", "main"])
+        );
+    }
+
+    #[test]
+    fn git_helpers_trim_stdout_and_attach_failure_context() {
+        let fixture = GitFixture::new("github-automation-git-helper");
+
+        assert_eq!(
+            run_git_stdout(path_str(&fixture.repo), &["branch", "--show-current"])
+                .expect("git stdout helper should trim branch name"),
+            "main"
+        );
+
+        let error = run_git(path_str(&fixture.repo), &["definitely-not-a-git-command"])
+            .expect_err("git helper should reject failed commands");
+
+        assert!(
+            error
+                .to_string()
+                .contains("git definitely-not-a-git-command failed")
+        );
+    }
+
+    struct GitFixture {
+        repo: PathBuf,
+        remote: PathBuf,
+    }
+
+    impl GitFixture {
+        fn new(label: &str) -> Self {
+            let root = unique_temp_dir(label);
+            let remote = root.join("origin.git");
+            let repo = root.join("repo");
+            fs::create_dir_all(&repo).expect("repo directory should be created");
+
+            git_in(&root, &["init", "--bare", "origin.git"]);
+            git(&repo, &["init"]);
+            git(&repo, &["config", "user.name", "RefinedStone"]);
+            git(&repo, &["config", "user.email", "chem.en.9273@gmail.com"]);
+            fs::write(repo.join("README.md"), "initial\n").expect("fixture file should be written");
+            git(&repo, &["add", "README.md"]);
+            git(&repo, &["commit", "-m", "Initial commit"]);
+            git(&repo, &["branch", "-M", "main"]);
+            git(&repo, &["remote", "add", "origin", path_str(&remote)]);
+
+            Self { repo, remote }
+        }
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "codex-exec-loop-{label}-{}-{now}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temporary directory should be created");
+        path
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        git_in(repo, args);
+    }
+
+    fn git_stdout(repo: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run git {}: {error}", args.join(" ")));
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn git_in(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run git {}: {error}", args.join(" ")));
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn path_str(path: &Path) -> &str {
+        path.to_str().expect("test path should be valid UTF-8")
+    }
+}
