@@ -186,7 +186,6 @@ use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningInitOverlayUiState,
 };
-use post_turn_automation::PostTurnAutomationBackgroundResult;
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
 pub use shell_entrypoint::run;
@@ -295,7 +294,6 @@ struct NativeTuiApp {
     core_runtime: CoreRuntime<CoreEffectRunner>,
     turn_control_truth: ConversationRuntimeControlTruth,
     planning_worker_panel_state: PlanningWorkerPanelState,
-    pending_post_turn_automation_results: Vec<PostTurnAutomationBackgroundResult>,
     planning_worker_visibility: PlanningWorkerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,

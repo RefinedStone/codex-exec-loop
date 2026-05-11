@@ -27,33 +27,6 @@ pub(super) struct ConversationRuntimeAutomationContext {
 }
 
 impl NativeTuiApp {
-    pub(super) fn enqueue_post_turn_automation_result(
-        &mut self,
-        result: PostTurnAutomationBackgroundResult,
-    ) {
-        self.pending_post_turn_automation_results.push(result);
-    }
-
-    pub(super) fn route_pending_post_turn_automation_result(
-        &mut self,
-        thread_id: &str,
-        completed_turn_id: &str,
-    ) -> bool {
-        let Some(result_index) =
-            self.pending_post_turn_automation_results
-                .iter()
-                .position(|result| {
-                    result.thread_id == thread_id && result.completed_turn_id == completed_turn_id
-                })
-        else {
-            return false;
-        };
-        let result = self
-            .pending_post_turn_automation_results
-            .swap_remove(result_index);
-        self.route_post_turn_automation_result(result)
-    }
-
     pub(super) fn route_post_turn_automation_result(
         &mut self,
         result: PostTurnAutomationBackgroundResult,
