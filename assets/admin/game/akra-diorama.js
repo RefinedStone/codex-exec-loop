@@ -7,7 +7,13 @@
 	var AGENT_SHADOW_HEIGHT = 6.8;
 	var AGENT_RING_WIDTH = 21.25;
 	var AGENT_RING_HEIGHT = 5.95;
+	var AGENT_SPEECH_BUBBLES_DEFAULT_ENABLED = true;
+	var AGENT_SPEECH_BUBBLE_MAX_WIDTH = 116;
+	var AGENT_SPEECH_BUBBLE_MIN_WIDTH = 54;
+	var AGENT_SPEECH_BUBBLE_TAIL_HEIGHT = 7;
+	var AGENT_SPEECH_BUBBLE_HEAD_GAP = 8;
 	(() => {
+		let activeHandle = null;
 		const isStatusSeverity = (value) => value === "normal" || value === "success" || value === "warning" || value === "danger" || value === "info" || value === "muted";
 		const isPixiTexture = (texture) => texture !== null;
 		const mountDiorama = () => {
@@ -16,6 +22,7 @@
 			const boardEl = container.closest(".office-board");
 			if (!boardEl || container.dataset.akraDioramaMounted === "true") return null;
 			container.dataset.akraDioramaMounted = "true";
+			boardEl.classList.add("is-pixi-mounted");
 			const initialWidth = boardEl.offsetWidth || 900;
 			const initialHeight = boardEl.offsetHeight || 540;
 			const app = new PIXI.Application({
@@ -58,6 +65,7 @@
 			let roamSnapshots = /* @__PURE__ */ new Map();
 			let stageBurst = 0;
 			let elapsed = 0;
+			let speechBubblesEnabled = AGENT_SPEECH_BUBBLES_DEFAULT_ENABLED;
 			let resizeObserver = null;
 			const boardSize = () => ({
 				width: boardEl.offsetWidth || initialWidth,
@@ -198,6 +206,72 @@
 				packetLayer.addChild(packet);
 				return packet;
 			};
+			const speechLabelFor = (node) => node.querySelector(".speech")?.textContent?.trim() || node.dataset.detailState?.trim() || "작업중";
+			const drawSpeechBubbleBackground = (background, width, height, color) => {
+				const halfWidth = width / 2;
+				const bottom = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT;
+				const top = bottom - height;
+				const bubbleShape = [
+					-halfWidth,
+					top,
+					halfWidth,
+					top,
+					halfWidth,
+					bottom,
+					7,
+					bottom,
+					0,
+					0,
+					-7,
+					bottom,
+					-halfWidth,
+					bottom
+				];
+				const shadowShape = bubbleShape.map((value, index) => value + (index % 2 === 0 ? 2 : 3));
+				background.clear();
+				background.beginFill(0, .28);
+				background.drawPolygon(shadowShape);
+				background.endFill();
+				background.lineStyle(2, color, .62);
+				background.beginFill(15925236, .98);
+				background.drawPolygon(bubbleShape);
+				background.endFill();
+				background.lineStyle(1, 16777215, .38);
+				background.moveTo(-halfWidth + 4, top + 4);
+				background.lineTo(halfWidth - 4, top + 4);
+			};
+			const makeSpeechBubble = (node, color) => {
+				const TextCtor = PIXI.Text;
+				if (!TextCtor) return null;
+				const group = new PIXI.Container();
+				const background = new PIXI.Graphics();
+				const label = new TextCtor(speechLabelFor(node), {
+					align: "center",
+					fill: "#102015",
+					fontFamily: "ui-sans-serif, system-ui, sans-serif",
+					fontSize: 12,
+					fontWeight: "800",
+					lineHeight: 15,
+					wordWrap: true,
+					wordWrapWidth: AGENT_SPEECH_BUBBLE_MAX_WIDTH - 18
+				});
+				label.anchor.set(.5, .5);
+				const width = Math.ceil(clamp(label.width + 18, AGENT_SPEECH_BUBBLE_MIN_WIDTH, AGENT_SPEECH_BUBBLE_MAX_WIDTH));
+				const height = Math.ceil(Math.max(24, label.height + 10));
+				drawSpeechBubbleBackground(background, width, height, color);
+				label.y = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT - height / 2;
+				group.addChild(background, label);
+				group.alpha = speechBubblesEnabled ? .96 : 0;
+				return {
+					group,
+					background,
+					label
+				};
+			};
+			const setSpeechBubblesEnabled = (enabled) => {
+				speechBubblesEnabled = enabled;
+				for (const unit of agentUnits) if (unit.speechBubble) unit.speechBubble.group.alpha = enabled ? .96 : 0;
+			};
 			const makeAgentUnit = (node, index) => {
 				const agentId = node.dataset.agentId || `agent-${index}`;
 				const severity = parseSeverity(node);
@@ -211,11 +285,13 @@
 				const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
 				const texture = frameSet?.down[0] || null;
 				const sprite = texture ? new PIXI.Sprite(texture) : null;
+				const speechBubble = makeSpeechBubble(node, color);
 				if (sprite) {
 					sprite.anchor.set(.5, 1);
 					sprite.scale.set(AGENT_SPRITE_SCALE);
 					group.addChild(shadow, ring, sprite);
 				} else group.addChild(shadow, ring);
+				if (speechBubble) group.addChild(speechBubble.group);
 				group.alpha = severity === "muted" ? .58 : .95;
 				agentLayer.addChild(group);
 				const packet = makePacket(color);
@@ -245,6 +321,7 @@
 					group,
 					ring,
 					sprite,
+					speechBubble,
 					packet,
 					frameSet,
 					point,
@@ -341,6 +418,16 @@
 				unit.sprite.texture = frames[frameIndex] || frames[0];
 				unit.sprite.scale.set(unit.facing === "side" ? unit.facingSign * AGENT_SPRITE_SCALE : AGENT_SPRITE_SCALE, AGENT_SPRITE_SCALE);
 			};
+			const applySpeechBubbleFrame = (unit) => {
+				if (!unit.speechBubble) return;
+				const spriteHeight = AGENT_FRAME_HEIGHT * AGENT_SPRITE_SCALE;
+				const driftX = Math.sin(elapsed * 1.7 + unit.phase * 11) * 1.5;
+				const driftY = Math.sin(elapsed * 2.6 + unit.phase * 9) * 3;
+				unit.speechBubble.group.x = driftX;
+				unit.speechBubble.group.y = -spriteHeight - AGENT_SPEECH_BUBBLE_HEAD_GAP + driftY - stageBurst * 1.5;
+				unit.speechBubble.group.alpha = speechBubblesEnabled ? .9 + Math.sin(elapsed * 2.2 + unit.phase * 5) * .06 : 0;
+				unit.speechBubble.group.scale.set(1 + stageBurst * .025);
+			};
 			const renderTick = (delta) => {
 				elapsed += delta / 60;
 				stageBurst = Math.max(0, stageBurst - delta * .018);
@@ -348,6 +435,7 @@
 				for (const unit of agentUnits) {
 					updateRoamMotion(unit, delta);
 					applyWalkFrame(unit);
+					applySpeechBubbleFrame(unit);
 					const target = targets[unit.targetKind] || targets.distributor;
 					const start = {
 						x: unit.point.x,
@@ -403,7 +491,9 @@
 					texture: false,
 					baseTexture: false
 				});
+				boardEl.classList.remove("is-pixi-mounted");
 				delete container.dataset.akraDioramaMounted;
+				if (activeHandle?.app === app) activeHandle = null;
 			};
 			loadTextures().then(() => {
 				rebuildAgentUnits();
@@ -416,16 +506,22 @@
 					resizeObserver.observe(boardEl);
 				}
 			});
-			return {
+			const handle = {
 				app,
 				destroy,
 				rebuildAgentUnits,
+				setSpeechBubblesEnabled,
 				syncLayout
 			};
+			activeHandle = handle;
+			return handle;
 		};
 		window.AkraAdminGame = {
 			...window.AkraAdminGame || {},
-			mountDiorama
+			mountDiorama,
+			setSpeechBubblesEnabled: (enabled) => {
+				activeHandle?.setSpeechBubblesEnabled(enabled);
+			}
 		};
 		if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mountDiorama, { once: true });
 		else mountDiorama();
