@@ -282,7 +282,6 @@ impl NativeTuiApp {
             core_runtime,
             turn_control_truth,
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
-            pending_post_turn_automation_results: Vec::new(),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
@@ -390,11 +389,13 @@ impl NativeTuiApp {
                     ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(stream_snapshot)),
                 );
             }
-            AppEvent::PostTurnEvaluationCompleted(completion) => {
-                self.route_pending_post_turn_automation_result(
-                    &completion.thread_id,
-                    &completion.completed_turn_id,
-                );
+            AppEvent::PostTurnEvaluationCompleted(_completion) => {
+                /*
+                 * The background message handler applies the payload after it
+                 * has re-entered core as a completion. Keeping the payload out
+                 * of a TUI pending queue avoids a second routing path that can
+                 * drift from core ordering.
+                 */
             }
             AppEvent::ConversationTurnWorkspaceChanged {
                 workspace_directory,

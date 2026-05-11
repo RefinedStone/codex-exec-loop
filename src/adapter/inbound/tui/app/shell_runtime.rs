@@ -141,14 +141,12 @@ impl ShellRuntime {
                     evaluation,
                     planning_worker_panel_state,
                 } => {
-                    self.app.enqueue_post_turn_automation_result(
-                        PostTurnAutomationBackgroundResult {
-                            thread_id: thread_id.clone(),
-                            completed_turn_id: completed_turn_id.clone(),
-                            evaluation,
-                            planning_worker_panel_state,
-                        },
-                    );
+                    let result = PostTurnAutomationBackgroundResult {
+                        thread_id: thread_id.clone(),
+                        completed_turn_id: completed_turn_id.clone(),
+                        evaluation,
+                        planning_worker_panel_state,
+                    };
                     self.app.dispatch_core_input(CoreInput::EffectCompleted(
                         CoreEffectCompletion::PostTurnEvaluationCompleted(
                             PostTurnEvaluationCompletion {
@@ -157,6 +155,7 @@ impl ShellRuntime {
                             },
                         ),
                     ));
+                    self.app.route_post_turn_automation_result(result);
                 }
                 BackgroundMessage::GithubReviewPollLoaded(result) => {
                     self.app.record_github_review_poll_result(now, result)

@@ -248,6 +248,25 @@ fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
     assert!(!CONTROL_PLANE_HOST_RS.contains("pub fn handle_post_turn_queue_continuation"));
 }
 
+#[test]
+fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
+    /*
+     * Post-turn completion must re-enter core before the TUI applies the
+     * payload, but the payload should not sit in a second TUI-owned pending
+     * queue keyed by thread/turn. Stale and duplicate guards live at the
+     * application point that applies the result.
+     */
+    const APP_RS: &str = include_str!("../../app.rs");
+    const POST_TURN_AUTOMATION_RS: &str = include_str!("../post_turn_automation.rs");
+    const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
+
+    assert!(!APP_RS.contains("pending_post_turn_automation_results"));
+    assert!(!POST_TURN_AUTOMATION_RS.contains("route_pending_post_turn_automation_result"));
+    assert!(!POST_TURN_AUTOMATION_RS.contains("enqueue_post_turn_automation_result"));
+    assert!(SHELL_RUNTIME_RS.contains("PostTurnEvaluationCompleted"));
+    assert!(SHELL_RUNTIME_RS.contains("route_post_turn_automation_result(result)"));
+}
+
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
     let workspace_dir = create_temp_git_repo(prefix);
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
