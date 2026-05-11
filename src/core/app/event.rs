@@ -29,6 +29,13 @@ pub enum CoreEffectCompletion {
     StartupChecksLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
     ConversationLoaded(Result<Box<ConversationReadySnapshot>, String>),
+    PostTurnEvaluationCompleted(PostTurnEvaluationCompletion),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostTurnEvaluationCompletion {
+    pub thread_id: String,
+    pub completed_turn_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +50,7 @@ pub enum AppEvent {
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
     TurnStreamSnapshotChanged(TurnStreamSnapshot),
+    PostTurnEvaluationCompleted(PostTurnEvaluationCompletion),
     ConversationTurnWorkspaceChanged { workspace_directory: String },
     ParallelModeSupervisorSnapshotInvalidated,
 }

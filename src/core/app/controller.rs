@@ -70,6 +70,13 @@ impl CoreController {
                 self.state.apply_conversation_result(result);
                 self.conversation_changed_outcome(Vec::new())
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
+                completion,
+            )) => CoreDispatchOutcome {
+                events: vec![AppEvent::PostTurnEvaluationCompleted(completion)],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
             CoreInput::ConversationStreamUpdated(event) => {
                 let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
                 CoreDispatchOutcome {
@@ -508,6 +515,26 @@ mod tests {
             TurnStreamUpdate::RuntimeNotice {
                 notice: "reattached runtime".to_string()
             }
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn post_turn_evaluation_completion_passes_through_core_without_state_revision() {
+        let mut controller = CoreController::new();
+        let completion = crate::core::app::PostTurnEvaluationCompletion {
+            thread_id: "thread-1".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+        };
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(completion.clone()),
+        ));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::PostTurnEvaluationCompleted(completion)]
         );
         assert!(outcome.effects.is_empty());
     }
