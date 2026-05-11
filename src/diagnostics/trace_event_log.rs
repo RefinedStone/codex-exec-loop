@@ -542,13 +542,22 @@ fn default_trace_log_directory() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
     use serde_json::{Map, json};
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::prelude::*;
 
     use super::{
-        AKRA_EVENT_TARGET, TraceDestination, TraceSpanMode, concise_trace_filter,
-        full_trace_filter, merge_detail_field, planning_trace_filter,
-        tokio_console_value_is_enabled, trace_filter_from_rust_log_value,
-        trace_settings_from_value, trace_span_mode_from_value, valid_filter_or_fallback,
+        AKRA_EVENT_TARGET, AkraJsonFormat, TraceConfig, TraceDestination, TraceSettings,
+        TraceSpanMode, concise_trace_filter, default_trace_log_directory, full_trace_filter,
+        merge_detail_field, non_blocking_writer, planning_trace_filter, tokio_console_requested,
+        tokio_console_value_is_enabled, trace_config_from_env, trace_destination,
+        trace_filter_from_rust_log_value, trace_settings_from_env, trace_settings_from_value,
+        trace_span_mode_from_env, trace_span_mode_from_value, valid_filter_or_fallback,
     };
 
     #[test]
@@ -599,6 +608,8 @@ mod tests {
             trace_span_mode_from_value("none"),
             Some(TraceSpanMode::None)
         );
+        assert_eq!(trace_span_mode_from_value("0"), Some(TraceSpanMode::None));
+        assert_eq!(trace_span_mode_from_value("off"), Some(TraceSpanMode::None));
         assert_eq!(
             trace_span_mode_from_value("close"),
             Some(TraceSpanMode::Close)
@@ -608,6 +619,22 @@ mod tests {
             Some(TraceSpanMode::Full)
         );
         assert_eq!(trace_span_mode_from_value("verbose"), None);
+    }
+
+    #[test]
+    fn fmt_span_mapping_matches_trace_span_mode_contract() {
+        assert_eq!(
+            TraceSpanMode::None.fmt_span(),
+            tracing_subscriber::fmt::format::FmtSpan::NONE
+        );
+        assert_eq!(
+            TraceSpanMode::Close.fmt_span(),
+            tracing_subscriber::fmt::format::FmtSpan::CLOSE
+        );
+        assert_eq!(
+            TraceSpanMode::Full.fmt_span(),
+            tracing_subscriber::fmt::format::FmtSpan::FULL
+        );
     }
 
     #[test]
@@ -629,7 +656,12 @@ mod tests {
             trace_filter_from_rust_log_value("codex_exec_loop_native=trace"),
             Some("codex_exec_loop_native=trace".to_string())
         );
+        assert_eq!(
+            trace_filter_from_rust_log_value("  codex_exec_loop_native=debug  "),
+            Some("codex_exec_loop_native=debug".to_string())
+        );
         assert_eq!(trace_filter_from_rust_log_value("off"), None);
+        assert_eq!(trace_filter_from_rust_log_value(""), None);
     }
 
     #[test]
@@ -680,6 +712,60 @@ mod tests {
     }
 
     #[test]
+    fn akra_json_formatter_emits_flattened_event_and_span_context() {
+        let capture = CaptureWriter::default();
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_span_events(TraceSpanMode::Full.fmt_span())
+            .event_format(AkraJsonFormat)
+            .with_writer(capture.clone());
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new("trace"))
+            .with(fmt_layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("turn_stream", thread_id = "thread-1", turn = 7_u64);
+            let _entered = span.enter();
+            tracing::debug!(
+                target: AKRA_EVENT_TARGET,
+                event = "turn_stream_reduced",
+                detail = r#"{"phase":"delta","token_count":3}"#,
+                ok = true,
+                latency_ms = 12_i64,
+                ratio = 1.5_f64,
+                "akra_event"
+            );
+        });
+
+        let lines = capture.lines();
+        let event = lines
+            .iter()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).expect("trace line should be JSON")
+            })
+            .find(|value| {
+                value.get("event").and_then(serde_json::Value::as_str)
+                    == Some("turn_stream_reduced")
+            })
+            .expect("captured trace should include the emitted akra event");
+
+        assert_eq!(event["target"], AKRA_EVENT_TARGET);
+        assert_eq!(event["phase"], "delta");
+        assert_eq!(event["token_count"], 3);
+        assert_eq!(event["ok"], true);
+        assert_eq!(event["latency_ms"], 12);
+        assert_eq!(event["ratio"], 1.5);
+        assert!(
+            !event
+                .as_object()
+                .expect("event should be an object")
+                .contains_key("detail")
+        );
+        assert_eq!(event["span"]["name"], "turn_stream");
+        assert_eq!(event["spans"][0]["name"], "turn_stream");
+    }
+
+    #[test]
     fn trace_destination_can_represent_rolling_and_exact_file_modes() {
         assert_eq!(
             TraceDestination::DailyRolling {
@@ -695,5 +781,314 @@ mod tests {
             TraceDestination::ExactFile("/tmp/akra-trace.jsonl".into()),
             TraceDestination::ExactFile("/tmp/akra-trace.jsonl".into())
         );
+    }
+
+    #[test]
+    fn trace_config_from_env_applies_file_destination_span_override_and_tokio_flag() {
+        let trace_file = unique_temp_dir("trace-config").join("akra-trace.jsonl");
+
+        let config = with_trace_env(
+            &[
+                ("AKRA_TRACE", Some("planning")),
+                ("RUST_LOG", Some("off")),
+                ("AKRA_TRACE_SPANS", Some("full")),
+                ("AKRA_TRACE_FILE", Some(path_str(&trace_file))),
+                ("AKRA_TOKIO_CONSOLE", Some("yes")),
+            ],
+            trace_config_from_env,
+        )
+        .expect("AKRA_TRACE planning should enable trace config");
+
+        assert_eq!(
+            config,
+            TraceConfig {
+                filter: planning_trace_filter(),
+                destination: TraceDestination::ExactFile(trace_file),
+                span_mode: TraceSpanMode::Full,
+                tokio_console: true,
+            }
+        );
+    }
+
+    #[test]
+    fn trace_settings_from_env_uses_rust_log_when_akra_trace_is_missing() {
+        let settings = with_trace_env(
+            &[
+                ("AKRA_TRACE", None),
+                ("RUST_LOG", Some("codex_exec_loop_native=trace")),
+                ("AKRA_TRACE_SPANS", None),
+                ("AKRA_TRACE_FILE", None),
+                ("AKRA_TOKIO_CONSOLE", None),
+            ],
+            trace_settings_from_env,
+        )
+        .expect("RUST_LOG should enable trace settings when AKRA_TRACE is absent");
+
+        assert_eq!(
+            settings,
+            TraceSettings {
+                filter: "codex_exec_loop_native=trace".to_string(),
+                span_mode: TraceSpanMode::None,
+            }
+        );
+    }
+
+    #[test]
+    fn trace_settings_from_env_lets_rust_log_override_akra_trace_filter_only() {
+        let settings = with_trace_env(
+            &[
+                ("AKRA_TRACE", Some("full")),
+                ("RUST_LOG", Some("codex_exec_loop_native::adapter=debug")),
+                ("AKRA_TRACE_SPANS", None),
+                ("AKRA_TRACE_FILE", None),
+                ("AKRA_TOKIO_CONSOLE", None),
+            ],
+            trace_settings_from_env,
+        )
+        .expect("AKRA_TRACE full should remain enabled");
+
+        assert_eq!(settings.filter, "codex_exec_loop_native::adapter=debug");
+        assert_eq!(settings.span_mode, TraceSpanMode::Full);
+    }
+
+    #[test]
+    fn trace_config_from_env_respects_disabled_trace_and_empty_file_path() {
+        assert_eq!(
+            with_trace_env(
+                &[
+                    ("AKRA_TRACE", Some("off")),
+                    ("RUST_LOG", None),
+                    ("AKRA_TRACE_SPANS", None),
+                    ("AKRA_TRACE_FILE", Some("/tmp/ignored.jsonl")),
+                    ("AKRA_TOKIO_CONSOLE", None),
+                ],
+                trace_config_from_env,
+            ),
+            None
+        );
+
+        assert_eq!(
+            with_trace_env(
+                &[
+                    ("AKRA_TRACE", Some("1")),
+                    ("RUST_LOG", None),
+                    ("AKRA_TRACE_SPANS", None),
+                    ("AKRA_TRACE_FILE", Some("")),
+                    ("AKRA_TOKIO_CONSOLE", None),
+                ],
+                trace_config_from_env,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn env_backed_span_and_tokio_helpers_parse_documented_values() {
+        assert_eq!(
+            with_trace_env(
+                &[("AKRA_TRACE_SPANS", Some("close"))],
+                trace_span_mode_from_env
+            ),
+            Some(TraceSpanMode::Close)
+        );
+        assert_eq!(
+            with_trace_env(
+                &[("AKRA_TRACE_SPANS", Some("verbose"))],
+                trace_span_mode_from_env
+            ),
+            None
+        );
+        assert!(with_trace_env(
+            &[("AKRA_TOKIO_CONSOLE", Some("on"))],
+            tokio_console_requested,
+        ));
+        assert!(!with_trace_env(
+            &[("AKRA_TOKIO_CONSOLE", Some("full"))],
+            tokio_console_requested,
+        ));
+    }
+
+    #[test]
+    fn trace_destination_prefers_exact_file_and_falls_back_to_default_daily_directory() {
+        let exact = unique_temp_dir("trace-destination").join("exact.jsonl");
+        assert_eq!(
+            with_trace_env(
+                &[("AKRA_TRACE_FILE", Some(path_str(&exact)))],
+                trace_destination
+            ),
+            Some(TraceDestination::ExactFile(exact))
+        );
+
+        let daily = with_trace_env(&[("AKRA_TRACE_FILE", None)], trace_destination)
+            .expect("default trace destination should be available under current dir");
+        assert_eq!(
+            daily,
+            TraceDestination::DailyRolling {
+                directory: default_trace_log_directory()
+                    .expect("default trace log directory should resolve"),
+                file_name: "akra-trace.jsonl".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn non_blocking_writer_creates_destinations_and_reports_directory_failures() {
+        let root = unique_temp_dir("trace-writer");
+        let exact_file = root.join("nested").join("trace.jsonl");
+        let (mut writer, guard) =
+            non_blocking_writer(TraceDestination::ExactFile(exact_file.clone()))
+                .expect("exact file writer should create parent directories");
+        writer
+            .write_all(b"{\"event\":\"exact\"}\n")
+            .expect("non-blocking writer should accept bytes");
+        drop(writer);
+        drop(guard);
+        wait_for_file_contains(&exact_file, "exact");
+
+        let daily_dir = root.join("daily");
+        let (_writer, guard) = non_blocking_writer(TraceDestination::DailyRolling {
+            directory: daily_dir.clone(),
+            file_name: "akra-trace.jsonl".to_string(),
+        })
+        .expect("daily rolling writer should create its directory");
+        drop(guard);
+        assert!(daily_dir.is_dir());
+
+        let parent_file = root.join("not-a-directory");
+        std::fs::write(&parent_file, "file").expect("fixture file should be written");
+        let error =
+            non_blocking_writer(TraceDestination::ExactFile(parent_file.join("trace.jsonl")))
+                .expect_err("file parent should fail directory creation");
+        assert!(error.contains("failed to create trace log directory"));
+    }
+
+    #[derive(Clone, Default)]
+    struct CaptureWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl CaptureWriter {
+        fn lines(&self) -> Vec<String> {
+            let bytes = self
+                .bytes
+                .lock()
+                .expect("capture lock should not be poisoned");
+            String::from_utf8(bytes.clone())
+                .expect("captured trace should be UTF-8")
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+        type Writer = CaptureSink;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            CaptureSink {
+                bytes: Arc::clone(&self.bytes),
+            }
+        }
+    }
+
+    struct CaptureSink {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CaptureSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("capture lock should not be poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn with_trace_env<T>(updates: &[(&str, Option<&str>)], body: impl FnOnce() -> T) -> T {
+        let _lock = ENV_MUTEX
+            .lock()
+            .expect("trace env lock should not be poisoned");
+        let keys = [
+            "AKRA_TRACE",
+            "RUST_LOG",
+            "AKRA_TRACE_SPANS",
+            "AKRA_TRACE_FILE",
+            "AKRA_TOKIO_CONSOLE",
+        ];
+        let saved = keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+
+        for key in keys {
+            // SAFETY: These tests serialize all mutations of the trace-related
+            // environment keys with ENV_MUTEX and restore the original values before
+            // releasing it.
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+        for (key, value) in updates {
+            // SAFETY: See the serialized environment mutation note above.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+
+        let result = body();
+
+        for (key, value) in saved {
+            // SAFETY: See the serialized environment mutation note above.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+
+        result
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "codex-exec-loop-{label}-{}-{now}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("temporary directory should be created");
+        path
+    }
+
+    fn wait_for_file_contains(path: &Path, needle: &str) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if std::fs::read_to_string(path).is_ok_and(|body| body.contains(needle)) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected {} to contain `{needle}`",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn path_str(path: &Path) -> &str {
+        path.to_str().expect("test path should be valid UTF-8")
     }
 }
