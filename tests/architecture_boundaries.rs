@@ -130,6 +130,41 @@ const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
     ".repair_task_authority(",
 ];
 
+const CORE_APP_APPLICATION_CONTRACT_FORBIDDEN_PATTERNS: &[&str] = &[
+    "crate::application::",
+    "ConversationStreamEvent",
+    "ManualPromptPreparationRequest",
+    "ManualPromptPreparationResult",
+    "ParallelTurnSlotLeaseHandoff",
+    "PlanningRuntimeProjection",
+    "PlanningTurnExecutionSnapshotCapture",
+    "PostTurnEvaluationExecution",
+    "PostTurnEvaluationRequest",
+];
+
+const CORE_RUNTIME_RAW_APPLICATION_SERVICE_FORBIDDEN_PATTERNS: &[&str] = &[
+    "use crate::application::service::",
+    "crate::application::service::",
+    "StartupService",
+    "SessionService",
+    "ConversationService",
+    "PlanningServices",
+    "PlanningRuntimeUseCases",
+    "ParallelModeTurnService",
+    "ManualPromptPreparationService",
+    "PostTurnEvaluationService",
+    "ParallelTurnStreamLaunchRequest",
+    "PlanningTurnExecutionSnapshotCaptureRequest",
+    ".run_checks(",
+    ".load_session_catalog(",
+    ".load_snapshot(",
+    ".prepare_stream_launch(",
+    ".capture_execution_snapshot(",
+    ".start_stream(",
+    ".prepare(",
+    ".evaluate_with_timeout(",
+];
+
 #[test]
 fn domain_layer_has_no_application_core_or_adapter_dependencies() {
     // Static guard: dependency direction is a source graph property, not a runtime behavior.
@@ -237,6 +272,31 @@ fn future_core_app_contracts_are_application_dto_free() {
 }
 
 #[test]
+#[ignore]
+fn future_core_app_public_contracts_are_core_owned() {
+    /*
+     * Disabled target: this is the strict version of the core/app boundary. Core
+     * commands, effects, inputs, events, stream snapshots, and app snapshots
+     * should be owned by core/domain contracts instead of reusing application
+     * request/result/projection DTOs in their public shape.
+     */
+    assert_no_forbidden_references_in_paths(
+        "future core/app public contracts must be core-owned and application DTO free",
+        &[
+            "src/core/app/command.rs",
+            "src/core/app/effect.rs",
+            "src/core/app/event.rs",
+            "src/core/app/projection.rs",
+            "src/core/app/snapshot.rs",
+            "src/core/app/state.rs",
+            "src/core/app/turn_stream.rs",
+            "src/core/app/turn_submission.rs",
+        ],
+        CORE_APP_APPLICATION_CONTRACT_FORBIDDEN_PATTERNS,
+    );
+}
+
+#[test]
 fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
     // Static guard: core is a headless application runtime. It may coordinate application services,
     // but it must not become a TUI, HTTP, Telegram, or concrete outbound adapter layer.
@@ -317,6 +377,21 @@ fn future_core_runtime_does_not_hold_raw_application_services() {
             "manual_prompt_preparation_service: ManualPromptPreparationService",
             "post_turn_evaluation_service: PostTurnEvaluationService",
         ],
+    });
+}
+
+#[test]
+#[ignore]
+fn future_core_runtime_uses_application_facade_not_service_modules() {
+    /*
+     * Disabled target: core/runtime should eventually execute one narrow
+     * application-facing facade instead of importing service modules, storing raw
+     * services, or calling service methods directly from core worker code.
+     */
+    assert_no_forbidden_references(BoundaryRule {
+        name: "future core runtime must call an application facade instead of raw service modules",
+        root: "src/core/runtime",
+        forbidden_patterns: CORE_RUNTIME_RAW_APPLICATION_SERVICE_FORBIDDEN_PATTERNS,
     });
 }
 
