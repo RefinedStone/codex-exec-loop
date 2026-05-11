@@ -116,6 +116,14 @@ interface AkraAdminGameBridge {
   [key: string]: unknown;
 }
 
+const AGENT_FRAME_WIDTH = 128;
+const AGENT_FRAME_HEIGHT = 192;
+const AGENT_SPRITE_SCALE = 0.78;
+const AGENT_SHADOW_WIDTH = 44;
+const AGENT_SHADOW_HEIGHT = 12;
+const AGENT_RING_WIDTH = 36;
+const AGENT_RING_HEIGHT = 10;
+
 declare const PIXI: {
   Application: new (options: Record<string, unknown>) => PixiApplication;
   BaseTexture: { defaultOptions: { scaleMode?: unknown } };
@@ -178,7 +186,7 @@ declare global {
       whiteboard: basePath + "sprite_whiteboard.png",
       sofa: basePath + "sprite_sofa.png",
       plant: basePath + "sprite_potted_plant.png",
-      agentAtlas: basePath + "gamebaljeonguk_atlas_64x96.png",
+      agentAtlas: basePath + "gamebaljeonguk_atlas_128x192.png",
     };
 
     const root = boardEl.closest<HTMLElement>("[data-admin-graphic]");
@@ -255,7 +263,7 @@ declare global {
     const roamBounds = () => {
       const { width, height } = boardSize();
       const horizontalInset = Math.min(width * 0.5, Math.max(56, width * 0.08));
-      const topInset = Math.min(height * 0.5, Math.max(118, height * 0.19));
+      const topInset = Math.min(height * 0.5, Math.max(168, height * 0.24));
       const bottomInset = Math.max(58, height * 0.08);
       return {
         left: horizontalInset,
@@ -288,7 +296,15 @@ declare global {
     ): PixiTexture | null => {
       const baseTexture = texture?.baseTexture;
       if (!baseTexture || typeof PIXI.Rectangle === "undefined") return null;
-      return new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * 64, row * 96, 64, 96));
+      return new PIXI.Texture(
+        baseTexture,
+        new PIXI.Rectangle(
+          col * AGENT_FRAME_WIDTH,
+          row * AGENT_FRAME_HEIGHT,
+          AGENT_FRAME_WIDTH,
+          AGENT_FRAME_HEIGHT
+        )
+      );
     };
 
     const makeFrameRow = (
@@ -360,7 +376,7 @@ declare global {
       const group = new PIXI.Container();
       const shadow = new PIXI.Graphics();
       shadow.beginFill(0x000000, 0.26);
-      shadow.drawEllipse(0, 0, 30, 8);
+      shadow.drawEllipse(0, 0, AGENT_SHADOW_WIDTH, AGENT_SHADOW_HEIGHT);
       shadow.endFill();
 
       const ring = new PIXI.Graphics();
@@ -369,7 +385,7 @@ declare global {
       const sprite = texture ? new PIXI.Sprite(texture) : null;
       if (sprite) {
         sprite.anchor.set(0.5, 1);
-        sprite.scale.set(0.72);
+        sprite.scale.set(AGENT_SPRITE_SCALE);
         group.addChild(shadow, ring, sprite);
       } else {
         group.addChild(shadow, ring);
@@ -529,7 +545,10 @@ declare global {
         ? Math.floor((elapsed * 7.5 + unit.phase * 6) % frames.length)
         : 0;
       unit.sprite.texture = frames[frameIndex] || frames[0];
-      unit.sprite.scale.set(unit.facing === "side" ? unit.facingSign * 0.72 : 0.72, 0.72);
+      unit.sprite.scale.set(
+        unit.facing === "side" ? unit.facingSign * AGENT_SPRITE_SCALE : AGENT_SPRITE_SCALE,
+        AGENT_SPRITE_SCALE
+      );
     };
 
     const renderTick = (delta: number): void => {
@@ -564,7 +583,7 @@ declare global {
         unit.ring.clear();
         unit.ring.lineStyle(2, unit.color, 0.58 + stageBurst * 0.2);
         const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * 0.12 + stageBurst * 0.12;
-        unit.ring.drawEllipse(0, 0, 25 * ringPulse, 7 * ringPulse);
+        unit.ring.drawEllipse(0, 0, AGENT_RING_WIDTH * ringPulse, AGENT_RING_HEIGHT * ringPulse);
       }
     };
 

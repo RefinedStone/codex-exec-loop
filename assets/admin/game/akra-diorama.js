@@ -1,5 +1,12 @@
 (function() {
 	//#region src/akra-diorama.ts
+	var AGENT_FRAME_WIDTH = 128;
+	var AGENT_FRAME_HEIGHT = 192;
+	var AGENT_SPRITE_SCALE = .78;
+	var AGENT_SHADOW_WIDTH = 44;
+	var AGENT_SHADOW_HEIGHT = 12;
+	var AGENT_RING_WIDTH = 36;
+	var AGENT_RING_HEIGHT = 10;
 	(() => {
 		const isStatusSeverity = (value) => value === "normal" || value === "success" || value === "warning" || value === "danger" || value === "info" || value === "muted";
 		const isPixiTexture = (texture) => texture !== null;
@@ -29,7 +36,7 @@
 				whiteboard: basePath + "sprite_whiteboard.png",
 				sofa: basePath + "sprite_sofa.png",
 				plant: basePath + "sprite_potted_plant.png",
-				agentAtlas: basePath + "gamebaljeonguk_atlas_64x96.png"
+				agentAtlas: basePath + "gamebaljeonguk_atlas_128x192.png"
 			};
 			const root = boardEl.closest("[data-admin-graphic]");
 			const pathLayer = new PIXI.Graphics();
@@ -109,7 +116,7 @@
 			const roamBounds = () => {
 				const { width, height } = boardSize();
 				const horizontalInset = Math.min(width * .5, Math.max(56, width * .08));
-				const topInset = Math.min(height * .5, Math.max(118, height * .19));
+				const topInset = Math.min(height * .5, Math.max(168, height * .24));
 				const bottomInset = Math.max(58, height * .08);
 				return {
 					left: horizontalInset,
@@ -135,7 +142,7 @@
 			const makeAtlasFrame = (texture, col, row = 0) => {
 				const baseTexture = texture?.baseTexture;
 				if (!baseTexture || typeof PIXI.Rectangle === "undefined") return null;
-				return new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * 64, row * 96, 64, 96));
+				return new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * AGENT_FRAME_WIDTH, row * AGENT_FRAME_HEIGHT, AGENT_FRAME_WIDTH, AGENT_FRAME_HEIGHT));
 			};
 			const makeFrameRow = (texture, row, startCol) => Array.from({ length: 4 }, (_, index) => makeAtlasFrame(texture, startCol + index, row)).filter(isPixiTexture);
 			const buildAgentFrameSets = (texture) => {
@@ -198,7 +205,7 @@
 				const group = new PIXI.Container();
 				const shadow = new PIXI.Graphics();
 				shadow.beginFill(0, .26);
-				shadow.drawEllipse(0, 0, 30, 8);
+				shadow.drawEllipse(0, 0, AGENT_SHADOW_WIDTH, AGENT_SHADOW_HEIGHT);
 				shadow.endFill();
 				const ring = new PIXI.Graphics();
 				const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
@@ -206,7 +213,7 @@
 				const sprite = texture ? new PIXI.Sprite(texture) : null;
 				if (sprite) {
 					sprite.anchor.set(.5, 1);
-					sprite.scale.set(.72);
+					sprite.scale.set(AGENT_SPRITE_SCALE);
 					group.addChild(shadow, ring, sprite);
 				} else group.addChild(shadow, ring);
 				group.alpha = severity === "muted" ? .58 : .95;
@@ -332,7 +339,7 @@
 				if (frames.length === 0) return;
 				const frameIndex = unit.isWalking ? Math.floor((elapsed * 7.5 + unit.phase * 6) % frames.length) : 0;
 				unit.sprite.texture = frames[frameIndex] || frames[0];
-				unit.sprite.scale.set(unit.facing === "side" ? unit.facingSign * .72 : .72, .72);
+				unit.sprite.scale.set(unit.facing === "side" ? unit.facingSign * AGENT_SPRITE_SCALE : AGENT_SPRITE_SCALE, AGENT_SPRITE_SCALE);
 			};
 			const renderTick = (delta) => {
 				elapsed += delta / 60;
@@ -368,7 +375,7 @@
 					unit.ring.clear();
 					unit.ring.lineStyle(2, unit.color, .58 + stageBurst * .2);
 					const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * .12 + stageBurst * .12;
-					unit.ring.drawEllipse(0, 0, 25 * ringPulse, 7 * ringPulse);
+					unit.ring.drawEllipse(0, 0, AGENT_RING_WIDTH * ringPulse, AGENT_RING_HEIGHT * ringPulse);
 				}
 			};
 			const loadTextures = async () => {
