@@ -43,19 +43,17 @@ The operator-facing current contract lives in
 
 Runtime task intake is the narrow operator path for adding one user-authored task while the shell is
 already running. It is intentionally separate from broad planning authoring: `:planning` remains the
-staged-draft surface, while `:task` creates a single validated task mutation against the accepted
+staged-draft surface, while task intake creates a single validated task mutation against the accepted
 task authority.
 
-The TUI exposes the intake as `:task`. `:task <prompt>` opens a preview for that prompt immediately;
-plain `:task` opens an intake overlay with a prompt editor. The overlay shows title, direction,
-status, priority, and a description excerpt, then accepts only `Y` to commit, `N` or `Esc` to cancel,
-and `E` to return to prompt editing. The command remains available during a streaming turn, queue
-evaluation, and automation-stopped state. A committed runtime task never interrupts an existing
+The TUI no longer exposes task intake as an inline command. Admin/API task creation and future
+manual prompt intake reuse the same `PlanningTaskIntakeRequest` -> draft -> validation -> commit
+path. A committed runtime task never interrupts an existing
 `in_progress` task; it enters as a normal `ready` candidate for the next queue selection.
 
 The intake authority flow is:
 
-1. TUI prompt input becomes a `PlanningTaskIntakeRequest`.
+1. Admin/API or manual prompt input becomes a `PlanningTaskIntakeRequest`.
 2. `PlanningTaskDraftGenerator` converts the prompt into one `PlanningTaskIntakeDraft`.
 3. `PlanningTaskIntakeValidationService` validates the draft shape, selected direction, task id,
    priority, and dependency references.

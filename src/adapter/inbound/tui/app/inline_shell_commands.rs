@@ -6,7 +6,6 @@ use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
-use super::task_shell_command::{ParsedTaskShellCommand, parse_task_shell_argument};
 use crate::application::service::planning::PlanningResetTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +15,6 @@ pub(crate) enum InlineShellCommand {
     Sessions,
     Queue,
     Directions,
-    Task,
     Turns,
     Stop,
     Doctor,
@@ -59,7 +57,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :task [prompt]  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 
@@ -106,15 +104,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":directions"],
         suggestion_detail: "directions maintenance",
         buffered_hint: "Press Enter to review or edit planning directions.",
-        execution_status: None,
-        requires_argument: false,
-    },
-    InlineShellCommandSpec {
-        command: InlineShellCommand::Task,
-        primary_name: ":task",
-        aliases: &[":task"],
-        suggestion_detail: "task intake",
-        buffered_hint: "Press Enter to draft a runtime planning task.",
         execution_status: None,
         requires_argument: false,
     },
@@ -205,7 +194,6 @@ impl InlineShellCommandInput {
                 InlineShellCommand::Directions,
                 "directions",
             ),
-            InlineShellCommand::Task => task_argument_hint(self.argument()),
             InlineShellCommand::Turns => match self.argument() {
                 Some(value) => {
                     format!("Press Enter to set the auto-follow turn budget to `{value}`.")
@@ -350,7 +338,6 @@ impl InlineShellCommand {
             | InlineShellCommand::Sessions
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
-            | InlineShellCommand::Task
             | InlineShellCommand::Stop
             | InlineShellCommand::Doctor
             | InlineShellCommand::PlanningInit
@@ -372,7 +359,6 @@ impl InlineShellCommand {
             InlineShellCommand::Parallel => ":parallel [off]",
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Directions => ":directions",
-            InlineShellCommand::Task => ":task [prompt]",
             InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::Stop => ":stop",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
@@ -449,16 +435,6 @@ fn planning_argument_hint(argument: Option<&str>) -> String {
             "Press Enter to apply `:planning {}`. Supported arguments: doctor.",
             error.argument()
         ),
-    }
-}
-fn task_argument_hint(argument: Option<&str>) -> String {
-    match parse_task_shell_argument(argument) {
-        ParsedTaskShellCommand::OpenPromptEditor => {
-            InlineShellCommand::Task.spec().buffered_hint.to_string()
-        }
-        ParsedTaskShellCommand::PreviewPrompt { prompt } => {
-            format!("Press Enter to preview a runtime task for `{prompt}`.")
-        }
     }
 }
 fn planning_overlay_argument_hint(

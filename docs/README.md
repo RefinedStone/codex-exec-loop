@@ -42,7 +42,7 @@ most, one supporting deep dive.
 
 - `docs/plan/18-*` and `docs/plan/19-*`: compact authority-store design and pre-store risk history
 - `docs/plan/21-*` through `docs/plan/26-*`: terminal-agent bridge and capability research
-- `docs/plan/27-*`: runtime `:task` intake design
+- `docs/plan/27-*`: historical runtime task intake design
 - `docs/plan/28-*` and `docs/plan/29-*`: terminal rendering research and test methodology
 - `docs/plan/30-*`: jcode competitor code deep dive
 - [training/README.md](training/README.md): Rust training material using this repo as curriculum

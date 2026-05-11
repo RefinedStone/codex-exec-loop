@@ -17,7 +17,6 @@ pub enum ShellOverlay {
     Queue,
     DirectionsMaintenance,
     PlanningInit,
-    TaskIntake,
 }
 
 // exit confirmation은 overlay stack 일부가 아니라 별도 focus guard다. 어떤 overlay event도 이를 닫을 수 있어야 한다.
@@ -105,7 +104,6 @@ pub enum ShellChromeEvent {
     QueueOverlayShown,
     DirectionsMaintenanceOverlayShown,
     PlanningInitOverlayShown,
-    TaskIntakeOverlayShown,
     StartupOverlayToggled,
     SessionsOverlayToggled {
         limit: usize,
@@ -213,10 +211,6 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::PlanningInitOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::PlanningInit;
-        }
-        ShellChromeEvent::TaskIntakeOverlayShown => {
-            state.exit_confirmation_state = ExitConfirmationState::Hidden;
-            state.shell_overlay = ShellOverlay::TaskIntake;
         }
         ShellChromeEvent::StartupOverlayToggled => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;

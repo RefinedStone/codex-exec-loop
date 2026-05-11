@@ -18,7 +18,7 @@ pub(crate) struct HelpOverlayView {
 pub(crate) fn build_help_overlay_view() -> HelpOverlayView {
     let entries = InlineShellCommand::help_entries();
     // usage column은 가장 긴 command usage를 기준으로 잡고 두 칸 padding을 더한다.
-    // 이렇게 해야 `:task [prompt]`처럼 긴 command가 있어도 detail 문장이 같은 열에서 시작한다.
+    // 이렇게 해야 argument가 있는 command에서도 detail 문장이 같은 열에서 시작한다.
     let usage_width = entries
         .iter()
         .map(|entry| entry.usage.len())

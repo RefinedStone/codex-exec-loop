@@ -6,7 +6,7 @@ to [remaining-work.md](remaining-work.md).
 ## Snapshot
 
 - One inline shell carries startup diagnostics, session resume, planning state, queue state,
-  post-turn continuation, task intake, and supersession supervision.
+  post-turn continuation, and supersession supervision.
 - Accepted planning authority is DB-backed. Tracked planning files are review/export/staged-edit
   artifacts, not the runtime source of truth.
 - Supersession is shipped for git-backed workspaces with a fixed local worktree pool and serialized
@@ -19,7 +19,7 @@ to [remaining-work.md](remaining-work.md).
 | Diagnostics | `Ctrl+d`, `:diag` | inspect startup readiness and blocking failures |
 | Sessions | `Ctrl+o`, `:sessions` | resume prior threads with current workspace context |
 | Queue | `:queue` | inspect accepted queue head, proposals, and skip framing |
-| Task Intake | `:task` | preview and commit one validated user task as accepted `ready` work |
+| Task Intake | Admin/API | add one validated user task as accepted `ready` work |
 | Planning | `:planning` | stage or reopen planning authoring |
 | Directions | `:directions` | maintain direction docs and queue-idle supporting prompt |
 | Supersession | `:parallel` (`:pa`) | arm parallel automation and refresh the supervisor board/pool |
@@ -31,7 +31,7 @@ to [remaining-work.md](remaining-work.md).
 - `:planning`: create or stage the default planning scaffold.
 - `:reset queue|directions|all`: rewrite the selected accepted planning scope.
 - `:planning on|off`: toggle plan execution without deleting the workspace.
-- `:task [prompt]`: create a structured task draft, validate it, then commit one accepted task.
+- Admin task intake: create a structured task draft, validate it, then commit one accepted task.
 - Builtin `next-task` and internal continuation execute only the accepted queue head.
 - Proposed tasks are visible but not executable until promoted.
 - Queue-idle behavior follows accepted DB direction authority.
@@ -58,7 +58,7 @@ to [remaining-work.md](remaining-work.md).
   queue, or after the main session completes a user turn and post-turn planning evaluation returns
   an accepted ready queue. In the post-turn case the normal main-session auto-follow prompt is
   suppressed and converted into parallel dispatch.
-- Manual `:task` intake before successful `:parallel` entry commits accepted work only; it records a
+- Admin/manual task intake before successful `:parallel` entry commits accepted work only; it records a
   dispatch-withheld reason and launches no worker. After the epoch is open, task intake can request
   dispatch with the `task_intake_after_epoch` trigger.
 - Dispatch triggers are explicit: `main_turn_post_evaluation`, `parallel_official_completion`, and

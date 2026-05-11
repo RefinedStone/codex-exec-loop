@@ -254,8 +254,6 @@ impl NativeTuiApp {
                 super::DirectionsMaintenanceOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
-            task_intake_overlay_ui_state: super::TaskIntakeOverlayUiState::default(),
-            pending_task_intake_command: None,
             active_session: None,
             application,
             core_runtime,

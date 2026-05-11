@@ -6,7 +6,6 @@ use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
-use crate::application::service::planning::PlanningTaskIntakeRequest;
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
@@ -122,10 +121,6 @@ mod shell_presentation;
 mod shell_rendering;
 #[path = "app/shell_runtime.rs"]
 mod shell_runtime;
-#[path = "app/task_intake_overlay_ui.rs"]
-mod task_intake_overlay_ui;
-#[path = "app/task_shell_command.rs"]
-mod task_shell_command;
 #[cfg(test)]
 #[path = "app/test_helpers.rs"]
 pub(crate) mod test_helpers;
@@ -193,7 +188,6 @@ use shell_frontend::ShellFrontendMode;
 use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{build_inline_tail_lines, build_planning_init_overlay_view};
-use task_intake_overlay_ui::{TaskIntakeOverlayStep, TaskIntakeOverlayUiState};
 use theme::AkraTheme;
 
 // Auto-follow submission carries more than a generated prompt: it records the
@@ -284,8 +278,6 @@ struct NativeTuiApp {
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
-    task_intake_overlay_ui_state: TaskIntakeOverlayUiState,
-    pending_task_intake_command: Option<InlineShellCommandInput>,
     active_session: Option<SessionSummary>,
     application: NativeTuiApplicationHandle,
     core_runtime: CoreRuntime<CoreEffectRunner>,

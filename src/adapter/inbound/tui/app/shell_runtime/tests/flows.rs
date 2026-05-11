@@ -1352,10 +1352,19 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
         ParallelModeDispatchCommandState::Pending
     );
 
+    let epoch_id = harness
+        .runtime
+        .app()
+        .parallel_mode_automation_epoch_id()
+        .expect("parallel mode should have an epoch");
     harness
         .runtime
         .app_mut()
-        .refresh_parallel_mode_dispatch_after_task_update("task-added-while-loading");
+        .apply_parallel_mode_orchestrator_wake_request(
+            harness.workspace_dir.clone(),
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id,
+        );
     let projections = harness.runtime_projections();
     assert_eq!(projections.dispatch_commands.len(), 1);
     assert_eq!(

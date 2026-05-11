@@ -105,11 +105,6 @@ pub use self::runtime::intake::{
     PlanningTaskIntakeDraft, PlanningTaskIntakeProposal, PlanningTaskIntakeRequest,
     PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
 };
-pub use self::runtime::intake_routing::{
-    PendingPlanningTaskIntakeCommandRoute, PendingPlanningTaskIntakeCommandRouteRequest,
-    PlanningTaskIntakeCommandRoute, PlanningTaskIntakeCommandRouteRequest,
-    route_pending_planning_task_intake_command, route_planning_task_intake_command,
-};
 pub use self::runtime::manual_intake::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainSessionHandoff,
 };

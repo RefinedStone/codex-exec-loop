@@ -1,26 +1,28 @@
 # Runtime Task Intake Design
 
-This document is the implementation target for adding user task intake to the running TUI without
-opening the broader planning draft editor.
+This document tracks the runtime task intake service that adds one user task without opening the
+broader planning draft editor. The earlier TUI inline command and overlay design has been
+superseded; current task creation should enter through admin/API surfaces or a future manual prompt
+intake path.
 
 ## Goal
 
-Operators need a low-friction way to enqueue a new task while work is already underway. The command
-must work while a turn is streaming, while queue evaluation is running, and while internal
+Operators need a low-friction way to enqueue a new task while work is already underway. The intake
+path must work while a turn is streaming, while queue evaluation is running, and while internal
 continuation is paused. It should add a normal `ready` task and leave the current `in_progress`
 task alone.
 
 The first implementation is local and deterministic. Future hidden Codex sessions or LLM structured
 output adapters may help draft a task, but they must plug into the same draft and validation path.
 
-## Command UX
+## Intake UX
 
-| Command | Behavior |
+| Surface | Behavior |
 | --- | --- |
-| `:task` | opens the Task Intake overlay prompt editor |
-| `:task <prompt>` | creates a draft from `<prompt>` and opens preview immediately |
+| Admin/API task creation | creates a draft from a prompt and commits the validated task |
+| Future manual prompt intake | may reuse the same request/draft/validation/commit path |
 
-The preview overlay shows:
+An admin preview should show:
 
 - generated title
 - selected direction
@@ -28,16 +30,7 @@ The preview overlay shows:
 - base priority and dynamic delta
 - description excerpt
 
-Preview keys:
-
-| Key | Behavior |
-| --- | --- |
-| `Y` | commit the task |
-| `N` | cancel |
-| `E` | return to prompt editing |
-| `Esc` | cancel |
-
-The overlay intentionally avoids multi-task editing, JSON editing, dependency editing, and
+The intake surface intentionally avoids multi-task editing, JSON editing, dependency editing, and
 automation toggles. Those remain planning-authoring responsibilities.
 
 ## Application Contract
@@ -157,23 +150,22 @@ commit a ledger or projection derived from an older revision over a newer runtim
 
 ## Runtime Semantics
 
-- `:task` is allowed before workspace initialization, but it does not enable queue automation until planning files exist.
-- `:task` is rejected when no planning workspace exists; the TUI should guide the operator to
-  `:planning`.
-- `:task` is rejected when no active direction exists; the TUI should guide the operator to
-  `:directions` or `:planning`.
+- Task intake can initialize the default planning workspace when the workspace is otherwise valid,
+  but it does not enable queue automation until planning files exist.
+- Task intake is rejected when planning authority cannot be initialized or repaired.
+- Task intake is rejected when no active direction exists; the operator should repair planning
+  direction authority before adding tasks.
 - If one task is already `in_progress`, queue ranking keeps that task ahead of newly added `ready`
   work.
-- Buffered shell commands must execute after streaming turn handling reaches a command-safe point.
 - Commit failure leaves the accepted ledger and queue projection unchanged.
 
 ## Failure Modes
 
 | Failure | Expected behavior |
 | --- | --- |
-| Blank prompt | keep editor open and show validation copy |
-| Missing workspace | reject with `:planning` guidance; do not bootstrap implicitly |
-| No active direction | reject with `:directions` or `:planning` guidance |
+| Blank prompt | keep the draft uncommitted and show validation copy |
+| Missing workspace | reject with repair guidance; do not commit partial authority |
+| No active direction | reject with planning-authority repair guidance |
 | Duplicate generated id | retry with suffix before preview or commit |
 | Full-ledger validation error | reject commit and keep accepted state unchanged |
 | Planning revision conflict | reload, revalidate, retry user intake |
@@ -187,8 +179,7 @@ commit a ledger or projection derived from an older revision over a newer runtim
 - service: adding one user task to an empty ledger updates task ledger and queue projection together
 - service: concurrent planning revision conflict retries user intake against the latest snapshot
 - service: stale queue refresh cannot overwrite a newer intake mutation
-- TUI: `:task`, `:task <prompt>`, preview `Y`, `N`, `E`, and `Esc`
-- TUI: streaming turn buffers `:task` and executes it at the command-safe point
+- Admin/API: prompt-backed task creation reaches the shared intake service
 - SQLite adapter: `planning_tasks`, `planning_queue_projection`, and runtime exports reflect the
   same accepted mutation
 

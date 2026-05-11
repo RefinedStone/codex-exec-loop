@@ -317,24 +317,24 @@ fn conversation_lifecycle_body_state_is_driven_by_core_snapshot() {
 }
 
 #[test]
-fn task_intake_inline_routing_uses_application_policy() {
+fn tui_task_command_surface_is_removed() {
     /*
-     * The shell adapter parses inline command syntax and applies UI effects, but
-     * the policy that task intake waits for a planning-safe post-turn point must
-     * live in application planning runtime. This keeps task mutation timing out
-     * of the terminal command switchboard.
+     * Runtime task creation stays available through planning services and admin
+     * surfaces, but the terminal command switchboard should no longer expose a
+     * `:task` entry point or its old pending replay path.
      */
+    const APP_RS: &str = include_str!("../../app.rs");
+    const INLINE_COMMANDS_RS: &str = include_str!("../inline_shell_commands.rs");
     const SHELL_CONTROLLER_RS: &str = include_str!("../shell_controller.rs");
     const TURN_SUBMISSION_RUNTIME_RS: &str = include_str!("../turn_submission_runtime.rs");
-    const INTAKE_ROUTING_RS: &str =
-        include_str!("../../../../../application/service/planning/runtime/intake_routing.rs");
 
-    assert!(SHELL_CONTROLLER_RS.contains("route_planning_task_intake_command"));
-    assert!(SHELL_CONTROLLER_RS.contains("route_pending_planning_task_intake_command"));
-    assert!(TURN_SUBMISSION_RUNTIME_RS.contains("PlanningTaskIntakeCommandRoute::QueueUntilIdle"));
-    assert!(INTAKE_ROUTING_RS.contains("QueueUntilIdle { pause_auto_follow: bool }"));
-    assert!(!TURN_SUBMISSION_RUNTIME_RS.contains("should_queue_task_intake_command"));
-    assert!(!SHELL_CONTROLLER_RS.contains("should_queue_task_intake_command"));
+    assert!(!INLINE_COMMANDS_RS.contains("InlineShellCommand::Task"));
+    assert!(!INLINE_COMMANDS_RS.contains("primary_name: \":task\""));
+    assert!(!APP_RS.contains("task_intake_overlay_ui_state"));
+    assert!(!APP_RS.contains("pending_task_intake_command"));
+    assert!(!SHELL_CONTROLLER_RS.contains("route_planning_task_intake_command"));
+    assert!(!SHELL_CONTROLLER_RS.contains("execute_pending_task_intake_command_if_ready"));
+    assert!(!TURN_SUBMISSION_RUNTIME_RS.contains("PlanningTaskIntakeCommandRoute"));
 }
 
 #[test]

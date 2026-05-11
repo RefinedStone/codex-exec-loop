@@ -35,11 +35,8 @@ fn parse_recognizes_supported_aliases() {
         (":q", Some((InlineShellCommand::Queue, None))),
         (":queue", Some((InlineShellCommand::Queue, None))),
         (":directions", Some((InlineShellCommand::Directions, None))),
-        (":task", Some((InlineShellCommand::Task, None))),
-        (
-            ":task add a release checklist",
-            Some((InlineShellCommand::Task, Some("add a release checklist"))),
-        ),
+        (":task", None),
+        (":task add a release checklist", None),
         (":turns 5", Some((InlineShellCommand::Turns, Some("5")))),
         (
             ":turns infinite",
@@ -102,7 +99,6 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Sessions,
             InlineShellCommand::Queue,
             InlineShellCommand::Directions,
-            InlineShellCommand::Task,
             InlineShellCommand::Turns,
             InlineShellCommand::Stop,
             InlineShellCommand::Doctor,
@@ -151,7 +147,7 @@ fn suggestions_filter_by_prefix() {
     );
     assert_eq!(
         InlineShellCommand::suggestions(":t"),
-        vec![InlineShellCommand::Task, InlineShellCommand::Turns]
+        vec![InlineShellCommand::Turns]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":tu"),
@@ -186,7 +182,7 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(9));
+    assert!(state.move_selection(8));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -214,7 +210,6 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     );
     assert_eq!(InlineShellCommand::Parallel.completion_text(), ":parallel");
     assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
-    assert_eq!(InlineShellCommand::Task.completion_text(), ":task");
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
     assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
@@ -301,22 +296,6 @@ fn directions_command_hint_is_argument_aware() {
     assert_eq!(
         invalid.buffered_hint(),
         "Press Enter to apply `:directions later`. Supported command: :directions."
-    );
-}
-
-#[test]
-fn task_command_hint_is_prompt_aware() {
-    let plain = InlineShellCommandInput::parse(":task").expect("command should parse");
-    let prompted = InlineShellCommandInput::parse(":task add a release checklist")
-        .expect("command should parse");
-
-    assert_eq!(
-        plain.buffered_hint(),
-        "Press Enter to draft a runtime planning task."
-    );
-    assert_eq!(
-        prompted.buffered_hint(),
-        "Press Enter to preview a runtime task for `add a release checklist`."
     );
 }
 
@@ -426,7 +405,6 @@ fn execution_status_stays_alias_neutral() {
         (":queue", Some("opened planning queue inspection")),
         (":doctor", None),
         (":planning", None),
-        (":task", None),
         (":turns 5", None),
         (":stop", None),
         (":reset queue", None),

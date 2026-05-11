@@ -64,18 +64,13 @@ impl NativeTuiApp {
             return;
         }
         let queued_auto_prompt_available = conversation_runtime_auto_prompt_queued(effects);
-        let pending_task_intake_executed = self.execute_pending_task_intake_command_if_ready();
-        let parallel_dispatch_consumed_auto_prompt = if pending_task_intake_executed {
-            false
-        } else {
-            self.apply_parallel_mode_post_turn_queue_continuation(
+        let parallel_dispatch_consumed_auto_prompt = self
+            .apply_parallel_mode_post_turn_queue_continuation(
                 queued_auto_prompt_available,
                 context.parallel_mode_post_turn_queue_signal,
-            )
-        };
+            );
         let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
             queued_auto_prompt_available,
-            pending_task_intake_executed,
             parallel_dispatch_consumed_auto_prompt,
         });
         self.apply_post_turn_auto_prompt_route(route, effects);

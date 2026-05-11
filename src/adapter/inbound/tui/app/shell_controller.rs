@@ -1,10 +1,4 @@
-use super::task_shell_command::{ParsedTaskShellCommand, parse_task_shell_argument};
 use super::*;
-use crate::application::service::planning::{
-    PendingPlanningTaskIntakeCommandRoute, PendingPlanningTaskIntakeCommandRouteRequest,
-    PlanningTaskIntakeCommandRoute, PlanningTaskIntakeCommandRouteRequest,
-    route_pending_planning_task_intake_command, route_planning_task_intake_command,
-};
 
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
@@ -114,9 +108,6 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state.reset();
                 self.planning_draft_editor_ui_state.reset();
             }
-            ShellOverlay::TaskIntake => {
-                self.task_intake_overlay_ui_state.reset();
-            }
             _ => {}
         }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
@@ -140,7 +131,6 @@ impl NativeTuiApp {
             InlineShellCommand::Directions => {
                 self.handle_directions_shell_command(command_input.argument())
             }
-            InlineShellCommand::Task => self.handle_task_shell_command(command_input.argument()),
             InlineShellCommand::Turns => self.handle_turns_shell_command(command_input.argument()),
             InlineShellCommand::Stop => self.handle_stop_shell_command(),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
@@ -192,162 +182,6 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
-    }
-    fn handle_task_shell_command(&mut self, prompt: Option<&str>) {
-        let parsed = parse_task_shell_argument(prompt);
-        let prompt = match parsed {
-            ParsedTaskShellCommand::OpenPromptEditor => None,
-            ParsedTaskShellCommand::PreviewPrompt { prompt } => Some(prompt),
-        };
-        self.task_intake_overlay_ui_state.open(prompt);
-        self.dispatch_shell_chrome(ShellChromeEvent::TaskIntakeOverlayShown);
-        if matches!(parsed, ParsedTaskShellCommand::PreviewPrompt { .. }) {
-            self.preview_task_intake_prompt();
-        }
-    }
-    pub(super) fn task_intake_command_route(
-        &self,
-        command_input: &InlineShellCommandInput,
-    ) -> PlanningTaskIntakeCommandRoute {
-        route_planning_task_intake_command(PlanningTaskIntakeCommandRouteRequest {
-            is_task_intake_command: command_input.command() == InlineShellCommand::Task,
-            turn_running: self.conversation_has_running_turn(),
-        })
-    }
-    pub(super) fn queue_task_intake_command_until_idle(
-        &mut self,
-        command_input: InlineShellCommandInput,
-        pause_auto_follow: bool,
-    ) {
-        self.pending_task_intake_command = Some(command_input);
-        if pause_auto_follow {
-            self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
-        }
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: "task intake queued until the current turn reaches a planning-safe point"
-                .to_string(),
-        });
-    }
-    pub(super) fn execute_pending_task_intake_command_if_ready(&mut self) -> bool {
-        let Some(command_input) = self.pending_task_intake_command.take() else {
-            return false;
-        };
-        let route = route_pending_planning_task_intake_command(
-            PendingPlanningTaskIntakeCommandRouteRequest {
-                turn_running: self.conversation_has_running_turn(),
-                command_still_buffered: self
-                    .pending_task_intake_command_still_buffered(&command_input),
-            },
-        );
-
-        match route {
-            PendingPlanningTaskIntakeCommandRoute::WaitForIdle => {
-                self.pending_task_intake_command = Some(command_input);
-                false
-            }
-            PendingPlanningTaskIntakeCommandRoute::DropStale => false,
-            PendingPlanningTaskIntakeCommandRoute::Execute => {
-                self.execute_inline_shell_command_input(command_input);
-                true
-            }
-        }
-    }
-    fn pending_task_intake_command_still_buffered(
-        &self,
-        command_input: &InlineShellCommandInput,
-    ) -> bool {
-        matches!(
-            &self.conversation_state,
-            ConversationState::Ready(conversation)
-                if InlineShellCommandInput::parse(&conversation.input_buffer).as_ref()
-                    == Some(command_input)
-        )
-    }
-    fn preview_task_intake_prompt(&mut self) {
-        let prompt = self
-            .task_intake_overlay_ui_state
-            .prompt_buffer()
-            .trim()
-            .to_string();
-        if !prompt.is_empty()
-            && let Err(error) = self.ensure_default_active_planning_workspace()
-        {
-            self.task_intake_overlay_ui_state
-                .show_error(error.to_string());
-            return;
-        }
-        // Preview runs against the active planning workspace and current turn
-        // identity. The mutation layer stores the active turn as a legacy lookup
-        // key while provenance records it as the parent turn.
-        let active_thread_id = self.task_intake_active_thread_id();
-        let active_turn_id = self.task_intake_active_turn_id();
-        let request = PlanningTaskIntakeRequest {
-            workspace_directory: self.planning_workspace_directory(),
-            raw_prompt: prompt,
-            legacy_source_turn_id: active_turn_id.clone(),
-            provenance: crate::domain::planning::TaskMutationProvenance::new(
-                crate::domain::planning::OriginSessionKind::ManualIntake,
-            )
-            .with_parent(active_thread_id, active_turn_id),
-            requested_direction_id: None,
-            observed_planning_revision: None,
-        };
-        match self
-            .application
-            .planning()
-            .runtime()
-            .prepare_task_intake(request)
-        {
-            Ok(proposal) => self.task_intake_overlay_ui_state.show_preview(proposal),
-            Err(error) => self
-                .task_intake_overlay_ui_state
-                .show_error(error.to_string()),
-        }
-    }
-    fn commit_task_intake_preview(&mut self) {
-        let Some(proposal) = self.task_intake_overlay_ui_state.proposal().cloned() else {
-            self.task_intake_overlay_ui_state
-                .show_error("Preview a task before committing it.");
-            return;
-        };
-        // Commit refreshes the conversation's planning runtime projection before opening
-        // the queue overlay, otherwise the queue can render the pre-commit view
-        // for one frame.
-        match self
-            .application
-            .planning()
-            .runtime()
-            .commit_task_intake(&proposal)
-        {
-            Ok(result) => {
-                let committed_task_id = result.committed_task_id.clone();
-                self.task_intake_overlay_ui_state
-                    .record_commit_result(result);
-                self.refresh_ready_conversation_planning_runtime_projection();
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("task accepted into planning queue: {committed_task_id}"),
-                });
-                self.refresh_parallel_mode_dispatch_after_task_update(&committed_task_id);
-                self.task_intake_overlay_ui_state.reset();
-                self.show_queue_overlay();
-            }
-            Err(error) => self
-                .task_intake_overlay_ui_state
-                .show_error(format!("Task commit failed: {error}")),
-        }
-    }
-    fn task_intake_active_turn_id(&self) -> Option<String> {
-        match &self.conversation_state {
-            ConversationState::Ready(conversation) => conversation.active_turn_id.clone(),
-            ConversationState::Loading | ConversationState::Failed(_) => None,
-        }
-    }
-    fn task_intake_active_thread_id(&self) -> Option<String> {
-        match &self.conversation_state {
-            ConversationState::Ready(conversation) => Some(conversation.thread_id.clone())
-                .filter(|thread_id| !thread_id.trim().is_empty()),
-            ConversationState::Loading | ConversationState::Failed(_) => None,
-        }
     }
     pub(super) fn push_input_character(&mut self, character: char) {
         self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
@@ -495,9 +329,6 @@ impl NativeTuiApp {
             // board remains visible.
             return self.parallel_mode_prompt_input_locked();
         }
-        if self.shell_overlay == ShellOverlay::TaskIntake {
-            return self.handle_task_intake_overlay_key(key);
-        }
         if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
             return self.handle_directions_overlay_key(key);
         }
@@ -506,38 +337,6 @@ impl NativeTuiApp {
         }
 
         self.handle_session_overlay_key(key);
-        true
-    }
-    fn handle_task_intake_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('u') {
-            self.task_intake_overlay_ui_state.clear_prompt();
-            return true;
-        }
-        if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
-            return true;
-        }
-        // The task overlay has two modes: prompt editing builds a preview, and
-        // preview confirmation commits or returns to editing without touching the
-        // main conversation prompt.
-        match self.task_intake_overlay_ui_state.step() {
-            TaskIntakeOverlayStep::Prompt => match key.code {
-                KeyCode::Enter => self.preview_task_intake_prompt(),
-                KeyCode::Backspace => self.task_intake_overlay_ui_state.pop_character(),
-                KeyCode::Char(character) => {
-                    self.task_intake_overlay_ui_state.push_character(character)
-                }
-                _ => {}
-            },
-            TaskIntakeOverlayStep::Preview => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => self.commit_task_intake_preview(),
-                KeyCode::Char('n') | KeyCode::Char('N') => self.close_shell_overlay(),
-                KeyCode::Char('e') | KeyCode::Char('E') => {
-                    self.task_intake_overlay_ui_state.return_to_editing()
-                }
-                _ => {}
-            },
-        }
-
         true
     }
     pub(super) fn handle_ctrl_c(&mut self) {

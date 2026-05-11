@@ -41,8 +41,7 @@ pub(crate) use list_projection::{OverlayListEntryView, OverlayListView};
 // churn으로 번지지 않는다.
 pub(crate) use popup::{
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, SupersessionOverlayView, TaskIntakeOverlayView,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    build_supersession_overlay_view, build_task_intake_overlay_view,
+    StartupOverlayView, SupersessionOverlayView, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view, build_supersession_overlay_view,
 };

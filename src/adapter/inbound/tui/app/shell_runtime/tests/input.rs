@@ -401,54 +401,6 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
 }
 
 #[test]
-fn parallel_task_update_after_enable_reuses_existing_epoch_for_dispatch() {
-    /*
-     * Enable is the single application command for :parallel entry and opens the
-     * automation epoch before async readiness/pool work returns. Later task
-     * updates reuse that epoch instead of creating a second entry path.
-     */
-    let mut runtime = make_test_runtime();
-    let workspace_directory = runtime.app().current_workspace_directory();
-    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
-    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime
-        .app_mut()
-        .set_parallel_mode_readiness_snapshot_for_test(Some(
-            ready_parallel_mode_readiness_snapshot(&workspace_directory),
-        ));
-    runtime
-        .app_mut()
-        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
-            ParallelModeSupervisorState::Supervise,
-            workspace_directory,
-            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
-            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
-            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
-            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
-            None,
-        )));
-
-    runtime
-        .app_mut()
-        .refresh_parallel_mode_dispatch_after_task_update("task-added");
-
-    assert!(
-        runtime.app().parallel_mode_automation_epoch_id().is_some(),
-        "enabled parallel mode should already own the automation epoch"
-    );
-    assert_eq!(
-        runtime.app().last_parallel_mode_automation_trigger(),
-        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
-    );
-    assert!(
-        runtime
-            .app()
-            .last_parallel_mode_dispatch_withheld_reason()
-            .is_none()
-    );
-}
-
-#[test]
 fn parallel_epoch_id_ignores_stale_workspace_epoch() {
     /*
      * 세션 전환으로 shell workspace가 바뀌면 이전 workspace의 epoch를 현재 workspace의

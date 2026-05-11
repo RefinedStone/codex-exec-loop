@@ -685,7 +685,6 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     let supersession = shell_presentation::build_supersession_overlay_view(&app);
     app.show_planning_init_overlay();
     let planning = shell_presentation::build_planning_init_overlay_view(&app);
-    let task_intake = shell_presentation::build_task_intake_overlay_view(&app);
     for title in [
         startup.header_lines[0].to_string(),
         sessions.header_lines[0].to_string(),
@@ -694,7 +693,6 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
         directions.header_lines[0].to_string(),
         supersession.header_lines[0].to_string(),
         planning.header_lines[0].to_string(),
-        task_intake.header_lines[0].to_string(),
     ] {
         assert!(
             title.starts_with("Akra / "),
@@ -703,7 +701,6 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     }
 
     assert_eq!(queue.key_lines[0].style.fg, Some(Color::Yellow));
-    assert_eq!(task_intake.key_lines[0].style.fg, Some(Color::Yellow));
 }
 #[test]
 fn exit_confirmation_uses_shared_akra_chrome() {

@@ -89,24 +89,6 @@ pub(crate) struct QueueOverlayView {
 }
 
 /*
- * Task intake overlay is the `:task` modal read model. It keeps the raw prompt,
- * generated preview, action status, and stage-specific keys separate so preview
- * confirmation can be rendered without knowing task-intake service internals.
- */
-pub(crate) struct TaskIntakeOverlayView {
-    // Fixed context that the operator is drafting a new ready task.
-    pub(crate) header_lines: Vec<Line<'static>>,
-    // Raw operator prompt echo.
-    pub(crate) prompt_lines: Vec<Line<'static>>,
-    // Generated task preview before commit.
-    pub(crate) preview_lines: Vec<Line<'static>>,
-    // Editing, preview-ready, error, or accepted result copy.
-    pub(crate) status_lines: Vec<Line<'static>>,
-    // Prompt/preview-stage key hints.
-    pub(crate) key_lines: Vec<Line<'static>>,
-}
-
-/*
  * Planning init overlay is the shared setup modal shape. Selection, existing
  * workspace review, manual editor entry, and simple review all collapse to this
  * DTO so the renderer can keep one section layout across setup modes.

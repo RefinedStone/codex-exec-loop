@@ -36,7 +36,7 @@ pub use self::draft::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// `:task` 스타일 runtime intake surface에서 들어오는 inbound request다.
+// runtime/admin intake surface에서 들어오는 inbound request다.
 pub struct PlanningTaskIntakeRequest {
     pub workspace_directory: String,
     pub raw_prompt: String,
@@ -193,7 +193,7 @@ impl PlanningTaskIntakeValidationService {
 #[derive(Clone)]
 /*
  * intake service는 authority seeding, workspace validation, draft generation, mutation preview, final commit을
- * 조율한다. 의도적으로 PlanningTaskMutationService를 재사용해 `:task` intake가 worker-produced
+ * 조율한다. 의도적으로 PlanningTaskMutationService를 재사용해 task intake가 worker-produced
  * planning_task_commands와 같은 DB authority path를 따르게 한다.
  */
 pub struct PlanningTaskIntakeService {
@@ -331,7 +331,7 @@ impl PlanningTaskIntakeService {
             .load_planning_workspace_files(&request.workspace_directory)?;
         if !workspace_record.has_any_files() {
             return Err(anyhow!(
-                "Planning workspace is unavailable; :task can initialize a new default workspace, but this workspace could not be loaded. Run :doctor for details."
+                "Planning workspace is unavailable; task intake can initialize a new default workspace, but this workspace could not be loaded. Run :doctor for details."
             ));
         }
         let result_output_markdown = required_workspace_body(
@@ -344,7 +344,7 @@ impl PlanningTaskIntakeService {
             .load_direction_authority_snapshot(&request.workspace_directory)?
             .ok_or_else(|| {
                 anyhow!(
-                    "Planning direction authority is unavailable; initialize or repair the planning database before using :task."
+                    "Planning direction authority is unavailable; initialize or repair the planning database before adding tasks."
                 )
             })?;
         let repository_snapshot = self
@@ -352,7 +352,7 @@ impl PlanningTaskIntakeService {
             .load_task_authority_snapshot(&request.workspace_directory)?
             .ok_or_else(|| {
                 anyhow!(
-                    "Planning task authority is unavailable; initialize or repair the planning database before using :task."
+                    "Planning task authority is unavailable; initialize or repair the planning database before adding tasks."
                 )
             })?;
         let task_authority_json = serde_json::to_string_pretty(&repository_snapshot.task_authority)

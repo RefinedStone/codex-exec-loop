@@ -30,14 +30,12 @@ impl PostTurnAutoPromptRoute {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PostTurnAutoPromptSuppressionReason {
-    PendingTaskIntake,
     ParallelDispatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PostTurnAutoPromptRouteRequest {
     pub(crate) queued_auto_prompt_available: bool,
-    pub(crate) pending_task_intake_executed: bool,
     pub(crate) parallel_dispatch_consumed_auto_prompt: bool,
 }
 
@@ -46,11 +44,6 @@ pub(crate) fn decide_post_turn_auto_prompt_route(
 ) -> PostTurnAutoPromptRoute {
     if !request.queued_auto_prompt_available {
         return PostTurnAutoPromptRoute::NoPrompt;
-    }
-    if request.pending_task_intake_executed {
-        return PostTurnAutoPromptRoute::Suppress(
-            PostTurnAutoPromptSuppressionReason::PendingTaskIntake,
-        );
     }
     if request.parallel_dispatch_consumed_auto_prompt {
         return PostTurnAutoPromptRoute::Suppress(
@@ -136,27 +129,9 @@ mod tests {
     }
 
     #[test]
-    fn post_turn_auto_prompt_route_prefers_pending_task_intake_over_parallel_dispatch() {
-        let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
-            queued_auto_prompt_available: true,
-            pending_task_intake_executed: true,
-            parallel_dispatch_consumed_auto_prompt: true,
-        });
-
-        assert_eq!(
-            route,
-            PostTurnAutoPromptRoute::Suppress(
-                PostTurnAutoPromptSuppressionReason::PendingTaskIntake
-            )
-        );
-        assert!(route.should_suppress_prompt());
-    }
-
-    #[test]
     fn post_turn_auto_prompt_route_suppresses_when_parallel_dispatch_consumes_prompt() {
         let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
             queued_auto_prompt_available: true,
-            pending_task_intake_executed: false,
             parallel_dispatch_consumed_auto_prompt: true,
         });
 
@@ -173,7 +148,6 @@ mod tests {
     fn post_turn_auto_prompt_route_submits_when_nothing_consumes_prompt() {
         let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
             queued_auto_prompt_available: true,
-            pending_task_intake_executed: false,
             parallel_dispatch_consumed_auto_prompt: false,
         });
 

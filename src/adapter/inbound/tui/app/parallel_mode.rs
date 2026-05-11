@@ -395,19 +395,6 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn refresh_parallel_mode_dispatch_after_task_update(&mut self, _task_id: &str) {
-        if !self.parallel_mode_enabled() {
-            return;
-        }
-
-        let workspace_directory = self.planning_workspace_directory();
-        self.request_parallel_mode_dispatch(
-            workspace_directory,
-            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
-            None,
-        );
-    }
-
     pub(super) fn parallel_mode_post_turn_queue_signal(
         &self,
         event: &ConversationRuntimeEvent,
@@ -470,6 +457,7 @@ impl NativeTuiApp {
         self.request_parallel_mode_dispatch(workspace_directory, trigger, Some(epoch_id));
     }
 
+    #[cfg(test)]
     fn request_parallel_mode_dispatch(
         &mut self,
         workspace_directory: String,
