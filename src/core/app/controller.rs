@@ -50,6 +50,11 @@ impl CoreController {
                 self.state.mark_conversation_loading();
                 self.conversation_changed_outcome(vec![CoreEffect::LoadConversation { thread_id }])
             }
+            CoreInput::Command(AppCommand::SubmitTurn(request)) => CoreDispatchOutcome {
+                events: Vec::new(),
+                effects: vec![CoreEffect::SubmitTurn(request)],
+                snapshot: self.snapshot(),
+            },
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded(result)) => {
                 self.state.apply_startup_result(result);
                 self.startup_changed_outcome(Vec::new())
@@ -82,6 +87,20 @@ impl CoreController {
             },
             CoreInput::ConversationRuntimeNotice(notice) => CoreDispatchOutcome {
                 events: vec![AppEvent::ConversationRuntimeNotice(notice)],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
+            CoreInput::ConversationTurnWorkspaceChanged {
+                workspace_directory,
+            } => CoreDispatchOutcome {
+                events: vec![AppEvent::ConversationTurnWorkspaceChanged {
+                    workspace_directory,
+                }],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
+            CoreInput::ParallelModeSupervisorSnapshotInvalidated => CoreDispatchOutcome {
+                events: vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated],
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
@@ -273,6 +292,25 @@ mod tests {
     }
 
     #[test]
+    fn submit_turn_returns_core_effect_without_state_revision() {
+        let mut controller = CoreController::new();
+        let request = crate::core::app::TurnSubmissionRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            prompt: "ship it".to_string(),
+            prompt_origin: crate::core::app::CorePromptOrigin::Manual,
+            slot_lease_handoff: None,
+        };
+
+        let outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(request.clone())));
+
+        assert!(outcome.events.is_empty());
+        assert_eq!(outcome.effects, vec![CoreEffect::SubmitTurn(request)]);
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+    }
+
+    #[test]
     fn session_catalog_completion_marks_ready() {
         let mut controller = CoreController::new();
         let ready = SessionCatalogReadySnapshot {
@@ -441,6 +479,38 @@ mod tests {
             vec![AppEvent::ConversationRuntimeNotice(
                 "reattached runtime".to_string()
             )]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_workspace_change_passes_through_core_without_state_revision() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::ConversationTurnWorkspaceChanged {
+            workspace_directory: "/tmp/slot-worktree".to_string(),
+        });
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ConversationTurnWorkspaceChanged {
+                workspace_directory: "/tmp/slot-worktree".to_string()
+            }]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn parallel_supervisor_invalidation_passes_through_core_without_state_revision() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated]
         );
         assert!(outcome.effects.is_empty());
     }

@@ -12,6 +12,7 @@ pub mod session;
 pub mod snapshot;
 pub mod startup;
 pub mod state;
+pub mod turn_submission;
 
 pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
@@ -25,3 +26,4 @@ pub use startup::{
     StartupState,
 };
 pub use state::AppState;
+pub use turn_submission::{CorePromptOrigin, TurnSubmissionRequest};

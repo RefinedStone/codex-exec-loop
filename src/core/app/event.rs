@@ -17,6 +17,10 @@ pub enum CoreInput {
         execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
     },
     ConversationRuntimeNotice(String),
+    ConversationTurnWorkspaceChanged {
+        workspace_directory: String,
+    },
+    ParallelModeSupervisorSnapshotInvalidated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,4 +48,8 @@ pub enum AppEvent {
         execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
     },
     ConversationRuntimeNotice(String),
+    ConversationTurnWorkspaceChanged {
+        workspace_directory: String,
+    },
+    ParallelModeSupervisorSnapshotInvalidated,
 }

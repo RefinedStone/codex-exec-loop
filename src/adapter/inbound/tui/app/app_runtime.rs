@@ -122,10 +122,6 @@ impl NativeTuiApplicationHandle {
         }
     }
 
-    pub(super) fn conversation_streams(&self) -> NativeTuiConversationStreamHandle {
-        self.conversations.streams()
-    }
-
     pub(super) fn planning(&self) -> &NativeTuiPlanningHandle {
         &self.planning_feature
     }
@@ -155,10 +151,6 @@ pub(super) struct NativeTuiConversationHandle {
 impl NativeTuiConversationHandle {
     fn new(service: ConversationService) -> Self {
         Self { service }
-    }
-
-    pub(super) fn streams(&self) -> NativeTuiConversationStreamHandle {
-        NativeTuiConversationStreamHandle::new(self.service.clone())
     }
 
     pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
@@ -197,39 +189,6 @@ impl NativeTuiPlanningHandle {
     #[cfg(test)]
     pub(super) fn task_tool(&self) -> &PlanningTaskToolUseCases {
         &self.services.task_tool
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct NativeTuiConversationStreamHandle {
-    conversations: ConversationService,
-}
-
-impl NativeTuiConversationStreamHandle {
-    fn new(conversations: ConversationService) -> Self {
-        Self { conversations }
-    }
-
-    pub(super) fn run_turn_stream(
-        &self,
-        thread_id: &str,
-        prompt: &str,
-        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
-    ) -> Result<(), String> {
-        self.conversations
-            .run_turn_stream(thread_id, prompt, event_sender)
-            .map_err(|error: anyhow::Error| error.to_string())
-    }
-
-    pub(super) fn run_new_thread_stream(
-        &self,
-        workspace_directory: &str,
-        prompt: &str,
-        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
-    ) -> Result<(), String> {
-        self.conversations
-            .run_new_thread_stream(workspace_directory, prompt, event_sender)
-            .map_err(|error: anyhow::Error| error.to_string())
     }
 }
 
@@ -275,6 +234,8 @@ impl NativeTuiApp {
             startup_service.clone(),
             session_service.clone(),
             conversation_service.clone(),
+            planning_feature.runtime.clone(),
+            parallel_turns.clone(),
             core_input_sender,
         );
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
@@ -440,8 +401,21 @@ impl NativeTuiApp {
                     ConversationRuntimeEvent::StreamExecutionObserved { notice },
                 );
             }
+            AppEvent::ConversationTurnWorkspaceChanged {
+                workspace_directory,
+            } => {
+                self.sync_active_turn_workspace_directory(&workspace_directory);
+            }
+            AppEvent::ParallelModeSupervisorSnapshotInvalidated => {
+                self.invalidate_parallel_mode_supervisor_snapshot();
+            }
             AppEvent::SnapshotChanged(_) => {}
         }
+    }
+
+    pub(super) fn dispatch_core_command(&mut self, command: AppCommand) {
+        let outcome = self.core_runtime.dispatch_command(command);
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn dispatch_core_input(&mut self, input: CoreInput) {
@@ -474,10 +448,7 @@ impl NativeTuiApp {
     fn execute_shell_chrome_effect(&mut self, effect: ShellChromeEffect) {
         match effect {
             ShellChromeEffect::RunStartupChecks => {
-                let outcome = self
-                    .core_runtime
-                    .dispatch_command(AppCommand::RunStartupChecks);
-                self.apply_core_dispatch_outcome(outcome);
+                self.dispatch_core_command(AppCommand::RunStartupChecks);
             }
             ShellChromeEffect::LoadSessionCatalog {
                 limit,
@@ -487,13 +458,10 @@ impl NativeTuiApp {
                 // workspace unless the reducer explicitly supplied another root.
                 let workspace_directory = current_workspace_directory
                     .unwrap_or_else(|| self.current_workspace_directory());
-                let outcome = self
-                    .core_runtime
-                    .dispatch_command(AppCommand::LoadSessionCatalog {
-                        limit,
-                        workspace_directory,
-                    });
-                self.apply_core_dispatch_outcome(outcome);
+                self.dispatch_core_command(AppCommand::LoadSessionCatalog {
+                    limit,
+                    workspace_directory,
+                });
             }
         }
     }
@@ -532,10 +500,7 @@ impl NativeTuiApp {
     fn execute_conversation_lifecycle_effect(&mut self, effect: ConversationLifecycleEffect) {
         match effect {
             ConversationLifecycleEffect::LoadConversation { thread_id } => {
-                let outcome = self
-                    .core_runtime
-                    .dispatch_command(AppCommand::LoadConversation { thread_id });
-                self.apply_core_dispatch_outcome(outcome);
+                self.dispatch_core_command(AppCommand::LoadConversation { thread_id });
             }
         }
     }

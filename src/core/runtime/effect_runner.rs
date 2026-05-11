@@ -4,11 +4,13 @@ use std::thread;
 use anyhow::Result;
 
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::planning::PlanningRuntimeUseCases;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::core::app::{ConversationReadySnapshot, SessionCatalogReadySnapshot};
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
-use crate::core::runtime::CoreEffectExecutor;
+use crate::core::runtime::{CoreEffectExecutor, turn_submission};
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -18,6 +20,8 @@ pub struct CoreEffectRunner {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
+    planning_runtime: PlanningRuntimeUseCases,
+    parallel_mode_turn_service: ParallelModeTurnService,
     input_sender: Sender<CoreInput>,
 }
 
@@ -26,12 +30,16 @@ impl CoreEffectRunner {
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
+        planning_runtime: PlanningRuntimeUseCases,
+        parallel_mode_turn_service: ParallelModeTurnService,
         input_sender: Sender<CoreInput>,
     ) -> Self {
         Self {
             startup_service,
             session_service,
             conversation_service,
+            planning_runtime,
+            parallel_mode_turn_service,
             input_sender,
         }
     }
@@ -53,6 +61,7 @@ impl CoreEffectRunner {
                 workspace_directory,
             } => self.spawn_session_catalog_load(limit, workspace_directory),
             CoreEffect::LoadConversation { thread_id } => self.spawn_conversation_load(thread_id),
+            CoreEffect::SubmitTurn(request) => self.spawn_turn_submission(request),
         }
     }
 
@@ -76,6 +85,16 @@ impl CoreEffectRunner {
             );
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
+    }
+
+    pub fn spawn_turn_submission(&self, request: crate::core::app::TurnSubmissionRequest) {
+        turn_submission::spawn_turn_submission_worker(
+            request,
+            self.conversation_service.clone(),
+            self.planning_runtime.clone(),
+            self.parallel_mode_turn_service.clone(),
+            self.input_sender.clone(),
+        );
     }
 }
 

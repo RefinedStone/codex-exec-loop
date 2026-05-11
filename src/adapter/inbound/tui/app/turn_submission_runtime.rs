@@ -1,12 +1,10 @@
 /* Turn submission is the execution layer for ConversationRuntimeEffect. The
  * reducer decides what should happen; this module gates the prompt against shell
- * readiness, creates the app-server stream request, starts post-turn planning
- * evaluation, and re-enters the reducer for auto-follow prompts.
+ * readiness, sends stream startup through the core runtime, starts post-turn
+ * planning evaluation, and re-enters the reducer for auto-follow prompts.
  */
 #[path = "turn_submission_runtime/post_turn_execution.rs"]
 mod post_turn_execution;
-#[path = "turn_submission_runtime/stream_execution.rs"]
-mod stream_execution;
 
 use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelTurnSlotLeaseHandoff,
@@ -14,8 +12,8 @@ use crate::application::service::parallel_mode::turn::{
 use crate::application::service::planning::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
+use crate::core::app::{AppCommand, CorePromptOrigin, TurnSubmissionRequest};
 use post_turn_execution::PostTurnEvaluationRequest;
-use stream_execution::PreparedTurnStreamRequest;
 
 use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
@@ -75,10 +73,14 @@ impl NativeTuiApp {
                 workspace_directory,
                 thread_id,
                 prompt,
-            } => self.execute_start_stream(self.build_turn_stream_request(
-                workspace_directory,
-                thread_id,
-                prompt,
+                prompt_origin,
+            } => self.dispatch_core_command(AppCommand::SubmitTurn(
+                self.build_turn_submission_request(
+                    workspace_directory,
+                    thread_id,
+                    prompt,
+                    &prompt_origin,
+                ),
             )),
             ConversationRuntimeEffect::EvaluatePostTurnAutomation {
                 workspace_directory,
@@ -116,16 +118,18 @@ impl NativeTuiApp {
         }
     }
 
-    fn build_turn_stream_request(
+    fn build_turn_submission_request(
         &self,
         workspace_directory: String,
         thread_id: Option<String>,
         prompt: String,
-    ) -> PreparedTurnStreamRequest {
-        PreparedTurnStreamRequest {
+        prompt_origin: &PromptOrigin,
+    ) -> TurnSubmissionRequest {
+        TurnSubmissionRequest {
             workspace_directory,
             thread_id,
             prompt,
+            prompt_origin: core_prompt_origin(prompt_origin),
             slot_lease_handoff: self.build_parallel_mode_slot_lease_handoff(),
         }
     }
@@ -146,6 +150,15 @@ impl NativeTuiApp {
             handoff_task.task_id.clone(),
             handoff_task.task_title.clone(),
         ))
+    }
+
+    pub(super) fn sync_active_turn_workspace_directory(&mut self, workspace_directory: &str) {
+        let Some(mut conversation) = self.take_ready_conversation_state() else {
+            return;
+        };
+
+        conversation.replace_active_turn_workspace_directory(workspace_directory.to_string());
+        self.conversation_state = ConversationState::ready(conversation);
     }
 
     pub(super) fn resolve_startup_submit_queue(&mut self) {
@@ -422,6 +435,14 @@ fn prompt_origin_label(prompt_origin: &PromptOrigin) -> &'static str {
     }
 }
 
+fn core_prompt_origin(prompt_origin: &PromptOrigin) -> CorePromptOrigin {
+    match prompt_origin {
+        PromptOrigin::Manual => CorePromptOrigin::Manual,
+        PromptOrigin::ManualIntake(_) => CorePromptOrigin::ManualIntake,
+        PromptOrigin::AutoFollow(_) => CorePromptOrigin::AutoFollow,
+    }
+}
+
 fn append_debug_detail_preview_block(lines: &mut Vec<String>, label: &str, block: Option<&str>) {
     let Some(block) = block.filter(|block| !block.trim().is_empty()) else {
         return;
@@ -435,7 +456,8 @@ fn append_debug_detail_preview_block(lines: &mut Vec<String>, label: &str, block
 
 #[cfg(test)]
 mod prompt_submit_diagnostics_tests {
-    use super::{PromptOrigin, user_prompt_submit_detail};
+    use super::{PromptOrigin, core_prompt_origin, user_prompt_submit_detail};
+    use crate::core::app::CorePromptOrigin;
 
     #[test]
     fn user_prompt_submit_detail_keeps_operator_text_and_final_prompt() {
@@ -452,5 +474,13 @@ mod prompt_submit_diagnostics_tests {
         assert_eq!(detail["prompt"], "final wrapper\noperator text");
         assert_eq!(detail["prompt_len"], 27);
         assert_eq!(detail["parallel_mode_enabled"], true);
+    }
+
+    #[test]
+    fn prompt_origin_maps_to_core_origin_without_tui_context() {
+        assert_eq!(
+            core_prompt_origin(&PromptOrigin::Manual),
+            CorePromptOrigin::Manual
+        );
     }
 }

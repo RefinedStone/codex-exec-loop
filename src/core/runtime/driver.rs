@@ -81,9 +81,9 @@ mod tests {
 
     use super::*;
     use crate::core::app::{
-        AppEvent, CoreEffectCompletion, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
-        StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
-        StartupSnapshot,
+        AppEvent, CoreEffectCompletion, CorePromptOrigin, SessionCatalogReadySnapshot,
+        SessionCatalogSnapshot, StartupAttachmentSnapshot, StartupDiagnosticSnapshot,
+        StartupReadySnapshot, StartupSnapshot, TurnSubmissionRequest,
     };
     use crate::domain::recent_sessions::RecentSessions;
 
@@ -122,6 +122,29 @@ mod tests {
             vec![CoreEffect::RunStartupChecks]
         );
         assert_eq!(runtime.snapshot().startup, StartupSnapshot::Loading);
+    }
+
+    #[test]
+    fn submit_turn_command_runs_submit_turn_effect_without_snapshot_change() {
+        let (_tx, rx) = mpsc::channel();
+        let effects = RecordingEffectExecutor::default();
+        let mut runtime = CoreRuntime::new(effects.clone(), rx);
+        let request = TurnSubmissionRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            prompt: "ship it".to_string(),
+            prompt_origin: CorePromptOrigin::Manual,
+            slot_lease_handoff: None,
+        };
+
+        let outcome = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
+
+        assert!(outcome.events.is_empty());
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            effects.recorded_effects(),
+            vec![CoreEffect::SubmitTurn(request)]
+        );
     }
 
     #[test]

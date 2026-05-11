@@ -1,3 +1,5 @@
+use super::TurnSubmissionRequest;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppCommand {
     /*
@@ -14,4 +16,5 @@ pub enum AppCommand {
     LoadConversation {
         thread_id: String,
     },
+    SubmitTurn(TurnSubmissionRequest),
 }

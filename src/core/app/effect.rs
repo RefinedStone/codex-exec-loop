@@ -1,3 +1,5 @@
+use super::TurnSubmissionRequest;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreEffect {
     RunStartupChecks,
@@ -8,4 +10,5 @@ pub enum CoreEffect {
     LoadConversation {
         thread_id: String,
     },
+    SubmitTurn(TurnSubmissionRequest),
 }

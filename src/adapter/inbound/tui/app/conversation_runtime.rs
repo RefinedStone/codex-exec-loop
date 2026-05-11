@@ -61,6 +61,7 @@ pub(super) enum ConversationRuntimeEffect {
         workspace_directory: String,
         thread_id: Option<String>,
         prompt: String,
+        prompt_origin: PromptOrigin,
     },
     EvaluatePostTurnAutomation {
         workspace_directory: String,
@@ -278,7 +279,7 @@ pub(super) fn reduce_conversation_runtime(
                 workspace_directory.clone(),
                 matches!(origin, PromptOrigin::Manual | PromptOrigin::ManualIntake(_)),
             );
-            state.status_text = match origin {
+            state.status_text = match &origin {
                 PromptOrigin::Manual | PromptOrigin::ManualIntake(_) => "starting turn".to_string(),
                 PromptOrigin::AutoFollow(context) => format!(
                     "auto-follow submitted / turn {auto_follow_progress} / mode: {}",
@@ -289,6 +290,7 @@ pub(super) fn reduce_conversation_runtime(
                 workspace_directory,
                 thread_id,
                 prompt,
+                prompt_origin: origin,
             });
         }
         ConversationRuntimeEvent::StreamUpdated(event) => match event {
