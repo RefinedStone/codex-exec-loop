@@ -715,10 +715,211 @@ fn finish_stream_result(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+    use std::sync::{Mutex, MutexGuard};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use serde_json::Value;
+
+    use super::connection::AppServerConnectionConfig;
+    use super::execution_policy::AppServerExecutionPolicy;
     use super::protocol::ThreadStartParams;
     use super::{
-        CodexAppServerAdapter, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
+        CodexAppServerAdapter, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS,
+        PLANNING_WORKER_SERVICE_NAME, PlanningThreadLauncher, finish_stream_result,
     };
+    use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+    use crate::application::port::outbound::parallel_agent_worker_port::{
+        ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+    };
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::application::port::outbound::startup_probe_port::StartupProbePort;
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::domain::conversation::ConversationRuntimeControlTruth;
+    use crate::domain::recent_sessions::{
+        SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+    };
+
+    static FAKE_CODEX_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn startup_catalog_and_snapshot_ports_reuse_shared_app_server_runtime() {
+        let fake_codex = FakeCodex::install("shared-runtime");
+        let adapter = test_adapter();
+
+        let startup = adapter
+            .load_startup_context()
+            .expect("startup context should come from fake app-server");
+        assert_eq!(
+            startup.initialize_detail,
+            "linux-x64 / unix / codex-app-server/fake"
+        );
+        assert_eq!(
+            startup.account_detail,
+            "chatgpt / operator@example.com / plus"
+        );
+        assert!(startup.account_ok);
+        assert!(startup.warnings.is_empty());
+
+        let catalog = adapter
+            .load_session_catalog(SessionCatalogRequest::for_workspace(5, "/repo"))
+            .expect("session catalog should come from fake app-server");
+        let SessionCatalog::Ready {
+            tier,
+            recent_sessions,
+        } = catalog
+        else {
+            panic!("fake app-server should produce a ready provider catalog");
+        };
+        assert_eq!(tier, SessionCatalogTier::ProviderBackedCatalog);
+        assert_eq!(recent_sessions.items[0].id, "listed-thread");
+        assert_eq!(recent_sessions.items[0].git_branch.as_deref(), Some("main"));
+        assert_eq!(recent_sessions.next_cursor.as_deref(), Some("cursor-next"));
+
+        let snapshot = adapter
+            .load_conversation_snapshot("resume-thread")
+            .expect("conversation snapshot should come from fake app-server");
+        assert_eq!(snapshot.thread_id, "resume-thread");
+        assert_eq!(snapshot.title, "Fake resume-thread");
+        assert!(snapshot.warnings.is_empty());
+
+        let methods = fake_codex.logged_methods();
+        assert_eq!(
+            methods,
+            [
+                "initialize",
+                "initialized",
+                "account/read",
+                "thread/list",
+                "thread/read"
+            ]
+        );
+    }
+
+    #[test]
+    fn user_thread_streams_emit_launch_reattach_and_completion_events() {
+        let fake_codex = FakeCodex::install("user-streams");
+        let adapter = test_adapter();
+
+        let (new_tx, new_rx) = mpsc::channel();
+        adapter
+            .run_new_thread_stream("/repo", "start a new session", new_tx)
+            .expect("new thread stream should complete");
+        let new_events = new_rx.try_iter().collect::<Vec<_>>();
+        assert!(has_launch_attachment(&new_events));
+        assert!(has_thread_prepared(&new_events, "started-thread"));
+        assert!(has_turn_completed(&new_events));
+
+        let (resume_tx, resume_rx) = mpsc::channel();
+        adapter
+            .run_turn_stream("resume-thread", "continue session", resume_tx)
+            .expect("existing thread stream should complete");
+        let resume_events = resume_rx.try_iter().collect::<Vec<_>>();
+        assert!(has_reattach_attachment(&resume_events));
+        assert!(has_turn_completed(&resume_events));
+
+        let methods = fake_codex.logged_methods();
+        assert_eq!(
+            methods,
+            [
+                "initialize",
+                "initialized",
+                "thread/start",
+                "turn/start",
+                "thread/resume",
+                "turn/start"
+            ]
+        );
+    }
+
+    #[test]
+    fn hidden_planning_and_parallel_streams_use_isolated_ephemeral_threads() {
+        let fake_codex = FakeCodex::install("isolated-workers");
+        let adapter = test_adapter();
+
+        let (planning_tx, planning_rx) = mpsc::channel();
+        adapter
+            .run_hidden_planning_thread("/repo", "refresh queue", planning_tx)
+            .expect("hidden planning worker stream should complete");
+        let planning_events = planning_rx.try_iter().collect::<Vec<_>>();
+        assert!(has_thread_prepared(&planning_events, "started-thread"));
+        assert!(has_turn_completed(&planning_events));
+
+        let (parallel_tx, parallel_rx) = mpsc::channel();
+        adapter
+            .run_isolated_new_thread_stream(
+                ParallelAgentWorkerStreamRequest {
+                    cwd: "/repo/slot-1",
+                    prompt: "implement task",
+                    developer_instructions: "You are an isolated worker.",
+                    service_name: "akra-parallel-worker",
+                },
+                parallel_tx,
+            )
+            .expect("parallel worker stream should complete");
+        let parallel_events = parallel_rx.try_iter().collect::<Vec<_>>();
+        assert!(has_thread_prepared(&parallel_events, "started-thread"));
+        assert!(has_turn_completed(&parallel_events));
+
+        let requests = fake_codex.logged_requests();
+        let thread_starts = requests
+            .iter()
+            .filter(|request| request["method"] == "thread/start")
+            .collect::<Vec<_>>();
+        assert_eq!(thread_starts.len(), 2);
+
+        assert_eq!(
+            thread_starts[0]["params"]["serviceName"],
+            PLANNING_WORKER_SERVICE_NAME
+        );
+        assert_eq!(thread_starts[0]["params"]["model"], "gpt-5.4");
+        assert_eq!(thread_starts[0]["params"]["ephemeral"], true);
+        assert!(
+            thread_starts[0]["params"]["developerInstructions"]
+                .as_str()
+                .is_some_and(|value| value.contains("planning-only sub-session"))
+        );
+
+        assert_eq!(
+            thread_starts[1]["params"]["serviceName"],
+            "akra-parallel-worker"
+        );
+        assert_eq!(thread_starts[1]["params"]["ephemeral"], true);
+        assert_eq!(
+            thread_starts[1]["params"]["developerInstructions"],
+            "You are an isolated worker."
+        );
+    }
+
+    #[test]
+    fn runtime_control_and_stop_requests_are_app_server_truths() {
+        let adapter = test_adapter();
+
+        assert_eq!(
+            adapter.runtime_control_truth(),
+            ConversationRuntimeControlTruth::codex_app_server()
+        );
+        adapter
+            .request_stop_all_sessions()
+            .expect("stop request should update interrupt generation without IO");
+    }
+
+    #[test]
+    fn finish_stream_result_reports_failed_event_and_returns_error() {
+        let (tx, rx) = mpsc::channel();
+        let result = finish_stream_result(anyhow::Result::<()>::Err(anyhow::anyhow!("boom")), &tx);
+
+        assert!(result.is_err());
+        assert_eq!(
+            rx.try_recv().expect("failed event should be sent"),
+            ConversationStreamEvent::Failed {
+                message: "boom".to_string()
+            }
+        );
+    }
 
     #[test]
     fn planning_worker_turn_input_attaches_queue_mutation_skill_before_prompt() {
@@ -768,5 +969,292 @@ mod tests {
         assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("planning-only sub-session"));
         assert!(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.contains("akra planning-tool run ."));
         assert_eq!(PLANNING_WORKER_SERVICE_NAME, "akra-planning-worker");
+    }
+
+    fn test_adapter() -> CodexAppServerAdapter {
+        CodexAppServerAdapter::with_configs(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default(),
+            AppServerExecutionPolicy::default(),
+        )
+    }
+
+    fn has_launch_attachment(events: &[ConversationStreamEvent]) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                ConversationStreamEvent::AttachmentObserved { profile }
+                    if *profile == crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile::codex_app_server_launch()
+            )
+        })
+    }
+
+    fn has_reattach_attachment(events: &[ConversationStreamEvent]) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                ConversationStreamEvent::AttachmentObserved { profile }
+                    if *profile == crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile::codex_app_server_reattach()
+            )
+        })
+    }
+
+    fn has_thread_prepared(events: &[ConversationStreamEvent], thread_id: &str) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                ConversationStreamEvent::ThreadPrepared { thread_id: observed, .. }
+                    if observed == thread_id
+            )
+        })
+    }
+
+    fn has_turn_completed(events: &[ConversationStreamEvent]) -> bool {
+        events
+            .iter()
+            .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. }))
+    }
+
+    struct FakeCodex {
+        _guard: MutexGuard<'static, ()>,
+        temp_dir: PathBuf,
+        log_path: PathBuf,
+        previous_path: Option<OsString>,
+        previous_log: Option<OsString>,
+    }
+
+    impl FakeCodex {
+        fn install(name: &str) -> Self {
+            let guard = FAKE_CODEX_ENV_LOCK.lock().expect("fake codex env lock");
+            let temp_dir = unique_temp_dir(name);
+            let codex_path = temp_dir.join("codex");
+            let log_path = temp_dir.join("requests.jsonl");
+            fs::write(&codex_path, fake_codex_script()).expect("fake codex script should write");
+            make_executable(&codex_path);
+
+            let previous_path = std::env::var_os("PATH");
+            let previous_log = std::env::var_os("AKRA_FAKE_APP_SERVER_LOG");
+            let mut paths = vec![temp_dir.clone()];
+            if let Some(path) = &previous_path {
+                paths.extend(std::env::split_paths(path));
+            }
+            let joined_path = std::env::join_paths(paths).expect("PATH should join");
+            unsafe {
+                std::env::set_var("PATH", joined_path);
+                std::env::set_var("AKRA_FAKE_APP_SERVER_LOG", &log_path);
+            }
+
+            Self {
+                _guard: guard,
+                temp_dir,
+                log_path,
+                previous_path,
+                previous_log,
+            }
+        }
+
+        fn logged_requests(&self) -> Vec<Value> {
+            fs::read_to_string(&self.log_path)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("logged request should be JSON"))
+                .collect()
+        }
+
+        fn logged_methods(&self) -> Vec<String> {
+            self.logged_requests()
+                .into_iter()
+                .map(|request| {
+                    request["method"]
+                        .as_str()
+                        .expect("logged request should include method")
+                        .to_string()
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for FakeCodex {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(path) = &self.previous_path {
+                    std::env::set_var("PATH", path);
+                } else {
+                    std::env::remove_var("PATH");
+                }
+
+                if let Some(log) = &self.previous_log {
+                    std::env::set_var("AKRA_FAKE_APP_SERVER_LOG", log);
+                } else {
+                    std::env::remove_var("AKRA_FAKE_APP_SERVER_LOG");
+                }
+            }
+            let _ = fs::remove_dir_all(&self.temp_dir);
+        }
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "app-server-mod-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temp dir should be created");
+        path
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path)
+            .expect("fake codex metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("fake codex should be executable");
+    }
+
+    fn fake_codex_script() -> &'static str {
+        r#"#!/usr/bin/env python3
+import json
+import os
+import sys
+
+log_path = os.environ.get("AKRA_FAKE_APP_SERVER_LOG")
+
+def log_request(request):
+    if not log_path:
+        return
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(request, sort_keys=True) + "\n")
+
+def send(value):
+    sys.stdout.write(json.dumps(value) + "\n")
+    sys.stdout.flush()
+
+def thread_record(thread_id, params=None):
+    params = params or {}
+    cwd = params.get("cwd") or "/repo"
+    name = "Fake " + thread_id
+    return {
+        "id": thread_id,
+        "name": name,
+        "preview": "Preview for " + thread_id,
+        "cwd": cwd,
+        "source": "vscode",
+        "modelProvider": "openai",
+        "updatedAt": 1770000000,
+        "path": "/tmp/" + thread_id + ".jsonl",
+        "status": {"type": "idle"},
+        "gitInfo": {"branch": "main"},
+        "turns": [],
+    }
+
+for line in sys.stdin:
+    request = json.loads(line)
+    log_request(request)
+    method = request.get("method")
+    if "id" not in request:
+        continue
+
+    request_id = request["id"]
+    params = request.get("params") or {}
+
+    if method == "initialize":
+        send({
+            "id": request_id,
+            "result": {
+                "userAgent": "codex-app-server/fake",
+                "platformFamily": "unix",
+                "platformOs": "linux-x64",
+            },
+        })
+    elif method == "account/read":
+        send({
+            "id": request_id,
+            "result": {
+                "account": {
+                    "type": "chatgpt",
+                    "email": "operator@example.com",
+                    "planType": "plus",
+                },
+                "requiresOpenAIAuth": False,
+            },
+        })
+    elif method == "thread/list":
+        send({
+            "id": request_id,
+            "result": {
+                "data": [thread_record("listed-thread")],
+                "nextCursor": "cursor-next",
+            },
+        })
+    elif method == "thread/read":
+        send({
+            "id": request_id,
+            "result": {
+                "thread": thread_record(params.get("threadId", "read-thread")),
+            },
+        })
+    elif method == "thread/start":
+        send({
+            "id": request_id,
+            "result": {
+                "thread": thread_record("started-thread", params),
+            },
+        })
+    elif method == "thread/resume":
+        send({
+            "id": request_id,
+            "result": {
+                "thread": thread_record(params.get("threadId", "resumed-thread")),
+            },
+        })
+    elif method == "turn/start":
+        thread_id = params.get("threadId", "started-thread")
+        turn_id = "turn-" + str(request_id)
+        send({
+            "id": request_id,
+            "result": {
+                "turn": {
+                    "id": turn_id,
+                },
+            },
+        })
+        send({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "itemId": "agent-1",
+                "delta": "fake delta",
+            },
+        })
+        send({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                },
+            },
+        })
+    elif method == "turn/interrupt":
+        send({
+            "id": request_id,
+            "result": {},
+        })
+    else:
+        send({
+            "id": request_id,
+            "error": {
+                "message": "unexpected method " + str(method),
+            },
+        })
+"#
     }
 }
