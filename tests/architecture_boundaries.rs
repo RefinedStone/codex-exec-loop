@@ -208,6 +208,21 @@ fn core_layer_only_depends_on_application_domain_and_core_modules() {
 
 #[test]
 #[ignore]
+fn future_core_layer_is_application_independent() {
+    /*
+     * Disabled target: if core becomes the innermost app/kernel boundary instead
+     * of a headless coordinator, application service types should move behind
+     * core-owned ports/facades and disappear from the core source graph.
+     */
+    assert_no_forbidden_references(BoundaryRule {
+        name: "future core layer must not depend directly on application modules",
+        root: "src/core",
+        forbidden_patterns: &["crate::application::"],
+    });
+}
+
+#[test]
+#[ignore]
 fn future_core_app_contracts_are_application_dto_free() {
     /*
      * Disabled target: core/app should eventually expose core-owned commands,
