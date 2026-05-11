@@ -479,7 +479,7 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "const applyWalkFrame",
         "const AGENT_FRAME_WIDTH = 128",
         "const AGENT_FRAME_HEIGHT = 192",
-        "const AGENT_SPRITE_SCALE = 0.78",
+        "const AGENT_SPRITE_SCALE = 0.55",
         "gamebaljeonguk_atlas_128x192.png",
     ] {
         assert!(
