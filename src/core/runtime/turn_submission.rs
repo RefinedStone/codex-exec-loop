@@ -28,7 +28,7 @@ pub(crate) fn spawn_turn_submission_worker(
     input_sender: Sender<CoreInput>,
 ) {
     thread::spawn(move || {
-        let (request, launch_notice, invalidate_supervisor_snapshot) =
+        let (resolved_request, launch_notice, invalidate_supervisor_snapshot) =
             match resolve_stream_launch_request(&parallel_mode_turn_service, request) {
                 Ok(result) => result,
                 Err(error) => {
@@ -42,10 +42,12 @@ pub(crate) fn spawn_turn_submission_worker(
             };
 
         let _ = input_sender.send(CoreInput::ConversationTurnWorkspaceChanged {
-            workspace_directory: request.workspace_directory.clone(),
+            workspace_directory: resolved_request.workspace_directory.clone(),
         });
-        let execution_snapshot_capture =
-            capture_turn_execution_snapshot(&planning_runtime, &request.workspace_directory);
+        let execution_snapshot_capture = capture_turn_execution_snapshot(
+            &planning_runtime,
+            &resolved_request.workspace_directory,
+        );
 
         if invalidate_supervisor_snapshot {
             let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
@@ -55,7 +57,7 @@ pub(crate) fn spawn_turn_submission_worker(
         }
 
         run_conversation_stream_worker(
-            request,
+            resolved_request,
             execution_snapshot_capture,
             conversation_service,
             parallel_mode_turn_service,
@@ -134,13 +136,19 @@ fn resolve_stream_launch_request(
     parallel_mode_turn_service: &ParallelModeTurnService,
     request: TurnSubmissionRequest,
 ) -> Result<(TurnSubmissionRequest, Option<String>, bool), String> {
-    let prompt_origin = request.prompt_origin;
+    let TurnSubmissionRequest {
+        workspace_directory,
+        thread_id,
+        prompt,
+        prompt_origin,
+        slot_lease_handoff,
+    } = request;
     let outcome =
         parallel_mode_turn_service.prepare_stream_launch(ParallelTurnStreamLaunchRequest {
-            workspace_directory: request.workspace_directory,
-            thread_id: request.thread_id,
-            prompt: request.prompt,
-            slot_lease_handoff: request.slot_lease_handoff,
+            workspace_directory,
+            thread_id,
+            prompt,
+            slot_lease_handoff,
         })?;
     Ok((
         TurnSubmissionRequest {

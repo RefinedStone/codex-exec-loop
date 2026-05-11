@@ -68,6 +68,7 @@ impl CoreController {
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ConversationLoaded(result)) => {
                 self.state.apply_conversation_result(result);
+                self.turn_stream_state = TurnStreamState::new();
                 self.conversation_changed_outcome(Vec::new())
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
@@ -543,6 +544,37 @@ mod tests {
                 notice: "reattached runtime".to_string()
             }
         );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_load_resets_previous_turn_stream_identity() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::ConversationStreamUpdated(
+            crate::application::service::conversation_runtime_event::ConversationStreamEvent::ThreadPrepared {
+                thread_id: "old-thread".to_string(),
+                title: "Old Thread".to_string(),
+                cwd: "/tmp/old".to_string(),
+            },
+        ));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded(Ok(Box::new(
+                sample_conversation_ready_snapshot(),
+            ))),
+        ));
+
+        let outcome = controller.handle_input(CoreInput::ConversationRuntimeNotice(
+            "runtime reattached".to_string(),
+        ));
+
+        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
+        else {
+            panic!("runtime notice should emit a fresh turn stream snapshot");
+        };
+        assert_eq!(stream_snapshot.revision, 1);
+        assert_eq!(stream_snapshot.thread_id, None);
+        assert_eq!(stream_snapshot.title, None);
+        assert_eq!(stream_snapshot.cwd, None);
         assert!(outcome.effects.is_empty());
     }
 

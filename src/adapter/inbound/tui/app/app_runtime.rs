@@ -522,16 +522,19 @@ impl NativeTuiApp {
 
         let previous_planning_runtime_snapshot = conversation.planning_runtime_snapshot.clone();
         let reduction = reduce_conversation_runtime(conversation, event);
-        let next_planning_runtime_snapshot = reduction.state.planning_runtime_snapshot.clone();
-        let planning_projection_changed =
-            previous_planning_runtime_snapshot != next_planning_runtime_snapshot;
+        let next_planning_runtime_snapshot =
+            if previous_planning_runtime_snapshot != reduction.state.planning_runtime_snapshot {
+                Some(reduction.state.planning_runtime_snapshot.clone())
+            } else {
+                None
+            };
         let mut effects = reduction.effects;
         let started_stream = effects
             .iter()
             .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
-        if planning_projection_changed {
-            self.sync_core_planning_runtime_projection(next_planning_runtime_snapshot);
+        if let Some(snapshot) = next_planning_runtime_snapshot {
+            self.sync_core_planning_runtime_projection(snapshot);
         }
         self.route_conversation_runtime_automation_effects(automation_context, &mut effects);
         for effect in effects {
