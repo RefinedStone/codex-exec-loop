@@ -10,6 +10,7 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlaneLoadingStage, ParallelModeControlPlanePresentationEvent,
 };
+use crate::core::app::CoreInput;
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
@@ -90,7 +91,7 @@ impl NativeTuiApp {
                 snapshot,
             } => {
                 if self.planning_workspace_directory() == workspace_directory {
-                    self.parallel_mode_readiness_snapshot = Some(snapshot);
+                    self.sync_core_parallel_mode_readiness_projection(Some(snapshot));
                 }
             }
             ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
@@ -98,7 +99,7 @@ impl NativeTuiApp {
                 snapshot,
             } => {
                 if self.planning_workspace_directory() == workspace_directory {
-                    self.parallel_mode_supervisor_snapshot = Some(*snapshot);
+                    self.sync_core_parallel_mode_supervisor_projection(Some(*snapshot));
                 }
             }
             ParallelModeControlPlanePresentationEvent::StatusShown { status_text } => {
@@ -254,13 +255,14 @@ impl NativeTuiApp {
         let readiness_snapshot = self.parallel_mode_readiness_snapshot.clone();
         let workspace_directory = self.planning_workspace_directory();
         if self.parallel_mode_supervisor_snapshot.is_none() {
-            self.parallel_mode_supervisor_snapshot =
-                Some(pending_parallel_mode_supervisor_snapshot(
+            self.sync_core_parallel_mode_supervisor_projection(Some(
+                pending_parallel_mode_supervisor_snapshot(
                     &workspace_directory,
                     self.parallel_mode_enabled(),
                     readiness_snapshot.as_ref(),
                     ParallelModeLoadingStage::RefreshingBoard,
-                ));
+                ),
+            ));
         }
         self.apply_parallel_mode_control_plane_command(
             ParallelModeControlPlaneCommand::RefreshSupervisor {
@@ -339,14 +341,15 @@ impl NativeTuiApp {
                 // runtime owns mode and initial-reset policy; this adapter only
                 // projects the loading state.
                 let workspace_directory = self.planning_workspace_directory();
-                self.parallel_mode_readiness_snapshot = None;
-                self.parallel_mode_supervisor_snapshot =
-                    Some(pending_parallel_mode_supervisor_snapshot(
+                self.sync_core_parallel_mode_readiness_projection(None);
+                self.sync_core_parallel_mode_supervisor_projection(Some(
+                    pending_parallel_mode_supervisor_snapshot(
                         &workspace_directory,
                         true,
                         None,
                         ParallelModeLoadingStage::Entering,
-                    ));
+                    ),
+                ));
                 self.show_supersession_overlay();
                 self.apply_parallel_mode_control_plane_command(
                     ParallelModeControlPlaneCommand::Enable {
@@ -486,12 +489,32 @@ impl NativeTuiApp {
         }
 
         if let Some(readiness_snapshot) = readiness_snapshot {
-            self.parallel_mode_readiness_snapshot = Some(readiness_snapshot);
+            self.sync_core_parallel_mode_readiness_projection(Some(readiness_snapshot));
         }
-        self.parallel_mode_supervisor_snapshot = Some(supervisor_snapshot);
+        self.sync_core_parallel_mode_supervisor_projection(Some(supervisor_snapshot));
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
+    }
+
+    fn sync_core_parallel_mode_readiness_projection(
+        &mut self,
+        snapshot: Option<ParallelModeReadinessSnapshot>,
+    ) {
+        self.parallel_mode_readiness_snapshot = snapshot.clone();
+        self.dispatch_core_input(CoreInput::ParallelModeReadinessProjectionChanged(
+            snapshot.map(Box::new),
+        ));
+    }
+
+    fn sync_core_parallel_mode_supervisor_projection(
+        &mut self,
+        snapshot: Option<ParallelModeSupervisorSnapshot>,
+    ) {
+        self.parallel_mode_supervisor_snapshot = snapshot.clone();
+        self.dispatch_core_input(CoreInput::ParallelModeSupervisorProjectionChanged(
+            snapshot.map(Box::new),
+        ));
     }
 }
 

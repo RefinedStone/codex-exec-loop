@@ -5,7 +5,10 @@ use super::{
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
+use crate::application::service::planning::{
+    PlanningRuntimeSnapshot, PlanningTurnExecutionSnapshotCapture,
+};
+use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
@@ -22,6 +25,9 @@ pub enum CoreInput {
         workspace_directory: String,
     },
     ParallelModeSupervisorSnapshotInvalidated,
+    PlanningRuntimeProjectionChanged(Box<PlanningRuntimeSnapshot>),
+    ParallelModeReadinessProjectionChanged(Option<Box<ParallelModeReadinessSnapshot>>),
+    ParallelModeSupervisorProjectionChanged(Option<Box<ParallelModeSupervisorSnapshot>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

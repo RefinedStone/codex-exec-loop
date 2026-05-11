@@ -1,6 +1,7 @@
 use super::super::planning::status_projection::build_resumed_session_status_text;
 use super::super::{AutoFollowControlEvent, ConversationState, NativeTuiApp, StartupState};
 use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::core::app::CoreInput;
 
 /*
 conversation controller는 shell startup, editable draft, resumed thread 사이의 workspace boundary를 소유한다.
@@ -77,10 +78,10 @@ impl NativeTuiApp {
             return;
         };
         // conversation이 snapshot cache를 소유해야 render path가 filesystem-backed planning service를 직접 호출하지 않는다.
-        conversation.replace_planning_runtime_snapshot(
-            self.load_planning_runtime_snapshot(workspace_directory),
-        );
+        let planning_runtime_snapshot = self.load_planning_runtime_snapshot(workspace_directory);
+        conversation.replace_planning_runtime_snapshot(planning_runtime_snapshot.clone());
         self.conversation_state = ConversationState::ready(conversation);
+        self.sync_core_planning_runtime_projection(planning_runtime_snapshot);
     }
 
     // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.
@@ -92,5 +93,16 @@ impl NativeTuiApp {
             &conversation.planning_runtime_snapshot,
         ));
         self.conversation_state = ConversationState::ready(conversation);
+    }
+}
+
+impl NativeTuiApp {
+    pub(in crate::adapter::inbound::tui::app) fn sync_core_planning_runtime_projection(
+        &mut self,
+        snapshot: PlanningRuntimeSnapshot,
+    ) {
+        self.dispatch_core_input(CoreInput::PlanningRuntimeProjectionChanged(Box::new(
+            snapshot,
+        )));
     }
 }

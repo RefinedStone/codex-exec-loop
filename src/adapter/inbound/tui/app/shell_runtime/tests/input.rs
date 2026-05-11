@@ -258,6 +258,10 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
         Some(snapshot),
         "MUD navigation must not mutate supervisor/domain state"
     );
+    assert!(
+        !runtime.app().parallel_mode_supervisor_refresh_in_flight(),
+        "MUD navigation must not request an application supervisor refresh"
+    );
     assert_eq!(
         runtime
             .app()
@@ -363,7 +367,18 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     );
     assert_eq!(
         runtime.app().parallel_mode_supervisor_snapshot,
-        Some(refreshed_snapshot)
+        Some(refreshed_snapshot.clone())
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .core_runtime
+            .snapshot()
+            .planning_parallel
+            .parallel_mode
+            .supervisor
+            .as_deref(),
+        Some(&refreshed_snapshot)
     );
 }
 

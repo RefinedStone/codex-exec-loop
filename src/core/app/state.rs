@@ -1,7 +1,9 @@
 use super::{
-    AppSnapshot, ConversationReadySnapshot, ConversationState, SessionCatalogReadySnapshot,
-    SessionCatalogState, StartupReadySnapshot, StartupState,
+    AppSnapshot, ConversationReadySnapshot, ConversationState, PlanningParallelProjection,
+    SessionCatalogReadySnapshot, SessionCatalogState, StartupReadySnapshot, StartupState,
 };
+use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
@@ -9,6 +11,7 @@ pub struct AppState {
     startup: StartupState,
     session_catalog: SessionCatalogState,
     conversation: ConversationState,
+    planning_parallel: PlanningParallelProjection,
 }
 
 impl AppState {
@@ -18,6 +21,7 @@ impl AppState {
             startup: StartupState::Idle,
             session_catalog: SessionCatalogState::Idle,
             conversation: ConversationState::Idle,
+            planning_parallel: PlanningParallelProjection::initial(),
         }
     }
 
@@ -27,6 +31,7 @@ impl AppState {
             startup: self.startup.snapshot(),
             session_catalog: self.session_catalog.snapshot(),
             conversation: self.conversation.snapshot(),
+            planning_parallel: self.planning_parallel.clone(),
         }
     }
 
@@ -75,6 +80,45 @@ impl AppState {
         self.advance_revision();
     }
 
+    pub fn apply_planning_runtime_projection(
+        &mut self,
+        snapshot: Box<PlanningRuntimeSnapshot>,
+    ) -> bool {
+        let changed = self
+            .planning_parallel
+            .apply_planning_runtime_snapshot(snapshot);
+        if changed {
+            self.advance_revision();
+        }
+        changed
+    }
+
+    pub fn apply_parallel_readiness_projection(
+        &mut self,
+        snapshot: Option<Box<ParallelModeReadinessSnapshot>>,
+    ) -> bool {
+        let changed = self
+            .planning_parallel
+            .apply_parallel_readiness_snapshot(snapshot);
+        if changed {
+            self.advance_revision();
+        }
+        changed
+    }
+
+    pub fn apply_parallel_supervisor_projection(
+        &mut self,
+        snapshot: Option<Box<ParallelModeSupervisorSnapshot>>,
+    ) -> bool {
+        let changed = self
+            .planning_parallel
+            .apply_parallel_supervisor_snapshot(snapshot);
+        if changed {
+            self.advance_revision();
+        }
+        changed
+    }
+
     fn advance_revision(&mut self) {
         self.revision += 1;
     }
@@ -109,6 +153,7 @@ mod tests {
                 startup: StartupSnapshot::Loading,
                 session_catalog: SessionCatalogSnapshot::Idle,
                 conversation: ConversationSnapshot::Idle,
+                planning_parallel: PlanningParallelProjection::initial(),
             }
         );
     }
@@ -126,6 +171,7 @@ mod tests {
                 startup: StartupSnapshot::Idle,
                 session_catalog: SessionCatalogSnapshot::Loading,
                 conversation: ConversationSnapshot::Idle,
+                planning_parallel: PlanningParallelProjection::initial(),
             }
         );
     }
@@ -143,6 +189,7 @@ mod tests {
                 startup: StartupSnapshot::Idle,
                 session_catalog: SessionCatalogSnapshot::Idle,
                 conversation: ConversationSnapshot::Loading,
+                planning_parallel: PlanningParallelProjection::initial(),
             }
         );
     }
