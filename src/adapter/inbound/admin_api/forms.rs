@@ -74,6 +74,12 @@ pub(super) struct ParallelPersonaForm {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(super) struct AgentProfilesForm {
+    pub(super) csrf_token: String,
+    pub(super) profiles_json: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(super) struct DirectionMutationForm {
     pub(super) csrf_token: String,
     /*

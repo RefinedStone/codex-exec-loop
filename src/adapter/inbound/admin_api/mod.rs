@@ -164,6 +164,10 @@ fn build_router(state: AdminAppState) -> Router {
             "/admin/controls/parallel-persona",
             post(pages::update_parallel_persona_page),
         )
+        .route(
+            "/admin/controls/agent-profiles",
+            post(pages::update_agent_profiles_page),
+        )
         .route("/admin/drafts/{draft_name}", get(pages::editor_page))
         .route(
             "/admin/drafts/{draft_name}/save",

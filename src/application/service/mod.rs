@@ -11,6 +11,8 @@ pub mod github_review_poller_service;
 pub mod manual_prompt_preparation;
 // parallel_agent_persona는 병렬 agent prompt에 선택적으로 주입되는 작은 페르소나 설정을 관리한다.
 pub mod parallel_agent_persona;
+// parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.
+pub mod parallel_agent_profile;
 // parallel_mode는 여러 worktree/agent lane을 만들고 배분하는 application 흐름이다.
 pub mod parallel_mode;
 // post_turn_decision은 턴 완료 후 auto-follow, parallel continuation, operator alert를 분리해 결정한다.

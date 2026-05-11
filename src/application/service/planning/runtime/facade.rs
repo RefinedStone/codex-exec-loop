@@ -5,6 +5,7 @@
  * 작은 DTO와 method만 알면 된다.
  */
 use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
+use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
@@ -22,8 +23,8 @@ use crate::application::service::planning::runtime::prompt::{
 use crate::application::service::planning::shared::auto_follow_copy::QUEUED_TASK_TRANSCRIPT_TEXT;
 use crate::application::service::prompt_component::PromptDocument;
 use crate::application::service::turn_prompt_assembly_service::{
-    MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionPromptAssemblyRequest,
-    TurnPromptAssemblyService,
+    MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionAgentPrompt,
+    SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
 };
 use crate::diagnostics::event_log;
 use crate::domain::planning::{PriorityQueueTask, TaskDefinition};
@@ -217,12 +218,39 @@ impl PlanningRuntimeFacadeService {
         task: &PriorityQueueTask,
         persona: ParallelAgentPersona,
     ) -> PlanningSubSessionHandoff {
+        self.build_sub_session_task_handoff_with_agent_prompt(
+            task,
+            persona,
+            SubSessionAgentPrompt::default(),
+        )
+    }
+
+    pub fn build_sub_session_task_handoff_with_agent_profile(
+        &self,
+        task: &PriorityQueueTask,
+        persona: ParallelAgentPersona,
+        profile: &ParallelAgentProfile,
+    ) -> PlanningSubSessionHandoff {
+        self.build_sub_session_task_handoff_with_agent_prompt(
+            task,
+            persona,
+            SubSessionAgentPrompt::new(profile.prompt_label(), profile.prompt_lines()),
+        )
+    }
+
+    fn build_sub_session_task_handoff_with_agent_prompt(
+        &self,
+        task: &PriorityQueueTask,
+        persona: ParallelAgentPersona,
+        agent_prompt: SubSessionAgentPrompt,
+    ) -> PlanningSubSessionHandoff {
         let task_prompt = render_queued_task_handoff_prompt(task);
         let prompt = self
             .turn_prompt_assembly_service
             .build_sub_session_prompt(SubSessionPromptAssemblyRequest {
                 handoff_prompt: &task_prompt,
                 persona,
+                agent_prompt: agent_prompt.clone(),
             })
             .expect("queued sub-session handoff prompt should not be empty");
 
@@ -230,6 +258,7 @@ impl PlanningRuntimeFacadeService {
             parallel_sub_session_handoff_trace_payload(
                 task,
                 persona,
+                agent_prompt.lines.len(),
                 &prompt.service_name,
                 &task_prompt,
                 &prompt.turn_prompt,
@@ -431,6 +460,7 @@ fn render_queued_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
 fn parallel_sub_session_handoff_trace_payload(
     task: &PriorityQueueTask,
     persona: ParallelAgentPersona,
+    agent_prompt_line_count: usize,
     service_name: &str,
     handoff_prompt: &str,
     turn_prompt: &str,
@@ -442,6 +472,7 @@ fn parallel_sub_session_handoff_trace_payload(
         "direction_id": &task.direction_id,
         "combined_priority": task.combined_priority,
         "persona": persona.form_value(),
+        "agent_prompt_line_count": agent_prompt_line_count,
         "service_name": service_name,
         "handoff_prompt_chars": handoff_prompt.chars().count(),
         "turn_prompt_chars": turn_prompt.chars().count(),
@@ -471,6 +502,7 @@ mod tests {
                 rank_reasons: vec!["ready".to_string()],
             },
             ParallelAgentPersona::None,
+            0,
             "akra-parallel-worker",
             "handoff SECRET-HANDOFF body",
             "turn SECRET-TURN body",

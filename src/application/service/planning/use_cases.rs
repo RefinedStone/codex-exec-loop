@@ -44,6 +44,7 @@ use super::worker::orchestration::{
     PlanningWorkerRunOutcome,
 };
 use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
+use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
     PlanningOfficialCompletionRefreshContract, PriorityQueueTask, QueueIdlePolicy,
 };
@@ -657,6 +658,15 @@ impl PlanningRuntimeUseCases {
     ) -> PlanningSubSessionHandoff {
         self.runtime_facade
             .build_sub_session_task_handoff_with_persona(task, persona)
+    }
+    pub fn build_sub_session_task_handoff_with_agent_profile(
+        &self,
+        task: &PriorityQueueTask,
+        persona: ParallelAgentPersona,
+        profile: &ParallelAgentProfile,
+    ) -> PlanningSubSessionHandoff {
+        self.runtime_facade
+            .build_sub_session_task_handoff_with_agent_profile(task, persona, profile)
     }
     pub fn decide_auto_follow(
         &self,

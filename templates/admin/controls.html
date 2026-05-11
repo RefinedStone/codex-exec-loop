@@ -26,7 +26,7 @@
 
   <article class="card span-6">
     <h2>Parallel Agent Persona</h2>
-    <p>Default is None, so parallel workers receive no extra persona prompt unless this is changed.</p>
+    <p>Default is None. Agent Profile prompt가 있으면 해당 profile prompt가 우선 적용됩니다.</p>
     <form method="post" action="/admin/controls/parallel-persona" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>
@@ -50,6 +50,21 @@
       </p>
       <div class="actions">
         <button type="submit" class="secondary">Save Persona</button>
+      </div>
+    </form>
+  </article>
+
+  <article class="card span-6">
+    <h2>Agent Profiles</h2>
+    <p>{{ agent_profile_config.profiles.len() }} profiles define agent identity, role, avatar, and persona prompt for parallel dispatch.</p>
+    <form method="post" action="/admin/controls/agent-profiles" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Profiles JSON
+        <textarea name="profiles_json" rows="18" spellcheck="false">{{ agent_profile_config_json }}</textarea>
+      </label>
+      <div class="actions">
+        <button type="submit" class="secondary">Save Profiles</button>
       </div>
     </form>
   </article>

@@ -1,4 +1,7 @@
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+use crate::application::service::parallel_agent_profile::{
+    ParallelAgentProfileConfig, load_parallel_agent_profile_config,
+};
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::domain::parallel_mode::{
@@ -117,6 +120,7 @@ pub(super) struct AgentView {
     pub agent_id: String,
     pub display_name: String,
     pub class_label: String,
+    pub role_label: String,
     pub slot_id: String,
     pub task_title: String,
     pub branch_name: String,
@@ -282,9 +286,11 @@ pub(super) fn build_akra_dashboard_view(
     let readiness = snapshot.readiness;
     let supervisor = snapshot.supervisor;
     let events = snapshot.events;
+    let agent_profiles =
+        load_parallel_agent_profile_config(workspace_dir).map_err(anyhow::Error::msg)?;
 
     let pool = map_pool(&supervisor);
-    let agents = map_agents(&supervisor);
+    let agents = map_agents(&supervisor, &agent_profiles);
     let selected_task = map_selected_task(&supervisor);
     let distributor = map_distributor(&supervisor);
     let automation_epoch = events
@@ -402,7 +408,10 @@ fn map_pool_slot(index: usize, slot: &ParallelModePoolSlotSnapshot) -> PoolSlotV
     }
 }
 
-fn map_agents(supervisor: &ParallelModeSupervisorSnapshot) -> AgentRosterView {
+fn map_agents(
+    supervisor: &ParallelModeSupervisorSnapshot,
+    agent_profiles: &ParallelAgentProfileConfig,
+) -> AgentRosterView {
     AgentRosterView {
         active_count: supervisor.roster.active_count(),
         empty_state: supervisor.roster.empty_state.clone(),
@@ -411,17 +420,33 @@ fn map_agents(supervisor: &ParallelModeSupervisorSnapshot) -> AgentRosterView {
             .entries
             .iter()
             .enumerate()
-            .map(|(index, entry)| map_agent(index, entry))
+            .map(|(index, entry)| map_agent(index, entry, agent_profiles))
             .collect(),
     }
 }
 
-fn map_agent(index: usize, entry: &ParallelModeAgentRosterEntry) -> AgentView {
+fn map_agent(
+    index: usize,
+    entry: &ParallelModeAgentRosterEntry,
+    agent_profiles: &ParallelAgentProfileConfig,
+) -> AgentView {
     let status = agent_status(entry.state_label.as_str());
+    let profile = agent_profiles.profile_for_agent_id(&entry.agent_id);
+    let fallback_class = agent_class_label(index).to_string();
     AgentView {
         agent_id: entry.agent_id.clone(),
-        display_name: format!("A{:02}", index + 1),
-        class_label: agent_class_label(index).to_string(),
+        display_name: profile
+            .as_ref()
+            .map(|profile| profile.display_name.clone())
+            .unwrap_or_else(|| format!("A{:02}", index + 1)),
+        class_label: profile
+            .as_ref()
+            .map(|profile| profile.avatar_class.clone())
+            .unwrap_or_else(|| fallback_class.clone()),
+        role_label: profile
+            .as_ref()
+            .map(|profile| profile.role.clone())
+            .unwrap_or(fallback_class),
         slot_id: entry.slot_id.clone(),
         task_title: entry.task_title.clone(),
         branch_name: entry.branch_name.clone(),

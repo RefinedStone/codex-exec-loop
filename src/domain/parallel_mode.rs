@@ -190,6 +190,16 @@ impl ParallelModeSlotLeaseRequest {
             task_slug,
         )
     }
+
+    pub fn from_task_identity_with_agent_id(
+        task_id: impl AsRef<str>,
+        task_title: impl AsRef<str>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        let mut request = Self::from_task_identity(task_id, task_title);
+        request.agent_id = agent_id.into();
+        request
+    }
 }
 
 fn sanitize_parallel_mode_identifier(input: &str) -> Option<String> {

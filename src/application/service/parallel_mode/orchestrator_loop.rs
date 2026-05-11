@@ -5,6 +5,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::parallel_agent_persona::{
     ParallelAgentPersona, load_parallel_agent_persona_config,
 };
+use crate::application::service::parallel_agent_profile::load_parallel_agent_profile_config;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeProjection,
@@ -18,11 +19,13 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseRequest, ParallelModeSupervisorSnapshot,
 };
 use chrono::Utc;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use super::ParallelModeService;
+use super::pool::load_pool_runtime_context;
 
 pub struct ParallelModeDispatchOrchestratorTickRequest {
     pub workspace_directory: String,
@@ -286,15 +289,40 @@ fn dispatch_parallel_queue_pool(
     let persona = load_parallel_agent_persona_config(workspace_directory)
         .map(|config| config.persona)
         .unwrap_or(ParallelAgentPersona::None);
+    let agent_profiles =
+        load_parallel_agent_profile_config(workspace_directory).unwrap_or_default();
+    let mut used_agent_ids = active_parallel_agent_ids(service, workspace_directory);
     for task in dispatch_plan.candidates {
-        let handoff = context
-            .planning
-            .runtime
-            .build_sub_session_task_handoff_with_persona(&task, persona);
-        let lease_request = ParallelModeSlotLeaseRequest::from_task_identity(
-            &handoff.task.task_id,
-            &handoff.task.task_title,
-        );
+        let selected_profile = agent_profiles.select_available_profile(&used_agent_ids);
+        if let Some(profile) = selected_profile.as_ref() {
+            used_agent_ids.insert(profile.agent_id.clone());
+        }
+        let handoff = selected_profile
+            .as_ref()
+            .map(|profile| {
+                context
+                    .planning
+                    .runtime
+                    .build_sub_session_task_handoff_with_agent_profile(&task, persona, profile)
+            })
+            .unwrap_or_else(|| {
+                context
+                    .planning
+                    .runtime
+                    .build_sub_session_task_handoff_with_persona(&task, persona)
+            });
+        let lease_request = if let Some(profile) = selected_profile.as_ref() {
+            ParallelModeSlotLeaseRequest::from_task_identity_with_agent_id(
+                &handoff.task.task_id,
+                &handoff.task.task_title,
+                profile.agent_id.clone(),
+            )
+        } else {
+            ParallelModeSlotLeaseRequest::from_task_identity(
+                &handoff.task.task_id,
+                &handoff.task.task_title,
+            )
+        };
         match service.acquire_slot_lease(workspace_directory, lease_request) {
             Ok(lease) => {
                 event_log::emit_lazy("parallel_dispatch_slot_lease_acquired", || {
@@ -306,6 +334,7 @@ fn dispatch_parallel_queue_pool(
                         "agent_id": &lease.agent_id,
                         "task_id": &handoff.task.task_id,
                         "task_title": &handoff.task.task_title,
+                        "agent_profile_id": selected_profile.as_ref().map(|profile| profile.agent_id.as_str()),
                         "worktree": &lease.worktree_path,
                         "service_name": &handoff.service_name,
                         "prompt_chars": handoff.prompt.chars().count(),
@@ -373,6 +402,21 @@ fn dispatch_parallel_queue_pool(
         })
     });
     outcome
+}
+
+fn active_parallel_agent_ids(
+    service: &ParallelModeService,
+    workspace_directory: &str,
+) -> BTreeSet<String> {
+    load_pool_runtime_context(service.planning_authority.as_ref(), workspace_directory)
+        .map(|context| {
+            context
+                .slot_leases
+                .values()
+                .map(|lease| lease.agent_id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parallel_runtime_event_for_dispatch_trigger(
