@@ -1246,34 +1246,34 @@
         {% endfor %}
       </aside>
 
-      {% for agent in dashboard.agents.entries %}
+      {% for slot in dashboard.pool.slots %}
       <button
         type="button"
-        class="scene-object desk agent-{{ loop.index }} severity-{% if agent.status == "blocked" %}danger{% else if agent.status == "cleanup" %}warning{% else %}normal{% endif %}"
-        data-agent-id="{{ agent.agent_id }}"
-        data-slot-id="{{ agent.slot_id }}"
-        data-task-id=""
+        class="scene-object desk agent-{{ loop.index }} severity-{{ slot.severity }}"
+        data-agent-id="{{ slot.slot_id }}"
+        data-slot-id="{{ slot.slot_id }}"
+        data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
         data-detail-type="agent"
-        data-detail-title="요원 · {{ agent.display_name }}"
-        data-detail-subtitle="{{ agent.agent_id }} / {{ agent.class_label }}"
-        data-detail-state="{{ agent.lifecycle_state }}"
-        data-detail-severity="{% if agent.status == "blocked" %}danger{% else if agent.status == "cleanup" %}warning{% else %}normal{% endif %}"
-        data-detail-slot="{{ agent.slot_id }}"
-        data-detail-task="{{ agent.task_title }}"
-        data-detail-branch="{{ agent.branch_name }}"
-        data-detail-runtime="{{ agent.duration_label }}"
-        data-detail-progress="{{ agent.progress_label }}"
-        data-detail-summary="{{ agent.latest_summary }}"
-        data-agent-status="{{ agent.status }}"
-        data-agent-progress="{{ agent.progress_label }}"
-        title="{{ agent.branch_name }} / {{ agent.task_title }} / {{ agent.latest_summary }}"
+        data-detail-title="슬롯 요원 · {{ slot.display_slot_label }}"
+        data-detail-subtitle="{{ slot.label }} / {{ slot.owner_label }}"
+        data-detail-state="{{ slot.label }}"
+        data-detail-severity="{{ slot.severity }}"
+        data-detail-slot="{{ slot.display_slot_label }}"
+        data-detail-task="{{ slot.task_id.as_deref().unwrap_or("-") }}"
+        data-detail-branch="{{ slot.branch_name }}"
+        data-detail-worktree="{{ slot.worktree_label }}"
+        data-detail-owner="{{ slot.owner_label }}"
+        data-detail-note="{{ slot.note }}"
+        data-agent-status="{{ slot.state }}"
+        data-agent-progress="{{ slot.label }}"
+        title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
       >
-        <span class="speech">{{ agent.bubble_label }}</span>
-        <span class="agent-sprite avatar-{{ agent.class_label }}" aria-hidden="true"><span class="sprite-label">{{ agent.display_name }}</span></span>
+        <span class="speech">{{ slot.bubble_label }}</span>
+        <span class="agent-sprite avatar-{{ slot.avatar_class_label }}" aria-hidden="true"><span class="sprite-label">{{ slot.display_slot_label }}</span></span>
         <div class="object-label">
-          <strong>{{ agent.agent_id }}</strong>
-          <span>{{ agent.task_title }}</span>
-          <small>{{ agent.slot_id }} · {{ agent.lifecycle_state }}</small>
+          <strong>{{ slot.display_slot_label }}</strong>
+          <span>{{ slot.task_id.as_deref().unwrap_or("-") }}</span>
+          <small>{{ slot.label }} · {{ slot.worktree_label }}</small>
         </div>
       </button>
       {% endfor %}
@@ -1909,12 +1909,6 @@
     if (insertedCount > 0) pulseStage(insertedCount);
   };
 
-  const agentSeverity = (status) => {
-    if (status === "blocked") return "danger";
-    if (status === "cleanup") return "warning";
-    return "normal";
-  };
-
   const createCampaignLane = (lane) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -2094,53 +2088,59 @@
     );
   };
 
-  const createAgentButton = (agent, index) => {
-    const severity = agentSeverity(agent.status);
+  const createSlotAgentButton = (slot, index) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `scene-object desk agent-${index % 5 + 1} ${severityClass(severity)}`;
+    button.className = `scene-object desk agent-${index % 5 + 1} ${severityClass(slot.severity)}`;
+    const slotDisplayLabel = optionalText(slot.displaySlotLabel || slot.slotId, "슬롯");
+    const slotStateLabel = optionalText(slot.label || slot.bubbleLabel, "상태");
+    const slotTaskId = optionalText(slot.taskId, "-");
+    const slotBranchName = optionalText(slot.branchName, "-");
+    const slotWorktreeLabel = optionalText(slot.worktreeLabel, "-");
+    const slotOwnerLabel = optionalText(slot.ownerLabel, "-");
+    const slotNote = optionalText(slot.note, "-");
     setDataset(button, {
-      agentId: agent.agentId,
-      slotId: agent.slotId,
-      taskId: "",
+      agentId: slot.slotId,
+      slotId: slot.slotId,
+      taskId: slot.taskId || "",
       detailType: "agent",
-      detailTitle: `요원 · ${optionalText(agent.displayName)}`,
-      detailSubtitle: `${optionalText(agent.agentId)} / ${optionalText(agent.classLabel)}`,
-      detailState: agent.lifecycleState,
-      detailSeverity: severity,
-      detailSlot: agent.slotId,
-      detailTask: agent.taskTitle,
-      detailBranch: agent.branchName,
-      detailRuntime: agent.durationLabel,
-      detailProgress: agent.progressLabel,
-      detailSummary: agent.latestSummary,
-      agentStatus: agent.status,
-      agentProgress: agent.progressLabel
+      detailTitle: `슬롯 요원 · ${slotDisplayLabel}`,
+      detailSubtitle: `${slotStateLabel} / ${slotOwnerLabel}`,
+      detailState: slotStateLabel,
+      detailSeverity: slot.severity,
+      detailSlot: slotDisplayLabel,
+      detailTask: slotTaskId,
+      detailBranch: slotBranchName,
+      detailWorktree: slotWorktreeLabel,
+      detailOwner: slotOwnerLabel,
+      detailNote: slotNote,
+      agentStatus: slot.state,
+      agentProgress: slotStateLabel
     });
-    button.title = `${optionalText(agent.branchName)} / ${optionalText(agent.taskTitle)} / ${optionalText(agent.latestSummary)}`;
+    button.title = `${slotDisplayLabel} · ${slotStateLabel} · task ${slotTaskId} · branch ${slotBranchName} · worktree ${slotWorktreeLabel} · owner ${slotOwnerLabel} · note ${slotNote}`;
     const sprite = document.createElement("span");
-    sprite.className = `agent-sprite ${agentAvatarClass(agent.classLabel)}`;
+    sprite.className = `agent-sprite ${agentAvatarClass(slot.avatarClassLabel)}`;
     sprite.setAttribute("aria-hidden", "true");
-    sprite.appendChild(createText("span", "sprite-label", agent.displayName));
+    sprite.appendChild(createText("span", "sprite-label", slotDisplayLabel));
     const label = document.createElement("div");
     label.className = "object-label";
     label.append(
-      createText("strong", "", agent.agentId),
-      createText("span", "", agent.taskTitle),
-      createText("small", "", `${optionalText(agent.slotId)} · ${optionalText(agent.lifecycleState)}`)
+      createText("strong", "", slotDisplayLabel),
+      createText("span", "", slotTaskId),
+      createText("small", "", `${slotStateLabel} · ${slotWorktreeLabel}`)
     );
-    button.append(createText("span", "speech", agent.bubbleLabel), sprite, label);
+    button.append(createText("span", "speech", slot.bubbleLabel), sprite, label);
     initializeDetailControl(button);
     return button;
   };
 
-  const renderAgents = (agents) => {
+  const renderAgents = (pool) => {
     const board = root.querySelector(".office-board");
-    if (!board || !agents) return;
+    if (!board || !pool) return;
     for (const node of board.querySelectorAll(".desk[data-agent-id]")) node.remove();
     const anchor = board.querySelector(".distributor-desk") || board.querySelector(".event-board");
-    asArray(agents.entries).forEach((agent, index) => {
-      board.insertBefore(createAgentButton(agent, index), anchor);
+    asArray(pool.slots).forEach((slot, index) => {
+      board.insertBefore(createSlotAgentButton(slot, index), anchor);
     });
   };
 
@@ -2208,7 +2208,7 @@
 
   const renderBoard = (dashboard) => {
     renderPool(dashboard.pool);
-    renderAgents(dashboard.agents);
+    renderAgents(dashboard.pool);
     syncStageHud(dashboard);
     syncDistributorDesk(dashboard.distributor);
     syncEventBoard(dashboard);

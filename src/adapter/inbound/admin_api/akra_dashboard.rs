@@ -90,6 +90,7 @@ pub(super) struct PoolSummaryView {
 pub(super) struct PoolSlotView {
     pub slot_id: String,
     pub display_slot_label: String,
+    pub avatar_class_label: String,
     pub state: String,
     pub label: String,
     pub branch_name: String,
@@ -373,15 +374,21 @@ fn map_pool(supervisor: &ParallelModeSupervisorSnapshot) -> PoolBoardView {
             missing: pool.missing_slots,
             unavailable: pool.unavailable_slots,
         },
-        slots: pool.slots.iter().map(map_pool_slot).collect(),
+        slots: pool
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| map_pool_slot(index, slot))
+            .collect(),
     }
 }
 
-fn map_pool_slot(slot: &ParallelModePoolSlotSnapshot) -> PoolSlotView {
+fn map_pool_slot(index: usize, slot: &ParallelModePoolSlotSnapshot) -> PoolSlotView {
     let (owner_agent_id, task_id) = parse_owner_label(&slot.owner_label);
     PoolSlotView {
         slot_id: slot.slot_id.clone(),
         display_slot_label: pool_slot_display_label(&slot.slot_id),
+        avatar_class_label: agent_class_label(index).to_string(),
         state: slot.state.label().to_string(),
         label: pool_state_korean_label(slot.state).to_string(),
         branch_name: slot.branch_name.clone(),
@@ -897,7 +904,7 @@ fn pool_state_korean_label(state: ParallelModePoolSlotState) -> &'static str {
 
 fn pool_state_bubble(state: ParallelModePoolSlotState) -> &'static str {
     match state {
-        ParallelModePoolSlotState::Idle => "여유",
+        ParallelModePoolSlotState::Idle => "노는중",
         ParallelModePoolSlotState::Leased => "점유됨",
         ParallelModePoolSlotState::Running => "작업중",
         ParallelModePoolSlotState::AwaitingCleanup => "정리중",
@@ -1039,23 +1046,49 @@ mod tests {
     #[test]
     fn pool_slot_state_mapping_covers_all_states() {
         let cases = [
-            (ParallelModePoolSlotState::Idle, "여유", "normal"),
-            (ParallelModePoolSlotState::Leased, "예약됨", "info"),
-            (ParallelModePoolSlotState::Running, "작업중", "normal"),
+            (ParallelModePoolSlotState::Idle, "여유", "normal", "노는중"),
+            (
+                ParallelModePoolSlotState::Leased,
+                "예약됨",
+                "info",
+                "점유됨",
+            ),
+            (
+                ParallelModePoolSlotState::Running,
+                "작업중",
+                "normal",
+                "작업중",
+            ),
             (
                 ParallelModePoolSlotState::AwaitingCleanup,
                 "정리중",
                 "warning",
+                "정리중",
             ),
-            (ParallelModePoolSlotState::Blocked, "차단됨", "danger"),
-            (ParallelModePoolSlotState::Missing, "사라짐", "muted"),
-            (ParallelModePoolSlotState::Unavailable, "사용 불가", "muted"),
+            (
+                ParallelModePoolSlotState::Blocked,
+                "차단됨",
+                "danger",
+                "막힘",
+            ),
+            (
+                ParallelModePoolSlotState::Missing,
+                "사라짐",
+                "muted",
+                "확인 필요",
+            ),
+            (
+                ParallelModePoolSlotState::Unavailable,
+                "사용 불가",
+                "muted",
+                "잠금",
+            ),
         ];
 
-        for (state, label, severity) in cases {
+        for (state, label, severity, bubble) in cases {
             assert_eq!(pool_state_korean_label(state), label);
             assert_eq!(pool_state_severity(state), severity);
-            assert!(!pool_state_bubble(state).is_empty());
+            assert_eq!(pool_state_bubble(state), bubble);
         }
     }
 
