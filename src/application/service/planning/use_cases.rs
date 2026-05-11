@@ -1440,8 +1440,571 @@ fn repeated_queue_head_detail(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::{Result, anyhow};
+
     use super::*;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
+    use crate::application::service::planning::PlanningServices;
+    use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::planning::{PriorityQueueTask, TaskStatus};
+
+    #[derive(Default)]
+    struct ScriptedPlanningWorkspacePort {
+        record: Mutex<PlanningWorkspaceLoadRecord>,
+        load_error: Mutex<Option<String>>,
+        commits: Mutex<Vec<PlanningWorkspaceLoadRecord>>,
+    }
+
+    impl ScriptedPlanningWorkspacePort {
+        fn with_result_output(result_output_markdown: &str) -> Self {
+            Self {
+                record: Mutex::new(PlanningWorkspaceLoadRecord {
+                    result_output_markdown: Some(result_output_markdown.to_string()),
+                }),
+                load_error: Mutex::new(None),
+                commits: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn failing_load(message: &str) -> Self {
+            Self {
+                record: Mutex::new(PlanningWorkspaceLoadRecord::default()),
+                load_error: Mutex::new(Some(message.to_string())),
+                commits: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn commits(&self) -> Vec<PlanningWorkspaceLoadRecord> {
+            self.commits
+                .lock()
+                .expect("workspace commit log should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl PlanningWorkspacePort for ScriptedPlanningWorkspacePort {
+        fn stage_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _files: &[PlanningDraftFileRecord],
+        ) -> Result<PlanningDraftStageRecord> {
+            Err(anyhow!(
+                "stage_planning_draft_files should not be called by use-case tests"
+            ))
+        }
+
+        fn load_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+        ) -> Result<PlanningDraftLoadRecord> {
+            Err(anyhow!(
+                "load_planning_draft_files should not be called by use-case tests"
+            ))
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow!(
+                "replace_planning_draft_file should not be called by use-case tests"
+            ))
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            if let Some(message) = self
+                .load_error
+                .lock()
+                .expect("load error slot should not be poisoned")
+                .clone()
+            {
+                return Err(anyhow!(message));
+            }
+            Ok(self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned")
+                .clone())
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Err(anyhow!(
+                "load_planning_workspace_candidate_files should not be called by use-case tests"
+            ))
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            *self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned") = record.clone();
+            self.commits
+                .lock()
+                .expect("workspace commit log should not be poisoned")
+                .push(record.clone());
+            Ok(())
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<Option<String>> {
+            Err(anyhow!(
+                "load_optional_planning_candidate_file should not be called by use-case tests"
+            ))
+        }
+
+        fn replace_planning_workspace_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+            _body: Option<&str>,
+        ) -> Result<()> {
+            Err(anyhow!(
+                "replace_planning_workspace_file should not be called by use-case tests"
+            ))
+        }
+
+        fn remove_planning_workspace_entry(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<()> {
+            Err(anyhow!(
+                "remove_planning_workspace_entry should not be called by use-case tests"
+            ))
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            _workspace_dir: &str,
+            _archive_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow!(
+                "archive_rejected_planning_file should not be called by use-case tests"
+            ))
+        }
+    }
+
+    #[test]
+    fn capture_turn_execution_snapshot_maps_success_and_failure_to_stable_outcomes() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+
+        let capture = planning.runtime.capture_turn_execution_snapshot(
+            PlanningTurnExecutionSnapshotCaptureRequest::new("/tmp/workspace"),
+        );
+
+        assert_eq!(capture.workspace_directory, "/tmp/workspace");
+        assert_eq!(
+            capture.state,
+            PlanningTurnExecutionSnapshotCaptureState::Ready(PlanningExecutionSnapshot {
+                result_output_markdown: Some(
+                    "# Result Output\n- Keep completion copy.".to_string()
+                )
+            })
+        );
+
+        let planning = planning_services(Arc::new(ScriptedPlanningWorkspacePort::failing_load(
+            "workspace unavailable",
+        )));
+        let capture = planning.runtime.capture_turn_execution_snapshot(
+            PlanningTurnExecutionSnapshotCaptureRequest::new("/tmp/broken"),
+        );
+
+        assert_eq!(capture.workspace_directory, "/tmp/broken");
+        assert!(matches!(
+            capture.state,
+            PlanningTurnExecutionSnapshotCaptureState::CaptureFailed(ref message)
+                if message.contains("workspace unavailable")
+        ));
+    }
+
+    #[test]
+    fn reconcile_post_turn_blocks_without_matching_ready_execution_snapshot() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let current = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+        let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+
+        let missing_capture =
+            planning
+                .runtime
+                .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                    workspace_directory: "/tmp/workspace",
+                    completed_turn_id: "turn-1",
+                    changed_planning_file_paths: &changed_paths,
+                    execution_snapshot_capture: None,
+                    current_runtime_projection: &current,
+                });
+        assert_eq!(
+            missing_capture
+                .reconciliation_result
+                .auto_follow_block_reason
+                .as_deref(),
+            Some(
+                "planning reconciliation could not restore protected planning files because the execution snapshot was unavailable"
+            )
+        );
+
+        let stale_capture = PlanningTurnExecutionSnapshotCapture::ready(
+            "/tmp/other",
+            PlanningExecutionSnapshot {
+                result_output_markdown: Some("old".to_string()),
+            },
+        );
+        let stale = planning
+            .runtime
+            .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                workspace_directory: "/tmp/workspace",
+                completed_turn_id: "turn-1",
+                changed_planning_file_paths: &changed_paths,
+                execution_snapshot_capture: Some(&stale_capture),
+                current_runtime_projection: &current,
+            });
+        assert!(
+            stale
+                .reconciliation_result
+                .auto_follow_block_reason
+                .as_deref()
+                .is_some_and(|message| message.contains("stale execution snapshot"))
+        );
+
+        let failed_capture = PlanningTurnExecutionSnapshotCapture::capture_failed(
+            "/tmp/workspace",
+            "capture failed before turn".to_string(),
+        );
+        let failed = planning
+            .runtime
+            .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                workspace_directory: "/tmp/workspace",
+                completed_turn_id: "turn-1",
+                changed_planning_file_paths: &changed_paths,
+                execution_snapshot_capture: Some(&failed_capture),
+                current_runtime_projection: &current,
+            });
+        assert_eq!(
+            failed
+                .reconciliation_result
+                .auto_follow_block_reason
+                .as_deref(),
+            Some("capture failed before turn")
+        );
+    }
+
+    #[test]
+    fn reconcile_post_turn_restores_protected_files_and_preserves_current_projection_without_changes()
+     {
+        let workspace_port = Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+            "# Result Output\n- Worker-edited copy.",
+        ));
+        let planning = planning_services(workspace_port.clone());
+        let current = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+        let unchanged =
+            planning
+                .runtime
+                .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                    workspace_directory: "/tmp/workspace",
+                    completed_turn_id: "turn-1",
+                    changed_planning_file_paths: &[],
+                    execution_snapshot_capture: None,
+                    current_runtime_projection: &current,
+                });
+        assert_eq!(unchanged.runtime_projection, current);
+        assert!(unchanged.reconciliation_result.notices.is_empty());
+
+        let capture = PlanningTurnExecutionSnapshotCapture::ready(
+            "/tmp/workspace",
+            PlanningExecutionSnapshot {
+                result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+            },
+        );
+        let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+        let restored =
+            planning
+                .runtime
+                .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                    workspace_directory: "/tmp/workspace",
+                    completed_turn_id: "turn-1",
+                    changed_planning_file_paths: &changed_paths,
+                    execution_snapshot_capture: Some(&capture),
+                    current_runtime_projection: &current,
+                });
+
+        assert!(restored.reconciliation_result.notices.iter().any(|notice| {
+            notice == "planning reconciliation restored protected planning files"
+        }));
+        assert_eq!(workspace_port.commits().len(), 1);
+        assert_eq!(
+            workspace_port.commits()[0]
+                .result_output_markdown
+                .as_deref(),
+            Some("# Result Output\n- Pre-turn copy.")
+        );
+    }
+
+    #[test]
+    fn post_turn_worker_panel_state_prioritizes_pause_repair_and_stop_policy() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let ready_with_task = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+        let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+
+        assert_eq!(
+            planning.runtime.post_turn_worker_panel_start_state(
+                PlanningPostTurnWorkerPanelStartRequest {
+                    continuation_paused: true,
+                    changed_planning_file_paths: &changed_paths,
+                    current_runtime_projection: &ready_with_task,
+                },
+            ),
+            PlanningPostTurnWorkerPanelStartState::PreserveCurrent
+        );
+        assert_eq!(
+            planning.runtime.post_turn_worker_panel_start_state(
+                PlanningPostTurnWorkerPanelStartRequest {
+                    continuation_paused: false,
+                    changed_planning_file_paths: &changed_paths,
+                    current_runtime_projection: &ready_with_task,
+                },
+            ),
+            PlanningPostTurnWorkerPanelStartState::RepairRunning
+        );
+        assert_eq!(
+            planning.runtime.post_turn_worker_panel_start_state(
+                PlanningPostTurnWorkerPanelStartRequest {
+                    continuation_paused: false,
+                    changed_planning_file_paths: &[],
+                    current_runtime_projection: &PlanningRuntimeProjection::ready(
+                        "prompt".to_string(),
+                        "queue empty".to_string(),
+                        None,
+                    ),
+                },
+            ),
+            PlanningPostTurnWorkerPanelStartState::PreserveCurrent
+        );
+        assert_eq!(
+            planning.runtime.post_turn_worker_panel_start_state(
+                PlanningPostTurnWorkerPanelStartRequest {
+                    continuation_paused: false,
+                    changed_planning_file_paths: &[],
+                    current_runtime_projection: &ready_with_task,
+                },
+            ),
+            PlanningPostTurnWorkerPanelStartState::RefreshRunning
+        );
+    }
+
+    #[test]
+    fn decide_post_turn_auto_follow_short_circuits_skips_and_builds_queue_prompt() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let ready_with_task = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+
+        assert_eq!(
+            decide_auto_follow_skip(&planning, &ready_with_task, |request| {
+                request.continuation_paused = true;
+            }),
+            PlanningPostTurnAutoFollowSkipReason::PostTurnContinuationPaused
+        );
+        assert_eq!(
+            decide_auto_follow_skip(
+                &planning,
+                &PlanningRuntimeProjection::ready(
+                    "prompt".to_string(),
+                    "queue empty".to_string(),
+                    None,
+                ),
+                |_| {}
+            ),
+            PlanningPostTurnAutoFollowSkipReason::PlanningQueueDrained
+        );
+        assert_eq!(
+            decide_auto_follow_skip(&planning, &ready_with_task, |request| {
+                request.can_queue_next = false;
+            }),
+            PlanningPostTurnAutoFollowSkipReason::LimitReached
+        );
+        assert_eq!(
+            decide_auto_follow_skip(&planning, &ready_with_task, |request| {
+                request.latest_agent_message = Some("   ");
+            }),
+            PlanningPostTurnAutoFollowSkipReason::NoAgentReply
+        );
+        assert_eq!(
+            decide_auto_follow_skip(&planning, &ready_with_task, |request| {
+                request.stop_keyword_matched = true;
+            }),
+            PlanningPostTurnAutoFollowSkipReason::StopKeywordMatched
+        );
+        assert_eq!(
+            decide_auto_follow_skip(&planning, &ready_with_task, |request| {
+                request.no_file_changes_stop_matched = true;
+            }),
+            PlanningPostTurnAutoFollowSkipReason::NoFileChanges
+        );
+
+        let decision =
+            planning
+                .runtime
+                .decide_post_turn_auto_follow(PlanningPostTurnAutoFollowRequest {
+                    continuation_paused: false,
+                    can_queue_next: true,
+                    latest_agent_message: Some("completed"),
+                    stop_keyword: "stop",
+                    stop_keyword_matched: false,
+                    no_file_changes_stop_matched: false,
+                    runtime_projection: &ready_with_task,
+                });
+
+        let PlanningPostTurnAutoFollowDecision::QueuePrompt(prompt) = decision else {
+            panic!("ready queue head should build an auto-follow prompt");
+        };
+        assert_eq!(
+            prompt
+                .handoff_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-1")
+        );
+        assert!(prompt.prompt.contains("Queue head"));
+    }
+
+    #[test]
+    fn prepare_post_turn_queue_refresh_skips_invalid_or_empty_reply_and_builds_ready_refresh() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let ready_with_task = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+
+        let invalid = planning.worker.prepare_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshPreparationRequest {
+                workspace_directory: "/tmp/workspace",
+                parent_thread_id: Some("thread-1"),
+                completed_turn_id: "turn-1",
+                latest_user_message: Some("user"),
+                latest_main_reply: Some("reply"),
+                previous_handoff_task: None,
+                current_runtime_projection: &PlanningRuntimeProjection::invalid("broken"),
+            },
+        );
+        let PlanningPostTurnQueueRefreshPreparation::Skipped(skipped) = invalid else {
+            panic!("invalid projection should skip queue refresh");
+        };
+        assert_eq!(
+            skipped.reason,
+            PlanningPostTurnQueueRefreshSkipReason::PlanningRuntimeNotReady
+        );
+
+        let empty = planning.worker.prepare_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshPreparationRequest {
+                workspace_directory: "/tmp/workspace",
+                parent_thread_id: Some("thread-1"),
+                completed_turn_id: "turn-1",
+                latest_user_message: Some("user"),
+                latest_main_reply: Some("   "),
+                previous_handoff_task: None,
+                current_runtime_projection: &ready_with_task,
+            },
+        );
+        let PlanningPostTurnQueueRefreshPreparation::Skipped(skipped) = empty else {
+            panic!("blank reply should skip queue refresh");
+        };
+        assert_eq!(
+            skipped.reason,
+            PlanningPostTurnQueueRefreshSkipReason::LatestMainReplyEmpty
+        );
+        assert_eq!(skipped.reason.log_label(), "latest_main_reply_empty");
+
+        let ready = planning.worker.prepare_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshPreparationRequest {
+                workspace_directory: "/tmp/workspace",
+                parent_thread_id: Some("thread-1"),
+                completed_turn_id: "turn-1",
+                latest_user_message: Some("user"),
+                latest_main_reply: Some("  refreshed queue  "),
+                previous_handoff_task: Some(&sample_handoff()),
+                current_runtime_projection: &ready_with_task,
+            },
+        );
+        let PlanningPostTurnQueueRefreshPreparation::Ready(prepared) = ready else {
+            panic!("ready queue head should prepare worker refresh");
+        };
+        assert_eq!(prepared.mode_label(), "from_latest_main_reply");
+        assert_eq!(prepared.panel_operation_label(), "refresh");
+        assert_eq!(
+            prepared.latest_main_reply_char_count(),
+            "refreshed queue".chars().count()
+        );
+        assert!(prepared.has_latest_user_message());
+        assert!(prepared.has_previous_handoff());
+        assert!(!prepared.is_queue_idle_derivation());
+        assert!(prepared.worker_prompt().contains("refreshed queue"));
+    }
 
     fn sample_queue_head() -> PriorityQueueTask {
         PriorityQueueTask {
@@ -1475,6 +2038,38 @@ mod tests {
             Some(sample_queue_head()),
         )
         .with_test_signatures(None, signature)
+    }
+
+    fn planning_services(workspace_port: Arc<dyn PlanningWorkspacePort>) -> PlanningServices {
+        PlanningServices::from_ports(
+            workspace_port,
+            Arc::new(NoopPlanningAuthorityPort::default()),
+            Arc::new(NoopPlanningTaskRepositoryPort),
+            Arc::new(NoopPlanningWorkerPort),
+        )
+    }
+
+    fn decide_auto_follow_skip(
+        planning: &PlanningServices,
+        projection: &PlanningRuntimeProjection,
+        mutate: impl FnOnce(&mut PlanningPostTurnAutoFollowRequest<'_>),
+    ) -> PlanningPostTurnAutoFollowSkipReason {
+        let mut request = PlanningPostTurnAutoFollowRequest {
+            continuation_paused: false,
+            can_queue_next: true,
+            latest_agent_message: Some("completed"),
+            stop_keyword: "stop",
+            stop_keyword_matched: false,
+            no_file_changes_stop_matched: false,
+            runtime_projection: projection,
+        };
+        mutate(&mut request);
+        match planning.runtime.decide_post_turn_auto_follow(request) {
+            PlanningPostTurnAutoFollowDecision::Skip(reason) => reason,
+            PlanningPostTurnAutoFollowDecision::QueuePrompt(_) => {
+                panic!("expected auto-follow decision to skip")
+            }
+        }
     }
 
     #[test]
