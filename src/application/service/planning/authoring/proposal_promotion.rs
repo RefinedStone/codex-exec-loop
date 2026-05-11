@@ -275,3 +275,473 @@ fn workspace_record_to_files<'a>(
             .ok_or_else(|| anyhow!("planning workspace is missing result-output.md"))?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningDirectionAuthoritySnapshot, PlanningTaskAuthoritySnapshot,
+    };
+    use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use crate::domain::planning::{
+        DirectionDefinition, DirectionState, OriginSessionKind, PriorityQueueProjection,
+        QueueIdleConfig, QueueIdlePolicy, TaskDefinition, TaskMutationProvenance,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn workspace_record_to_files_requires_result_output() {
+        let directions = direction_catalog();
+        let task_authority_json = "{}";
+
+        let error = workspace_record_to_files(
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: None,
+            },
+            &directions,
+            task_authority_json,
+        )
+        .expect_err("missing result output should block validation input");
+
+        assert_eq!(
+            error.to_string(),
+            "planning workspace is missing result-output.md"
+        );
+    }
+
+    #[test]
+    fn promotes_top_proposal_and_returns_refreshed_projection() {
+        let fixture = PromotionFixture::new("proposal-promote");
+        let directions = direction_catalog();
+        fixture.write_result_output();
+        fixture.seed_authority(
+            &directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![
+                    task("proposal-low", "Low proposal", 10, TaskStatus::Proposed),
+                    task("proposal-high", "High proposal", 90, TaskStatus::Proposed),
+                ],
+            },
+        );
+
+        let outcome = fixture
+            .service
+            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: fixture.workspace.path_str(),
+            })
+            .expect("top proposal should promote");
+
+        assert!(outcome.promoted);
+        assert_eq!(
+            outcome.promoted_task_title.as_deref(),
+            Some("High proposal")
+        );
+        assert_eq!(
+            outcome.notices,
+            vec![
+                "host promoted top follow-up proposal into the executable queue: High proposal"
+                    .to_string()
+            ]
+        );
+        assert_eq!(
+            outcome
+                .runtime_projection
+                .queue_head()
+                .expect("promoted proposal should become the queue head")
+                .task_id,
+            "proposal-high"
+        );
+        assert!(
+            outcome
+                .runtime_projection
+                .proposal_summary()
+                .expect("lower proposal should remain visible")
+                .contains("Low proposal")
+        );
+
+        let snapshot = fixture.task_snapshot();
+        let promoted = snapshot
+            .task_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "proposal-high")
+            .expect("promoted task should remain in authority");
+        assert_eq!(promoted.status, TaskStatus::Ready);
+        assert_eq!(promoted.last_updated_by, TaskActor::System);
+        assert!(promoted.updated_at.ends_with('Z'));
+        let lower_proposal = snapshot
+            .task_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "proposal-low")
+            .expect("lower proposal should remain in authority");
+        assert_eq!(lower_proposal.status, TaskStatus::Proposed);
+    }
+
+    #[test]
+    fn ready_queue_head_keeps_promotion_as_noop_without_writing_authority() {
+        let fixture = PromotionFixture::new("proposal-noop-ready");
+        let directions = direction_catalog();
+        fixture.write_result_output();
+        fixture.seed_authority(
+            &directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![
+                    task("ready-task", "Ready task", 50, TaskStatus::Ready),
+                    task("proposal-task", "Proposal task", 90, TaskStatus::Proposed),
+                ],
+            },
+        );
+        let before_revision = fixture.task_snapshot().planning_revision;
+
+        let outcome = fixture
+            .service
+            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: fixture.workspace.path_str(),
+            })
+            .expect("ready queue head should make promotion a no-op");
+
+        assert!(!outcome.promoted);
+        assert!(outcome.notices.is_empty());
+        assert!(outcome.promoted_task_title.is_none());
+        assert_eq!(
+            outcome
+                .runtime_projection
+                .queue_head()
+                .expect("existing ready task should remain queue head")
+                .task_id,
+            "ready-task"
+        );
+        let after_snapshot = fixture.task_snapshot();
+        assert_eq!(after_snapshot.planning_revision, before_revision);
+        assert_eq!(
+            after_snapshot
+                .task_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == "proposal-task")
+                .expect("proposal should remain in authority")
+                .status,
+            TaskStatus::Proposed
+        );
+    }
+
+    #[test]
+    fn invalid_workspace_blocks_promotion_before_authority_write() {
+        let fixture = PromotionFixture::new("proposal-invalid-workspace");
+        let directions = direction_catalog();
+        fixture.write_result_output_body("not a heading");
+        fixture.seed_authority(
+            &directions,
+            TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task(
+                    "proposal-task",
+                    "Proposal task",
+                    90,
+                    TaskStatus::Proposed,
+                )],
+            },
+        );
+        let before_revision = fixture.task_snapshot().planning_revision;
+
+        let error = fixture
+            .service
+            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: fixture.workspace.path_str(),
+            })
+            .expect_err("invalid result output should block promotion");
+
+        assert!(
+            error.to_string().contains(
+                "cannot promote proposal from an invalid planning workspace: result-output.md must start with a markdown heading"
+            )
+        );
+        let after_snapshot = fixture.task_snapshot();
+        assert_eq!(after_snapshot.planning_revision, before_revision);
+        assert_eq!(
+            after_snapshot.task_authority.tasks[0].status,
+            TaskStatus::Proposed
+        );
+    }
+
+    #[test]
+    fn commit_conflict_reports_observed_and_current_revisions() {
+        let directions = direction_catalog();
+        let task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task(
+                "proposal-task",
+                "Proposal task",
+                90,
+                TaskStatus::Proposed,
+            )],
+        };
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_authority)
+            .expect("fixture projection should build");
+        let repository: Arc<dyn PlanningTaskRepositoryPort> = Arc::new(ConflictRepository {
+            directions,
+            task_authority,
+            queue_projection,
+        });
+        let fixture = PromotionFixture::new_with_repository("proposal-conflict", repository);
+        fixture.write_result_output();
+
+        let error = fixture
+            .service
+            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: fixture.workspace.path_str(),
+            })
+            .expect_err("stale promotion should report a commit conflict");
+
+        assert_eq!(
+            error.to_string(),
+            "planning db changed while promoting proposal (observed revision 1, current revision 2); reload and retry"
+        );
+    }
+
+    #[test]
+    fn missing_authority_snapshot_reports_actionable_error() {
+        let fixture = PromotionFixture::new("proposal-missing-authority");
+        fixture.write_result_output();
+
+        let error = fixture
+            .service
+            .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
+                workspace_directory: fixture.workspace.path_str(),
+            })
+            .expect_err("missing task authority should block promotion");
+
+        assert_eq!(error.to_string(), "planning task authority is unavailable");
+    }
+
+    fn direction_catalog() -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::Stop,
+                prompt_path: String::new(),
+            },
+            directions: vec![DirectionDefinition {
+                id: "general-workstream".to_string(),
+                title: "General workstream".to_string(),
+                summary: "General planning work.".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        }
+    }
+
+    fn task(id: &str, title: &str, priority: i32, status: TaskStatus) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_relation_note: "relates to the general workstream".to_string(),
+            title: title.to_string(),
+            description: format!("Do {title}."),
+            status,
+            base_priority: priority,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::Worker,
+            last_updated_by: TaskActor::Worker,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+
+    struct PromotionFixture {
+        workspace: TempPlanningWorkspace,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        repository: Arc<dyn PlanningTaskRepositoryPort>,
+        service: PlanningProposalPromotionService,
+        priority_queue: PriorityQueueService,
+    }
+
+    impl PromotionFixture {
+        fn new(prefix: &str) -> Self {
+            Self::new_with_repository(prefix, Arc::new(NoopPlanningTaskRepositoryPort))
+        }
+
+        fn new_with_repository(
+            prefix: &str,
+            repository: Arc<dyn PlanningTaskRepositoryPort>,
+        ) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let validation = PlanningValidationService::new();
+            let priority_queue = PriorityQueueService::new();
+            let prompt = PlanningPromptService::with_task_repository(
+                workspace_port.clone(),
+                validation.clone(),
+                priority_queue.clone(),
+                repository.clone(),
+            );
+            let service = PlanningProposalPromotionService::with_task_repository(
+                workspace_port.clone(),
+                prompt,
+                validation,
+                priority_queue.clone(),
+                repository.clone(),
+            );
+            Self {
+                workspace,
+                workspace_port,
+                repository,
+                service,
+                priority_queue,
+            }
+        }
+
+        fn write_result_output(&self) {
+            self.write_result_output_body("# Result Output\n\n- Record completed work.\n");
+        }
+
+        fn write_result_output_body(&self, body: &str) {
+            self.workspace_port
+                .replace_planning_workspace_file(
+                    self.workspace.path_str(),
+                    RESULT_OUTPUT_FILE_PATH,
+                    Some(body),
+                )
+                .expect("result output should be written");
+        }
+
+        fn seed_authority(
+            &self,
+            directions: &DirectionCatalogDocument,
+            task_authority: TaskAuthorityDocument,
+        ) {
+            self.repository
+                .commit_direction_authority_snapshot(
+                    self.workspace.path_str(),
+                    PlanningDirectionAuthorityCommit {
+                        observed_planning_revision: None,
+                        directions,
+                    },
+                )
+                .expect("direction authority should be seeded");
+            let queue_projection = self
+                .priority_queue
+                .build_projection(directions, &task_authority)
+                .expect("task authority projection should build");
+            self.repository
+                .commit_task_authority_snapshot(
+                    self.workspace.path_str(),
+                    PlanningTaskAuthorityCommit {
+                        observed_planning_revision: None,
+                        task_authority: &task_authority,
+                        queue_projection: &queue_projection,
+                    },
+                )
+                .expect("task authority should be seeded");
+        }
+
+        fn task_snapshot(&self) -> PlanningTaskAuthoritySnapshot {
+            self.repository
+                .load_task_authority_snapshot(self.workspace.path_str())
+                .expect("task authority should load")
+                .expect("task authority should exist")
+        }
+    }
+
+    struct ConflictRepository {
+        directions: DirectionCatalogDocument,
+        task_authority: TaskAuthorityDocument,
+        queue_projection: PriorityQueueProjection,
+    }
+
+    impl PlanningTaskRepositoryPort for ConflictRepository {
+        fn load_direction_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
+            Ok(Some(PlanningDirectionAuthoritySnapshot {
+                planning_revision: 1,
+                directions: self.directions.clone(),
+            }))
+        }
+
+        fn commit_direction_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+            _commit: PlanningDirectionAuthorityCommit<'_>,
+        ) -> Result<PlanningTaskAuthorityCommitResult> {
+            Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: 1,
+            })
+        }
+
+        fn clear_direction_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn load_task_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
+            Ok(Some(PlanningTaskAuthoritySnapshot {
+                planning_revision: 1,
+                task_authority: self.task_authority.clone(),
+                queue_projection: self.queue_projection.clone(),
+            }))
+        }
+
+        fn commit_task_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+            commit: PlanningTaskAuthorityCommit<'_>,
+        ) -> Result<PlanningTaskAuthorityCommitResult> {
+            Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: commit.observed_planning_revision.unwrap_or_default(),
+                current_planning_revision: 2,
+            })
+        }
+
+        fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
