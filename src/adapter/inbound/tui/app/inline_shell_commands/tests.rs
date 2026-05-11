@@ -22,10 +22,13 @@ fn parse_recognizes_supported_aliases() {
             Some((InlineShellCommand::Diagnostics, None)),
         ),
         (":parallel", Some((InlineShellCommand::Parallel, None))),
+        (":pa", Some((InlineShellCommand::Parallel, None))),
         (
             ":parallel off",
             Some((InlineShellCommand::Parallel, Some("off"))),
         ),
+        (":pa off", Some((InlineShellCommand::Parallel, Some("off")))),
+        (":PA OFF", Some((InlineShellCommand::Parallel, Some("OFF")))),
         (":DIAG", Some((InlineShellCommand::Diagnostics, None))),
         (":session", Some((InlineShellCommand::Sessions, None))),
         (":sessions", Some((InlineShellCommand::Sessions, None))),
@@ -124,6 +127,10 @@ fn suggestions_filter_by_prefix() {
             InlineShellCommand::Parallel,
             InlineShellCommand::PlanningInit
         ]
+    );
+    assert_eq!(
+        InlineShellCommand::suggestions(":pa"),
+        vec![InlineShellCommand::Parallel]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":q"),
@@ -238,6 +245,7 @@ fn help_entries_use_renderable_command_forms() {
 
     assert!(rendered.contains(":diag - diagnostics"));
     assert!(rendered.contains(":parallel [off] - parallel mode"));
+    assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
     assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
     assert!(rendered.contains(":stop - stop active sessions"));
     assert!(!rendered.contains(":auto"));
@@ -347,11 +355,11 @@ fn parallel_command_hint_is_argument_aware() {
     );
     assert_eq!(
         invalid.buffered_hint(),
-        "Press Enter to apply `:parallel later`. Supported command forms: :parallel, :parallel off."
+        "Press Enter to apply `:parallel later`. Supported command forms: :parallel, :pa, :parallel off, :pa off."
     );
     assert_eq!(
         invalid_extra.buffered_hint(),
-        "Press Enter to apply `:parallel off now`. Supported command forms: :parallel, :parallel off."
+        "Press Enter to apply `:parallel off now`. Supported command forms: :parallel, :pa, :parallel off, :pa off."
     );
 }
 

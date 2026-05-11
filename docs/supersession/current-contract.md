@@ -22,8 +22,8 @@ to [remaining-work.md](remaining-work.md).
 | Task Intake | `:task` | preview and commit one validated user task as accepted `ready` work |
 | Planning | `:planning` | stage or reopen planning authoring |
 | Directions | `:directions` | maintain direction docs and queue-idle supporting prompt |
-| Supersession | `:parallel` | arm parallel automation and refresh the supervisor board/pool |
-| Supersession Off | `:parallel off` | stop local parallel mode and close the board without deleting worktrees |
+| Supersession | `:parallel` (`:pa`) | arm parallel automation and refresh the supervisor board/pool |
+| Supersession Off | `:parallel off` (`:pa off`) | stop local parallel mode and close the board without deleting worktrees |
 
 ## Planning Contract
 
@@ -38,23 +38,23 @@ to [remaining-work.md](remaining-work.md).
 
 ## Supersession Contract
 
-- Bare `:parallel` is the enable/refresh entrypoint; `:parallel on` is not a separate mode.
-- Off-to-on `:parallel` entry checks readiness, opens the board, attempts a pool-only reset and
+- Bare `:parallel`/`:pa` is the enable/refresh entrypoint; `:parallel on` is not a separate mode.
+- Off-to-on `:parallel`/`:pa` entry checks readiness, opens the board, attempts a pool-only reset and
   reconcile, opens an automation epoch, and dispatches any already-ready accepted queue up to
   idle-slot capacity.
 - The first off-to-on `:parallel` in a TUI process treats the pool as disposable initial setup:
   every registered `akra` slot is forced back to the current `prerelease` baseline and stale lease,
   session, and distributor mirrors for reset slots are cleared.
-- Re-running `:parallel` while already enabled refreshes readiness and supervisor projection only;
+- Re-running `:parallel`/`:pa` while already enabled refreshes readiness and supervisor projection only;
   it does not reset the pool, reopen the automation epoch, or launch workers by itself.
 - `Esc` closes the board surface only. Parallel mode remains enabled.
-- `:parallel off` disables local parallel mode and clears the automation epoch, pending dispatch,
+- `:parallel off`/`:pa off` disables local parallel mode and clears the automation epoch, pending dispatch,
   and in-flight dispatch state, but leaves pool worktrees in place.
 - Later off-to-on `:parallel` entries attempt a guarded reset. Reset is blocked when live Running,
   CleanupPending, or recent Leased slots are present.
 - Idle or stale reusable slots are reset into disposable baselines; protected active slots are
   preserved only after the initial setup reset has completed once in the process.
-- Parallel automation starts when `:parallel` opens an automation epoch with an accepted ready
+- Parallel automation starts when `:parallel`/`:pa` opens an automation epoch with an accepted ready
   queue, or after the main session completes a user turn and post-turn planning evaluation returns
   an accepted ready queue. In the post-turn case the normal main-session auto-follow prompt is
   suppressed and converted into parallel dispatch.

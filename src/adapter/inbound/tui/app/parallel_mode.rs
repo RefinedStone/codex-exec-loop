@@ -366,10 +366,10 @@ impl NativeTuiApp {
                 });
             }
             Ok(ParsedParallelModeShellCommand::Enable) => {
-                // Bare `:parallel` is the only enable entrypoint. Open the
-                // control tower first, then send one application command. The
-                // runtime owns mode and initial-reset policy; this adapter only
-                // projects the loading state.
+                // The parsed parallel command is the enable entrypoint. Open
+                // the control tower first, then send one application command.
+                // The runtime owns mode and initial-reset policy; this adapter
+                // only projects the loading state.
                 let workspace_directory = self.planning_workspace_directory();
                 self.sync_core_parallel_mode_readiness_projection(None);
                 self.sync_core_parallel_mode_supervisor_projection(Some(
