@@ -744,6 +744,25 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.3/pixi.min.js"></script>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script>
+      (function () {
+        const akraHashTabRoutes = {
+          tasks: "/admin/tasks"
+        };
+
+        const redirectAkraHashTab = function () {
+          if (window.location.pathname !== "/admin/akra") return;
+
+          const tabName = window.location.hash.replace(/^#/, "");
+          const targetPath = akraHashTabRoutes[tabName];
+          if (!targetPath) return;
+
+          window.location.replace(targetPath);
+        };
+
+        redirectAkraHashTab();
+        window.addEventListener("hashchange", redirectAkraHashTab);
+      })();
+
       document.addEventListener("htmx:configRequest", function (event) {
         const token = document.querySelector('meta[name="csrf-token"]')?.content;
         if (token) {

@@ -169,6 +169,9 @@ for token in \
   '최근 시도 로그' \
   '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
+  'akraHashTabRoutes' \
+  'tasks: "/admin/tasks"' \
+  'hashchange' \
   'MISSION FLOW' \
   'stage-refresh-btn' \
   '--office-board-height: 720px' \

@@ -213,6 +213,10 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains(
         r#"href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}""#
     ));
+    assert!(BASE_TEMPLATE.contains("akraHashTabRoutes"));
+    assert!(BASE_TEMPLATE.contains("window.location.pathname !== \"/admin/akra\""));
+    assert!(BASE_TEMPLATE.contains("tasks: \"/admin/tasks\""));
+    assert!(BASE_TEMPLATE.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)"));
     assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
