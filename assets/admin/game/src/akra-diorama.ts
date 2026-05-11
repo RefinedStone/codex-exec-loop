@@ -187,8 +187,6 @@ declare global {
     const boardEl = container.closest<HTMLElement>(".office-board");
     if (!boardEl || container.dataset.akraDioramaMounted === "true") return null;
     container.dataset.akraDioramaMounted = "true";
-    boardEl.classList.add("is-pixi-mounted");
-
     const initialWidth = boardEl.offsetWidth || 900;
     const initialHeight = boardEl.offsetHeight || 540;
     const app = new PIXI.Application({
@@ -395,16 +393,36 @@ declare global {
       return packet;
     };
 
+    const speechNodeFor = (node: HTMLElement): HTMLElement | null =>
+      node.querySelector<HTMLElement>(".speech");
+
     const speechLabelFor = (node: HTMLElement): string =>
-      node.querySelector<HTMLElement>(".speech")?.textContent?.trim() ||
-      node.dataset.detailState?.trim() ||
-      "작업중";
+      speechNodeFor(node)?.textContent?.trim() || node.dataset.detailState?.trim() || "작업중";
+
+    const speechTextStyleFor = (node: HTMLElement): Record<string, unknown> => {
+      const speechNode = speechNodeFor(node);
+      const speechStyle = speechNode ? window.getComputedStyle(speechNode) : null;
+      const fontSize = speechStyle ? parseFloat(speechStyle.fontSize) || 12 : 12;
+      const lineHeight =
+        speechStyle?.lineHeight && speechStyle.lineHeight !== "normal"
+          ? parseFloat(speechStyle.lineHeight) || Math.round(fontSize * 1.25)
+          : Math.round(fontSize * 1.25);
+      return {
+        align: "center",
+        fill: speechStyle?.color || "#102015",
+        fontFamily: speechStyle?.fontFamily || "'DungGeunMo', monospace",
+        fontSize,
+        fontWeight: speechStyle?.fontWeight || "800",
+        lineHeight,
+        wordWrap: true,
+        wordWrapWidth: AGENT_SPEECH_BUBBLE_MAX_WIDTH - 18,
+      };
+    };
 
     const drawSpeechBubbleBackground = (
       background: PixiGraphics,
       width: number,
       height: number,
-      color: number
     ): void => {
       const halfWidth = width / 2;
       const bottom = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT;
@@ -431,7 +449,7 @@ declare global {
       background.beginFill(0x000000, 0.28);
       background.drawPolygon(shadowShape);
       background.endFill();
-      background.lineStyle(2, color, 0.62);
+      background.lineStyle(2, 0x18452a, 0.4);
       background.beginFill(0xf2fff4, 0.98);
       background.drawPolygon(bubbleShape);
       background.endFill();
@@ -440,29 +458,20 @@ declare global {
       background.lineTo(halfWidth - 4, top + 4);
     };
 
-    const makeSpeechBubble = (node: HTMLElement, color: number): AgentSpeechBubble | null => {
+    const makeSpeechBubble = (node: HTMLElement): AgentSpeechBubble | null => {
       const TextCtor = PIXI.Text;
       if (!TextCtor) return null;
 
       const group = new PIXI.Container();
       const background = new PIXI.Graphics();
-      const label = new TextCtor(speechLabelFor(node), {
-        align: "center",
-        fill: "#102015",
-        fontFamily: "ui-sans-serif, system-ui, sans-serif",
-        fontSize: 12,
-        fontWeight: "800",
-        lineHeight: 15,
-        wordWrap: true,
-        wordWrapWidth: AGENT_SPEECH_BUBBLE_MAX_WIDTH - 18,
-      });
+      const label = new TextCtor(speechLabelFor(node), speechTextStyleFor(node));
       label.anchor.set(0.5, 0.5);
 
       const width = Math.ceil(
         clamp(label.width + 18, AGENT_SPEECH_BUBBLE_MIN_WIDTH, AGENT_SPEECH_BUBBLE_MAX_WIDTH)
       );
       const height = Math.ceil(Math.max(24, label.height + 10));
-      drawSpeechBubbleBackground(background, width, height, color);
+      drawSpeechBubbleBackground(background, width, height);
       label.y = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT - height / 2;
       group.addChild(background, label);
       group.alpha = speechBubblesEnabled ? 0.96 : 0;
@@ -490,7 +499,7 @@ declare global {
       const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
       const texture = frameSet?.down[0] || null;
       const sprite = texture ? new PIXI.Sprite(texture) : null;
-      const speechBubble = makeSpeechBubble(node, color);
+      const speechBubble = makeSpeechBubble(node);
       if (sprite) {
         sprite.anchor.set(0.5, 1);
         sprite.scale.set(AGENT_SPRITE_SCALE);
@@ -737,7 +746,6 @@ declare global {
       window.removeEventListener("resize", onResize);
       resizeObserver?.disconnect();
       app.destroy(true, { children: true, texture: false, baseTexture: false });
-      boardEl.classList.remove("is-pixi-mounted");
       delete container.dataset.akraDioramaMounted;
       if (activeHandle?.app === app) activeHandle = null;
     };

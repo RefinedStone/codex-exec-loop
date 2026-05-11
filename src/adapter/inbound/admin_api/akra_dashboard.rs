@@ -925,10 +925,11 @@ fn pool_slot_note(slot: &ParallelModePoolSlotSnapshot) -> String {
 }
 
 fn pool_slot_display_label(slot_id: &str) -> String {
-    if let Some(number) = slot_id.strip_prefix("slot-") {
-        if !number.is_empty() && number.chars().all(|character| character.is_ascii_digit()) {
-            return format!("슬롯 {number}");
-        }
+    if let Some(number) = slot_id.strip_prefix("slot-")
+        && !number.is_empty()
+        && number.chars().all(|character| character.is_ascii_digit())
+    {
+        return format!("슬롯 {number}");
     }
     slot_id.to_string()
 }

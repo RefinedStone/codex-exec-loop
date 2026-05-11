@@ -22,7 +22,6 @@
 			const boardEl = container.closest(".office-board");
 			if (!boardEl || container.dataset.akraDioramaMounted === "true") return null;
 			container.dataset.akraDioramaMounted = "true";
-			boardEl.classList.add("is-pixi-mounted");
 			const initialWidth = boardEl.offsetWidth || 900;
 			const initialHeight = boardEl.offsetHeight || 540;
 			const app = new PIXI.Application({
@@ -206,8 +205,25 @@
 				packetLayer.addChild(packet);
 				return packet;
 			};
-			const speechLabelFor = (node) => node.querySelector(".speech")?.textContent?.trim() || node.dataset.detailState?.trim() || "작업중";
-			const drawSpeechBubbleBackground = (background, width, height, color) => {
+			const speechNodeFor = (node) => node.querySelector(".speech");
+			const speechLabelFor = (node) => speechNodeFor(node)?.textContent?.trim() || node.dataset.detailState?.trim() || "작업중";
+			const speechTextStyleFor = (node) => {
+				const speechNode = speechNodeFor(node);
+				const speechStyle = speechNode ? window.getComputedStyle(speechNode) : null;
+				const fontSize = speechStyle ? parseFloat(speechStyle.fontSize) || 12 : 12;
+				const lineHeight = speechStyle?.lineHeight && speechStyle.lineHeight !== "normal" ? parseFloat(speechStyle.lineHeight) || Math.round(fontSize * 1.25) : Math.round(fontSize * 1.25);
+				return {
+					align: "center",
+					fill: speechStyle?.color || "#102015",
+					fontFamily: speechStyle?.fontFamily || "'DungGeunMo', monospace",
+					fontSize,
+					fontWeight: speechStyle?.fontWeight || "800",
+					lineHeight,
+					wordWrap: true,
+					wordWrapWidth: AGENT_SPEECH_BUBBLE_MAX_WIDTH - 18
+				};
+			};
+			const drawSpeechBubbleBackground = (background, width, height) => {
 				const halfWidth = width / 2;
 				const bottom = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT;
 				const top = bottom - height;
@@ -232,7 +248,7 @@
 				background.beginFill(0, .28);
 				background.drawPolygon(shadowShape);
 				background.endFill();
-				background.lineStyle(2, color, .62);
+				background.lineStyle(2, 1590570, .4);
 				background.beginFill(15925236, .98);
 				background.drawPolygon(bubbleShape);
 				background.endFill();
@@ -240,25 +256,16 @@
 				background.moveTo(-halfWidth + 4, top + 4);
 				background.lineTo(halfWidth - 4, top + 4);
 			};
-			const makeSpeechBubble = (node, color) => {
+			const makeSpeechBubble = (node) => {
 				const TextCtor = PIXI.Text;
 				if (!TextCtor) return null;
 				const group = new PIXI.Container();
 				const background = new PIXI.Graphics();
-				const label = new TextCtor(speechLabelFor(node), {
-					align: "center",
-					fill: "#102015",
-					fontFamily: "ui-sans-serif, system-ui, sans-serif",
-					fontSize: 12,
-					fontWeight: "800",
-					lineHeight: 15,
-					wordWrap: true,
-					wordWrapWidth: AGENT_SPEECH_BUBBLE_MAX_WIDTH - 18
-				});
+				const label = new TextCtor(speechLabelFor(node), speechTextStyleFor(node));
 				label.anchor.set(.5, .5);
 				const width = Math.ceil(clamp(label.width + 18, AGENT_SPEECH_BUBBLE_MIN_WIDTH, AGENT_SPEECH_BUBBLE_MAX_WIDTH));
 				const height = Math.ceil(Math.max(24, label.height + 10));
-				drawSpeechBubbleBackground(background, width, height, color);
+				drawSpeechBubbleBackground(background, width, height);
 				label.y = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT - height / 2;
 				group.addChild(background, label);
 				group.alpha = speechBubblesEnabled ? .96 : 0;
@@ -285,7 +292,7 @@
 				const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
 				const texture = frameSet?.down[0] || null;
 				const sprite = texture ? new PIXI.Sprite(texture) : null;
-				const speechBubble = makeSpeechBubble(node, color);
+				const speechBubble = makeSpeechBubble(node);
 				if (sprite) {
 					sprite.anchor.set(.5, 1);
 					sprite.scale.set(AGENT_SPRITE_SCALE);
@@ -491,7 +498,6 @@
 					texture: false,
 					baseTexture: false
 				});
-				boardEl.classList.remove("is-pixi-mounted");
 				delete container.dataset.akraDioramaMounted;
 				if (activeHandle?.app === app) activeHandle = null;
 			};
