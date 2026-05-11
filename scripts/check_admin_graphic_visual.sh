@@ -177,7 +177,9 @@ for token in \
   'var(--office-bg-image) center / cover no-repeat' \
   'akra-office-background.png' \
   'akra-object-sprites.png' \
-  'background-size: 528px 96px' \
+  'background-size: 672px 96px' \
+  'avatar-Artificer' \
+  'agentAvatarClass' \
   'background-size: 627px 627px' \
   'prependEventRows' \
   'stale snapshot' \
@@ -216,10 +218,16 @@ for token in \
 done
 
 for token in \
-  '<svg xmlns="http://www.w3.org/2000/svg" width="528" height="96"' \
+  '<svg xmlns="http://www.w3.org/2000/svg" width="672" height="96"' \
   'id="agent-normal"' \
   'id="agent-warning"' \
   'id="agent-danger"' \
+  'id="agent-artificer"' \
+  'id="agent-scribe"' \
+  'id="agent-ranger"' \
+  'id="agent-guardian"' \
+  'id="agent-seer"' \
+  'id="agent-runner"' \
   'id="distributor"' \
   'id="event-board"' \
   'id="server-rack"' \
