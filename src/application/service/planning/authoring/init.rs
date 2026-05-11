@@ -9,7 +9,9 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
-use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::shared::contract::{
+    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
+};
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningValidationReport,
@@ -431,24 +433,23 @@ impl PlanningInitService {
         workspace_dir: &str,
         loaded: &PlanningDraftLoadRecord,
     ) -> Result<crate::domain::planning::PlanningValidationResult> {
+        let staged_file_map = loaded
+            .staged_files
+            .iter()
+            .map(|file| (file.active_path.as_str(), file.body.as_str()))
+            .collect::<HashMap<_, _>>();
         // draft validation은 accepted direction authority가 있으면 그것을 사용하고, 첫 manual draft처럼 아직 authority가
-        // 없으면 Detail bootstrap으로 fallback한다.
+        // 없으면 draft shape에서 bootstrap mode를 복원한다. Simple init draft는 queue-idle prompt를 포함하고,
+        // Detail manual draft는 result-output만 stage하므로 staged prompt presence가 현재 mode marker다.
         let directions = self
             .planning_task_repository_port
             .load_direction_authority_snapshot(workspace_dir)?
             .map(|snapshot| snapshot.directions)
             .unwrap_or_else(|| {
                 self.planning_bootstrap_service
-                    .build_artifacts_for_mode(PlanningBootstrapMode::Detail)
+                    .build_artifacts_for_mode(fallback_mode_for_loaded_draft(&staged_file_map))
                     .directions
             });
-        // staged map은 editable/supporting file body의 유일한 source다. active workspace file은 의도적으로 무시해
-        // draft가 promotion 전에 내부적으로 complete한지 검증한다.
-        let staged_file_map = loaded
-            .staged_files
-            .iter()
-            .map(|file| (file.active_path.as_str(), file.body.as_str()))
-            .collect::<HashMap<_, _>>();
         let task_authority_json = default_empty_task_authority_json();
         // manual bootstrap draft는 task authority editing을 노출하지 않는다. direction/result-output과 supporting-file
         // reference를 검증하기 위해 empty valid authority document를 중립 입력으로 사용한다.
@@ -639,6 +640,14 @@ fn default_empty_task_authority_json() -> String {
     .expect("empty task authority should serialize")
 }
 
+fn fallback_mode_for_loaded_draft(staged_file_map: &HashMap<&str, &str>) -> PlanningBootstrapMode {
+    if staged_file_map.contains_key(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH) {
+        PlanningBootstrapMode::Simple
+    } else {
+        PlanningBootstrapMode::Detail
+    }
+}
+
 fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
     // timestamp와 nanoseconds를 함께 써서 동시에 stage된 bootstrap draft를 구분한다. 동시에 operator가 생성 시각을
     // 이름에서 바로 볼 수 있게 한다.
@@ -650,8 +659,18 @@ fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::is_operator_editable_draft_path;
+    use super::*;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+    };
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use crate::domain::planning::QueueIdlePolicy;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     #[test]
     fn operator_editable_draft_paths_exclude_task_authority_artifacts() {
         // UI boundary를 고정한다. structured authority editing이 이 surface에 추가되기 전까지 manual bootstrap
@@ -661,5 +680,347 @@ mod tests {
             ".codex-exec-loop/planning/direction-authority"
         ));
         assert!(!is_operator_editable_draft_path("DB task authority"));
+    }
+
+    #[test]
+    fn fallback_mode_for_loaded_draft_uses_queue_idle_prompt_as_simple_marker() {
+        let mut staged_file_map = HashMap::new();
+        staged_file_map.insert(
+            RESULT_OUTPUT_FILE_PATH,
+            "# Result Output\n\n- Report work.\n",
+        );
+        assert_eq!(
+            fallback_mode_for_loaded_draft(&staged_file_map),
+            PlanningBootstrapMode::Detail
+        );
+
+        staged_file_map.insert(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, "# Queue idle\n");
+        assert_eq!(
+            fallback_mode_for_loaded_draft(&staged_file_map),
+            PlanningBootstrapMode::Simple
+        );
+    }
+
+    #[test]
+    fn direct_simple_initialization_creates_workspace_files_and_authority() {
+        let fixture = InitFixture::new("planning-init-direct-simple");
+
+        let result = fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect("simple initialization should succeed");
+
+        assert_eq!(result.mode, PlanningBootstrapMode::Simple);
+        assert_eq!(result.created_file_count, 2);
+        assert_eq!(
+            result.created_paths,
+            vec![
+                RESULT_OUTPUT_FILE_PATH.to_string(),
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string()
+            ]
+        );
+        assert!(
+            fixture
+                .service
+                .has_planning_workspace(fixture.workspace.path_str())
+                .expect("workspace check should succeed")
+        );
+        assert!(
+            fixture
+                .service
+                .has_planning_candidate_workspace(fixture.workspace.path_str())
+                .expect("candidate workspace check should succeed")
+        );
+        assert!(
+            fixture
+                .workspace
+                .path()
+                .join(RESULT_OUTPUT_FILE_PATH)
+                .is_file()
+        );
+        assert!(
+            fixture
+                .workspace
+                .path()
+                .join(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+                .is_file()
+        );
+        let directions = fixture.direction_snapshot();
+        assert_eq!(directions.directions[0].id, "general-workstream");
+        assert_eq!(
+            directions.queue_idle.policy,
+            QueueIdlePolicy::ReviewAndEnqueue
+        );
+        let task_snapshot = fixture.task_snapshot();
+        assert!(task_snapshot.task_authority.tasks.is_empty());
+        assert!(task_snapshot.queue_projection.next_task.is_none());
+    }
+
+    #[test]
+    fn direct_initialization_rejects_existing_workspace_before_authority_seed() {
+        let fixture = InitFixture::new("planning-init-existing");
+        fixture.write_result_output("# Result Output\n\n- Existing contract.\n");
+
+        let error = fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect_err("existing workspace should block direct init");
+
+        assert_eq!(
+            error.to_string(),
+            "planning workspace already exists; reset or reuse the existing workspace instead"
+        );
+        assert!(
+            fixture
+                .repository
+                .load_direction_authority_snapshot(fixture.workspace.path_str())
+                .expect("direction snapshot should load")
+                .is_none()
+        );
+        assert!(
+            fixture
+                .repository
+                .load_task_authority_snapshot(fixture.workspace.path_str())
+                .expect("task snapshot should load")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn staged_simple_draft_promotion_preserves_simple_bootstrap_authority() {
+        let fixture = InitFixture::new("planning-init-simple-promotion");
+
+        let stage_result = fixture
+            .service
+            .stage_simple_mode_draft(fixture.workspace.path_str())
+            .expect("simple draft should stage");
+        assert!(stage_result.is_valid());
+        assert_eq!(
+            stage_result.status_text(),
+            format!(
+                "planning init staged / mode: simple / draft: {} / files: 2 / validation: ok",
+                stage_result.draft_name
+            )
+        );
+
+        let promote_result = fixture
+            .service
+            .promote_staged_draft(fixture.workspace.path_str(), &stage_result.draft_name)
+            .expect("simple staged draft should promote");
+
+        assert_eq!(promote_result.promoted_file_count, 2);
+        assert!(promote_result.validation_report.is_valid());
+        let directions = fixture.direction_snapshot();
+        assert_eq!(directions.directions[0].id, "general-workstream");
+        assert_eq!(
+            directions.queue_idle.policy,
+            QueueIdlePolicy::ReviewAndEnqueue
+        );
+        assert_eq!(
+            directions.queue_idle.prompt_path,
+            DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+        );
+        assert!(
+            fixture
+                .workspace
+                .path()
+                .join(DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH)
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn manual_editor_session_exposes_only_result_output_and_save_revalidates_draft() {
+        let fixture = InitFixture::new("planning-init-editor-save");
+        let session = fixture
+            .service
+            .stage_manual_editor_session(fixture.workspace.path_str())
+            .expect("manual editor session should stage");
+
+        assert_eq!(session.editable_files.len(), 1);
+        assert_eq!(
+            session.editable_files[0].active_path,
+            RESULT_OUTPUT_FILE_PATH
+        );
+        let invalid_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: "not a heading".to_string(),
+        };
+
+        let save_result = fixture
+            .service
+            .save_draft_editor_files(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[invalid_file],
+            )
+            .expect("draft save should return validation state");
+
+        assert_eq!(save_result.draft_name, session.draft_name);
+        assert!(!save_result.validation_report.is_valid());
+        assert!(
+            !fixture
+                .workspace
+                .path()
+                .join(RESULT_OUTPUT_FILE_PATH)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn invalid_manual_editor_promotion_returns_zero_without_active_write() {
+        let fixture = InitFixture::new("planning-init-invalid-promotion");
+        let session = fixture
+            .service
+            .stage_manual_editor_session(fixture.workspace.path_str())
+            .expect("manual editor session should stage");
+        let invalid_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: String::new(),
+        };
+
+        let promote_result = fixture
+            .service
+            .promote_draft_editor_files(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[invalid_file],
+            )
+            .expect("invalid draft promotion should return validation result");
+
+        assert_eq!(promote_result.promoted_file_count, 0);
+        assert!(!promote_result.validation_report.is_valid());
+        assert!(
+            !fixture
+                .workspace
+                .path()
+                .join(RESULT_OUTPUT_FILE_PATH)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn valid_manual_editor_promotion_writes_result_output_and_detail_authority() {
+        let fixture = InitFixture::new("planning-init-valid-promotion");
+        let session = fixture
+            .service
+            .stage_manual_editor_session(fixture.workspace.path_str())
+            .expect("manual editor session should stage");
+        let edited_body = "# Result Output\n\n- Use the manually edited prompt.\n";
+        let edited_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: edited_body.to_string(),
+        };
+
+        let promote_result = fixture
+            .service
+            .promote_draft_editor_files(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[edited_file],
+            )
+            .expect("valid draft promotion should commit active state");
+
+        assert_eq!(promote_result.promoted_file_count, 1);
+        assert!(promote_result.validation_report.is_valid());
+        assert_eq!(
+            fs::read_to_string(fixture.workspace.path().join(RESULT_OUTPUT_FILE_PATH))
+                .expect("active result output should be readable"),
+            edited_body
+        );
+        let directions = fixture.direction_snapshot();
+        assert_eq!(directions.directions[0].id, "example-direction");
+        assert_eq!(directions.queue_idle.policy, QueueIdlePolicy::Stop);
+        assert!(fixture.task_snapshot().task_authority.tasks.is_empty());
+    }
+
+    struct InitFixture {
+        workspace: TempPlanningWorkspace,
+        repository: Arc<dyn PlanningTaskRepositoryPort>,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        service: PlanningInitService,
+    }
+
+    impl InitFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let repository: Arc<dyn PlanningTaskRepositoryPort> =
+                Arc::new(NoopPlanningTaskRepositoryPort);
+            let service = PlanningInitService::with_task_repository(
+                workspace_port.clone(),
+                PlanningBootstrapService::new(),
+                PlanningValidationService::new(),
+                repository.clone(),
+                PriorityQueueService::new(),
+            );
+            Self {
+                workspace,
+                repository,
+                workspace_port,
+                service,
+            }
+        }
+
+        fn write_result_output(&self, body: &str) {
+            self.workspace_port
+                .replace_planning_workspace_file(
+                    self.workspace.path_str(),
+                    RESULT_OUTPUT_FILE_PATH,
+                    Some(body),
+                )
+                .expect("result output should be written");
+        }
+
+        fn direction_snapshot(&self) -> DirectionCatalogDocument {
+            self.repository
+                .load_direction_authority_snapshot(self.workspace.path_str())
+                .expect("direction snapshot should load")
+                .expect("direction snapshot should exist")
+                .directions
+        }
+
+        fn task_snapshot(&self) -> PlanningTaskAuthoritySnapshot {
+            self.repository
+                .load_task_authority_snapshot(self.workspace.path_str())
+                .expect("task snapshot should load")
+                .expect("task snapshot should exist")
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
