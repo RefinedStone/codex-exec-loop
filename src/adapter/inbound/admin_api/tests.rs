@@ -349,6 +349,10 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "PIXI.Application",
         "gamebaljeonguk_atlas_64x96.png",
         "src/akra-diorama.ts",
+        "chooseRoamPoint",
+        "updateRoamMotion",
+        "applyWalkFrame",
+        "buildAgentFrameSets",
     ] {
         assert!(
             AKRA_DIORAMA_JS.contains(token),
@@ -392,6 +396,11 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "window.AkraAdminGame",
         "PIXI.Assets.load",
         "app.ticker.add",
+        "type Facing = \"down\" | \"side\" | \"up\"",
+        "interface AgentFrameSet",
+        "const chooseRoamPoint",
+        "const updateRoamMotion",
+        "const applyWalkFrame",
     ] {
         assert!(
             AKRA_DIORAMA_TS.contains(token),
@@ -447,6 +456,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "akraStageScan",
         "makePacket",
         "statusPalette",
+        "chooseRoamPoint",
+        "updateRoamMotion",
+        "applyWalkFrame",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)

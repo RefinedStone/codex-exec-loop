@@ -1,6 +1,7 @@
 type StatusSeverity = "normal" | "success" | "warning" | "danger" | "info" | "muted";
 type TargetKind = "distributor" | "events";
 type AssetKey = "floor" | "desk" | "server" | "whiteboard" | "sofa" | "plant" | "agentAtlas";
+type Facing = "down" | "side" | "up";
 
 interface Point {
   x: number;
@@ -21,6 +22,7 @@ interface PixiDisplayObject {
   y: number;
   alpha: number;
   rotation: number;
+  zIndex: number;
   scale: PixiScale;
   destroy: (options?: { children?: boolean; texture?: boolean; baseTexture?: boolean }) => void;
 }
@@ -37,12 +39,14 @@ interface PixiGraphics extends PixiDisplayObject {
 }
 
 interface PixiContainer extends PixiDisplayObject {
+  sortableChildren: boolean;
   addChild: (...children: PixiDisplayObject[]) => void;
   removeChildren: () => PixiDisplayObject[];
 }
 
 interface PixiSprite extends PixiDisplayObject {
   anchor: PixiScale;
+  texture: PixiTexture;
 }
 
 interface PixiTexture {
@@ -65,6 +69,7 @@ interface PixiApplication {
 }
 
 interface AgentUnit {
+  agentId: string;
   node: HTMLElement;
   index: number;
   color: number;
@@ -72,10 +77,31 @@ interface AgentUnit {
   ring: PixiGraphics;
   sprite: PixiSprite | null;
   packet: PixiGraphics;
+  frameSet: AgentFrameSet | null;
   point: Point;
+  destination: Point;
   phase: number;
   speed: number;
+  walkSpeed: number;
+  routeIndex: number;
+  waitUntil: number;
+  facing: Facing;
+  facingSign: 1 | -1;
+  isWalking: boolean;
   targetKind: TargetKind;
+}
+
+interface AgentFrameSet {
+  down: PixiTexture[];
+  side: PixiTexture[];
+  up: PixiTexture[];
+}
+
+interface RoamSnapshot {
+  point: Point;
+  destination: Point;
+  routeIndex: number;
+  waitUntil: number;
 }
 
 interface DioramaHandle {
@@ -159,6 +185,7 @@ declare global {
     const pathLayer = new PIXI.Graphics();
     const packetLayer = new PIXI.Container();
     const agentLayer = new PIXI.Container();
+    agentLayer.sortableChildren = true;
     app.stage.addChild(pathLayer, packetLayer, agentLayer);
 
     const statusPalette: Record<StatusSeverity, number> = {
@@ -171,8 +198,9 @@ declare global {
     };
 
     let textures: Partial<Record<AssetKey, PixiTexture>> = {};
-    let agentFrames: PixiTexture[] = [];
+    let agentFrameSets: AgentFrameSet[] = [];
     let agentUnits: AgentUnit[] = [];
+    let roamSnapshots = new Map<string, RoamSnapshot>();
     let stageBurst = 0;
     let elapsed = 0;
     let resizeObserver: ResizeObserver | null = null;
@@ -209,6 +237,50 @@ declare global {
     const colorFor = (severity: StatusSeverity): number =>
       statusPalette[severity] || statusPalette.normal;
 
+    const clamp = (value: number, min: number, max: number): number =>
+      Math.min(Math.max(value, min), max);
+
+    const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+    const distanceBetween = (a: Point, b: Point): number =>
+      Math.hypot(a.x - b.x, a.y - b.y);
+
+    const seededRatio = (index: number, routeIndex: number, salt: number): number => {
+      const raw =
+        Math.sin((index + 1) * 12.9898 + (routeIndex + 1) * 78.233 + salt * 37.719) *
+        43758.5453;
+      return raw - Math.floor(raw);
+    };
+
+    const roamBounds = () => {
+      const { width, height } = boardSize();
+      const horizontalInset = Math.min(width * 0.5, Math.max(56, width * 0.08));
+      const topInset = Math.min(height * 0.5, Math.max(118, height * 0.19));
+      const bottomInset = Math.max(58, height * 0.08);
+      return {
+        left: horizontalInset,
+        right: Math.max(horizontalInset, width - horizontalInset),
+        top: topInset,
+        bottom: Math.max(topInset, height - bottomInset),
+      };
+    };
+
+    const clampRoamPoint = (point: Point): Point => {
+      const bounds = roamBounds();
+      return {
+        x: clamp(point.x, bounds.left, bounds.right),
+        y: clamp(point.y, bounds.top, bounds.bottom),
+      };
+    };
+
+    const chooseRoamPoint = (index: number, routeIndex: number): Point => {
+      const bounds = roamBounds();
+      return {
+        x: lerp(bounds.left, bounds.right, seededRatio(index, routeIndex, 1)),
+        y: lerp(bounds.top, bounds.bottom, seededRatio(index, routeIndex, 2)),
+      };
+    };
+
     const makeAtlasFrame = (
       texture: PixiTexture | undefined,
       col: number,
@@ -217,6 +289,41 @@ declare global {
       const baseTexture = texture?.baseTexture;
       if (!baseTexture || typeof PIXI.Rectangle === "undefined") return null;
       return new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * 64, row * 96, 64, 96));
+    };
+
+    const makeFrameRow = (
+      texture: PixiTexture | undefined,
+      row: number,
+      startCol: number
+    ): PixiTexture[] =>
+      Array.from({ length: 4 }, (_, index) => makeAtlasFrame(texture, startCol + index, row)).filter(
+        isPixiTexture
+      );
+
+    const buildAgentFrameSets = (texture: PixiTexture | undefined): AgentFrameSet[] => {
+      const planner = {
+        down: makeFrameRow(texture, 0, 0),
+        side: makeFrameRow(texture, 1, 0),
+        up: makeFrameRow(texture, 2, 0),
+      };
+      const coffeeAddict = {
+        down: makeFrameRow(texture, 0, 4),
+        side: makeFrameRow(texture, 1, 4),
+        up: makeFrameRow(texture, 2, 4),
+      };
+      const aiResearcher = {
+        down: makeFrameRow(texture, 3, 0),
+        side: makeFrameRow(texture, 4, 0),
+        up: makeFrameRow(texture, 4, 0),
+      };
+      const designer = {
+        down: makeFrameRow(texture, 3, 4),
+        side: makeFrameRow(texture, 4, 4),
+        up: makeFrameRow(texture, 4, 4),
+      };
+      return [planner, coffeeAddict, aiResearcher, designer].filter(
+        (set) => set.down.length > 0 && set.side.length > 0 && set.up.length > 0
+      );
     };
 
     const resolvePoint = (
@@ -247,6 +354,7 @@ declare global {
     };
 
     const makeAgentUnit = (node: HTMLElement, index: number): AgentUnit => {
+      const agentId = node.dataset.agentId || `agent-${index}`;
       const severity = parseSeverity(node);
       const color = colorFor(severity);
       const group = new PIXI.Container();
@@ -256,7 +364,8 @@ declare global {
       shadow.endFill();
 
       const ring = new PIXI.Graphics();
-      const texture = agentFrames.length ? agentFrames[index % agentFrames.length] : null;
+      const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
+      const texture = frameSet?.down[0] || null;
       const sprite = texture ? new PIXI.Sprite(texture) : null;
       if (sprite) {
         sprite.anchor.set(0.5, 1);
@@ -283,7 +392,16 @@ declare global {
       });
 
       const points = fallbackPoints();
+      const fallbackPoint = resolvePoint(node, points[index % points.length], 0.5, 0.78);
+      const snapshot = roamSnapshots.get(agentId);
+      const routeIndex = snapshot?.routeIndex ?? index * 5;
+      const point = clampRoamPoint(snapshot?.point || fallbackPoint);
+      let destination = clampRoamPoint(snapshot?.destination || chooseRoamPoint(index, routeIndex));
+      if (distanceBetween(point, destination) < 54) {
+        destination = chooseRoamPoint(index, routeIndex + 1);
+      }
       return {
+        agentId,
         node,
         index,
         color,
@@ -291,9 +409,17 @@ declare global {
         ring,
         sprite,
         packet,
-        point: points[index % points.length],
+        frameSet,
+        point,
+        destination,
         phase: index * 0.23,
         speed: 0.16 + index * 0.025,
+        walkSpeed: 34 + index * 4,
+        routeIndex,
+        waitUntil: snapshot?.waitUntil ?? 0,
+        facing: "down",
+        facingSign: 1,
+        isWalking: false,
         targetKind: index % 2 === 0 ? "distributor" : "events",
       };
     };
@@ -317,18 +443,30 @@ declare global {
       };
       const points = fallbackPoints();
       for (const unit of agentUnits) {
-        unit.point = resolvePoint(
-          unit.node,
-          points[unit.index % points.length],
-          0.5,
-          0.78
-        );
+        const fallbackPoint = resolvePoint(unit.node, points[unit.index % points.length], 0.5, 0.78);
+        unit.point = clampRoamPoint(unit.point || fallbackPoint);
+        unit.destination = clampRoamPoint(unit.destination || chooseRoamPoint(unit.index, 0));
         unit.group.x = unit.point.x;
         unit.group.y = unit.point.y;
       }
     };
 
+    const rememberRoamSnapshots = (): void => {
+      roamSnapshots = new Map(
+        agentUnits.map((unit) => [
+          unit.agentId,
+          {
+            point: { ...unit.point },
+            destination: { ...unit.destination },
+            routeIndex: unit.routeIndex,
+            waitUntil: unit.waitUntil,
+          },
+        ])
+      );
+    };
+
     const rebuildAgentUnits = (): void => {
+      rememberRoamSnapshots();
       for (const child of packetLayer.removeChildren()) child.destroy({ children: true });
       for (const child of agentLayer.removeChildren()) child.destroy({ children: true });
       agentUnits = root
@@ -337,7 +475,62 @@ declare global {
       syncLayout();
     };
 
-    const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+    const setNextRoamTarget = (unit: AgentUnit): void => {
+      unit.routeIndex += 1;
+      unit.destination = chooseRoamPoint(unit.index, unit.routeIndex);
+      if (distanceBetween(unit.point, unit.destination) < 72) {
+        unit.routeIndex += 1;
+        unit.destination = chooseRoamPoint(unit.index, unit.routeIndex);
+      }
+      unit.waitUntil = 0;
+    };
+
+    const updateFacing = (unit: AgentUnit, dx: number, dy: number): void => {
+      if (Math.abs(dx) > Math.abs(dy) * 0.72) {
+        unit.facing = "side";
+        unit.facingSign = dx < 0 ? 1 : -1;
+        return;
+      }
+      unit.facing = dy < 0 ? "up" : "down";
+    };
+
+    const updateRoamMotion = (unit: AgentUnit, delta: number): void => {
+      const dt = Math.min(delta / 60, 0.08);
+      const dx = unit.destination.x - unit.point.x;
+      const dy = unit.destination.y - unit.point.y;
+      const distance = Math.hypot(dx, dy);
+
+      if (distance <= 3) {
+        unit.isWalking = false;
+        if (unit.waitUntil === 0) {
+          unit.waitUntil = elapsed + 0.2 + seededRatio(unit.index, unit.routeIndex, 3) * 0.8;
+        }
+        if (elapsed >= unit.waitUntil) {
+          setNextRoamTarget(unit);
+        }
+        return;
+      }
+
+      unit.isWalking = true;
+      updateFacing(unit, dx, dy);
+      const step = Math.min(distance, unit.walkSpeed * (1 + stageBurst * 0.1) * dt);
+      unit.point = clampRoamPoint({
+        x: unit.point.x + (dx / distance) * step,
+        y: unit.point.y + (dy / distance) * step,
+      });
+    };
+
+    const applyWalkFrame = (unit: AgentUnit): void => {
+      if (!unit.sprite || !unit.frameSet) return;
+      const frames = unit.frameSet[unit.facing];
+      if (frames.length === 0) return;
+
+      const frameIndex = unit.isWalking
+        ? Math.floor((elapsed * 7.5 + unit.phase * 6) % frames.length)
+        : 0;
+      unit.sprite.texture = frames[frameIndex] || frames[0];
+      unit.sprite.scale.set(unit.facing === "side" ? unit.facingSign * 0.72 : 0.72, 0.72);
+    };
 
     const renderTick = (delta: number): void => {
       elapsed += delta / 60;
@@ -345,6 +538,9 @@ declare global {
       pathLayer.clear();
 
       for (const unit of agentUnits) {
+        updateRoamMotion(unit, delta);
+        applyWalkFrame(unit);
+
         const target = targets[unit.targetKind] || targets.distributor;
         const start = { x: unit.point.x, y: unit.point.y - 24 };
         const end = { x: target.x, y: target.y - 18 };
@@ -362,7 +558,9 @@ declare global {
         unit.packet.scale.set(0.92 + stageBurst * 0.18);
 
         const bob = Math.sin(elapsed * 3.4 + unit.phase * 8) * 2.2;
+        unit.group.x = unit.point.x;
         unit.group.y = unit.point.y + bob - stageBurst * 1.5;
+        unit.group.zIndex = unit.point.y;
         unit.ring.clear();
         unit.ring.lineStyle(2, unit.color, 0.58 + stageBurst * 0.2);
         const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * 0.12 + stageBurst * 0.12;
@@ -379,9 +577,7 @@ declare global {
           console.warn(`Failed to load sprite: ${key}`, error);
         }
       }
-      agentFrames = Array.from({ length: 8 }, (_, index) =>
-        makeAtlasFrame(textures.agentAtlas, index)
-      ).filter(isPixiTexture);
+      agentFrameSets = buildAgentFrameSets(textures.agentAtlas);
     };
 
     const onMissionPulse = (event: Event): void => {
