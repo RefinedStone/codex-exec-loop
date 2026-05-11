@@ -252,13 +252,13 @@ impl NativeTuiApp {
             workspace_directory.clone(),
             turn_control_truth,
         );
-        initial_conversation.replace_planning_runtime_snapshot(
-            application
-                .planning()
-                .runtime()
-                .load_runtime_snapshot_or_invalid(&workspace_directory),
-        );
-        Self {
+        let initial_planning_runtime_snapshot = application
+            .planning()
+            .runtime()
+            .load_runtime_snapshot_or_invalid(&workspace_directory);
+        initial_conversation
+            .replace_planning_runtime_snapshot(initial_planning_runtime_snapshot.clone());
+        let mut app = Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
@@ -291,7 +291,9 @@ impl NativeTuiApp {
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
             tx: runtime_channels.tx,
             rx: runtime_channels.rx,
-        }
+        };
+        app.sync_core_planning_runtime_projection(initial_planning_runtime_snapshot);
+        app
     }
 
     // Shell chrome state is split across NativeTuiApp fields for ergonomic access by
@@ -518,12 +520,19 @@ impl NativeTuiApp {
             return false;
         };
 
+        let previous_planning_runtime_snapshot = conversation.planning_runtime_snapshot.clone();
         let reduction = reduce_conversation_runtime(conversation, event);
+        let next_planning_runtime_snapshot = reduction.state.planning_runtime_snapshot.clone();
+        let planning_projection_changed =
+            previous_planning_runtime_snapshot != next_planning_runtime_snapshot;
         let mut effects = reduction.effects;
         let started_stream = effects
             .iter()
             .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
+        if planning_projection_changed {
+            self.sync_core_planning_runtime_projection(next_planning_runtime_snapshot);
+        }
         self.route_conversation_runtime_automation_effects(automation_context, &mut effects);
         for effect in effects {
             self.execute_conversation_runtime_effect(effect);

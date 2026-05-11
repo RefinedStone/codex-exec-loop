@@ -123,6 +123,31 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
+            CoreInput::PlanningRuntimeProjectionChanged(snapshot) => {
+                let changed = self.state.apply_planning_runtime_projection(snapshot);
+                self.snapshot_changed_outcome(changed)
+            }
+            CoreInput::ParallelModeReadinessProjectionChanged(snapshot) => {
+                let changed = self.state.apply_parallel_readiness_projection(snapshot);
+                self.snapshot_changed_outcome(changed)
+            }
+            CoreInput::ParallelModeSupervisorProjectionChanged(snapshot) => {
+                let changed = self.state.apply_parallel_supervisor_projection(snapshot);
+                self.snapshot_changed_outcome(changed)
+            }
+        }
+    }
+
+    fn snapshot_changed_outcome(&self, changed: bool) -> CoreDispatchOutcome {
+        let snapshot = self.snapshot();
+        CoreDispatchOutcome {
+            events: if changed {
+                vec![AppEvent::SnapshotChanged(snapshot.clone())]
+            } else {
+                Vec::new()
+            },
+            effects: Vec::new(),
+            snapshot,
         }
     }
 
@@ -165,6 +190,7 @@ impl Default for CoreController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::service::planning::PlanningRuntimeSnapshot;
     use crate::core::app::{
         ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
         SessionCatalogSnapshot,
@@ -177,6 +203,7 @@ mod tests {
         ConversationMessage, ConversationMessageKind,
         ConversationSnapshot as DomainConversationSnapshot,
     };
+    use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
@@ -536,6 +563,72 @@ mod tests {
             outcome.events,
             vec![AppEvent::PostTurnEvaluationCompleted(completion)]
         );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn planning_parallel_projection_changes_appear_in_app_snapshot() {
+        let mut controller = CoreController::new();
+        let planning_snapshot =
+            PlanningRuntimeSnapshot::invalid("planning validation failed in projection");
+
+        let outcome = controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(
+            Box::new(planning_snapshot.clone()),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            *outcome.snapshot.planning_parallel.planning_runtime,
+            planning_snapshot
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::SnapshotChanged(outcome.snapshot.clone())]
+        );
+        assert!(outcome.effects.is_empty());
+
+        let readiness_snapshot = ParallelModeReadinessSnapshot::new(
+            "/tmp/workspace",
+            ParallelModeReadinessState::Ready,
+            Vec::new(),
+            None,
+        );
+        let outcome = controller.handle_input(CoreInput::ParallelModeReadinessProjectionChanged(
+            Some(Box::new(readiness_snapshot.clone())),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 2);
+        assert_eq!(
+            outcome
+                .snapshot
+                .planning_parallel
+                .parallel_mode
+                .readiness
+                .as_deref(),
+            Some(&readiness_snapshot)
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::SnapshotChanged(outcome.snapshot.clone())]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn repeated_projection_input_does_not_advance_snapshot_revision() {
+        let mut controller = CoreController::new();
+        let planning_snapshot =
+            PlanningRuntimeSnapshot::invalid("planning validation failed in projection");
+        controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(Box::new(
+            planning_snapshot.clone(),
+        )));
+
+        let outcome = controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(
+            Box::new(planning_snapshot),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert!(outcome.events.is_empty());
         assert!(outcome.effects.is_empty());
     }
 

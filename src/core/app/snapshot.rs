@@ -1,4 +1,6 @@
-use super::{ConversationSnapshot, SessionCatalogSnapshot, StartupSnapshot};
+use super::{
+    ConversationSnapshot, PlanningParallelProjection, SessionCatalogSnapshot, StartupSnapshot,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppSnapshot {
@@ -6,6 +8,7 @@ pub struct AppSnapshot {
     pub startup: StartupSnapshot,
     pub session_catalog: SessionCatalogSnapshot,
     pub conversation: ConversationSnapshot,
+    pub planning_parallel: PlanningParallelProjection,
 }
 
 impl AppSnapshot {
@@ -15,6 +18,7 @@ impl AppSnapshot {
             startup: StartupSnapshot::Idle,
             session_catalog: SessionCatalogSnapshot::Idle,
             conversation: ConversationSnapshot::Idle,
+            planning_parallel: PlanningParallelProjection::initial(),
         }
     }
 }
