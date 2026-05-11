@@ -88,7 +88,7 @@ TUI/Admin/CLI가 읽는 이름은 하나로 유지한다.
 | --- | --- | --- | --- |
 | parallel mode enabled 여부 | TUI app state | application runtime store | 자동 dispatch에 영향을 주므로 UI-only가 아니다. TUI는 projection만 가진다. |
 | readiness snapshot | TUI refresh path/application service | Application Projection | 계산은 service/effect, 표시 모델은 projection으로 제공한다. |
-| supervisor snapshot | TUI cache/application service | Application Projection | durable repository/read model에서 조립하되 TUI cache는 마지막 렌더링 값이어야 한다. |
+| supervisor snapshot | application service/control-plane -> core projection | Application Projection | durable repository/read model에서 조립하고 TUI는 `AppSnapshot` projection만 읽는다. |
 | in-flight refresh/wake/tick flags | `ParallelModeControlPlaneRuntime` | application runtime store | `STORE-00D`에서 이동 완료. 중복 worker spawn 방지는 runtime effect state가 판단한다. |
 | last tick signature | `ParallelModeControlPlaneRuntime` | application runtime store | `STORE-00D`에서 이동 완료. wake coalescing과 같은 orchestration state다. |
 | overlay open/close | TUI app state | TUI controller | 순수 presentation state다. |

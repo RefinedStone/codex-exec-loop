@@ -11,7 +11,6 @@ use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
 };
-use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
@@ -275,8 +274,6 @@ struct NativeTuiApp {
     exit_confirmation_state: ExitConfirmationState,
     startup_state: StartupState,
     session_state: SessionState,
-    parallel_mode_readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
-    parallel_mode_supervisor_snapshot: Option<ParallelModeSupervisorSnapshot>,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,

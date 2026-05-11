@@ -132,8 +132,9 @@ fn active_supersession_supervisor_refreshes_periodically() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(
@@ -163,7 +164,7 @@ fn active_supersession_supervisor_refreshes_periodically() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     let now = Instant::now();
 
     assert!(
@@ -190,8 +191,9 @@ fn blocked_supersession_pool_refreshes_periodically() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(
@@ -221,7 +223,7 @@ fn blocked_supersession_pool_refreshes_periodically() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     let now = Instant::now();
 
     assert!(
@@ -241,8 +243,9 @@ fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
     runtime
         .app_mut()
         .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
@@ -261,7 +264,7 @@ fn in_flight_supersession_supervisor_refresh_blocks_periodic_overlap() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     let now = Instant::now();
 
     assert!(
@@ -282,8 +285,9 @@ fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(0, "idle", "idle", Vec::new()),
@@ -291,7 +295,7 @@ fn empty_non_loading_supersession_snapshot_does_not_refresh_periodically() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     let now = Instant::now();
 
     assert!(

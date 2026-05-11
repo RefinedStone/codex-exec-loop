@@ -284,13 +284,13 @@ fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
 }
 
 #[test]
-fn tui_projection_rendering_reads_core_snapshot_before_legacy_cache() {
+fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     /*
-     * Rendering can keep a transitional TUI cache for compatibility, but the
-     * effective read path should consult core AppSnapshot first. This keeps
-     * future surfaces from treating NativeTuiApp cache fields as the durable
+     * Parallel rendering must read core AppSnapshot projections directly. This
+     * keeps future surfaces from recreating NativeTuiApp cache fields as
      * projection authority.
      */
+    const APP_RS: &str = include_str!("../../app.rs");
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
     const PLAN_INDICATOR_RS: &str =
         include_str!("../shell_presentation/status_panels/plan_indicator.rs");
@@ -303,6 +303,8 @@ fn tui_projection_rendering_reads_core_snapshot_before_legacy_cache() {
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_supervisor_snapshot"));
     assert!(PARALLEL_MODE_RS.contains("self.core_runtime"));
     assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
+    assert!(!APP_RS.contains("parallel_mode_readiness_snapshot:"));
+    assert!(!APP_RS.contains("parallel_mode_supervisor_snapshot:"));
     assert!(
         !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
     );

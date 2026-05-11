@@ -250,6 +250,30 @@ impl NativeFlowHarness {
         }
     }
 
+    fn seed_ready_parallel_mode_projections(&mut self) {
+        self.runtime
+            .app_mut()
+            .set_parallel_mode_readiness_snapshot_for_test(Some(
+                ready_parallel_mode_readiness_snapshot(&self.workspace_dir),
+            ));
+        self.runtime
+            .app_mut()
+            .set_parallel_mode_supervisor_snapshot_for_test(Some(
+                ready_parallel_mode_supervisor_snapshot(&self.workspace_dir),
+            ));
+    }
+
+    fn seed_loading_parallel_mode_supervisor(&mut self) {
+        self.runtime
+            .app_mut()
+            .set_parallel_mode_readiness_snapshot_for_test(None);
+        self.runtime
+            .app_mut()
+            .set_parallel_mode_supervisor_snapshot_for_test(Some(
+                loading_parallel_mode_supervisor_snapshot(&self.workspace_dir),
+            ));
+    }
+
     fn committed_ready_task(&self, prompt: &str) -> PlanningTaskIntakeCommitResult {
         let proposal = self
             .runtime
@@ -715,18 +739,11 @@ impl NativeFlowHarness {
         let mut last_pool = None;
         for _ in 0..750 {
             self.runtime.poll_background_messages();
-            if let Some(supervisor) = self
-                .runtime
-                .app()
-                .parallel_mode_supervisor_snapshot
-                .as_ref()
-            {
-                let pool = supervisor.pool.clone();
-                if pool.slots.len() == FLOW_POOL_SIZE && pool.idle_slots == FLOW_POOL_SIZE {
-                    return pool;
-                }
-                last_pool = Some(pool);
+            let pool = self.runtime.app().parallel_mode_supervisor_snapshot().pool;
+            if pool.slots.len() == FLOW_POOL_SIZE && pool.idle_slots == FLOW_POOL_SIZE {
+                return pool;
             }
+            last_pool = Some(pool);
             thread::sleep(Duration::from_millis(20));
         }
         panic!(
@@ -1049,12 +1066,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
 
     harness.send_post_turn_auto_prompt("turn-1");
     harness.poll_until_worker_launches(1);
@@ -1131,12 +1143,7 @@ fn post_turn_dispatch_launches_all_idle_slots_concurrently() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
 
     harness.send_post_turn_auto_prompt("turn-1");
     harness.poll_until_worker_streams_active(FLOW_POOL_SIZE);
@@ -1210,12 +1217,7 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
     harness
         .runtime
         .app_mut()
@@ -1246,12 +1248,7 @@ fn parallel_completion_with_drained_queue_alerts_without_dispatching() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
     harness
         .runtime
         .app_mut()
@@ -1298,12 +1295,7 @@ fn pending_durable_dispatch_command_polls_without_visible_activity_pulse() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
     harness
         .runtime
         .app_mut()
@@ -1345,10 +1337,7 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
         .runtime
         .app_mut()
         .mark_parallel_mode_supervisor_refresh_in_flight_for_test();
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = None;
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        loading_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_loading_parallel_mode_supervisor();
 
     harness.send_post_turn_auto_prompt("turn-1");
     harness.runtime.poll_background_messages();
@@ -1554,12 +1543,7 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
     harness
         .runtime
         .app_mut()
@@ -1617,12 +1601,7 @@ fn worker_launch_failure_blocks_task_until_task_update_then_retries() {
         .runtime
         .app_mut()
         .set_parallel_mode_enabled_for_test(true);
-    harness.runtime.app_mut().parallel_mode_readiness_snapshot = Some(
-        ready_parallel_mode_readiness_snapshot(&harness.workspace_dir),
-    );
-    harness.runtime.app_mut().parallel_mode_supervisor_snapshot = Some(
-        ready_parallel_mode_supervisor_snapshot(&harness.workspace_dir),
-    );
+    harness.seed_ready_parallel_mode_projections();
 
     harness.send_post_turn_auto_prompt("turn-1");
     harness.poll_until_worker_launches(1);

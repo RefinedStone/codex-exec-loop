@@ -7,7 +7,6 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnQueuedPrompt,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
-use crate::core::app::CoreInput;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -77,8 +76,9 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
@@ -86,7 +86,7 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
             Some("loading 2/3: pool reconcile".to_string()),
-        ));
+        )));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -111,8 +111,9 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -120,7 +121,7 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -149,8 +150,9 @@ fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finis
     ));
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -158,7 +160,7 @@ fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finis
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     for character in "run".chars() {
         runtime.app_mut().push_input_character(character);
     }
@@ -248,7 +250,9 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
     );
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot = Some(snapshot.clone());
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot.clone()));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -265,8 +269,8 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
     )));
 
     assert_eq!(
-        runtime.app().parallel_mode_supervisor_snapshot,
-        Some(snapshot),
+        runtime.app().parallel_mode_supervisor_snapshot(),
+        snapshot,
         "MUD navigation must not mutate supervisor/domain state"
     );
     assert!(
@@ -294,7 +298,7 @@ fn supersession_mud_navigation_changes_only_ui_selection_state() {
 fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selection() {
     /*
      * Supervisor refresh is an application projection update. It may replace the
-     * cached board, but it must not close the active overlay or reset MUD
+     * core board projection, but it must not close the active overlay or reset MUD
      * navigation selection, which are UI-only state.
      */
     let mut runtime = make_test_runtime();
@@ -343,7 +347,9 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     };
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot = Some(build_snapshot("running"));
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(build_snapshot("running")));
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
         KeyCode::Down,
         KeyModifiers::empty(),
@@ -377,8 +383,8 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
         1
     );
     assert_eq!(
-        runtime.app().parallel_mode_supervisor_snapshot,
-        Some(refreshed_snapshot.clone())
+        runtime.app().parallel_mode_supervisor_snapshot(),
+        refreshed_snapshot.clone()
     );
     assert_eq!(
         runtime
@@ -404,10 +410,14 @@ fn parallel_task_update_after_enable_reuses_existing_epoch_for_dispatch() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_readiness_snapshot =
-        Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_readiness_snapshot_for_test(Some(
+            ready_parallel_mode_readiness_snapshot(&workspace_directory),
+        ));
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -415,7 +425,7 @@ fn parallel_task_update_after_enable_reuses_existing_epoch_for_dispatch() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
 
     runtime
         .app_mut()
@@ -517,10 +527,14 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     let mut runtime = fixture.runtime;
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_readiness_snapshot =
-        Some(ready_parallel_mode_readiness_snapshot(&workspace_directory));
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_readiness_snapshot_for_test(Some(
+            ready_parallel_mode_readiness_snapshot(&workspace_directory),
+        ));
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory.clone(),
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -528,7 +542,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
     let planning_projection = runtime
         .app()
         .application
@@ -619,8 +633,9 @@ fn supersession_uses_planning_workspace_projection_after_loading_finishes() {
     conversation.cwd = planning_workspace.clone();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             planning_workspace.clone(),
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -628,7 +643,7 @@ fn supersession_uses_planning_workspace_projection_after_loading_finishes() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
 
     let snapshot = runtime.app().parallel_mode_supervisor_snapshot();
 
@@ -646,7 +661,7 @@ fn supersession_uses_planning_workspace_projection_after_loading_finishes() {
 }
 
 #[test]
-fn supervisor_invalidation_keeps_cached_board_visible() {
+fn supervisor_invalidation_keeps_core_board_visible() {
     /*
      * Worker updates invalidate supervisor data after dispatch. The visible board
      * must not fall back to the loading placeholder while the replacement snapshot
@@ -655,8 +670,9 @@ fn supervisor_invalidation_keeps_cached_board_visible() {
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -664,7 +680,7 @@ fn supervisor_invalidation_keeps_cached_board_visible() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
 
     runtime
         .app_mut()
@@ -681,49 +697,29 @@ fn supervisor_invalidation_keeps_cached_board_visible() {
 }
 
 #[test]
-fn parallel_projection_accessors_prefer_core_snapshot_over_legacy_tui_cache() {
+fn parallel_projection_accessors_read_core_snapshot() {
     /*
-     * The TUI cache is still accepted as a transitional seed for old tests and
-     * event application, but effective rendering accessors must prefer the core
-     * AppSnapshot projection when both exist for the active workspace.
+     * Parallel rendering accessors read the core AppSnapshot projection directly.
+     * Test setup uses the same core input path that application events use.
      */
     let mut runtime = make_test_runtime();
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_readiness_snapshot = Some(ParallelModeReadinessSnapshot::new(
-        workspace_directory.clone(),
-        ParallelModeReadinessState::Blocked,
-        Vec::new(),
-        Some("legacy cache alert".to_string()),
-    ));
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
-            ParallelModeSupervisorState::Recover,
-            workspace_directory.clone(),
-            ParallelModePoolBoardSnapshot::new(1, "/tmp/legacy-pool", "legacy", Vec::new()),
-            ParallelModeAgentRosterSnapshot::new(Vec::new(), "legacy roster"),
-            ParallelModeSupervisorDetailSnapshot::new(None, "legacy detail"),
-            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "legacy", "legacy"),
-            Some("legacy cache notice".to_string()),
+    runtime
+        .app_mut()
+        .set_parallel_mode_readiness_snapshot_for_test(Some(
+            ready_parallel_mode_readiness_snapshot(&workspace_directory),
         ));
-
     runtime
         .app_mut()
-        .dispatch_core_input(CoreInput::ParallelModeReadinessProjectionChanged(Some(
-            Box::new(ready_parallel_mode_readiness_snapshot(&workspace_directory)),
-        )));
-    runtime
-        .app_mut()
-        .dispatch_core_input(CoreInput::ParallelModeSupervisorProjectionChanged(Some(
-            Box::new(ParallelModeSupervisorSnapshot::new(
-                ParallelModeSupervisorState::Supervise,
-                workspace_directory,
-                ParallelModePoolBoardSnapshot::new(4, "/tmp/core-pool", "core", Vec::new()),
-                ParallelModeAgentRosterSnapshot::new(Vec::new(), "core roster"),
-                ParallelModeSupervisorDetailSnapshot::new(None, "core detail"),
-                ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "core", "core"),
-                Some("core projection notice".to_string()),
-            )),
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(4, "/tmp/core-pool", "core", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "core roster"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "core detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "core", "core"),
+            Some("core projection notice".to_string()),
         )));
 
     let readiness_snapshot = runtime
@@ -755,8 +751,9 @@ fn supersession_active_worker_requests_live_pulse() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(
@@ -786,7 +783,7 @@ fn supersession_active_worker_requests_live_pulse() {
             ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
-        ));
+        )));
 
     assert!(runtime.app().live_activity_pulse(Instant::now()).is_some());
 }
@@ -801,8 +798,9 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
@@ -810,7 +808,7 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
             Some("loading 2/3: pool reconcile".to_string()),
-        ));
+        )));
     runtime.take_redraw_request();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(
@@ -866,8 +864,9 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
     ));
     runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    runtime.app_mut().parallel_mode_supervisor_snapshot =
-        Some(ParallelModeSupervisorSnapshot::new(
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
             ParallelModeSupervisorState::Supervise,
             workspace_directory,
             ParallelModePoolBoardSnapshot::new(0, "loading: pool", "loading", Vec::new()),
@@ -875,7 +874,7 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
             ParallelModeSupervisorDetailSnapshot::new(None, "loading detail"),
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
             Some("loading 2/3: pool reconcile".to_string()),
-        ));
+        )));
     for character in "run next".chars() {
         runtime.app_mut().push_input_character(character);
     }

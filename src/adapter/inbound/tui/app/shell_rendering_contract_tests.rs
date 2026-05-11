@@ -386,9 +386,9 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     app.set_parallel_mode_enabled_for_test(true);
-    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Degraded,
-    ));
+    )));
     app.shell_overlay = ShellOverlay::Supersession;
 
     terminal
@@ -422,10 +422,10 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.set_parallel_mode_enabled_for_test(true);
-    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
-    ));
-    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
         ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -433,7 +433,7 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
         ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
-    ));
+    )));
     app.shell_overlay = ShellOverlay::Supersession;
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("expected ready conversation state");
@@ -464,10 +464,10 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     let mut terminal = Terminal::new(TestBackend::new(72, 32)).expect("test terminal");
     let mut app = make_test_app();
     app.set_parallel_mode_enabled_for_test(true);
-    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
-    ));
-    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
         ParallelModePoolBoardSnapshot::new(
@@ -534,7 +534,7 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
         ),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
-    ));
+    )));
     app.shell_overlay = ShellOverlay::Supersession;
 
     terminal
@@ -557,7 +557,7 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.shell_overlay = ShellOverlay::Supersession;
     app.set_parallel_mode_enabled_for_test(true);
-    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
         ParallelModePoolBoardSnapshot::new(0, "loading: test", "loading", Vec::new()),
@@ -565,7 +565,7 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
         ParallelModeSupervisorDetailSnapshot::new(None, "loading"),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
         None,
-    ));
+    )));
     let rendered = build_inline_tail_lines(&app)
         .iter()
         .map(|line| line.to_string())
@@ -588,7 +588,7 @@ fn inline_tail_omits_parallel_loading_spinner_after_empty_non_loading_snapshot()
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     app.shell_overlay = ShellOverlay::Supersession;
     app.set_parallel_mode_enabled_for_test(true);
-    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
         ParallelModePoolBoardSnapshot::new(0, "idle", "idle", Vec::new()),
@@ -596,7 +596,7 @@ fn inline_tail_omits_parallel_loading_spinner_after_empty_non_loading_snapshot()
         ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
-    ));
+    )));
     let rendered = build_inline_tail_lines(&app)
         .iter()
         .map(|line| line.to_string())
@@ -625,10 +625,10 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
         "parallel summary should render in the live shell",
     );
     app.set_parallel_mode_enabled_for_test(true);
-    app.parallel_mode_readiness_snapshot = Some(sample_parallel_mode_snapshot(
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
         ParallelModeReadinessState::Ready,
-    ));
-    app.parallel_mode_supervisor_snapshot = Some(ParallelModeSupervisorSnapshot::new(
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         "/tmp/root",
         ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
@@ -636,7 +636,7 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
         ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
-    ));
+    )));
     let rendered = build_inline_tail_lines(&app)
         .iter()
         .map(|line| line.to_string())

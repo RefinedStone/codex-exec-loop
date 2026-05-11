@@ -248,8 +248,6 @@ impl NativeTuiApp {
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
-            parallel_mode_readiness_snapshot: None,
-            parallel_mode_supervisor_snapshot: None,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
             parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),

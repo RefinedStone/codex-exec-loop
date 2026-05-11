@@ -215,11 +215,6 @@ impl NativeTuiApp {
         let workspace_directory = self.planning_workspace_directory();
         self.core_parallel_mode_readiness_snapshot()
             .filter(|snapshot| snapshot.workspace_path == workspace_directory)
-            .or_else(|| {
-                self.parallel_mode_readiness_snapshot
-                    .clone()
-                    .filter(|snapshot| snapshot.workspace_path == workspace_directory)
-            })
     }
 
     fn core_parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
@@ -237,11 +232,6 @@ impl NativeTuiApp {
         let workspace_directory = self.planning_workspace_directory();
         self.core_parallel_mode_supervisor_snapshot()
             .filter(|snapshot| snapshot.workspace_path == workspace_directory)
-            .or_else(|| {
-                self.parallel_mode_supervisor_snapshot
-                    .clone()
-                    .filter(|snapshot| snapshot.workspace_path == workspace_directory)
-            })
     }
 
     fn core_parallel_mode_supervisor_snapshot(&self) -> Option<ParallelModeSupervisorSnapshot> {
@@ -541,7 +531,6 @@ impl NativeTuiApp {
         &mut self,
         snapshot: Option<ParallelModeReadinessSnapshot>,
     ) {
-        self.parallel_mode_readiness_snapshot = snapshot.clone();
         self.dispatch_core_input(CoreInput::ParallelModeReadinessProjectionChanged(
             snapshot.map(Box::new),
         ));
@@ -551,10 +540,25 @@ impl NativeTuiApp {
         &mut self,
         snapshot: Option<ParallelModeSupervisorSnapshot>,
     ) {
-        self.parallel_mode_supervisor_snapshot = snapshot.clone();
         self.dispatch_core_input(CoreInput::ParallelModeSupervisorProjectionChanged(
             snapshot.map(Box::new),
         ));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_parallel_mode_readiness_snapshot_for_test(
+        &mut self,
+        snapshot: Option<ParallelModeReadinessSnapshot>,
+    ) {
+        self.sync_core_parallel_mode_readiness_projection(snapshot);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_parallel_mode_supervisor_snapshot_for_test(
+        &mut self,
+        snapshot: Option<ParallelModeSupervisorSnapshot>,
+    ) {
+        self.sync_core_parallel_mode_supervisor_projection(snapshot);
     }
 }
 
