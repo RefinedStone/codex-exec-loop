@@ -271,9 +271,268 @@ fn split_references(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlanningAdminTaskMutationRequest, task_command_from_request};
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{
+        PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
+        PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
+        task_command_from_request,
+    };
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::{
+        PlanningAuthorityDistributorQueueRecord, PlanningAuthorityPort,
+    };
+    use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning::task_mutation::PlanningTaskMutationCommand;
-    use crate::domain::planning::TaskStatus;
+    use crate::domain::parallel_mode::{
+        ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+    };
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PLANNING_FORMAT_VERSION, QueueIdleConfig, QueueIdlePolicy, TaskActor,
+        TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
+    };
+
+    #[test]
+    fn direction_crud_reports_notice_and_refreshed_management_view() {
+        let fixture = TestAdminFixture::new("admin-crud-direction");
+
+        let added = fixture
+            .facade
+            .upsert_direction(direction_request(
+                "",
+                "Release Planning",
+                "active",
+                "Initial release direction",
+            ))
+            .expect("new direction should be added through facade");
+        let updated = fixture
+            .facade
+            .upsert_direction(direction_request(
+                "dir-release-planning",
+                "Release Execution",
+                "paused",
+                "Updated release direction",
+            ))
+            .expect("existing direction should be updated through facade");
+        let retained = fixture
+            .facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "general-workstream".to_string(),
+            })
+            .expect("default direction delete should be retained");
+        let deleted = fixture
+            .facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "dir-release-planning".to_string(),
+            })
+            .expect("non-default direction should be deleted");
+
+        assert_eq!(added.notice, "direction `dir-release-planning` added");
+        assert!(
+            added
+                .management
+                .directions
+                .iter()
+                .any(|direction| direction.id == "dir-release-planning")
+        );
+        assert_eq!(updated.notice, "direction `dir-release-planning` updated");
+        assert!(updated.management.directions.iter().any(|direction| {
+            direction.id == "dir-release-planning"
+                && direction.title == "Release Execution"
+                && direction.state == "paused"
+        }));
+        assert_eq!(
+            retained.notice,
+            "default direction `general-workstream` is retained"
+        );
+        assert_eq!(
+            deleted.notice,
+            "direction `dir-release-planning` deleted with 0 child tasks"
+        );
+        assert!(
+            !deleted
+                .management
+                .directions
+                .iter()
+                .any(|direction| direction.id == "dir-release-planning")
+        );
+    }
+
+    #[test]
+    fn task_crud_create_and_update_round_trips_through_management_view() {
+        let fixture = TestAdminFixture::new("admin-crud-task-upsert");
+        let added = fixture
+            .facade
+            .upsert_task(task_request(
+                "",
+                "",
+                "Ship admin task bridge",
+                "Create through admin",
+                "ready",
+                "70",
+                "5",
+                "operator priority",
+                "",
+                "",
+            ))
+            .expect("task create should commit through shared mutation service");
+        let task_id = added
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.title == "Ship admin task bridge")
+            .expect("created task should be visible")
+            .id
+            .clone();
+        let updated = fixture
+            .facade
+            .upsert_task(task_request(
+                &task_id,
+                "general-workstream",
+                "Updated admin task",
+                "Updated through admin",
+                "awaiting_user",
+                "65",
+                "-2",
+                "operator update",
+                "",
+                "",
+            ))
+            .expect("task update should commit through shared mutation service");
+        let reloaded_task = updated
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .expect("updated task should remain visible");
+
+        assert_eq!(added.notice, format!("task `{task_id}` added"));
+        assert_eq!(updated.notice, format!("task `{task_id}` updated"));
+        assert_eq!(reloaded_task.title, "Updated admin task");
+        assert_eq!(reloaded_task.description, "Updated through admin");
+        assert_eq!(reloaded_task.status, "awaiting_user");
+        assert_eq!(reloaded_task.base_priority, 65);
+        assert_eq!(reloaded_task.dynamic_priority_delta, -2);
+        assert_eq!(reloaded_task.priority_reason, "operator update");
+    }
+
+    #[test]
+    fn task_delete_removes_task_references_and_runtime_projections() {
+        let fixture = TestAdminFixture::new("admin-crud-task-delete");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded documents should load");
+        documents.directions = direction_catalog(vec![direction("general-workstream")]);
+        documents.task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![
+                task(
+                    "kept-dependency-task",
+                    "general-workstream",
+                    vec!["deleted-task"],
+                    Vec::new(),
+                ),
+                task(
+                    "kept-blocked-task",
+                    "general-workstream",
+                    Vec::new(),
+                    vec!["deleted-task"],
+                ),
+                task("deleted-task", "general-workstream", Vec::new(), Vec::new()),
+            ],
+        };
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("fixture documents should commit");
+        fixture
+            .authority_port
+            .upsert_runtime_slot_lease(
+                &fixture.workspace.path,
+                &slot_lease(
+                    "slot-1",
+                    "deleted-task",
+                    ParallelModeSlotLeaseState::Running,
+                ),
+            )
+            .expect("runtime slot lease should persist");
+        fixture
+            .authority_port
+            .upsert_runtime_distributor_queue_record(
+                &fixture.workspace.path,
+                &queue_record(
+                    "queue-1",
+                    "deleted-task",
+                    ParallelModeQueueItemState::Queued,
+                ),
+            )
+            .expect("runtime queue record should persist");
+
+        let outcome = fixture
+            .facade
+            .delete_task(PlanningAdminTaskDeleteRequest {
+                id: "deleted-task".to_string(),
+            })
+            .expect("task delete should remove task and runtime residue");
+        let kept_task = outcome
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.id == "kept-dependency-task")
+            .expect("dependency task should remain");
+        let blocked_task = outcome
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.id == "kept-blocked-task")
+            .expect("blocked task should remain");
+        let runtime = fixture
+            .authority_port
+            .load_runtime_projections(&fixture.workspace.path)
+            .expect("runtime projection should reload after cleanup");
+
+        assert_eq!(outcome.notice, "task `deleted-task` deleted");
+        assert!(
+            !outcome
+                .management
+                .tasks
+                .iter()
+                .any(|task| task.id == "deleted-task")
+        );
+        assert_eq!(kept_task.depends_on_text, "");
+        assert_eq!(blocked_task.blocked_by_text, "");
+        assert!(runtime.slot_leases.is_empty());
+        assert!(runtime.distributor_queue_records.is_empty());
+    }
+
+    #[test]
+    fn task_delete_rejects_blank_and_missing_ids() {
+        let fixture = TestAdminFixture::new("admin-crud-task-delete-errors");
+
+        let blank = fixture
+            .facade
+            .delete_task(PlanningAdminTaskDeleteRequest {
+                id: " ".to_string(),
+            })
+            .expect_err("blank task id should fail");
+        let missing = fixture
+            .facade
+            .delete_task(PlanningAdminTaskDeleteRequest {
+                id: "missing-task".to_string(),
+            })
+            .expect_err("missing task id should fail");
+
+        assert_eq!(blank.to_string(), "task id is required");
+        assert_eq!(missing.to_string(), "task `missing-task` was not found");
+    }
 
     #[test]
     fn admin_task_create_maps_blank_fields_to_common_defaults() {
@@ -333,5 +592,296 @@ mod tests {
         assert_eq!(input.priority_reason.as_deref(), Some("waiting for review"));
         assert_eq!(input.depends_on, Some(vec!["task-a".to_string()]));
         assert_eq!(input.blocked_by, Some(vec!["task-b".to_string()]));
+    }
+
+    #[test]
+    fn admin_task_parser_rejects_invalid_text_status_numbers_and_ids() {
+        let blank_title = task_command_from_request(task_request(
+            "",
+            "",
+            " ",
+            "description",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ))
+        .expect_err("blank create title should fail");
+        let bad_status = task_command_from_request(task_request(
+            "",
+            "",
+            "Task",
+            "description",
+            "unknown",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ))
+        .expect_err("unknown status should fail");
+        let bad_priority = task_command_from_request(task_request(
+            "",
+            "",
+            "Task",
+            "description",
+            "",
+            "high",
+            "",
+            "",
+            "",
+            "",
+        ))
+        .expect_err("non-integer priority should fail");
+        let bad_direction = task_command_from_request(task_request(
+            "",
+            "bad direction",
+            "Task",
+            "description",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ))
+        .expect_err("invalid direction id should fail");
+        let bad_task_id = task_command_from_request(task_request(
+            "bad/task",
+            "",
+            "Task",
+            "description",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ))
+        .expect_err("invalid update task id should fail");
+
+        assert_eq!(blank_title.to_string(), "task title is required");
+        assert_eq!(bad_status.to_string(), "unknown task status `unknown`");
+        assert!(
+            bad_priority
+                .to_string()
+                .starts_with("base priority must be an integer:")
+        );
+        assert_eq!(
+            bad_direction.to_string(),
+            "direction id `bad direction` must not contain whitespace or path separators"
+        );
+        assert_eq!(
+            bad_task_id.to_string(),
+            "task id `bad/task` must not contain whitespace or path separators"
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn task_request(
+        id: &str,
+        direction_id: &str,
+        title: &str,
+        description: &str,
+        status: &str,
+        base_priority: &str,
+        dynamic_priority_delta: &str,
+        priority_reason: &str,
+        depends_on_text: &str,
+        blocked_by_text: &str,
+    ) -> PlanningAdminTaskMutationRequest {
+        PlanningAdminTaskMutationRequest {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            status: status.to_string(),
+            base_priority: base_priority.to_string(),
+            dynamic_priority_delta: dynamic_priority_delta.to_string(),
+            priority_reason: priority_reason.to_string(),
+            depends_on_text: depends_on_text.to_string(),
+            blocked_by_text: blocked_by_text.to_string(),
+        }
+    }
+
+    fn direction_request(
+        id: &str,
+        title: &str,
+        state: &str,
+        summary: &str,
+    ) -> PlanningAdminDirectionMutationRequest {
+        PlanningAdminDirectionMutationRequest {
+            id: id.to_string(),
+            title: title.to_string(),
+            summary: summary.to_string(),
+            success_criteria_text: "done".to_string(),
+            scope_hints_text: "scope".to_string(),
+            detail_doc_path: String::new(),
+            state: state.to_string(),
+        }
+    }
+
+    fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::Stop,
+                prompt_path: String::new(),
+            },
+            directions,
+        }
+    }
+
+    fn direction(id: &str) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: format!("Direction {id}"),
+            summary: format!("Summary for {id}"),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state: DirectionState::Active,
+        }
+    }
+
+    fn task(
+        id: &str,
+        direction_id: &str,
+        depends_on: Vec<&str>,
+        blocked_by: Vec<&str>,
+    ) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            direction_relation_note: "relates to the direction".to_string(),
+            title: format!("Task {id}"),
+            description: "Do the task".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: depends_on.into_iter().map(str::to_string).collect(),
+            blocked_by: blocked_by.into_iter().map(str::to_string).collect(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+
+    fn slot_lease(
+        slot_id: &str,
+        task_id: &str,
+        state: ParallelModeSlotLeaseState,
+    ) -> ParallelModeSlotLeaseSnapshot {
+        ParallelModeSlotLeaseSnapshot::new(
+            slot_id,
+            task_id,
+            format!("Task {task_id}"),
+            "agent-1",
+            format!("akra-agent/{slot_id}/{task_id}"),
+            "/tmp/worktree",
+            state,
+            "2026-05-12T00:00:00+00:00",
+            Some("2026-05-12T00:01:00+00:00".to_string()),
+        )
+    }
+
+    fn queue_record(
+        queue_item_id: &str,
+        task_id: &str,
+        queue_state: ParallelModeQueueItemState,
+    ) -> PlanningAuthorityDistributorQueueRecord {
+        PlanningAuthorityDistributorQueueRecord {
+            queue_item_id: queue_item_id.to_string(),
+            queue_order_key: 1,
+            session_key: "slot-1@2026-05-12T00:00:00+00:00".to_string(),
+            slot_id: "slot-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            task_id: task_id.to_string(),
+            task_title: format!("Task {task_id}"),
+            source_branch: "prerelease".to_string(),
+            source_commit_sha: "source".to_string(),
+            branch_name: format!("akra-agent/slot-1/{task_id}"),
+            worktree_path: "/tmp/worktree".to_string(),
+            commit_sha: "commit".to_string(),
+            original_commit_sha: None,
+            planning_refresh_state: "complete".to_string(),
+            integration_state: "queued".to_string(),
+            conflict_files: Vec::new(),
+            recovery_note: None,
+            validation_summary: "validation unavailable".to_string(),
+            authority_refresh_outcome: "not refreshed".to_string(),
+            github_capabilities: None,
+            pull_request_number: None,
+            pull_request_url: None,
+            queue_state,
+            integration_note: "queued".to_string(),
+            enqueued_at: "2026-05-12T00:00:00+00:00".to_string(),
+            updated_at: "2026-05-12T00:00:00+00:00".to_string(),
+        }
+    }
+
+    struct TestAdminFixture {
+        workspace: TempPlanningWorkspace,
+        facade: crate::application::service::planning::PlanningAdminFacadeService,
+        authority_port: Arc<dyn PlanningAuthorityPort>,
+    }
+
+    impl TestAdminFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            let authority_port: Arc<dyn PlanningAuthorityPort> = sqlite.clone();
+            let task_repository_port: Arc<dyn PlanningTaskRepositoryPort> = sqlite;
+            let planning = PlanningServices::from_ports(
+                workspace_port.clone(),
+                authority_port.clone(),
+                task_repository_port.clone(),
+                Arc::new(NoopPlanningWorkerPort),
+            );
+            let facade =
+                crate::application::service::planning::PlanningAdminFacadeService::from_planning_with_authority(
+                    workspace.path.clone(),
+                    planning,
+                    workspace_port,
+                    authority_port.clone(),
+                    task_repository_port,
+                );
+            Self {
+                workspace,
+                facade,
+                authority_port,
+            }
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
