@@ -1150,7 +1150,7 @@
     </div>
     <div class="top-stat">
       <small>Automation Epoch</small>
-      <strong>#{{ dashboard.automation_epoch }}</strong>
+      <strong data-automation-epoch>#{{ dashboard.automation_epoch }}</strong>
     </div>
     <div class="top-stat">
       <small>Last Updated</small>
@@ -1707,10 +1707,7 @@
     };
   };
 
-  const agentUnits = root
-    ? [...root.querySelectorAll(".desk[data-agent-id]")].map(makeAgentUnit)
-    : [];
-
+  let agentUnits = [];
   let stageBurst = 0;
   window.addEventListener("akra:mission-pulse", (event) => {
     const count = Number(event.detail?.count || 1);
@@ -1742,6 +1739,15 @@
       unit.group.x = unit.point.x;
       unit.group.y = unit.point.y;
     }
+  };
+
+  const rebuildAgentUnits = () => {
+    for (const child of packetLayer.removeChildren()) child.destroy({ children: true });
+    for (const child of agentLayer.removeChildren()) child.destroy({ children: true });
+    agentUnits = root
+      ? [...root.querySelectorAll(".desk[data-agent-id]")].map(makeAgentUnit)
+      : [];
+    syncLayout();
   };
 
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -1776,7 +1782,8 @@
     }
   });
 
-  syncLayout();
+  rebuildAgentUnits();
+  window.addEventListener("akra:dashboard-rendered", rebuildAgentUnits);
   const onResize = () => syncLayout();
   window.addEventListener("resize", onResize);
   if (typeof ResizeObserver !== "undefined") {
@@ -1818,6 +1825,45 @@
   };
 
   const formatValue = (value, fallback = "-") => value === null || value === undefined ? fallback : String(value);
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const optionalText = (value, fallback = "-") => {
+    const text = formatValue(value, fallback);
+    return text.trim() === "" ? fallback : text;
+  };
+  const createText = (tagName, className, value) => {
+    const node = document.createElement(tagName);
+    if (className) node.className = className;
+    node.textContent = formatValue(value);
+    return node;
+  };
+  const setDataset = (node, values) => {
+    for (const [key, value] of Object.entries(values)) {
+      node.dataset[key] = value === null || value === undefined ? "" : String(value);
+    }
+  };
+  const panelTitle = (title, subtitle) => {
+    const header = document.createElement("div");
+    header.className = "panel-title";
+    header.append(createText("h3", "", title), createText("small", "", subtitle));
+    return header;
+  };
+  const metricLine = (label, value, note) => {
+    const line = document.createElement("div");
+    line.className = "metric-line";
+    line.append(createText("small", "", label), createText("strong", "", value));
+    if (note) line.appendChild(createText("small", "", note));
+    return line;
+  };
+  const updatePanel = (selector, children) => {
+    const panel = root.querySelector(selector);
+    if (panel) panel.replaceChildren(...children);
+  };
+  const updateKpiNote = (key, value, className = "") => {
+    const note = root.querySelector(`[data-kpi="${key}"] small:last-child`);
+    if (!note) return;
+    note.className = className;
+    note.textContent = formatValue(value);
+  };
   const eventPanel = root.querySelector("#events");
   const eventDrawer = root.querySelector("[data-event-drawer]");
   const eventFeedStatus = root.querySelector("[data-event-feed-status]");
@@ -2035,8 +2081,12 @@
     const source = [...root.querySelectorAll(detailSourceSelector)]
       .find((node) => detailSourceKey(node) === selectedKey);
     if (source) {
-      setSelectedDetail(source);
-      markRelated(source);
+      if (detailDrawer?.classList.contains("is-open")) {
+        openDetailDrawer(source);
+      } else {
+        setSelectedDetail(source);
+        markRelated(source);
+      }
     } else if (selectedKey.startsWith("event:")) {
       setSelectedDetail(null);
       clearRelated();
@@ -2197,8 +2247,487 @@
     if (insertedCount > 0) pulseStage(insertedCount);
   };
 
+  const agentSeverity = (status) => {
+    if (status === "blocked") return "danger";
+    if (status === "cleanup") return "warning";
+    return "normal";
+  };
+
+  const createCampaignLane = (lane) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `campaign-lane ${severityClass(lane.severity)}`;
+    setDataset(button, {
+      detailType: "campaignLane",
+      detailTitle: `시도 레인 · ${optionalText(lane.agentId)}`,
+      detailSubtitle: `${optionalText(lane.classLabel)} / ${optionalText(lane.slotId)}`,
+      detailState: lane.state,
+      detailSeverity: lane.severity,
+      detailAgent: lane.agentId,
+      detailSlot: lane.slotId,
+      detailTask: lane.taskTitle,
+      detailProgress: lane.progressLabel,
+      detailScore: lane.scoreLabel,
+      detailSummary: lane.summary,
+      agentId: lane.agentId,
+      slotId: lane.slotId
+    });
+    const body = document.createElement("div");
+    body.append(
+      createText("strong", "", `${optionalText(lane.agentId)} · ${optionalText(lane.classLabel)}`),
+      createText("small", "", lane.taskTitle),
+      createText("small", "", lane.summary)
+    );
+    button.append(body, createText("span", "score-chip", lane.scoreLabel));
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const createCampaignAttempt = (attempt) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `attempt-row ${severityClass(attempt.severity)}`;
+    setDataset(button, {
+      detailType: "campaignAttempt",
+      detailTitle: attempt.label,
+      detailSubtitle: attempt.source,
+      detailState: attempt.state,
+      detailSeverity: attempt.severity,
+      detailTime: attempt.timestamp,
+      detailScore: attempt.scoreLabel,
+      detailSummary: attempt.summary
+    });
+    const body = document.createElement("div");
+    body.append(
+      createText("small", "", `${optionalText(attempt.source)} · ${optionalText(attempt.timestamp)}`),
+      createText("strong", "", attempt.summary)
+    );
+    button.append(
+      createText("strong", "", attempt.label),
+      body,
+      createText("span", "attempt-state", attempt.state)
+    );
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const createCampaignIntel = (intel) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `intel-card ${severityClass(intel.severity)}`;
+    setDataset(button, {
+      detailType: "campaignIntel",
+      detailTitle: `정보 · ${optionalText(intel.label)}`,
+      detailSubtitle: intel.value,
+      detailState: intel.value,
+      detailSeverity: intel.severity,
+      detailNote: intel.note
+    });
+    button.append(
+      createText("small", "", intel.label),
+      createText("strong", "", intel.value),
+      createText("small", "", intel.note)
+    );
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const renderCampaign = (dashboard) => {
+    const campaign = dashboard.campaign || {};
+    const summary = document.createElement("div");
+    summary.className = "campaign-summary";
+    for (const [label, value] of [
+      ["활성 시도", campaign.activeLaneCount],
+      ["최근 로그", campaign.visibleAttemptCount],
+      ["정보 신호", campaign.signalCount]
+    ]) {
+      const item = document.createElement("span");
+      item.append(createText("small", "", label), createText("strong", "", formatValue(value, "0")));
+      summary.appendChild(item);
+    }
+
+    const lanes = asArray(campaign.laneCards);
+    const laneBody = lanes.length > 0
+      ? (() => {
+          const list = document.createElement("div");
+          list.className = "campaign-lanes";
+          list.append(...lanes.map(createCampaignLane));
+          return list;
+        })()
+      : createText("p", "", dashboard.agents?.emptyState || "표시할 시도 레인이 없습니다.");
+    updatePanel("#campaign", [
+      panelTitle("시도 보드", campaign.summary || ""),
+      summary,
+      laneBody
+    ]);
+
+    const attempts = asArray(campaign.attempts);
+    const attemptBody = attempts.length > 0
+      ? (() => {
+          const list = document.createElement("div");
+          list.className = "attempt-list";
+          list.append(...attempts.map(createCampaignAttempt));
+          return list;
+        })()
+      : createText("p", "", "아직 표시할 시도 로그가 없습니다.");
+    updatePanel("#attempts", [
+      panelTitle("최근 시도 로그", `${formatValue(campaign.visibleAttemptCount, "0")}/${formatValue(campaign.attemptCount, "0")}`),
+      attemptBody
+    ]);
+
+    const intelGrid = document.createElement("div");
+    intelGrid.className = "intel-grid";
+    intelGrid.append(...asArray(campaign.intelCards).map(createCampaignIntel));
+    updatePanel("#intel", [
+      panelTitle("정보 카드", "read-only signals"),
+      intelGrid
+    ]);
+  };
+
+  const createSlotButton = (slot) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `slot-card ${severityClass(slot.severity)}`;
+    setDataset(button, {
+      slotId: slot.slotId,
+      agentId: slot.ownerAgentId,
+      taskId: slot.taskId,
+      detailType: "slot",
+      detailTitle: `풀 슬롯 · ${optionalText(slot.slotId)}`,
+      detailSubtitle: `${optionalText(slot.label)} / ${optionalText(slot.note)}`,
+      detailState: slot.label,
+      detailSeverity: slot.severity,
+      detailOwner: slot.ownerLabel,
+      detailTask: slot.taskId || "-",
+      detailBranch: slot.branchName,
+      detailWorktree: slot.worktreeLabel,
+      detailNote: slot.note
+    });
+    button.title = `${optionalText(slot.branchName)} / ${optionalText(slot.worktreeLabel)} / ${optionalText(slot.note)}`;
+    const body = document.createElement("div");
+    body.append(
+      createText("strong", "", slot.slotId),
+      createText("small", "", slot.label),
+      createText("small", "", slot.ownerAgentId || "-")
+    );
+    const server = document.createElement("span");
+    server.className = "mini-server";
+    server.setAttribute("aria-hidden", "true");
+    button.append(body, server);
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const renderPool = (pool) => {
+    const panel = root.querySelector("#pool");
+    if (!panel || !pool) return;
+    panel.replaceChildren(
+      panelTitle("워크트리 풀", `${formatValue(pool.summary?.running, "0")} / ${formatValue(pool.configuredSize, "0")}`),
+      ...asArray(pool.slots).map(createSlotButton)
+    );
+  };
+
+  const createAgentButton = (agent, index) => {
+    const severity = agentSeverity(agent.status);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `scene-object desk agent-${index % 5 + 1} ${severityClass(severity)}`;
+    setDataset(button, {
+      agentId: agent.agentId,
+      slotId: agent.slotId,
+      taskId: "",
+      detailType: "agent",
+      detailTitle: `요원 · ${optionalText(agent.displayName)}`,
+      detailSubtitle: `${optionalText(agent.agentId)} / ${optionalText(agent.classLabel)}`,
+      detailState: agent.lifecycleState,
+      detailSeverity: severity,
+      detailSlot: agent.slotId,
+      detailTask: agent.taskTitle,
+      detailBranch: agent.branchName,
+      detailRuntime: agent.durationLabel,
+      detailProgress: agent.progressLabel,
+      detailSummary: agent.latestSummary,
+      agentStatus: agent.status,
+      agentProgress: agent.progressLabel
+    });
+    button.title = `${optionalText(agent.branchName)} / ${optionalText(agent.taskTitle)} / ${optionalText(agent.latestSummary)}`;
+    const sprite = document.createElement("span");
+    sprite.className = "agent-sprite";
+    sprite.setAttribute("aria-hidden", "true");
+    sprite.appendChild(createText("span", "sprite-label", agent.displayName));
+    const label = document.createElement("div");
+    label.className = "object-label";
+    label.append(
+      createText("strong", "", agent.agentId),
+      createText("span", "", agent.taskTitle),
+      createText("small", "", `${optionalText(agent.slotId)} · ${optionalText(agent.lifecycleState)}`)
+    );
+    button.append(createText("span", "speech", agent.bubbleLabel), sprite, label);
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const renderAgents = (agents) => {
+    const board = root.querySelector(".office-board");
+    if (!board || !agents) return;
+    for (const node of board.querySelectorAll(".desk[data-agent-id]")) node.remove();
+    const anchor = board.querySelector(".distributor-desk") || board.querySelector(".event-board");
+    asArray(agents.entries).forEach((agent, index) => {
+      board.insertBefore(createAgentButton(agent, index), anchor);
+    });
+  };
+
+  const syncStageHud = (dashboard) => {
+    const hud = root.querySelector(".stage-hud");
+    if (!hud) return;
+    const strong = hud.querySelector("strong");
+    const small = hud.querySelector("small");
+    if (strong) strong.textContent = `${formatValue(dashboard.campaign?.activeLaneCount, "0")} lanes`;
+    if (small) {
+      small.textContent = `${optionalText(dashboard.distributor?.barrierState)} · ${formatValue(dashboard.eventFeed?.totalEventCount, "0")} signals`;
+    }
+  };
+
+  const syncDistributorDesk = (distributor) => {
+    const desk = root.querySelector(".distributor-desk");
+    if (!desk || !distributor) return;
+    setDataset(desk, {
+      detailType: "distributor",
+      detailTitle: "분배관 · Distributor",
+      detailSubtitle: distributor.roleLabel,
+      detailState: distributor.barrierState,
+      detailSeverity: distributor.blockedReason ? "danger" : "normal",
+      detailHead: distributor.headSummary,
+      detailDepth: distributor.queueDepth,
+      detailBarrier: distributor.barrierState,
+      detailWorktree: distributor.integrationWorktreeReadiness,
+      detailNote: distributor.note
+    });
+    desk.title = `${optionalText(distributor.roleLabel)} / ${optionalText(distributor.integrationWorktreeReadiness)}`;
+    const label = desk.querySelector(".object-label");
+    if (label) {
+      label.replaceChildren(
+        createText("strong", "", "분배관"),
+        createText("span", "", distributor.headSummary),
+        createText("small", "", `queue ${formatValue(distributor.queueDepth, "0")}`)
+      );
+    }
+  };
+
+  const syncEventBoard = (dashboard) => {
+    const board = root.querySelector(".event-board");
+    if (!board) return;
+    const feed = dashboard.eventFeed || {};
+    setDataset(board, {
+      detailType: "eventFeed",
+      detailTitle: "실시간 이벤트",
+      detailSubtitle: "Runtime event feed",
+      detailState: "LIVE",
+      detailSeverity: "normal",
+      detailVisible: feed.visibleEventCount,
+      detailTotal: feed.totalEventCount,
+      detailNewest: feed.newestSequence || 0
+    });
+    board.title = `Runtime event feed / total ${formatValue(feed.totalEventCount, "0")}`;
+    const label = board.querySelector(".object-label");
+    if (label) {
+      label.replaceChildren(
+        createText("strong", "", "실시간 이벤트"),
+        createText("span", "", `${formatValue(asArray(dashboard.events).length, "0")} visible`),
+        createText("small", "", dashboard.workspace?.branch || "-")
+      );
+    }
+  };
+
+  const renderBoard = (dashboard) => {
+    renderPool(dashboard.pool);
+    renderAgents(dashboard.agents);
+    syncStageHud(dashboard);
+    syncDistributorDesk(dashboard.distributor);
+    syncEventBoard(dashboard);
+  };
+
+  const renderMetrics = (metrics) => {
+    if (!metrics) return;
+    const radar = document.createElement("div");
+    radar.className = "radar";
+    radar.setAttribute("aria-hidden", "true");
+    const badges = document.createElement("div");
+    badges.className = "badges";
+    badges.append(...asArray(metrics.badges).map((badge) => createText("span", "badge", badge)));
+    updatePanel("#metrics", [
+      panelTitle("길드 성과", "snapshot"),
+      radar,
+      badges
+    ]);
+  };
+
+  const renderSelectedTask = (dashboard) => {
+    const task = dashboard.selectedTask;
+    const children = [panelTitle("작업 상세", "selected session")];
+    if (!task) {
+      children.push(createText("p", "", dashboard.agents?.emptyState || "선택된 작업이 없습니다."));
+      updatePanel("#tasks", children);
+      return;
+    }
+
+    children.push(
+      metricLine(task.taskId, task.taskTitle),
+      metricLine("담당 요원", `${optionalText(task.agentId)} / ${optionalText(task.slotId)}`),
+      metricLine("브랜치", task.branchName)
+    );
+    const progressLine = document.createElement("div");
+    progressLine.className = "metric-line";
+    const track = document.createElement("span");
+    track.className = "progress-track";
+    const fill = document.createElement("span");
+    fill.className = "progress-fill";
+    fill.style.width = `${Number(task.progressPercent || 0)}%`;
+    track.appendChild(fill);
+    progressLine.append(createText("small", "", `진행률 ${formatValue(task.progressPercent, "0")}%`), track);
+    children.push(progressLine, metricLine("검증 결과", task.validationSummary));
+
+    const timeline = document.createElement("div");
+    timeline.className = "timeline";
+    const list = document.createElement("ul");
+    list.className = "trail-list";
+    for (const trail of asArray(task.trail)) list.appendChild(createText("li", "", trail));
+    timeline.append(createText("small", "", "트레일"), list);
+    children.push(timeline);
+    updatePanel("#tasks", children);
+  };
+
+  const createPipelineStep = (step) => {
+    const node = document.createElement("div");
+    node.className = `step ${step.state || "waiting"}`;
+    node.append(createText("strong", "", step.label), document.createElement("br"), createText("small", "", step.state));
+    return node;
+  };
+
+  const createQueueItem = (item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "queue-row";
+    setDataset(button, {
+      agentId: item.sourceAgent,
+      detailType: "queueItem",
+      detailTitle: `큐 작업 · ${optionalText(item.sourceAgent)}`,
+      detailSubtitle: `${optionalText(item.queueState)} / ${optionalText(item.commitShortSha)}`,
+      detailState: item.queueState,
+      detailSeverity: "info",
+      detailTask: item.taskTitle,
+      detailAgent: item.sourceAgent,
+      detailBranch: item.branchName,
+      detailCommit: item.commitShortSha,
+      detailNote: item.integrationNote
+    });
+    const body = document.createElement("div");
+    body.append(
+      createText("strong", "", item.taskTitle),
+      createText("small", "", `${optionalText(item.branchName)} · ${optionalText(item.commitShortSha)}`)
+    );
+    button.append(
+      createText("span", "agent-token", item.sourceAgent),
+      body,
+      createText("span", "queue-state", item.queueState)
+    );
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const renderPipeline = (distributor) => {
+    if (!distributor) return;
+    const pipeline = document.createElement("div");
+    pipeline.className = "pipeline";
+    pipeline.append(...asArray(distributor.pipeline).map(createPipelineStep));
+    const children = [panelTitle("배포 파이프라인", distributor.barrierState), pipeline];
+    const queueItems = asArray(distributor.queueItems);
+    if (queueItems.length === 0) {
+      children.push(createText("p", "", distributor.headSummary));
+    } else {
+      children.push(...queueItems.map(createQueueItem));
+    }
+    updatePanel("#pipeline", children);
+  };
+
+  const renderSystem = (dashboard) => {
+    const metrics = dashboard.metrics || {};
+    const workspace = dashboard.workspace || {};
+    const chips = document.createElement("div");
+    chips.className = "system-grid";
+    chips.append(
+      createText("span", "system-chip", "Git 상태 정상"),
+      createText("span", "system-chip", "GitHub 연동 정상"),
+      createText("span", "system-chip", `Worktree 풀 ${optionalText(workspace.readiness)}`),
+      createText("span", "system-chip", `저장소 ${workspace.branch || "-"}`)
+    );
+    updatePanel("#system", [
+      panelTitle("운영 지표", "system status"),
+      metricLine("풀 활용률", `${formatValue(metrics.poolUtilizationPercent, "0")}%`),
+      metricLine("활성 요원", metrics.activeAgentCount),
+      metricLine("대기 작업", metrics.waitingTaskCount),
+      metricLine("blocked slot", metrics.blockedSlotCount),
+      metricLine("지표 출처", metrics.sourceLabel, metrics.mockMetricNote),
+      chips
+    ]);
+  };
+
+  const renderOpsStatus = (workspace) => {
+    const ops = root.querySelector(".ops-status");
+    if (!ops || !workspace) return;
+    const items = [
+      ["목적", workspace.purposeLabel],
+      ["게임화 정책", workspace.gamificationPolicy],
+      ["도메인 매핑", workspace.domainMappingNote],
+      ["readiness", workspace.readinessNotice, workspace.blockedAction]
+    ];
+    ops.replaceChildren(...items.map(([label, value, note]) => {
+      const item = document.createElement("div");
+      item.append(createText("small", "", label), createText("strong", "", value));
+      if (note) item.appendChild(createText("small", "blocked-copy", note));
+      return item;
+    }));
+  };
+
+  const syncTopNotice = (workspace) => {
+    let notice = root.querySelector(".notice.error-notice");
+    if (!workspace?.topNotice) {
+      notice?.remove();
+      return;
+    }
+    if (!notice) {
+      notice = document.createElement("div");
+      notice.className = "notice error-notice";
+      root.insertBefore(notice, root.querySelector(".ops-status"));
+    }
+    notice.textContent = workspace.topNotice;
+  };
+
+  const dashboardSignature = (dashboard) => JSON.stringify({
+    agents: asArray(dashboard.agents?.entries).map((agent) => [agent.agentId, agent.slotId, agent.lifecycleState, agent.latestSummary]),
+    pool: asArray(dashboard.pool?.slots).map((slot) => [slot.slotId, slot.state, slot.ownerLabel, slot.note]),
+    distributor: [dashboard.distributor?.barrierState, dashboard.distributor?.queueDepth, dashboard.distributor?.headSummary],
+    campaign: [dashboard.campaign?.activeLaneCount, dashboard.campaign?.visibleAttemptCount, dashboard.campaign?.signalCount],
+    task: dashboard.selectedTask ? [dashboard.selectedTask.taskId, dashboard.selectedTask.state, dashboard.selectedTask.progressPercent] : []
+  });
+
+  const renderDashboardPanels = (dashboard) => {
+    syncTopNotice(dashboard.workspace);
+    renderOpsStatus(dashboard.workspace);
+    renderCampaign(dashboard);
+    renderBoard(dashboard);
+    renderMetrics(dashboard.metrics);
+    renderSelectedTask(dashboard);
+    renderPipeline(dashboard.distributor);
+    renderSystem(dashboard);
+    initializeDetailControls();
+    syncSelectedDetail();
+    window.dispatchEvent(new CustomEvent("akra:dashboard-rendered", { detail: { dashboard } }));
+  };
+
   const updateDashboard = (dashboard) => {
     setText("[data-last-updated]", dashboard.generatedTimeLabel);
+    setText("[data-automation-epoch]", `#${formatValue(dashboard.automationEpoch, "0")}`);
     const values = {
       totalTasks: formatValue(dashboard.kpis.totalTasks),
       successRate: dashboard.kpis.successRate == null ? "-" : `${dashboard.kpis.successRate}%`,
@@ -2217,8 +2746,19 @@
         window.setTimeout(() => node.closest("[data-kpi]")?.classList.remove("has-changed"), 520);
       }
     }
-    const latest = dashboard.eventFeed?.newestSequence;
-    if (Number.isFinite(latest)) root.dataset.latestEventSequence = String(latest);
+    updateKpiNote("totalTasks", dashboard.kpis.metricSourceLabel, "positive");
+    updateKpiNote("successRate", dashboard.kpis.successRate == null ? "미집계" : dashboard.kpis.metricSourceLabel);
+    updateKpiNote("todayThroughput", dashboard.kpis.todayThroughput == null ? "미집계" : dashboard.kpis.metricSourceLabel);
+    updateKpiNote("agents", "roster snapshot", "positive");
+    updateKpiNote("pool", `여유 ${formatValue(dashboard.kpis.poolIdle, "0")}`);
+    updateKpiNote("queueDepth", dashboard.kpis.queueDepthBasis);
+    updateKpiNote("readiness", "readiness snapshot");
+    updateKpiNote("distributor", dashboard.distributor?.note || "");
+    const previousSignature = root.dataset.dashboardSignature || "";
+    const nextSignature = dashboardSignature(dashboard);
+    renderDashboardPanels(dashboard);
+    if (previousSignature && previousSignature !== nextSignature) pulseStage(1);
+    root.dataset.dashboardSignature = nextSignature;
     if (Number.isFinite(dashboard.eventFeed?.totalEventCount)) {
       root.dataset.eventTotalCount = String(dashboard.eventFeed.totalEventCount);
     }
