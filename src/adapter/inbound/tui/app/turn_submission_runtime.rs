@@ -6,9 +6,13 @@
 #[path = "turn_submission_runtime/post_turn_execution.rs"]
 mod post_turn_execution;
 
+use crate::application::service::manual_prompt_preparation::{
+    ManualPlanningBootstrapFailureKind, ManualPromptPreparationRequest,
+    ManualPromptPreparationResult,
+};
 use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
 use crate::application::service::planning::{
-    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, QUEUED_TASK_TRANSCRIPT_TEXT,
+    ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
 use crate::core::app::{AppCommand, CorePromptOrigin, TurnSubmissionRequest};
 use post_turn_execution::PostTurnEvaluationRequest;
@@ -195,9 +199,6 @@ impl NativeTuiApp {
         if transcript_text.is_empty() {
             return;
         }
-        if !self.ensure_manual_planning_workspace(&transcript_text) {
-            return;
-        }
 
         let workspace_directory = self.planning_workspace_directory();
         let (parent_thread_id, parent_turn_id) = match &self.conversation_state {
@@ -208,18 +209,106 @@ impl NativeTuiApp {
             ),
             ConversationState::Loading | ConversationState::Failed(_) => (None, None),
         };
-        match self
-            .application
-            .planning()
-            .runtime()
-            .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+        self.dispatch_core_command(AppCommand::PrepareManualPrompt(Box::new(
+            ManualPromptPreparationRequest {
                 workspace_directory,
-                raw_prompt: transcript_text.clone(),
-                legacy_source_turn_id: None,
+                raw_prompt: transcript_text,
                 parent_thread_id,
                 parent_turn_id,
-            }) {
+            },
+        )));
+    }
+
+    pub(super) fn apply_manual_prompt_preparation(
+        &mut self,
+        result: ManualPromptPreparationResult,
+    ) {
+        self.replace_ready_conversation_planning_runtime_projection(
+            result.runtime_projection().clone(),
+        );
+        match result {
+            ManualPromptPreparationResult::PromptReady {
+                transcript_text,
+                intake,
+                ..
+            } => {
+                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
+                    return;
+                }
+                self.apply_manual_prompt_intake_outcome(*intake, transcript_text);
+            }
+            ManualPromptPreparationResult::BootstrapReviewRequired {
+                transcript_text,
+                review,
+                ..
+            } => {
+                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
+                    return;
+                }
+                let draft_name = review.draft_name.clone();
+                self.planning_init_overlay_ui_state
+                    .open_simple_review_summary(
+                        review.draft_name,
+                        review.staged_file_count,
+                        review.validation_report,
+                    );
+                self.planning_draft_editor_ui_state.reset();
+                self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!(
+                        "planning bootstrap promote blocked / draft: {draft_name} / validation needs attention"
+                    ),
+                });
+            }
+            ManualPromptPreparationResult::BootstrapFailed {
+                transcript_text,
+                kind,
+                reason,
+                ..
+            } => {
+                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
+                    return;
+                }
+                let status_text = match kind {
+                    ManualPlanningBootstrapFailureKind::Stage => {
+                        format!("planning bootstrap failed: {reason}")
+                    }
+                    ManualPlanningBootstrapFailureKind::Promote => {
+                        format!("planning bootstrap promote failed: {reason}")
+                    }
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
+            ManualPromptPreparationResult::Rejected {
+                transcript_text,
+                reason,
+                ..
+            } => {
+                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
+                    return;
+                }
+                self.dispatch_conversation_input(
+                    ConversationInputEvent::ManualPromptPreparationFailed {
+                        transcript_text,
+                        status_text: format!("turn preparation failed / {reason}"),
+                    },
+                );
+            }
+        }
+    }
+
+    fn apply_manual_prompt_intake_outcome(
+        &mut self,
+        outcome: ManualPromptIntakeOutcome,
+        transcript_text: String,
+    ) {
+        match outcome {
             ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
+                if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
+                    return;
+                }
                 let _ = self.submit_prompt_with_transcript(
                     handoff.prompt,
                     handoff.transcript_text,
@@ -228,6 +317,9 @@ impl NativeTuiApp {
             }
             ManualPromptIntakeOutcome::TaskCommitted { handoff, .. }
             | ManualPromptIntakeOutcome::TaskUpdated { handoff, .. } => {
+                if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
+                    return;
+                }
                 let _ = self.submit_prompt_with_transcript(
                     handoff.prompt,
                     handoff.transcript_text.clone(),
@@ -246,6 +338,15 @@ impl NativeTuiApp {
                     },
                 );
             }
+        }
+    }
+
+    fn manual_prompt_preparation_still_matches_input(&self, transcript_text: &str) -> bool {
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                conversation.input_buffer.trim() == transcript_text
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => false,
         }
     }
 
@@ -300,77 +401,6 @@ impl NativeTuiApp {
             transcript_text,
             origin: prompt_origin,
         })
-    }
-
-    fn ensure_manual_planning_workspace(&mut self, manual_prompt: &str) -> bool {
-        let workspace_directory = self.planning_workspace_directory();
-        let runtime_projection = self.load_planning_runtime_projection(&workspace_directory);
-        if runtime_projection.workspace_present() {
-            self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
-                &workspace_directory,
-            );
-            return true;
-        }
-        if manual_prompt.trim().is_empty() {
-            return false;
-        }
-
-        // First-use simple mode creates and immediately promotes a default planning
-        // scaffold. Validation failures open the review overlay instead of silently
-        // submitting a prompt against missing planning files.
-        match self
-            .application
-            .planning()
-            .workspace()
-            .stage_simple_mode_draft(&workspace_directory)
-        {
-            Ok(stage_result) => {
-                let draft_name = stage_result.draft_name.clone();
-                match self
-                    .application
-                    .planning()
-                    .workspace()
-                    .promote_staged_draft(&workspace_directory, &draft_name)
-                {
-                    Ok(result) => {
-                        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
-                            &workspace_directory,
-                        );
-                        if result.promoted_file_count > 0 {
-                            true
-                        } else {
-                            self.planning_init_overlay_ui_state
-                                .open_simple_review(stage_result);
-                            self.planning_draft_editor_ui_state.reset();
-                            self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
-                            self.dispatch_conversation_input(
-                                ConversationInputEvent::StatusMessageShown {
-                                    status_text: format!(
-                                        "planning bootstrap promote blocked / draft: {} / validation needs attention",
-                                        result.draft_name
-                                    ),
-                                },
-                            );
-                            false
-                        }
-                    }
-                    Err(error) => {
-                        self.dispatch_conversation_input(
-                            ConversationInputEvent::StatusMessageShown {
-                                status_text: format!("planning bootstrap promote failed: {error}"),
-                            },
-                        );
-                        false
-                    }
-                }
-            }
-            Err(error) => {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("planning bootstrap failed: {error}"),
-                });
-                false
-            }
-        }
     }
 
     fn build_auto_follow_transcript_debug_detail(&self, transcript_text: &str) -> Option<String> {

@@ -5,6 +5,7 @@ use super::{
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::manual_prompt_preparation::ManualPromptPreparationResult;
 use crate::application::service::planning::{
     PlanningRuntimeProjection, PlanningTurnExecutionSnapshotCapture,
 };
@@ -36,6 +37,7 @@ pub enum CoreEffectCompletion {
     StartupChecksLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
     ConversationLoaded(Result<Box<ConversationReadySnapshot>, String>),
+    ManualPromptPrepared(Box<ManualPromptPreparationResult>),
     PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
 }
 
@@ -51,6 +53,7 @@ pub enum AppEvent {
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
     TurnStreamSnapshotChanged(TurnStreamSnapshot),
+    ManualPromptPrepared(Box<ManualPromptPreparationResult>),
     PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
     ConversationTurnWorkspaceChanged { workspace_directory: String },
     ParallelModeSupervisorSnapshotInvalidated,
