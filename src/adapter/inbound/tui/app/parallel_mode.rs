@@ -8,16 +8,13 @@ use crate::application::service::parallel_mode::control_plane::ParallelModeContr
 use crate::application::service::parallel_mode::control_plane::parallel_mode_distributor_tick_signature;
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
-    ParallelModeControlPlaneLoadingStage, ParallelModeControlPlanePresentationEvent,
+    ParallelModeControlPlanePresentationEvent,
 };
 use crate::core::app::CoreInput;
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModeAutomationTrigger, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
+    ParallelModeSupervisorSnapshot,
 };
 
 /*
@@ -29,6 +26,11 @@ use crate::domain::parallel_mode::{
 use super::parallel_mode_shell_command::{
     PARALLEL_MODE_SHELL_USAGE_TEXT, ParsedParallelModeShellCommand,
     parse_parallel_mode_shell_argument,
+};
+use super::parallel_presentation_bridge::{
+    ParallelModePresentationAction, ParallelModePresentationBridgeContext,
+    ParallelModePresentationLoadingStage, parallel_mode_presentation_actions,
+    pending_parallel_mode_supervisor_snapshot,
 };
 use super::{
     ConversationInputEvent, ConversationRuntimeEvent, NativeTuiApp, ParallelPanelStateController,
@@ -51,76 +53,42 @@ impl NativeTuiApp {
         events: Vec<ParallelModeControlPlanePresentationEvent>,
     ) -> bool {
         let changed = !events.is_empty();
-        for event in events {
-            self.apply_parallel_mode_control_plane_presentation_event(event);
+        let current_workspace_directory = self.planning_workspace_directory();
+        let context = ParallelModePresentationBridgeContext::new(
+            current_workspace_directory,
+            self.parallel_mode_enabled(),
+        );
+        for action in parallel_mode_presentation_actions(&context, events) {
+            self.apply_parallel_mode_presentation_action(action);
         }
         changed
     }
 
-    fn apply_parallel_mode_control_plane_presentation_event(
-        &mut self,
-        event: ParallelModeControlPlanePresentationEvent,
-    ) {
-        match event {
-            ParallelModeControlPlanePresentationEvent::EnterProgress {
-                workspace_directory,
-                readiness_snapshot,
-                loading_stage,
-                status_text,
-            } => {
-                let stage = match loading_stage {
-                    ParallelModeControlPlaneLoadingStage::ReconcilingPool => {
-                        ParallelModeLoadingStage::ReconcilingPool
-                    }
-                };
-                let supervisor_snapshot = pending_parallel_mode_supervisor_snapshot(
-                    &workspace_directory,
-                    true,
-                    readiness_snapshot.as_ref(),
-                    stage,
-                );
-                self.apply_parallel_mode_enter_progress(
-                    &workspace_directory,
-                    readiness_snapshot,
-                    supervisor_snapshot,
-                    status_text,
-                );
+    fn apply_parallel_mode_presentation_action(&mut self, action: ParallelModePresentationAction) {
+        match action {
+            ParallelModePresentationAction::SyncReadinessProjection(snapshot) => {
+                self.sync_core_parallel_mode_readiness_projection(Some(snapshot));
             }
-            ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
-                workspace_directory,
-                snapshot,
-            } => {
-                if self.planning_workspace_directory() == workspace_directory {
-                    self.sync_core_parallel_mode_readiness_projection(Some(snapshot));
-                }
+            ParallelModePresentationAction::SyncSupervisorProjection(snapshot) => {
+                self.sync_core_parallel_mode_supervisor_projection(Some(*snapshot));
             }
-            ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
-                workspace_directory,
-                snapshot,
-            } => {
-                if self.planning_workspace_directory() == workspace_directory {
-                    self.sync_core_parallel_mode_supervisor_projection(Some(*snapshot));
-                }
-            }
-            ParallelModeControlPlanePresentationEvent::StatusShown { status_text } => {
+            ParallelModePresentationAction::ShowStatus(status_text) => {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text,
                 });
             }
-            ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice } => {
+            ParallelModePresentationAction::ObserveRuntimeNotice(notice) => {
                 self.dispatch_conversation_runtime(
                     ConversationRuntimeEvent::RuntimeNoticeObserved { notice },
                 );
             }
-            ParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed => {}
-            ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
+            ParallelModePresentationAction::RefreshPlanningRuntimeProjection {
                 workspace_directory,
             } => {
                 self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                     &workspace_directory,
                 );
             }
-            ParallelModeControlPlanePresentationEvent::ModeDisabled { .. } => {}
         }
     }
 }
@@ -207,7 +175,7 @@ impl NativeTuiApp {
             &workspace_directory,
             self.parallel_mode_enabled(),
             readiness_snapshot.as_ref(),
-            ParallelModeLoadingStage::Entering,
+            ParallelModePresentationLoadingStage::Entering,
         )
     }
 
@@ -290,7 +258,7 @@ impl NativeTuiApp {
                     &workspace_directory,
                     self.parallel_mode_enabled(),
                     readiness_snapshot.as_ref(),
-                    ParallelModeLoadingStage::RefreshingBoard,
+                    ParallelModePresentationLoadingStage::RefreshingBoard,
                 ),
             ));
         }
@@ -377,7 +345,7 @@ impl NativeTuiApp {
                         &workspace_directory,
                         true,
                         None,
-                        ParallelModeLoadingStage::Entering,
+                        ParallelModePresentationLoadingStage::Entering,
                     ),
                 ));
                 self.show_supersession_overlay();
@@ -493,28 +461,6 @@ impl NativeTuiApp {
             .supervisor_refresh_due(now, self.parallel_mode_activity_pulse_visible())
     }
 
-    pub(super) fn apply_parallel_mode_enter_progress(
-        &mut self,
-        workspace_directory: &str,
-        readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
-        supervisor_snapshot: ParallelModeSupervisorSnapshot,
-        status_text: String,
-    ) {
-        if !self.parallel_mode_enabled()
-            || self.planning_workspace_directory() != workspace_directory
-        {
-            return;
-        }
-
-        if let Some(readiness_snapshot) = readiness_snapshot {
-            self.sync_core_parallel_mode_readiness_projection(Some(readiness_snapshot));
-        }
-        self.sync_core_parallel_mode_supervisor_projection(Some(supervisor_snapshot));
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
-    }
-
     fn sync_core_parallel_mode_readiness_projection(
         &mut self,
         snapshot: Option<ParallelModeReadinessSnapshot>,
@@ -548,102 +494,6 @@ impl NativeTuiApp {
     ) {
         self.sync_core_parallel_mode_supervisor_projection(snapshot);
     }
-}
-
-#[derive(Clone, Copy)]
-enum ParallelModeLoadingStage {
-    Entering,
-    ReconcilingPool,
-    RefreshingBoard,
-}
-
-impl ParallelModeLoadingStage {
-    fn pool_root_label(self) -> &'static str {
-        match self {
-            Self::Entering => "loading: readiness checks",
-            Self::ReconcilingPool => "loading: pool reconcile",
-            Self::RefreshingBoard => "loading: supervisor refresh",
-        }
-    }
-
-    fn pool_status(self) -> &'static str {
-        match self {
-            Self::Entering => "1/3 readiness checks running",
-            Self::ReconcilingPool => "2/3 pool reconcile running",
-            Self::RefreshingBoard => "3/3 refreshing supervisor board",
-        }
-    }
-
-    fn roster_empty_state(self) -> &'static str {
-        match self {
-            Self::Entering => "waiting for readiness before slots can be assigned",
-            Self::ReconcilingPool => "waiting for pool reset and reconcile results",
-            Self::RefreshingBoard => "refreshing active agent roster",
-        }
-    }
-
-    fn detail_empty_state(self) -> &'static str {
-        match self {
-            Self::Entering => "loading 1/3: readiness checks",
-            Self::ReconcilingPool => "loading 2/3: pool reconcile",
-            Self::RefreshingBoard => "loading 3/3: board refresh",
-        }
-    }
-
-    fn distributor_head(self) -> &'static str {
-        match self {
-            Self::Entering => "waiting for readiness",
-            Self::ReconcilingPool => "pool reconcile in progress",
-            Self::RefreshingBoard => "refreshing distributor state",
-        }
-    }
-
-    fn distributor_note(self) -> &'static str {
-        match self {
-            Self::Entering => "pipeline: [running] readiness -> [next] pool -> [next] board",
-            Self::ReconcilingPool => "pipeline: [done] readiness -> [running] pool -> [next] board",
-            Self::RefreshingBoard => "pipeline: [done] readiness -> [done] pool -> [running] board",
-        }
-    }
-
-    fn top_notice(self) -> &'static str {
-        match self {
-            Self::Entering => {
-                "loading 1/3: checking repository, planning, branch, pool, and GitHub readiness"
-            }
-            Self::ReconcilingPool => "loading 2/3: readiness passed; reconciling pool",
-            Self::RefreshingBoard => {
-                "loading 3/3: pool state changed; refreshing the supervisor board"
-            }
-        }
-    }
-}
-
-fn pending_parallel_mode_supervisor_snapshot(
-    workspace_directory: &str,
-    mode_enabled: bool,
-    readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
-    stage: ParallelModeLoadingStage,
-) -> ParallelModeSupervisorSnapshot {
-    ParallelModeSupervisorSnapshot::new(
-        ParallelModeSupervisorState::derive(mode_enabled, readiness_snapshot),
-        workspace_directory,
-        ParallelModePoolBoardSnapshot::new(
-            0,
-            stage.pool_root_label(),
-            stage.pool_status(),
-            Vec::new(),
-        ),
-        ParallelModeAgentRosterSnapshot::new(Vec::new(), stage.roster_empty_state()),
-        ParallelModeSupervisorDetailSnapshot::new(None, stage.detail_empty_state()),
-        ParallelModeDistributorSnapshot::new(
-            Vec::new(),
-            Vec::new(),
-            stage.distributor_head(),
-            stage.distributor_note(),
-        ),
-        Some(stage.top_notice().to_string()),
-    )
 }
 
 impl NativeTuiApp {
@@ -711,8 +561,11 @@ impl NativeTuiApp {
 mod orchestrator_retry_tests {
     use super::*;
     use crate::domain::parallel_mode::{
-        ParallelModeDistributorQueueItem, ParallelModeOrchestratorStatus,
-        ParallelModeQueueItemState,
+        ParallelModeAgentRosterSnapshot, ParallelModeDistributorQueueItem,
+        ParallelModeDistributorSnapshot, ParallelModeOrchestratorStatus,
+        ParallelModePoolBoardSnapshot, ParallelModeQueueItemState,
+        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+        ParallelModeSupervisorState,
     };
 
     #[test]

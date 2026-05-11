@@ -252,6 +252,22 @@ fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
 }
 
 #[test]
+fn parallel_control_plane_presentation_bridge_maps_events_outside_tui_controller() {
+    /*
+     * The TUI controller may apply presentation actions, but control-plane event
+     * interpretation should stay in the small bridge mapper so the main
+     * parallel controller does not grow another orchestration switchboard.
+     */
+    const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
+    const PRESENTATION_BRIDGE_RS: &str = include_str!("../parallel_mode/presentation_bridge.rs");
+
+    assert!(PARALLEL_MODE_RS.contains("parallel_mode_presentation_actions"));
+    assert!(!PARALLEL_MODE_RS.contains("ParallelModeControlPlanePresentationEvent::"));
+    assert!(PRESENTATION_BRIDGE_RS.contains("ParallelModePresentationAction"));
+    assert!(PRESENTATION_BRIDGE_RS.contains("ParallelModeControlPlanePresentationEvent::"));
+}
+
+#[test]
 fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
     /*
      * Post-turn completion must re-enter core before the TUI applies the

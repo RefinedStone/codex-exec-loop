@@ -50,7 +50,8 @@ app lifecycle, business decision, background orchestration은 core/application/d
 `AppCommand::PrepareManualPrompt` -> `CoreEffect::PrepareManualPrompt` ->
 application `ManualPromptPreparationService` 경로를 탄다. parallel/planning 표시 경로는
 core `AppSnapshot` projection을 우선 읽고, TUI write-through cache/fallback authority는
-제거됐다. Ready conversation의 compatibility cache는
+제거됐다. parallel control-plane presentation event는 별도 bridge가 presentation
+action으로 낮추고, TUI parallel controller는 action 적용만 맡는다. Ready conversation의 compatibility cache는
 `reducer_event_projection_cache`로 낮췄고, production rendering/post-turn worker
 context가 이 cache를 authority로 읽지 못하게 source guard를 둔다. Post-turn
 stale/duplicate completion guard는 core turn-stream completion boundary로 이동했고,

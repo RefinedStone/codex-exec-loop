@@ -85,6 +85,8 @@ mod parallel_mode;
 mod parallel_mode_shell_command;
 #[path = "app/parallel_mode/panel_controller.rs"]
 mod parallel_panel_controller;
+#[path = "app/parallel_mode/presentation_bridge.rs"]
+mod parallel_presentation_bridge;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
