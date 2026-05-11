@@ -73,8 +73,6 @@ impl NativeTuiApp {
         execution: PostTurnEvaluationExecution,
     ) {
         self.apply_post_turn_evaluation_completion_payload(PostTurnEvaluationCompletionPayload {
-            thread_id: execution.thread_id,
-            completed_turn_id: execution.completed_turn_id,
             evaluation: Box::new(tui_post_turn_evaluation_outcome(execution.evaluation)),
             planning_worker_panel_state: tui_planning_worker_panel_state(
                 execution.planning_worker_panel_state,

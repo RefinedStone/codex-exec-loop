@@ -13,6 +13,8 @@ use crate::application::service::planning::{
     PlanningRuntimeUseCases, PlanningServices, PlanningTurnExecutionSnapshotCapture,
     PlanningWorkspaceUseCases,
 };
+#[cfg(test)]
+use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -27,8 +29,6 @@ use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 
-#[cfg(test)]
-use super::conversation_runtime::PostTurnEvaluationOutcome;
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
     AutoFollowOverlayUiState, ConversationInputEvent, ConversationIntentEffect,
@@ -65,12 +65,7 @@ pub(super) enum BackgroundMessage {
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
     #[cfg(test)]
-    PostTurnEvaluationCompleted {
-        thread_id: String,
-        completed_turn_id: String,
-        evaluation: Box<PostTurnEvaluationOutcome>,
-        planning_worker_panel_state: super::PlanningWorkerPanelState,
-    },
+    PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
     GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
 

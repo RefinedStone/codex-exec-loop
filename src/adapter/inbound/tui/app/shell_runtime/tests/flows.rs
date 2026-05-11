@@ -430,14 +430,15 @@ impl NativeFlowHarness {
         };
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
+        mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluationCompleted {
-                thread_id: "thread-1".to_string(),
-                completed_turn_id: turn_id.to_string(),
-                evaluation: Box::new(PostTurnEvaluationOutcome {
+            .send(post_turn_evaluation_completed_message(
+                "thread-1",
+                turn_id,
+                PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
                     runtime_projection: planning_projection,
                     planning_repair_state: None,
@@ -450,9 +451,9 @@ impl NativeFlowHarness {
                         },
                     )),
                     operator_alerts: Vec::new(),
-                }),
-                planning_worker_panel_state: Default::default(),
-            })
+                },
+                Default::default(),
+            ))
             .expect("post-turn evaluation should enqueue");
     }
 
@@ -474,14 +475,15 @@ impl NativeFlowHarness {
         };
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
+        mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluationCompleted {
-                thread_id: "thread-1".to_string(),
-                completed_turn_id: turn_id.to_string(),
-                evaluation: Box::new(PostTurnEvaluationOutcome {
+            .send(post_turn_evaluation_completed_message(
+                "thread-1",
+                turn_id,
+                PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
                         .with_parallel_queue_signal(Some(
                             ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
@@ -493,9 +495,9 @@ impl NativeFlowHarness {
                         reason: AutoFollowSkipReason::ParallelSessionCompleted,
                     },
                     operator_alerts: Vec::new(),
-                }),
-                planning_worker_panel_state: Default::default(),
-            })
+                },
+                Default::default(),
+            ))
             .expect("parallel completion evaluation should enqueue");
     }
 
@@ -512,14 +514,15 @@ impl NativeFlowHarness {
         };
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
+        mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
             .tx
-            .send(BackgroundMessage::PostTurnEvaluationCompleted {
-                thread_id: "thread-1".to_string(),
-                completed_turn_id: turn_id.to_string(),
-                evaluation: Box::new(PostTurnEvaluationOutcome {
+            .send(post_turn_evaluation_completed_message(
+                "thread-1",
+                turn_id,
+                PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
                     runtime_projection: planning_projection,
                     planning_repair_state: None,
@@ -528,9 +531,9 @@ impl NativeFlowHarness {
                         reason: AutoFollowSkipReason::PlanningQueueDrained,
                     },
                     operator_alerts: vec![OperatorAlert::planning_queue_drained()],
-                }),
-                planning_worker_panel_state: Default::default(),
-            })
+                },
+                Default::default(),
+            ))
             .expect("drained parallel completion evaluation should enqueue");
     }
 

@@ -99,11 +99,19 @@ impl CoreController {
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
                 execution,
-            )) => CoreDispatchOutcome {
-                events: vec![AppEvent::PostTurnEvaluationCompleted(execution)],
-                effects: Vec::new(),
-                snapshot: self.snapshot(),
-            },
+            )) => {
+                let events = self
+                    .turn_stream_state
+                    .accept_post_turn_evaluation_completion(execution.as_ref())
+                    .then_some(AppEvent::PostTurnEvaluationCompleted(execution))
+                    .into_iter()
+                    .collect();
+                CoreDispatchOutcome {
+                    events,
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::ConversationStreamUpdated(event) => {
                 let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
                 CoreDispatchOutcome {
@@ -632,6 +640,7 @@ mod tests {
     #[test]
     fn post_turn_evaluation_completion_passes_through_core_without_state_revision() {
         let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let execution = Box::new(sample_post_turn_execution());
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
@@ -644,6 +653,44 @@ mod tests {
             vec![AppEvent::PostTurnEvaluationCompleted(execution)]
         );
         assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn stale_post_turn_evaluation_completion_is_dropped_in_core() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-2");
+        let mut execution = sample_post_turn_execution();
+        execution.completed_turn_id = "turn-1".to_string();
+        execution.evaluation.provenance =
+            crate::application::service::post_turn_evaluation::PostTurnEvaluationProvenance::new(
+                "turn-1".to_string(),
+            );
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution)),
+        ));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert!(outcome.events.is_empty());
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn duplicate_post_turn_evaluation_completion_is_dropped_in_core() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let execution = Box::new(sample_post_turn_execution());
+
+        let first = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
+        ));
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
+        ));
+
+        assert_eq!(first.events.len(), 1);
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
     }
 
     #[test]
@@ -815,6 +862,30 @@ mod tests {
             runtime_notices: Vec::new(),
         }
         .into()
+    }
+
+    fn apply_completed_turn(controller: &mut CoreController, thread_id: &str, turn_id: &str) {
+        controller.handle_input(CoreInput::ConversationStreamUpdated(
+            crate::application::service::conversation_runtime_event::ConversationStreamEvent::ThreadPrepared {
+                thread_id: thread_id.to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+            },
+        ));
+        controller.handle_input(CoreInput::ConversationStreamUpdated(
+            crate::application::service::conversation_runtime_event::ConversationStreamEvent::TurnStarted {
+                turn_id: turn_id.to_string(),
+            },
+        ));
+        controller.handle_input(CoreInput::ConversationTurnCompleted {
+            turn_id: turn_id.to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture:
+                crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::capture_failed(
+                    "/tmp/workspace",
+                    "test capture skipped".to_string(),
+                ),
+        });
     }
 
     fn sample_post_turn_execution()

@@ -379,12 +379,12 @@ event reduction도 core path로 이동했다. Manual prompt intake/bootstrap은
 아직 `Loading/Ready/Failed` presentation transition, prompt input, cursor, inline
 command palette, transcript rendering cache, active overlay selection, post-turn
 completion 적용 일부를 계속 소유한다. Post-turn completion 용어와 evaluator worker
-boundary는 core re-entry 기준으로 정리됐지만, stale/duplicate completion guard는
-core/application completion boundary로 더 줄여야 한다. evaluator worker 입력은 TUI
-`ConversationViewModel` 전체 clone 대신 `PostTurnEvaluationContext`로 좁혀졌다.
-evaluator spawn/timeout owner는 core `EvaluatePostTurn` effect와 application
-`PostTurnEvaluationService`로 이동했고, 완료는
-`CoreEffectCompletion::PostTurnEvaluationCompleted`로 다시 core에 진입한다.
+boundary는 core re-entry 기준으로 정리됐고, stale/duplicate completion guard도 core
+turn-stream completion boundary로 이동했다. TUI는 core가 emit한 accepted completion을
+presentation state에 적용한다. evaluator worker 입력은 TUI `ConversationViewModel`
+전체 clone 대신 `PostTurnEvaluationContext`로 좁혀졌다. evaluator spawn/timeout owner는
+core `EvaluatePostTurn` effect와 application `PostTurnEvaluationService`로 이동했고,
+완료는 `CoreEffectCompletion::PostTurnEvaluationCompleted`로 다시 core에 진입한다.
 
 Parallel migration은 다른 흐름처럼 core state로 바로 흡수하지 않는다. parallel mode는
 이미 application `ParallelModeControlPlaneHandle`이 mutex-serialized single-writer gate를
@@ -411,7 +411,7 @@ authority로 읽지 못하게 source guard를 둔다.
 | conversation lifecycle | core snapshot + TUI conversation reducer transition | core app state | 아직 줄일 orchestration이다. `Loading/Ready/Failed`의 lifecycle authority는 core snapshot에서 읽게 한다. |
 | turn stream reduction | core runtime | core runtime | 완료된 orchestration 기준선이다. app-server stream은 UI가 아니라 app runtime event다. |
 | manual prompt intake/bootstrap | core effect + application service; TUI overlay application | core/application runtime | planning task intake는 use case다. TUI는 prompt buffer와 review overlay 표시만 가진다. |
-| post-turn continuation/evaluation | core effect/application service + TUI accepted completion application/stale guard 일부 | core runtime/application service | 남은 orchestration이다. stale/duplicate guard는 core/application completion boundary로 옮기고 TUI는 accepted presentation update만 적용한다. |
+| post-turn continuation/evaluation | core effect/application service + core completion guard + TUI accepted completion application | core runtime/application service | stale/duplicate guard는 core turn-stream completion boundary가 소유한다. TUI는 accepted presentation update만 적용한다. |
 | planning runtime projection | core projection + private Ready conversation `reducer_event_projection_cache` | core app state 또는 application projection | TUI cache는 reducer/event sync 전용이다. rendering과 post-turn worker context는 core projection을 읽고, source guard가 production leak을 막는다. |
 | parallel-mode status | application control-plane + core projection | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출한다. TUI fallback authority는 두지 않는다. |
 | inline command/overlay/auto-follow routing | TUI shell/input reducers | TUI presentation routing + application/domain decision | 남은 분류 작업이다. UI-only routing은 TUI에 남기고 business policy는 application/domain으로 이동한다. |

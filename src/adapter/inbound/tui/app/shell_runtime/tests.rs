@@ -26,10 +26,12 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::planning::{
     PlanningRuntimeProjection, PlanningServices, PlanningTaskIntakeRequest,
+    PlanningTurnExecutionSnapshotCapture,
 };
+use crate::application::service::post_turn_evaluation as application_post_turn;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::core::app::StartupReadySnapshot;
+use crate::core::app::{CoreInput, StartupReadySnapshot};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
@@ -255,17 +257,22 @@ fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
      * Post-turn completion must re-enter core before the TUI applies the
      * payload, but the payload should not sit in a second TUI-owned pending
      * queue keyed by thread/turn. Stale and duplicate guards live at the
-     * application point that applies the result.
+     * core completion boundary before the TUI sees accepted results.
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
+    const CONVERSATION_VIEW_MODEL_RS: &str = include_str!("../conversation_model/view_model.rs");
     const CONVERSATION_RUNTIME_RS: &str = include_str!("../conversation_runtime.rs");
     const POST_TURN_ROUTING_RS: &str = include_str!("../post_turn_continuation.rs");
     const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
+    const CORE_CONTROLLER_RS: &str = include_str!("../../../../../core/app/controller.rs");
 
     assert!(!APP_RS.contains("pending_post_turn_continuation_results"));
     assert!(!POST_TURN_ROUTING_RS.contains("route_pending_post_turn_continuation_result"));
     assert!(!POST_TURN_ROUTING_RS.contains("enqueue_post_turn_continuation_result"));
+    assert!(!CONVERSATION_VIEW_MODEL_RS.contains("last_applied_post_turn_evaluation_id"));
+    assert!(!CONVERSATION_VIEW_MODEL_RS.contains("accepts_post_turn_evaluation"));
+    assert!(!CONVERSATION_VIEW_MODEL_RS.contains("record_post_turn_evaluation_applied"));
     for source in [
         APP_RUNTIME_RS,
         CONVERSATION_RUNTIME_RS,
@@ -281,7 +288,10 @@ fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
         assert!(!source.contains("EvaluatePostTurnAutomation"));
     }
     assert!(SHELL_RUNTIME_RS.contains("PostTurnEvaluationCompleted"));
-    assert!(SHELL_RUNTIME_RS.contains("apply_post_turn_evaluation_completion_payload(result)"));
+    assert!(SHELL_RUNTIME_RS.contains("CoreEffectCompletion::PostTurnEvaluationCompleted"));
+    assert!(
+        CORE_CONTROLLER_RS.contains("accept_post_turn_evaluation_completion(execution.as_ref())")
+    );
 }
 
 #[test]
@@ -503,6 +513,185 @@ fn create_temp_git_repo(prefix: &str) -> String {
         .expect("temp git repo should canonicalize")
         .display()
         .to_string()
+}
+
+fn post_turn_evaluation_completed_message(
+    thread_id: impl Into<String>,
+    completed_turn_id: impl Into<String>,
+    evaluation: PostTurnEvaluationOutcome,
+    planning_worker_panel_state: PlanningWorkerPanelState,
+) -> BackgroundMessage {
+    BackgroundMessage::PostTurnEvaluationCompleted(Box::new(
+        application_post_turn::PostTurnEvaluationExecution {
+            thread_id: thread_id.into(),
+            completed_turn_id: completed_turn_id.into(),
+            evaluation: application_post_turn_evaluation_outcome(evaluation),
+            planning_worker_panel_state: application_planning_worker_panel_state(
+                planning_worker_panel_state,
+            ),
+        },
+    ))
+}
+
+fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
+    runtime
+        .app_mut()
+        .core_runtime
+        .dispatch_input(CoreInput::ConversationStreamUpdated(
+            ConversationStreamEvent::ThreadPrepared {
+                thread_id: thread_id.to_string(),
+                title: "Post-turn test".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+            },
+        ));
+    runtime
+        .app_mut()
+        .core_runtime
+        .dispatch_input(CoreInput::ConversationStreamUpdated(
+            ConversationStreamEvent::TurnStarted {
+                turn_id: turn_id.to_string(),
+            },
+        ));
+    runtime
+        .app_mut()
+        .core_runtime
+        .dispatch_input(CoreInput::ConversationTurnCompleted {
+            turn_id: turn_id.to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture::capture_failed(
+                "/tmp/workspace",
+                "test capture skipped".to_string(),
+            ),
+        });
+}
+
+fn application_post_turn_evaluation_outcome(
+    outcome: PostTurnEvaluationOutcome,
+) -> application_post_turn::PostTurnEvaluationOutcome {
+    application_post_turn::PostTurnEvaluationOutcome {
+        provenance: application_post_turn::PostTurnEvaluationProvenance::new(
+            outcome.provenance.completed_turn_id,
+        )
+        .with_handoff_task(outcome.provenance.handoff_task)
+        .with_parallel_queue_signal(outcome.provenance.parallel_queue_signal),
+        runtime_projection: outcome.runtime_projection,
+        planning_repair_state: outcome.planning_repair_state.map(|state| {
+            application_post_turn::PostTurnPlanningRepairState {
+                attempts_used: state.attempts_used,
+                max_attempts: state.max_attempts,
+                latest_request: state.latest_request,
+            }
+        }),
+        runtime_notices: outcome.runtime_notices,
+        action: application_post_turn_action(outcome.action),
+        operator_alerts: outcome.operator_alerts,
+    }
+}
+
+fn application_post_turn_action(
+    action: PostTurnContinuationAction,
+) -> application_post_turn::PostTurnContinuationAction {
+    match action {
+        PostTurnContinuationAction::QueueAutoPrompt(prompt) => {
+            application_post_turn::PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                application_post_turn::PostTurnQueuedPrompt {
+                    prompt: prompt.prompt,
+                    mode_label: prompt.mode_label,
+                    transcript_text: prompt.transcript_text,
+                },
+            ))
+        }
+        PostTurnContinuationAction::SkipAutoFollow { reason } => {
+            application_post_turn::PostTurnContinuationAction::SkipAutoFollow {
+                reason: application_post_turn_skip_reason(reason),
+            }
+        }
+    }
+}
+
+fn application_post_turn_skip_reason(
+    reason: AutoFollowSkipReason,
+) -> application_post_turn::PostTurnAutoFollowSkipReason {
+    match reason {
+        AutoFollowSkipReason::PostTurnContinuationPaused => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PostTurnContinuationPaused
+        }
+        AutoFollowSkipReason::LimitReached => {
+            application_post_turn::PostTurnAutoFollowSkipReason::LimitReached
+        }
+        AutoFollowSkipReason::NoAgentReply => {
+            application_post_turn::PostTurnAutoFollowSkipReason::NoAgentReply
+        }
+        AutoFollowSkipReason::StopKeywordMatched => {
+            application_post_turn::PostTurnAutoFollowSkipReason::StopKeywordMatched
+        }
+        AutoFollowSkipReason::NoFileChanges => {
+            application_post_turn::PostTurnAutoFollowSkipReason::NoFileChanges
+        }
+        AutoFollowSkipReason::PlanningBlocked => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PlanningBlocked
+        }
+        AutoFollowSkipReason::PlanningQueueIdlePolicyStop => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop
+        }
+        AutoFollowSkipReason::PlanningQueueHeadRequired => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PlanningQueueHeadRequired
+        }
+        AutoFollowSkipReason::PlanningQueueDrained => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PlanningQueueDrained
+        }
+        AutoFollowSkipReason::PlanningRepeatedQueueHead => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PlanningRepeatedQueueHead
+        }
+        AutoFollowSkipReason::ParallelSessionCompleted => {
+            application_post_turn::PostTurnAutoFollowSkipReason::ParallelSessionCompleted
+        }
+        AutoFollowSkipReason::PostTurnEvaluationTimedOut => {
+            application_post_turn::PostTurnAutoFollowSkipReason::PostTurnEvaluationTimedOut
+        }
+    }
+}
+
+fn application_planning_worker_panel_state(
+    state: PlanningWorkerPanelState,
+) -> application_post_turn::PlanningWorkerPanelState {
+    application_post_turn::PlanningWorkerPanelState {
+        status: application_planning_worker_status(state.status),
+        last_operation_label: state.last_operation_label,
+        last_summary: state.last_summary,
+        last_rejected_summary: state.last_rejected_summary,
+        last_queue_summary: state.last_queue_summary,
+        last_notice_detail: state.last_notice_detail,
+        last_prompt: state.last_prompt,
+        last_response: state.last_response,
+        last_host_detail: state.last_host_detail,
+    }
+}
+
+fn application_planning_worker_status(
+    status: PlanningWorkerStatus,
+) -> application_post_turn::PlanningWorkerStatus {
+    match status {
+        PlanningWorkerStatus::Idle => application_post_turn::PlanningWorkerStatus::Idle,
+        PlanningWorkerStatus::RefreshRunning => {
+            application_post_turn::PlanningWorkerStatus::RefreshRunning
+        }
+        PlanningWorkerStatus::RefreshSucceeded => {
+            application_post_turn::PlanningWorkerStatus::RefreshSucceeded
+        }
+        PlanningWorkerStatus::RefreshFailed => {
+            application_post_turn::PlanningWorkerStatus::RefreshFailed
+        }
+        PlanningWorkerStatus::RepairRunning => {
+            application_post_turn::PlanningWorkerStatus::RepairRunning
+        }
+        PlanningWorkerStatus::RepairSucceeded => {
+            application_post_turn::PlanningWorkerStatus::RepairSucceeded
+        }
+        PlanningWorkerStatus::RepairFailed => {
+            application_post_turn::PlanningWorkerStatus::RepairFailed
+        }
+    }
 }
 
 fn run_git(repo_root: &Path, args: &[&str]) {
@@ -809,38 +998,39 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     conversation.thread_id = "thread-1".to_string();
     conversation.status_text = "session ready".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-2".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-1", "turn-2");
 
     runtime
-            .app
-            .tx
-            .send(BackgroundMessage::PostTurnEvaluationCompleted {
-                thread_id: "thread-1".to_string(),
-                completed_turn_id: "turn-1".to_string(),
-                evaluation: Box::new(PostTurnEvaluationOutcome {
-                    provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-                    runtime_projection: crate::application::service::planning::PlanningRuntimeProjection::invalid(
-                        "stale projection".to_string(),
-                    ),
-                    planning_repair_state: None,
-                    runtime_notices: vec!["stale notice".to_string()],
-                    action: crate::adapter::inbound::tui::app::conversation_runtime::PostTurnContinuationAction::SkipAutoFollow {
-                        reason: crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason::PostTurnContinuationPaused,
-                    },
-                    operator_alerts: Vec::new(),
-                }),
-                planning_worker_panel_state: crate::adapter::inbound::tui::app::PlanningWorkerPanelState {
-                    status: crate::adapter::inbound::tui::app::PlanningWorkerStatus::RefreshSucceeded,
-                    last_operation_label: None,
-                    last_queue_summary: Some("queue head: stale".to_string()),
-                    last_summary: Some("stale".to_string()),
-                    last_rejected_summary: None,
-                    last_notice_detail: None,
-                    last_prompt: None,
-                    last_response: None,
-                    last_host_detail: None,
+        .app
+        .tx
+        .send(post_turn_evaluation_completed_message(
+            "thread-1",
+            "turn-1",
+            PostTurnEvaluationOutcome {
+                provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
+                runtime_projection: PlanningRuntimeProjection::invalid(
+                    "stale projection".to_string(),
+                ),
+                planning_repair_state: None,
+                runtime_notices: vec!["stale notice".to_string()],
+                action: PostTurnContinuationAction::SkipAutoFollow {
+                    reason: AutoFollowSkipReason::PostTurnContinuationPaused,
                 },
-            })
-            .expect("background message should enqueue");
+                operator_alerts: Vec::new(),
+            },
+            PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RefreshSucceeded,
+                last_operation_label: None,
+                last_queue_summary: Some("queue head: stale".to_string()),
+                last_summary: Some("stale".to_string()),
+                last_rejected_summary: None,
+                last_notice_detail: None,
+                last_prompt: None,
+                last_response: None,
+                last_host_detail: None,
+            },
+        ))
+        .expect("background message should enqueue");
 
     runtime.poll_background_messages();
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
@@ -865,30 +1055,33 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     };
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
-    let build_message = |notice: &str| BackgroundMessage::PostTurnEvaluationCompleted {
-        thread_id: "thread-1".to_string(),
-        completed_turn_id: "turn-1".to_string(),
-        evaluation: Box::new(PostTurnEvaluationOutcome {
-            provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-            runtime_projection: PlanningRuntimeProjection::invalid(notice.to_string()),
-            planning_repair_state: None,
-            runtime_notices: vec![notice.to_string()],
-            action: PostTurnContinuationAction::SkipAutoFollow {
-                reason: AutoFollowSkipReason::PlanningBlocked,
+    mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    let build_message = |notice: &str| {
+        post_turn_evaluation_completed_message(
+            "thread-1",
+            "turn-1",
+            PostTurnEvaluationOutcome {
+                provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
+                runtime_projection: PlanningRuntimeProjection::invalid(notice.to_string()),
+                planning_repair_state: None,
+                runtime_notices: vec![notice.to_string()],
+                action: PostTurnContinuationAction::SkipAutoFollow {
+                    reason: AutoFollowSkipReason::PlanningBlocked,
+                },
+                operator_alerts: Vec::new(),
             },
-            operator_alerts: Vec::new(),
-        }),
-        planning_worker_panel_state: PlanningWorkerPanelState {
-            status: PlanningWorkerStatus::RefreshFailed,
-            last_operation_label: None,
-            last_queue_summary: None,
-            last_summary: Some(notice.to_string()),
-            last_rejected_summary: None,
-            last_notice_detail: None,
-            last_prompt: None,
-            last_response: None,
-            last_host_detail: None,
-        },
+            PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RefreshFailed,
+                last_operation_label: None,
+                last_queue_summary: None,
+                last_summary: Some(notice.to_string()),
+                last_rejected_summary: None,
+                last_notice_detail: None,
+                last_prompt: None,
+                last_response: None,
+                last_host_detail: None,
+            },
+        )
     };
 
     runtime

@@ -122,8 +122,6 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_control_truth: ConversationRuntimeControlTruth,
     pub(crate) last_auto_follow_activity: Option<RecordedAutoFollowActivity>,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
-    // Idempotence guard for async post-turn evaluators racing with newer turns.
-    pub(crate) last_applied_post_turn_evaluation_id: Option<String>,
     pub(crate) status_text: String,
 }
 impl ConversationViewModel {
@@ -163,7 +161,6 @@ impl ConversationViewModel {
             turn_control_truth,
             last_auto_follow_activity: None,
             last_planning_task_handoff: None,
-            last_applied_post_turn_evaluation_id: None,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -218,7 +215,6 @@ impl ConversationViewModel {
             turn_control_truth,
             last_auto_follow_activity: None,
             last_planning_task_handoff: None,
-            last_applied_post_turn_evaluation_id: None,
             status_text: String::new(),
         };
         view_model.set_status_with_warnings(base_status);
@@ -530,20 +526,6 @@ impl ConversationViewModel {
     }
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()
-    }
-    pub(crate) fn accepts_post_turn_evaluation(
-        &self,
-        thread_id: &str,
-        completed_turn_id: &str,
-    ) -> bool {
-        // Async evaluators are accepted only for the most recently completed turn on this thread.
-        self.thread_id == thread_id
-            && !self.has_running_turn()
-            && self.last_applied_post_turn_evaluation_id.as_deref() != Some(completed_turn_id)
-            && self.turn_activity.last_completed_turn_id.as_deref() == Some(completed_turn_id)
-    }
-    pub(crate) fn record_post_turn_evaluation_applied(&mut self, completed_turn_id: &str) {
-        self.last_applied_post_turn_evaluation_id = Some(completed_turn_id.to_string());
     }
     #[cfg(test)]
     pub(crate) fn decide_auto_follow(

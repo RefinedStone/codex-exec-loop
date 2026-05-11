@@ -4,11 +4,11 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
 
+#[cfg(test)]
+use crate::core::app::CoreEffectCompletion;
 use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
-#[cfg(test)]
-use super::post_turn_continuation::PostTurnEvaluationCompletionPayload;
 use super::{BackgroundMessage, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -137,20 +137,10 @@ impl ShellRuntime {
                         .apply_parallel_mode_control_plane_background_event(event);
                 }
                 #[cfg(test)]
-                BackgroundMessage::PostTurnEvaluationCompleted {
-                    thread_id,
-                    completed_turn_id,
-                    evaluation,
-                    planning_worker_panel_state,
-                } => {
-                    let result = PostTurnEvaluationCompletionPayload {
-                        thread_id,
-                        completed_turn_id,
-                        evaluation,
-                        planning_worker_panel_state,
-                    };
-                    self.app
-                        .apply_post_turn_evaluation_completion_payload(result);
+                BackgroundMessage::PostTurnEvaluationCompleted(execution) => {
+                    self.app.dispatch_core_input(CoreInput::EffectCompleted(
+                        CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
+                    ));
                 }
                 BackgroundMessage::GithubReviewPollLoaded(result) => {
                     self.app.record_github_review_poll_result(now, result)

@@ -1,6 +1,7 @@
 use super::{
     BackgroundMessage, ConversationState, InlineShellCommand, ShellOverlay, StartupState,
-    make_dispatch_ready_parallel_runtime, make_test_runtime, sample_startup_diagnostics,
+    make_dispatch_ready_parallel_runtime, make_test_runtime, mark_core_turn_completed,
+    post_turn_evaluation_completed_message, sample_startup_diagnostics,
 };
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
@@ -554,14 +555,15 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     };
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
 
     runtime
         .app
         .tx
-        .send(BackgroundMessage::PostTurnEvaluationCompleted {
-            thread_id: "thread-1".to_string(),
-            completed_turn_id: "turn-1".to_string(),
-            evaluation: Box::new(PostTurnEvaluationOutcome {
+        .send(post_turn_evaluation_completed_message(
+            "thread-1",
+            "turn-1",
+            PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
                 runtime_projection: planning_projection,
                 planning_repair_state: None,
@@ -574,9 +576,9 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
                     },
                 )),
                 operator_alerts: Vec::new(),
-            }),
-            planning_worker_panel_state: Default::default(),
-        })
+            },
+            Default::default(),
+        ))
         .expect("background message should enqueue");
 
     for _ in 0..750 {

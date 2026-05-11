@@ -15,8 +15,6 @@ use super::{
 };
 
 pub(super) struct PostTurnEvaluationCompletionPayload {
-    pub(super) thread_id: String,
-    pub(super) completed_turn_id: String,
     pub(super) evaluation: Box<PostTurnEvaluationOutcome>,
     pub(super) planning_worker_panel_state: PlanningWorkerPanelState,
 }
@@ -31,10 +29,6 @@ impl NativeTuiApp {
         &mut self,
         result: PostTurnEvaluationCompletionPayload,
     ) -> bool {
-        if !self.should_apply_post_turn_evaluation(&result.thread_id, &result.completed_turn_id) {
-            return false;
-        }
-        self.record_post_turn_evaluation_applied(&result.completed_turn_id);
         self.planning_worker_panel_state = result.planning_worker_panel_state;
         self.invalidate_parallel_mode_supervisor_snapshot();
         self.dispatch_conversation_runtime(ConversationRuntimeEvent::PostTurnEvaluationCompleted {
@@ -102,21 +96,6 @@ impl NativeTuiApp {
             )
         ) {
             self.record_auto_follow_parallel_dispatch();
-        }
-    }
-
-    fn should_apply_post_turn_evaluation(&self, thread_id: &str, completed_turn_id: &str) -> bool {
-        match &self.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.accepts_post_turn_evaluation(thread_id, completed_turn_id)
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => false,
-        }
-    }
-
-    fn record_post_turn_evaluation_applied(&mut self, completed_turn_id: &str) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.record_post_turn_evaluation_applied(completed_turn_id);
         }
     }
 

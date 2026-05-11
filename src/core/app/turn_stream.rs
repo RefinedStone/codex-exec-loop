@@ -1,5 +1,6 @@
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
+use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
 use crate::domain::conversation::{ConversationApprovalReview, ConversationToolActivity};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -12,6 +13,7 @@ pub struct TurnStreamState {
     active_turn_id: Option<String>,
     status_text: Option<String>,
     terminal: Option<TurnStreamTerminalSnapshot>,
+    last_applied_post_turn_evaluation_id: Option<String>,
 }
 
 impl TurnStreamState {
@@ -24,6 +26,7 @@ impl TurnStreamState {
             active_turn_id: None,
             status_text: None,
             terminal: None,
+            last_applied_post_turn_evaluation_id: None,
         }
     }
 
@@ -40,6 +43,9 @@ impl TurnStreamState {
                 self.thread_id = Some(thread_id.clone());
                 self.title = Some(title.clone());
                 self.cwd = Some(cwd.clone());
+                self.active_turn_id = None;
+                self.terminal = None;
+                self.last_applied_post_turn_evaluation_id = None;
                 self.status_text = Some("thread started".to_string());
                 TurnStreamUpdate::ThreadPrepared {
                     thread_id,
@@ -51,6 +57,7 @@ impl TurnStreamState {
             ConversationStreamEvent::TurnStarted { turn_id } => {
                 self.active_turn_id = Some(turn_id.clone());
                 self.terminal = None;
+                self.last_applied_post_turn_evaluation_id = None;
                 self.status_text = Some("turn started".to_string());
                 TurnStreamUpdate::TurnStarted {
                     turn_id,
@@ -121,6 +128,32 @@ impl TurnStreamState {
 
     pub fn apply_runtime_notice(&mut self, notice: String) -> TurnStreamSnapshot {
         self.snapshot(TurnStreamUpdate::RuntimeNotice { notice })
+    }
+
+    pub fn accept_post_turn_evaluation_completion(
+        &mut self,
+        execution: &PostTurnEvaluationExecution,
+    ) -> bool {
+        if !self.post_turn_evaluation_matches_latest_completed_turn(execution) {
+            return false;
+        }
+        self.last_applied_post_turn_evaluation_id = Some(execution.completed_turn_id.clone());
+        true
+    }
+
+    fn post_turn_evaluation_matches_latest_completed_turn(
+        &self,
+        execution: &PostTurnEvaluationExecution,
+    ) -> bool {
+        self.thread_id.as_deref() == Some(execution.thread_id.as_str())
+            && self.active_turn_id.is_none()
+            && self.last_applied_post_turn_evaluation_id.as_deref()
+                != Some(execution.completed_turn_id.as_str())
+            && matches!(
+                &self.terminal,
+                Some(TurnStreamTerminalSnapshot::Completed { turn_id, .. })
+                    if turn_id == &execution.completed_turn_id
+            )
     }
 
     fn turn_completed_update(
