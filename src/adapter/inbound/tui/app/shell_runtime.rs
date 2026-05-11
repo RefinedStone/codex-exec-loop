@@ -4,7 +4,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
 
-use crate::core::app::CoreInput;
+use crate::core::app::{CoreEffectCompletion, CoreInput, PostTurnEvaluationCompletion};
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::post_turn_automation::PostTurnAutomationBackgroundResult;
@@ -141,14 +141,22 @@ impl ShellRuntime {
                     evaluation,
                     planning_worker_panel_state,
                 } => {
-                    self.app.route_post_turn_automation_result(
+                    self.app.enqueue_post_turn_automation_result(
                         PostTurnAutomationBackgroundResult {
-                            thread_id,
-                            completed_turn_id,
+                            thread_id: thread_id.clone(),
+                            completed_turn_id: completed_turn_id.clone(),
                             evaluation,
                             planning_worker_panel_state,
                         },
                     );
+                    self.app.dispatch_core_input(CoreInput::EffectCompleted(
+                        CoreEffectCompletion::PostTurnEvaluationCompleted(
+                            PostTurnEvaluationCompletion {
+                                thread_id,
+                                completed_turn_id,
+                            },
+                        ),
+                    ));
                 }
                 BackgroundMessage::GithubReviewPollLoaded(result) => {
                     self.app.record_github_review_poll_result(now, result)
