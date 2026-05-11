@@ -1,5 +1,10 @@
 use super::task_shell_command::{ParsedTaskShellCommand, parse_task_shell_argument};
 use super::*;
+use crate::application::service::planning::{
+    PendingPlanningTaskIntakeCommandRoute, PendingPlanningTaskIntakeCommandRouteRequest,
+    PlanningTaskIntakeCommandRoute, PlanningTaskIntakeCommandRouteRequest,
+    route_pending_planning_task_intake_command, route_planning_task_intake_command,
+};
 
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
@@ -200,27 +205,24 @@ impl NativeTuiApp {
             self.preview_task_intake_prompt();
         }
     }
-    pub(super) fn should_queue_task_intake_command(
+    pub(super) fn task_intake_command_route(
         &self,
         command_input: &InlineShellCommandInput,
-    ) -> bool {
-        // Task intake mutates planning state, so defer it while a turn is
-        // running and replay only if the same command remains in the buffer.
-        if command_input.command() != InlineShellCommand::Task {
-            return false;
-        }
-
-        matches!(
-            &self.conversation_state,
-            ConversationState::Ready(conversation) if conversation.has_running_turn()
-        )
+    ) -> PlanningTaskIntakeCommandRoute {
+        route_planning_task_intake_command(PlanningTaskIntakeCommandRouteRequest {
+            is_task_intake_command: command_input.command() == InlineShellCommand::Task,
+            turn_running: self.conversation_has_running_turn(),
+        })
     }
     pub(super) fn queue_task_intake_command_until_idle(
         &mut self,
         command_input: InlineShellCommandInput,
+        pause_auto_follow: bool,
     ) {
         self.pending_task_intake_command = Some(command_input);
-        self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
+        if pause_auto_follow {
+            self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
+        }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: "task intake queued until the current turn reaches a planning-safe point"
                 .to_string(),
@@ -230,22 +232,36 @@ impl NativeTuiApp {
         let Some(command_input) = self.pending_task_intake_command.take() else {
             return false;
         };
-        // If the operator edited the prompt while the current turn was running,
-        // the queued command is stale and should be discarded quietly.
-        let command_still_buffered = matches!(
+        let route = route_pending_planning_task_intake_command(
+            PendingPlanningTaskIntakeCommandRouteRequest {
+                turn_running: self.conversation_has_running_turn(),
+                command_still_buffered: self
+                    .pending_task_intake_command_still_buffered(&command_input),
+            },
+        );
+
+        match route {
+            PendingPlanningTaskIntakeCommandRoute::WaitForIdle => {
+                self.pending_task_intake_command = Some(command_input);
+                false
+            }
+            PendingPlanningTaskIntakeCommandRoute::DropStale => false,
+            PendingPlanningTaskIntakeCommandRoute::Execute => {
+                self.execute_inline_shell_command_input(command_input);
+                true
+            }
+        }
+    }
+    fn pending_task_intake_command_still_buffered(
+        &self,
+        command_input: &InlineShellCommandInput,
+    ) -> bool {
+        matches!(
             &self.conversation_state,
             ConversationState::Ready(conversation)
-                if !conversation.has_running_turn()
-                    && InlineShellCommandInput::parse(&conversation.input_buffer)
-                        .as_ref()
-                        == Some(&command_input)
-        );
-        if !command_still_buffered {
-            return false;
-        }
-
-        self.execute_inline_shell_command_input(command_input);
-        true
+                if InlineShellCommandInput::parse(&conversation.input_buffer).as_ref()
+                    == Some(command_input)
+        )
     }
     fn preview_task_intake_prompt(&mut self) {
         let prompt = self

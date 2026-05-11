@@ -11,6 +11,7 @@ use crate::application::service::manual_prompt_preparation::{
     ManualPromptPreparationResult,
 };
 use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
+use crate::application::service::planning::PlanningTaskIntakeCommandRoute;
 use crate::application::service::planning::{
     ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
@@ -39,9 +40,13 @@ impl NativeTuiApp {
             _ => None,
         };
         if let Some(command) = inline_command {
-            if self.should_queue_task_intake_command(&command) {
-                self.queue_task_intake_command_until_idle(command);
-                return;
+            match self.task_intake_command_route(&command) {
+                PlanningTaskIntakeCommandRoute::QueueUntilIdle { pause_auto_follow } => {
+                    self.queue_task_intake_command_until_idle(command, pause_auto_follow);
+                    return;
+                }
+                PlanningTaskIntakeCommandRoute::NotTaskIntake
+                | PlanningTaskIntakeCommandRoute::ExecuteNow => {}
             }
             self.execute_inline_shell_command_input(command);
             return;
