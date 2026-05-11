@@ -403,7 +403,21 @@ pub(super) fn remove_task_references(
 
 #[cfg(test)]
 mod tests {
-    use super::{generated_unique_id, slugify_title};
+    use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::service::planning::PlanningServices;
+    use crate::domain::planning::{
+        OriginSessionKind, PLANNING_FORMAT_VERSION, QueueIdleConfig, QueueIdlePolicy, TaskActor,
+        TaskDefinition, TaskMutationProvenance, TaskStatus,
+    };
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn slugify_title_preserves_unicode_alphanumerics() {
@@ -420,5 +434,335 @@ mod tests {
             generated_unique_id("task", "한글 작업", existing),
             "task-한글-작업-3"
         );
+    }
+
+    #[test]
+    fn direction_from_request_generates_id_and_normalizes_text_fields() {
+        let directions =
+            direction_catalog(vec![direction("dir-build-release", DirectionState::Active)]);
+
+        let direction = direction_from_request(
+            PlanningAdminDirectionMutationRequest {
+                id: " ".to_string(),
+                title: " Build Release! ".to_string(),
+                summary: " ".to_string(),
+                success_criteria_text: "\nship it\n\nverify it\n".to_string(),
+                scope_hints_text: " backend \n frontend \n".to_string(),
+                detail_doc_path: " docs/release.md ".to_string(),
+                state: " ".to_string(),
+            },
+            &directions,
+        )
+        .expect("valid direction form should normalize into a definition");
+
+        assert_eq!(direction.id, "dir-build-release-2");
+        assert_eq!(direction.title, "Build Release!");
+        assert_eq!(direction.summary, "Build Release!");
+        assert_eq!(direction.success_criteria, vec!["ship it", "verify it"]);
+        assert_eq!(direction.scope_hints, vec!["backend", "frontend"]);
+        assert_eq!(direction.detail_doc_path, "docs/release.md");
+        assert_eq!(direction.state, DirectionState::Active);
+    }
+
+    #[test]
+    fn direction_from_request_rejects_invalid_id_state_and_empty_success_criteria() {
+        let directions = direction_catalog(Vec::new());
+
+        let bad_id = direction_from_request(
+            PlanningAdminDirectionMutationRequest {
+                id: "bad id".to_string(),
+                title: "Title".to_string(),
+                summary: String::new(),
+                success_criteria_text: "done".to_string(),
+                scope_hints_text: String::new(),
+                detail_doc_path: String::new(),
+                state: "active".to_string(),
+            },
+            &directions,
+        )
+        .expect_err("ids with whitespace should be rejected");
+        assert_eq!(
+            bad_id.to_string(),
+            "direction id `bad id` must not contain whitespace or path separators"
+        );
+
+        let empty_success = direction_from_request(
+            PlanningAdminDirectionMutationRequest {
+                id: String::new(),
+                title: "Title".to_string(),
+                summary: String::new(),
+                success_criteria_text: "\n \n".to_string(),
+                scope_hints_text: String::new(),
+                detail_doc_path: String::new(),
+                state: "active".to_string(),
+            },
+            &directions,
+        )
+        .expect_err("success criteria is required");
+        assert_eq!(
+            empty_success.to_string(),
+            "direction `dir-title` requires at least one success criterion"
+        );
+
+        let bad_state = direction_from_request(
+            PlanningAdminDirectionMutationRequest {
+                id: String::new(),
+                title: "Title".to_string(),
+                summary: String::new(),
+                success_criteria_text: "done".to_string(),
+                scope_hints_text: String::new(),
+                detail_doc_path: String::new(),
+                state: "waiting".to_string(),
+            },
+            &directions,
+        )
+        .expect_err("unknown state should be rejected");
+        assert_eq!(bad_state.to_string(), "unknown direction state `waiting`");
+    }
+
+    #[test]
+    fn default_direction_selection_prefers_default_then_active_then_first() {
+        let catalog = direction_catalog(vec![
+            direction("paused-direction", DirectionState::Paused),
+            direction("active-direction", DirectionState::Active),
+            direction(DEFAULT_DIRECTION_ID, DirectionState::Paused),
+        ]);
+        assert_eq!(
+            default_direction_id(&catalog).unwrap(),
+            DEFAULT_DIRECTION_ID
+        );
+
+        let catalog = direction_catalog(vec![
+            direction("paused-direction", DirectionState::Paused),
+            direction("active-direction", DirectionState::Active),
+        ]);
+        assert_eq!(default_direction_id(&catalog).unwrap(), "active-direction");
+
+        let catalog =
+            direction_catalog(vec![direction("paused-direction", DirectionState::Paused)]);
+        assert_eq!(default_direction_id(&catalog).unwrap(), "paused-direction");
+
+        let empty = direction_catalog(Vec::new());
+        assert_eq!(
+            default_direction_id(&empty).unwrap_err().to_string(),
+            "at least one direction is required"
+        );
+    }
+
+    #[test]
+    fn ensure_default_direction_restores_bootstrap_anchor_once() {
+        let mut catalog = direction_catalog(vec![direction("custom", DirectionState::Active)]);
+
+        ensure_default_direction(&mut catalog).expect("default direction should be restored");
+        ensure_default_direction(&mut catalog).expect("second restore should be idempotent");
+
+        let default_count = catalog
+            .directions
+            .iter()
+            .filter(|direction| direction.id == DEFAULT_DIRECTION_ID)
+            .count();
+        assert_eq!(default_count, 1);
+        let restored = catalog
+            .directions
+            .iter()
+            .find(|direction| direction.id == DEFAULT_DIRECTION_ID)
+            .expect("default direction should be present");
+        assert_eq!(restored.state, DirectionState::Active);
+    }
+
+    #[test]
+    fn unresolved_direction_cleanup_prunes_tasks_and_references() {
+        let mut documents = PlanningOperatorPlanningDocuments {
+            directions: direction_catalog(vec![direction("kept", DirectionState::Active)]),
+            task_authority: TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![
+                    task(
+                        "kept-task",
+                        "kept",
+                        vec!["removed-task"],
+                        vec!["removed-task"],
+                    ),
+                    task("removed-task", "missing", Vec::new(), Vec::new()),
+                ],
+            },
+            result_output_markdown: "# Result Output\n\nKeep reporting.".to_string(),
+            observed_planning_revision: Some(1),
+        };
+
+        remove_tasks_with_unresolved_directions(&mut documents);
+
+        assert_eq!(documents.task_authority.tasks.len(), 1);
+        assert_eq!(documents.task_authority.tasks[0].id, "kept-task");
+        assert!(documents.task_authority.tasks[0].depends_on.is_empty());
+        assert!(documents.task_authority.tasks[0].blocked_by.is_empty());
+    }
+
+    #[test]
+    fn load_and_commit_operator_documents_round_trips_seeded_authority() {
+        let fixture = TestAdminFixture::new("admin-documents-round-trip");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded operator documents should load");
+        documents.result_output_markdown = "# Result Output\n\nUpdated admin copy.".to_string();
+        documents
+            .directions
+            .directions
+            .retain(|direction| direction.id != DEFAULT_DIRECTION_ID);
+
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("valid operator documents should commit");
+
+        let reloaded = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("committed operator documents should reload");
+        assert_eq!(
+            reloaded.result_output_markdown,
+            "# Result Output\n\nUpdated admin copy."
+        );
+        assert!(
+            reloaded
+                .directions
+                .directions
+                .iter()
+                .any(|direction| direction.id == DEFAULT_DIRECTION_ID)
+        );
+    }
+
+    #[test]
+    fn invalid_operator_documents_fail_before_overwriting_result_output() {
+        let fixture = TestAdminFixture::new("admin-documents-invalid");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded operator documents should load");
+        let original_result_output = documents.result_output_markdown.clone();
+        documents.result_output_markdown = "no heading".to_string();
+
+        let error = fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect_err("invalid result output should fail validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("planning mutation failed validation")
+        );
+        let reloaded = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should still load after failed commit");
+        assert_eq!(reloaded.result_output_markdown, original_result_output);
+    }
+
+    fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::Stop,
+                prompt_path: String::new(),
+            },
+            directions,
+        }
+    }
+
+    fn direction(id: &str, state: DirectionState) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: format!("Direction {id}"),
+            summary: format!("Summary for {id}"),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state,
+        }
+    }
+
+    fn task(
+        id: &str,
+        direction_id: &str,
+        depends_on: Vec<&str>,
+        blocked_by: Vec<&str>,
+    ) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: direction_id.to_string(),
+            direction_relation_note: "relates to the direction".to_string(),
+            title: format!("Task {id}"),
+            description: "Do the task".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: depends_on.into_iter().map(str::to_string).collect(),
+            blocked_by: blocked_by.into_iter().map(str::to_string).collect(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+
+    struct TestAdminFixture {
+        _workspace: TempPlanningWorkspace,
+        facade: PlanningAdminFacadeService,
+    }
+
+    impl TestAdminFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            let authority_port: Arc<dyn PlanningAuthorityPort> = sqlite.clone();
+            let task_repository_port: Arc<dyn PlanningTaskRepositoryPort> = sqlite.clone();
+            let planning = PlanningServices::from_ports(
+                workspace_port.clone(),
+                authority_port.clone(),
+                task_repository_port.clone(),
+                Arc::new(NoopPlanningWorkerPort),
+            );
+            let facade = PlanningAdminFacadeService::from_planning_with_authority(
+                workspace.path.clone(),
+                planning,
+                workspace_port,
+                authority_port,
+                task_repository_port,
+            );
+            Self {
+                _workspace: workspace,
+                facade,
+            }
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
