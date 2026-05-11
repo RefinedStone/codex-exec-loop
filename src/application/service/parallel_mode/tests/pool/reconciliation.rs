@@ -650,6 +650,77 @@ fn reconcile_releases_clean_baseline_split_brain_running_lease() {
     );
 }
 
+// 실제 운영에서는 다른 PR이 prerelease를 전진시킨 뒤 slot worktree가 이전 clean
+// detached baseline commit에 남을 수 있다. agent branch가 이미 없어졌다면 그 commit은
+// 현재 prerelease에 포함된 clean baseline이므로 stale Running lease를 계속 보존하면
+// capacity가 영구히 줄어든다.
+#[test]
+fn reconcile_releases_clean_integrated_detached_split_brain_running_lease() {
+    let repo = TempGitRepo::new("reconcile-integrated-detached-split-brain");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
+    let detached_head = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("slot head should resolve");
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    repo.commit_on_current_branch("later.txt", "later\n", "advance prerelease");
+    run_git(
+        &repo.repo_root,
+        &["branch", "-D", lease.branch_name.as_str()],
+    );
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projections should load");
+    let refreshed_head = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("refreshed slot head should resolve");
+
+    assert_ne!(detached_head, repo.head_sha());
+    assert_eq!(refreshed_head, repo.head_sha());
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.blocked_slots, 0);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!runtime_projection.slot_leases.contains_key("slot-1"));
+    assert!(
+        runtime_projection
+            .task_dispatch_blocks
+            .iter()
+            .any(|block| block.task_id == lease.task_id)
+    );
+}
+
 // 같은 split-brain이라도 baseline worktree에 변경이 남아 있으면 자동 회수하면 안 된다.
 // 이 경우는 사용자나 아직 늦게 쓰는 worker가 남긴 산출물일 수 있으므로 blocked로 보존한다.
 #[test]

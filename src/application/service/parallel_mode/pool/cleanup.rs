@@ -184,7 +184,12 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
         else {
             continue;
         };
-        if !worktree_is_clean_baseline(worktree_record, baseline_head, &slot_path) {
+        if !worktree_is_clean_reusable_baseline(
+            repo_root,
+            worktree_record,
+            baseline_head,
+            &slot_path,
+        ) {
             continue;
         }
         let branch_still_exists = branch_exists(repo_root, &lease.branch_name);
@@ -230,16 +235,24 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
     cleaned_slots
 }
 
-fn worktree_is_clean_baseline(
+fn worktree_is_clean_reusable_baseline(
+    repo_root: &str,
     worktree_record: &GitWorktreeRecord,
     baseline_head: &str,
     slot_path: &Path,
 ) -> bool {
+    if !inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline) {
+        return false;
+    }
     let branch_is_baseline = worktree_record.branch_name.as_deref() == Some(POOL_BASELINE_BRANCH);
     let detached_at_baseline =
         worktree_record.detached && worktree_record.head_sha == baseline_head;
-    (branch_is_baseline || detached_at_baseline)
-        && inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
+    if branch_is_baseline || detached_at_baseline {
+        return true;
+    }
+
+    worktree_record.detached
+        && branch_is_integrated_into(repo_root, &worktree_record.head_sha, POOL_BASELINE_BRANCH)
 }
 
 fn delete_stale_agent_branch(repo_root: &str, branch_name: &str) -> bool {
