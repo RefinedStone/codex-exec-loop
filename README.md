@@ -142,7 +142,7 @@ If you unpack a release bundle and put it on `PATH`, you can launch `akra` direc
 | `:new` | start a new draft |
 | `:help` | list available shell commands |
 
-Supported aliases remain available for common commands such as `:q`, `:diagnostics`, and `:session`.
+Supported aliases remain available for common commands such as `:pa`, `:q`, `:diagnostics`, and `:session`.
 
 ### External planning lifecycle commands
 

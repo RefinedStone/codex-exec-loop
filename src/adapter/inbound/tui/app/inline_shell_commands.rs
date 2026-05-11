@@ -76,7 +76,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
         command: InlineShellCommand::Parallel,
         primary_name: ":parallel",
-        aliases: &[":parallel"],
+        aliases: &[":pa", ":parallel"],
         suggestion_detail: "parallel mode",
         buffered_hint: "Press Enter to enter parallel mode.",
         execution_status: None,
@@ -431,7 +431,7 @@ fn parallel_argument_hint(argument: Option<&str>) -> String {
             "Press Enter to turn parallel mode off.".to_string()
         }
         Err(error) => format!(
-            "Press Enter to apply `:parallel {}`. Supported command forms: :parallel, :parallel off.",
+            "Press Enter to apply `:parallel {}`. Supported command forms: :parallel, :pa, :parallel off, :pa off.",
             error.argument()
         ),
     }

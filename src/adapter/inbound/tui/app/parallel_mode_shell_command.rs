@@ -1,4 +1,5 @@
-pub(super) const PARALLEL_MODE_SHELL_USAGE_TEXT: &str = "supported: :parallel, :parallel off";
+pub(super) const PARALLEL_MODE_SHELL_USAGE_TEXT: &str =
+    "supported: :parallel, :pa, :parallel off, :pa off";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ParsedParallelModeShellCommand {
