@@ -297,11 +297,16 @@ impl ParallelModeDistributorService {
             head,
             self.github_automation.as_ref(),
         );
-        let _ = reconcile_pool_board(
-            self.planning_authority.as_ref(),
-            self.parallel_runtime.as_ref(),
-            workspace_dir,
-        );
+        if matches!(
+            head.queue_state,
+            ParallelModeQueueItemState::Cleaning | ParallelModeQueueItemState::Done
+        ) {
+            let _ = reconcile_pool_board(
+                self.planning_authority.as_ref(),
+                self.parallel_runtime.as_ref(),
+                workspace_dir,
+            );
+        }
         notices
     }
 

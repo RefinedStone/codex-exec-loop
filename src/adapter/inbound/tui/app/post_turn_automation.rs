@@ -50,7 +50,7 @@ impl NativeTuiApp {
         };
         let result = self
             .pending_post_turn_automation_results
-            .remove(result_index);
+            .swap_remove(result_index);
         self.route_post_turn_automation_result(result)
     }
 

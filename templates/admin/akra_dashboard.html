@@ -2090,6 +2090,8 @@
     } else if (selectedKey.startsWith("event:")) {
       setSelectedDetail(null);
       clearRelated();
+    } else {
+      closeDetailDrawer();
     }
   };
 
@@ -2708,7 +2710,15 @@
     pool: asArray(dashboard.pool?.slots).map((slot) => [slot.slotId, slot.state, slot.ownerLabel, slot.note]),
     distributor: [dashboard.distributor?.barrierState, dashboard.distributor?.queueDepth, dashboard.distributor?.headSummary],
     campaign: [dashboard.campaign?.activeLaneCount, dashboard.campaign?.visibleAttemptCount, dashboard.campaign?.signalCount],
-    task: dashboard.selectedTask ? [dashboard.selectedTask.taskId, dashboard.selectedTask.state, dashboard.selectedTask.progressPercent] : []
+    task: dashboard.selectedTask ? [dashboard.selectedTask.taskId, dashboard.selectedTask.state, dashboard.selectedTask.progressPercent] : [],
+    metrics: [
+      dashboard.metrics?.poolUtilizationPercent,
+      dashboard.metrics?.activeAgentCount,
+      dashboard.metrics?.waitingTaskCount,
+      asArray(dashboard.metrics?.badges).join(",")
+    ],
+    workspace: [dashboard.workspace?.readiness, dashboard.workspace?.topNotice],
+    eventFeed: [dashboard.eventFeed?.totalEventCount, dashboard.eventFeed?.visibleEventCount]
   });
 
   const renderDashboardPanels = (dashboard) => {
@@ -2756,9 +2766,11 @@
     updateKpiNote("distributor", dashboard.distributor?.note || "");
     const previousSignature = root.dataset.dashboardSignature || "";
     const nextSignature = dashboardSignature(dashboard);
-    renderDashboardPanels(dashboard);
-    if (previousSignature && previousSignature !== nextSignature) pulseStage(1);
-    root.dataset.dashboardSignature = nextSignature;
+    if (previousSignature !== nextSignature) {
+      renderDashboardPanels(dashboard);
+      if (previousSignature) pulseStage(1);
+      root.dataset.dashboardSignature = nextSignature;
+    }
     if (Number.isFinite(dashboard.eventFeed?.totalEventCount)) {
       root.dataset.eventTotalCount = String(dashboard.eventFeed.totalEventCount);
     }
