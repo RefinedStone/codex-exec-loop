@@ -928,7 +928,18 @@ fn post_turn_evaluation_timeout_execution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::planning::{PriorityQueueProjection, PriorityQueueSkippedTask, TaskStatus};
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+    use crate::adapter::outbound::github::GithubAutomationAdapter;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::domain::planning::{
+        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
+    };
+    use std::sync::Arc;
 
     #[test]
     fn post_turn_evaluator_boundary_uses_context_not_conversation_model() {
@@ -1010,5 +1021,279 @@ mod tests {
             Some(ParallelModePostTurnQueueSignal::ParallelCompletionFinalized)
         );
         assert!(decision.operator_alerts.is_empty());
+    }
+
+    #[test]
+    fn timeout_execution_returns_blocked_action_and_failed_panel_state() {
+        let context = test_context(ready_projection(Some(queue_task())));
+        let request = test_request(context.clone());
+
+        let execution =
+            post_turn_evaluation_timeout_execution(&context, &request, Duration::from_secs(7));
+
+        assert_eq!(execution.thread_id, "thread-1");
+        assert_eq!(execution.completed_turn_id, "turn-1");
+        assert_eq!(
+            execution.evaluation.action,
+            PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::PostTurnEvaluationTimedOut
+            }
+        );
+        assert_eq!(
+            execution.evaluation.runtime_projection.failure_reason(),
+            Some("post-turn planning worker evaluation timed out after 7 seconds")
+        );
+        assert_eq!(
+            execution.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert_eq!(
+            execution
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref(),
+            Some("planning refresh timed out")
+        );
+    }
+
+    #[test]
+    fn operator_alerts_only_surface_planning_queue_drained_skip() {
+        assert_eq!(
+            operator_alerts_for_action(&PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                PostTurnQueuedPrompt {
+                    prompt: "continue".to_string(),
+                    mode_label: "auto".to_string(),
+                    transcript_text: "queued".to_string(),
+                },
+            ))),
+            Vec::<OperatorAlert>::new()
+        );
+        assert_eq!(
+            operator_alerts_for_action(&PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::NoAgentReply,
+            }),
+            Vec::<OperatorAlert>::new()
+        );
+
+        let alerts = operator_alerts_for_action(&PostTurnContinuationAction::SkipAutoFollow {
+            reason: PostTurnAutoFollowSkipReason::PlanningQueueDrained,
+        });
+
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].title, "All planning tasks complete");
+    }
+
+    #[test]
+    fn planning_skip_reason_mapping_covers_all_post_turn_action_variants() {
+        let cases = [
+            (
+                PlanningPostTurnAutoFollowSkipReason::PostTurnContinuationPaused,
+                PostTurnAutoFollowSkipReason::PostTurnContinuationPaused,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::PlanningQueueDrained,
+                PostTurnAutoFollowSkipReason::PlanningQueueDrained,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop,
+                PostTurnAutoFollowSkipReason::PlanningQueueIdlePolicyStop,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::LimitReached,
+                PostTurnAutoFollowSkipReason::LimitReached,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::NoAgentReply,
+                PostTurnAutoFollowSkipReason::NoAgentReply,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::StopKeywordMatched,
+                PostTurnAutoFollowSkipReason::StopKeywordMatched,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::NoFileChanges,
+                PostTurnAutoFollowSkipReason::NoFileChanges,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::PlanningBlocked,
+                PostTurnAutoFollowSkipReason::PlanningBlocked,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::PlanningQueueHeadRequired,
+                PostTurnAutoFollowSkipReason::PlanningQueueHeadRequired,
+            ),
+            (
+                PlanningPostTurnAutoFollowSkipReason::PlanningRepeatedQueueHead,
+                PostTurnAutoFollowSkipReason::PlanningRepeatedQueueHead,
+            ),
+        ];
+
+        for (planning_reason, post_turn_reason) in cases {
+            assert_eq!(
+                auto_follow_skip_reason_from_planning(planning_reason),
+                post_turn_reason
+            );
+        }
+        assert_eq!(
+            auto_follow_skip_reason_from_post_turn(
+                PostTurnAutoFollowStopReason::PlanningQueueDrained,
+            ),
+            PostTurnAutoFollowSkipReason::PlanningQueueDrained
+        );
+        assert_eq!(
+            auto_follow_skip_reason_from_post_turn(
+                PostTurnAutoFollowStopReason::ParallelSessionCompleted,
+            ),
+            PostTurnAutoFollowSkipReason::ParallelSessionCompleted
+        );
+    }
+
+    #[test]
+    fn queue_refresh_skip_keeps_projection_and_preserves_existing_panel_state() {
+        let mut executor = test_executor();
+        executor.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
+        executor.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
+        let mut context = test_context(PlanningRuntimeProjection::invalid("planning blocked"));
+        context.latest_main_reply = Some("worker reply".to_string());
+        let request = test_request(context.clone());
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            outcome.runtime_projection.failure_reason(),
+            Some("planning blocked")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("previous summary")
+        );
+    }
+
+    #[test]
+    fn auto_follow_decision_queues_prompt_with_handoff_provenance() {
+        let executor = test_executor();
+        let context = test_context(ready_projection(Some(queue_task())));
+        let request = test_request(context.clone());
+
+        let decision = executor.auto_follow_decision_from_projection(
+            &context,
+            &request,
+            &context.current_runtime_projection,
+        );
+
+        let PostTurnContinuationAction::QueueAutoPrompt(prompt) = decision.action else {
+            panic!("ready queue head should produce queued prompt action");
+        };
+        assert_eq!(prompt.mode_label, "auto-follow");
+        assert!(prompt.prompt.contains("Queue head"));
+        assert_eq!(
+            decision
+                .provenance
+                .handoff_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-1")
+        );
+        assert!(decision.operator_alerts.is_empty());
+    }
+
+    #[test]
+    fn auto_follow_decision_maps_skip_to_post_turn_action() {
+        let executor = test_executor();
+        let mut context = test_context(ready_projection(Some(queue_task())));
+        context.can_queue_next = false;
+        let request = test_request(context.clone());
+
+        let decision = executor.auto_follow_decision_from_projection(
+            &context,
+            &request,
+            &context.current_runtime_projection,
+        );
+
+        assert_eq!(
+            decision.action,
+            PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::LimitReached
+            }
+        );
+        assert_eq!(decision.provenance.completed_turn_id, "turn-1");
+        assert!(decision.operator_alerts.is_empty());
+    }
+
+    fn test_executor() -> PostTurnEvaluationExecutor {
+        PostTurnEvaluationExecutor::new(
+            PlanningServices::from_ports(
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                Arc::new(NoopPlanningAuthorityPort::default()),
+                Arc::new(NoopPlanningTaskRepositoryPort),
+                Arc::new(NoopPlanningWorkerPort),
+            ),
+            ParallelModeTurnService::new(ParallelModeService::new(
+                Arc::new(SqlitePlanningAuthorityAdapter::new()),
+                Arc::new(GithubAutomationAdapter::new()),
+                Arc::new(GitParallelModeRuntimeAdapter::new()),
+            )),
+            PlanningWorkerPanelState::default(),
+        )
+    }
+
+    fn test_context(
+        current_runtime_projection: PlanningRuntimeProjection,
+    ) -> PostTurnEvaluationContext {
+        PostTurnEvaluationContext {
+            thread_id: "thread-1".to_string(),
+            planning_workspace_directory: "/tmp/workspace".to_string(),
+            latest_user_message: Some("user request".to_string()),
+            latest_main_reply: Some("assistant reply".to_string()),
+            previous_handoff_task: None,
+            current_runtime_projection,
+            continuation_paused: false,
+            can_queue_next: true,
+            stop_keyword: "stop".to_string(),
+            stop_keyword_matched: false,
+            no_file_changes_stop_matched: false,
+            mode_label: "auto-follow".to_string(),
+        }
+    }
+
+    fn test_request(context: PostTurnEvaluationContext) -> PostTurnEvaluationRequest {
+        PostTurnEvaluationRequest {
+            context,
+            workspace_directory: "/tmp/workspace".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: None,
+            planning_worker_panel_state: PlanningWorkerPanelState::default(),
+        }
+    }
+
+    fn ready_projection(queue_head: Option<PriorityQueueTask>) -> PlanningRuntimeProjection {
+        PlanningRuntimeProjection::ready(
+            "Planning Context".to_string(),
+            "queue summary".to_string(),
+            queue_head,
+        )
+    }
+
+    fn queue_task() -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank: 1,
+            task_id: "task-1".to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_title: "General".to_string(),
+            task_title: "Queue head".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 80,
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+            rank_reasons: vec!["ready".to_string()],
+        }
     }
 }
