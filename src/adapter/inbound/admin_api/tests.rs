@@ -39,6 +39,10 @@ const ADMIN_MOD: &str = include_str!("mod.rs");
 const ADMIN_PAGES: &str = include_str!("pages.rs");
 const ADMIN_STATIC_ASSETS: &str = include_str!("static_assets.rs");
 
+fn source_contains(source: &str, needle: &str) -> bool {
+    source.contains(needle) || source.replace("\r\n", "\n").contains(needle)
+}
+
 /*
  * 제거된 raw-authority field는 stale browser tab이나 오래된 bookmark/form replay에서 여전히 들어올 수 있다.
  * extract_file_updates는 그런 이름을 application-level file mutation으로 승격하지 않아야 한다.
@@ -106,7 +110,7 @@ fn admin_html_and_json_reset_routes_share_parser_and_facade() {
         ".route(\"/api/planning/reset\", post(api::reset_api))",
     ] {
         assert!(
-            ADMIN_MOD.contains(route),
+            source_contains(ADMIN_MOD, route),
             "route table should keep paired reset route {route}"
         );
     }
@@ -132,7 +136,7 @@ fn admin_html_and_json_draft_routes_share_mutation_facade_methods() {
         ".route(\n            \"/api/planning/drafts/{draft_name}/promote\",\n            post(api::promote_draft_api),\n        )",
     ] {
         assert!(
-            ADMIN_MOD.contains(route),
+            source_contains(ADMIN_MOD, route),
             "route table should keep paired draft route {route}"
         );
     }
@@ -173,7 +177,7 @@ fn admin_html_and_json_direction_task_routes_share_facade_methods() {
         ".route(\"/api/planning/tasks/delete\", post(api::delete_task_api))",
     ] {
         assert!(
-            ADMIN_MOD.contains(route),
+            source_contains(ADMIN_MOD, route),
             "route table should keep paired admin CRUD route {route}"
         );
     }
@@ -417,7 +421,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "\"/admin/assets/game/{asset_name}\"",
     ] {
         assert!(
-            ADMIN_MOD.contains(route),
+            source_contains(ADMIN_MOD, route),
             "admin route table should keep {route}"
         );
     }
