@@ -614,6 +614,170 @@ mod tests {
         report
     }
 
+    fn issue_codes(report: &PlanningValidationReport) -> Vec<&str> {
+        report
+            .issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn validation_orchestration_allows_partial_documents_without_cross_reference_errors() {
+        let service = PlanningSemanticValidationService::new();
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction("direction-a")],
+        };
+        let ledger = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![task("task-a", TaskStatus::Ready)],
+        };
+
+        let mut directions_only_report = PlanningValidationReport::new();
+        service.validate(Some(&directions), None, &mut directions_only_report);
+        assert!(directions_only_report.is_valid());
+
+        let mut task_only_report = PlanningValidationReport::new();
+        service.validate(None, Some(&ledger), &mut task_only_report);
+        assert!(task_only_report.is_valid());
+        assert!(!issue_codes(&task_only_report).contains(&"missing_direction_reference"));
+
+        let mut empty_report = PlanningValidationReport::new();
+        service.validate(None, None, &mut empty_report);
+        assert!(empty_report.issues.is_empty());
+    }
+
+    #[test]
+    fn validates_direction_catalog_version_presence_and_field_quality() {
+        let service = PlanningSemanticValidationService::new();
+        let mut report = PlanningValidationReport::new();
+        service.validate(
+            Some(&DirectionCatalogDocument {
+                version: 999,
+                queue_idle: QueueIdleConfig::default(),
+                directions: Vec::new(),
+            }),
+            None,
+            &mut report,
+        );
+        assert_eq!(
+            issue_codes(&report),
+            vec!["unsupported_directions_version", "missing_directions"]
+        );
+
+        let mut blank = direction(" ");
+        blank.title = " ".to_string();
+        blank.summary = "\t".to_string();
+        blank.success_criteria = Vec::new();
+        let mut duplicate = direction("duplicate");
+        duplicate.success_criteria = vec!["valid".to_string(), " ".to_string()];
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![blank, direction("duplicate"), duplicate],
+        };
+
+        let mut quality_report = PlanningValidationReport::new();
+        service.validate(Some(&directions), None, &mut quality_report);
+        let codes = issue_codes(&quality_report);
+
+        assert!(codes.contains(&"blank_direction_id"));
+        assert!(codes.contains(&"duplicate_direction_id"));
+        assert!(codes.contains(&"blank_direction_title"));
+        assert!(codes.contains(&"blank_direction_summary"));
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "invalid_success_criteria")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn validates_task_required_fields_priority_reason_timestamp_and_link_shape() {
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction("direction-a")],
+        };
+        let mut malformed = task("task-a", TaskStatus::Ready);
+        malformed.direction_id = " ".to_string();
+        malformed.direction_relation_note = " ".to_string();
+        malformed.title = " ".to_string();
+        malformed.description = String::new();
+        malformed.dynamic_priority_delta = 1;
+        malformed.priority_reason = " ".to_string();
+        malformed.created_by = TaskActor::Worker;
+        malformed.updated_at = "not-rfc3339".to_string();
+        malformed.depends_on = vec![
+            " ".to_string(),
+            "task-a".to_string(),
+            "duplicate".to_string(),
+            "duplicate".to_string(),
+            "shared".to_string(),
+        ];
+        malformed.blocked_by = vec![
+            " ".to_string(),
+            "task-a".to_string(),
+            "blocked-duplicate".to_string(),
+            "blocked-duplicate".to_string(),
+            "shared".to_string(),
+        ];
+        let ledger = TaskAuthorityDocument {
+            version: 999,
+            tasks: vec![malformed],
+        };
+
+        let report = validate(&directions, &ledger);
+        let codes = issue_codes(&report);
+
+        for expected_code in [
+            "unsupported_task_authority_version",
+            "blank_direction_reference",
+            "blank_task_title",
+            "blank_task_description",
+            "missing_direction_relation_note",
+            "missing_priority_reason",
+            "invalid_updated_at",
+            "blank_dependency_id",
+            "self_dependency",
+            "duplicate_dependency_id",
+            "blank_blocker_id",
+            "self_blocker",
+            "duplicate_blocker_id",
+            "dependency_blocker_conflict",
+            "missing_direction_reference",
+        ] {
+            assert!(codes.contains(&expected_code), "missing {expected_code}");
+        }
+    }
+
+    #[test]
+    fn validates_missing_blockers_and_done_task_unresolved_blockers() {
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction("direction-a")],
+        };
+        let mut done = task("done-task", TaskStatus::Done);
+        done.blocked_by = vec!["open-blocker".to_string()];
+        let mut blocked = task("blocked-task", TaskStatus::Blocked);
+        blocked.blocked_by = vec!["missing-blocker".to_string()];
+        let ledger = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![done, blocked, task("open-blocker", TaskStatus::Ready)],
+        };
+
+        let report = validate(&directions, &ledger);
+        let codes = issue_codes(&report);
+
+        assert!(codes.contains(&"missing_blocker_reference"));
+        assert!(codes.contains(&"done_task_unresolved_blocker"));
+    }
+
     #[test]
     fn validates_cross_references_and_dependency_cycles() {
         // dependency cycle과 missing reference는 같은 graph pass에서 잡히지만 서로 다른 issue code로 남아야 한다.
@@ -632,11 +796,7 @@ mod tests {
         };
 
         let report = validate(&directions, &ledger);
-        let codes = report
-            .issues
-            .iter()
-            .map(|issue| issue.code.as_str())
-            .collect::<Vec<_>>();
+        let codes = issue_codes(&report);
 
         assert!(codes.contains(&"missing_dependency_reference"));
         assert!(codes.contains(&"dependency_cycle_detected"));
@@ -708,11 +868,7 @@ mod tests {
         };
 
         let report = validate(&directions, &ledger);
-        let codes = report
-            .issues
-            .iter()
-            .map(|issue| issue.code.as_str())
-            .collect::<Vec<_>>();
+        let codes = issue_codes(&report);
 
         assert!(codes.contains(&"invalid_base_priority"));
         assert!(codes.contains(&"invalid_dynamic_priority_delta"));
