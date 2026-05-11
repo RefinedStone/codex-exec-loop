@@ -1,9 +1,8 @@
-use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
 use crate::application::service::prompt_component::PromptDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 // `SubSessionAgentPrompt`는 특정 agent profile이 제공하는 prompt 주입값이다.
-// 비어 있으면 기존 workspace-wide `ParallelAgentPersona` 설정을 fallback으로 사용한다.
+// 비어 있으면 profile prompt 없이 기본 sub-session 계약만 사용한다.
 pub struct SubSessionAgentPrompt {
     pub label: String,
     pub lines: Vec<String>,
@@ -51,9 +50,7 @@ pub struct MainSessionPromptAssemblyRequest<'a> {
 pub struct SubSessionPromptAssemblyRequest<'a> {
     // distributor가 만든 queued-task handoff 원문이다. 이 값이 sub-session의 유일한 작업 범위이다.
     pub handoff_prompt: &'a str,
-    // admin surface에서 선택한 병렬 agent 페르소나다. None이면 아무 페르소나 프롬프트도 주입하지 않는다.
-    pub persona: ParallelAgentPersona,
-    // agent profile이 선택된 경우 이 prompt가 workspace-wide persona보다 우선한다.
+    // 선택된 agent profile에서 온 persona prompt다.
     pub agent_prompt: SubSessionAgentPrompt,
 }
 
@@ -117,19 +114,9 @@ fn sub_session_reporting_contract_lines() -> Vec<String> {
     vec!["최종 답변에는 변경 요약, 검증 결과, 남은 작업만 간결하게 포함하세요.".to_string()]
 }
 
-fn effective_sub_session_prompt_lines(
-    persona: ParallelAgentPersona,
-    agent_prompt: &SubSessionAgentPrompt,
-) -> Vec<String> {
-    if agent_prompt.has_lines() {
-        return agent_prompt.lines.clone();
-    }
-    persona.prompt_lines()
-}
-
 fn sub_session_prompt_heading(agent_prompt: &SubSessionAgentPrompt) -> String {
     if !agent_prompt.has_lines() {
-        return "Persona prompt:".to_string();
+        return "Agent profile prompt:".to_string();
     }
     if agent_prompt.label.is_empty() {
         "Agent profile prompt:".to_string()
@@ -225,8 +212,7 @@ impl TurnPromptAssemblyService {
             return None;
         }
 
-        let persona_lines =
-            effective_sub_session_prompt_lines(request.persona, &request.agent_prompt);
+        let persona_lines = request.agent_prompt.lines.clone();
         Some(SubSessionPromptAssembly {
             turn_prompt: render_sub_session_prompt(handoff_prompt, &persona_lines),
             developer_instructions: sub_session_developer_instructions(
@@ -281,8 +267,6 @@ fn render_sub_session_prompt(handoff_prompt: &str, persona_lines: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
-
     use super::{
         MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionAgentPrompt,
         SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
@@ -349,7 +333,6 @@ mod tests {
 
         let prompt = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
             handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
-            persona: ParallelAgentPersona::None,
             agent_prompt: SubSessionAgentPrompt::default(),
         });
 
@@ -376,14 +359,16 @@ mod tests {
     }
 
     #[test]
-    // admin에서 sample persona를 고른 경우에만 sub-session prompt와 developer metadata에 같은 응집 프롬프트를 주입한다.
-    fn sub_session_prompt_includes_selected_persona_prompt() {
+    // 선택된 agent profile의 persona prompt를 sub-session prompt와 developer metadata에 같은 응집 프롬프트로 주입한다.
+    fn sub_session_prompt_includes_agent_profile_prompt() {
         let service = TurnPromptAssemblyService::new();
 
         let prompt = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
             handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
-            persona: ParallelAgentPersona::Sample,
-            agent_prompt: SubSessionAgentPrompt::default(),
+            agent_prompt: SubSessionAgentPrompt::new(
+                "아티피서 / 구현 담당",
+                vec!["You are a careful implementation agent.".to_string()],
+            ),
         });
 
         let assembly = prompt.expect("sub-session prompt should render");
@@ -393,39 +378,15 @@ mod tests {
                 .turn_prompt
                 .contains("You are a careful implementation agent.")
         );
-        assert!(assembly.developer_instructions.contains("Persona prompt:"));
-        assert!(
-            assembly
-                .developer_instructions
-                .contains("Prefer the smallest coherent change")
-        );
-    }
-
-    #[test]
-    // agent profile prompt가 있으면 workspace-wide persona보다 우선한다.
-    fn sub_session_prompt_prefers_agent_profile_prompt() {
-        let service = TurnPromptAssemblyService::new();
-
-        let prompt = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
-            handoff_prompt: "# queued-task-handoff\n\n[task]\nintent=Continue",
-            persona: ParallelAgentPersona::Sample,
-            agent_prompt: SubSessionAgentPrompt::new(
-                "아티피서 / 구현 담당",
-                vec!["Use the profile prompt.".to_string()],
-            ),
-        });
-
-        let assembly = prompt.expect("sub-session prompt should render");
-        assert!(assembly.turn_prompt.contains("Use the profile prompt."));
-        assert!(
-            !assembly
-                .turn_prompt
-                .contains("You are a careful implementation agent.")
-        );
         assert!(
             assembly
                 .developer_instructions
                 .contains("Agent profile prompt: 아티피서 / 구현 담당")
+        );
+        assert!(
+            assembly
+                .developer_instructions
+                .contains("You are a careful implementation agent.")
         );
     }
 }

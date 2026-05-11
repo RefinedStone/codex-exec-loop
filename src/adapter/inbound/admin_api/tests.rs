@@ -828,10 +828,11 @@ fn risky_admin_mutations_require_browser_confirmation() {
 }
 
 #[test]
-fn controls_page_exposes_parallel_agent_persona_selector() {
-    assert!(CONTROLS_TEMPLATE.contains("Parallel Agent Persona"));
-    assert!(CONTROLS_TEMPLATE.contains("name=\"persona\""));
-    assert!(CONTROLS_TEMPLATE.contains("No persona prompt will be injected."));
-    assert!(ADMIN_MOD.contains("\"/admin/controls/parallel-persona\""));
-    assert!(ADMIN_MOD.contains("update_parallel_persona_page"));
+fn controls_page_uses_agent_profiles_for_parallel_agent_prompting() {
+    assert!(CONTROLS_TEMPLATE.contains("Agent Profiles"));
+    assert!(CONTROLS_TEMPLATE.contains("name=\"profiles_json\""));
+    assert!(ADMIN_MOD.contains("\"/admin/controls/agent-profiles\""));
+    assert!(!CONTROLS_TEMPLATE.contains("Parallel Agent Persona"));
+    assert!(!CONTROLS_TEMPLATE.contains("name=\"persona\""));
+    assert!(!ADMIN_MOD.contains("\"/admin/controls/parallel-persona\""));
 }

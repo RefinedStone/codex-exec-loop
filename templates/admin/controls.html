@@ -25,36 +25,6 @@
   </article>
 
   <article class="card span-6">
-    <h2>Parallel Agent Persona</h2>
-    <p>Default is None. Agent Profile prompt가 있으면 해당 profile prompt가 우선 적용됩니다.</p>
-    <form method="post" action="/admin/controls/parallel-persona" class="stack">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>
-        Persona
-        <select name="persona">
-          {% for option in persona_options %}
-          <option value="{{ option.value }}"{% if persona_config.persona.form_value() == option.value %} selected{% endif %}>{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <p>
-        {% for option in persona_options %}
-          {% if persona_config.persona.form_value() == option.value %}
-            {% if option.prompt_preview.is_empty() %}
-              No persona prompt will be injected.
-            {% else %}
-              {{ option.prompt_preview }}
-            {% endif %}
-          {% endif %}
-        {% endfor %}
-      </p>
-      <div class="actions">
-        <button type="submit" class="secondary">Save Persona</button>
-      </div>
-    </form>
-  </article>
-
-  <article class="card span-6">
     <h2>Agent Profiles</h2>
     <p>{{ agent_profile_config.profiles.len() }} profiles define agent identity, role, avatar, and persona prompt for parallel dispatch.</p>
     <form method="post" action="/admin/controls/agent-profiles" class="stack">

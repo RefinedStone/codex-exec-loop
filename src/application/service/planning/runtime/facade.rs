@@ -4,7 +4,6 @@
  * inbound adapter가 바로 소비할 return shape로 순서화한다. adapter는 내부 service graph를 모르고 이 facade의
  * 작은 DTO와 method만 알면 된다.
  */
-use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
@@ -210,17 +209,8 @@ impl PlanningRuntimeFacadeService {
         &self,
         task: &PriorityQueueTask,
     ) -> PlanningSubSessionHandoff {
-        self.build_sub_session_task_handoff_with_persona(task, ParallelAgentPersona::None)
-    }
-
-    pub fn build_sub_session_task_handoff_with_persona(
-        &self,
-        task: &PriorityQueueTask,
-        persona: ParallelAgentPersona,
-    ) -> PlanningSubSessionHandoff {
         self.build_sub_session_task_handoff_with_agent_prompt(
             task,
-            persona,
             SubSessionAgentPrompt::default(),
         )
     }
@@ -228,12 +218,10 @@ impl PlanningRuntimeFacadeService {
     pub fn build_sub_session_task_handoff_with_agent_profile(
         &self,
         task: &PriorityQueueTask,
-        persona: ParallelAgentPersona,
         profile: &ParallelAgentProfile,
     ) -> PlanningSubSessionHandoff {
         self.build_sub_session_task_handoff_with_agent_prompt(
             task,
-            persona,
             SubSessionAgentPrompt::new(profile.prompt_label(), profile.prompt_lines()),
         )
     }
@@ -241,7 +229,6 @@ impl PlanningRuntimeFacadeService {
     fn build_sub_session_task_handoff_with_agent_prompt(
         &self,
         task: &PriorityQueueTask,
-        persona: ParallelAgentPersona,
         agent_prompt: SubSessionAgentPrompt,
     ) -> PlanningSubSessionHandoff {
         let task_prompt = render_queued_task_handoff_prompt(task);
@@ -249,7 +236,6 @@ impl PlanningRuntimeFacadeService {
             .turn_prompt_assembly_service
             .build_sub_session_prompt(SubSessionPromptAssemblyRequest {
                 handoff_prompt: &task_prompt,
-                persona,
                 agent_prompt: agent_prompt.clone(),
             })
             .expect("queued sub-session handoff prompt should not be empty");
@@ -257,7 +243,7 @@ impl PlanningRuntimeFacadeService {
         event_log::emit_lazy("parallel_sub_session_handoff_built", || {
             parallel_sub_session_handoff_trace_payload(
                 task,
-                persona,
+                agent_prompt.label.as_str(),
                 agent_prompt.lines.len(),
                 &prompt.service_name,
                 &task_prompt,
@@ -459,7 +445,7 @@ fn render_queued_task_handoff_prompt(queue_head: &PriorityQueueTask) -> String {
 
 fn parallel_sub_session_handoff_trace_payload(
     task: &PriorityQueueTask,
-    persona: ParallelAgentPersona,
+    agent_prompt_label: &str,
     agent_prompt_line_count: usize,
     service_name: &str,
     handoff_prompt: &str,
@@ -471,7 +457,7 @@ fn parallel_sub_session_handoff_trace_payload(
         "task_title": &task.task_title,
         "direction_id": &task.direction_id,
         "combined_priority": task.combined_priority,
-        "persona": persona.form_value(),
+        "agent_prompt_label": agent_prompt_label,
         "agent_prompt_line_count": agent_prompt_line_count,
         "service_name": service_name,
         "handoff_prompt_chars": handoff_prompt.chars().count(),
@@ -483,7 +469,6 @@ fn parallel_sub_session_handoff_trace_payload(
 #[cfg(test)]
 mod tests {
     use super::{PriorityQueueTask, parallel_sub_session_handoff_trace_payload};
-    use crate::application::service::parallel_agent_persona::ParallelAgentPersona;
     use crate::domain::planning::TaskStatus;
     use crate::test_utils::json_payload_contains;
 
@@ -501,7 +486,7 @@ mod tests {
                 updated_at: "2026-05-09T00:00:00Z".to_string(),
                 rank_reasons: vec!["ready".to_string()],
             },
-            ParallelAgentPersona::None,
+            "",
             0,
             "akra-parallel-worker",
             "handoff SECRET-HANDOFF body",

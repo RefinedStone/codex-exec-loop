@@ -2,9 +2,6 @@ use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::parallel_agent_persona::{
-    ParallelAgentPersona, load_parallel_agent_persona_config,
-};
 use crate::application::service::parallel_agent_profile::load_parallel_agent_profile_config;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
@@ -286,9 +283,6 @@ fn dispatch_parallel_queue_pool(
 
     let mut launched_titles = Vec::new();
     let mut blocked_details = Vec::new();
-    let persona = load_parallel_agent_persona_config(workspace_directory)
-        .map(|config| config.persona)
-        .unwrap_or(ParallelAgentPersona::None);
     let agent_profiles =
         load_parallel_agent_profile_config(workspace_directory).unwrap_or_default();
     let mut used_agent_ids = active_parallel_agent_ids(service, workspace_directory);
@@ -303,13 +297,13 @@ fn dispatch_parallel_queue_pool(
                 context
                     .planning
                     .runtime
-                    .build_sub_session_task_handoff_with_agent_profile(&task, persona, profile)
+                    .build_sub_session_task_handoff_with_agent_profile(&task, profile)
             })
             .unwrap_or_else(|| {
                 context
                     .planning
                     .runtime
-                    .build_sub_session_task_handoff_with_persona(&task, persona)
+                    .build_sub_session_task_handoff(&task)
             });
         let lease_request = if let Some(profile) = selected_profile.as_ref() {
             ParallelModeSlotLeaseRequest::from_task_identity_with_agent_id(

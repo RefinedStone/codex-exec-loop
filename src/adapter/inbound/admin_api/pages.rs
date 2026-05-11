@@ -1,6 +1,6 @@
 use super::forms::{
     AgentProfilesForm, CreateDraftForm, DirectionMutationForm, DraftMutationForm, EditorQuery,
-    FileSyncForm, IdDeleteForm, ParallelPersonaForm, ResetForm, TaskMutationForm,
+    FileSyncForm, IdDeleteForm, ResetForm, TaskMutationForm,
 };
 use super::helpers::{
     encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
@@ -12,10 +12,6 @@ use super::views::{
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
-use crate::application::service::parallel_agent_persona::{
-    ParallelAgentPersona, ParallelAgentPersonaConfig, load_parallel_agent_persona_config,
-    save_parallel_agent_persona_config,
-};
 use crate::application::service::parallel_agent_profile::{
     load_parallel_agent_profile_config, parse_parallel_agent_profile_config_json,
     save_parallel_agent_profile_config,
@@ -328,8 +324,6 @@ pub(super) async fn controls_page(
         .facade
         .load_overview()
         .map_err(internal_server_error)?;
-    let persona_config = load_parallel_agent_persona_config(state.facade.workspace_dir())
-        .map_err(|error| internal_server_error(anyhow!(error)))?;
     let agent_profile_config = load_parallel_agent_profile_config(state.facade.workspace_dir())
         .map_err(|error| internal_server_error(anyhow!(error)))?;
     let agent_profile_config_json = agent_profile_config.to_pretty_json();
@@ -342,32 +336,10 @@ pub(super) async fn controls_page(
             csrf_token,
             notice: query.get("notice").cloned(),
             overview,
-            persona_config,
-            persona_options: ParallelAgentPersonaConfig::options(),
             agent_profile_config,
             agent_profile_config_json,
         },
     )
-}
-
-pub(super) async fn update_parallel_persona_page(
-    State(state): State<AdminAppState>,
-    jar: CookieJar,
-    Form(form): Form<ParallelPersonaForm>,
-) -> std::result::Result<Response, StatusCode> {
-    verify_form_csrf(&jar, &form.csrf_token)?;
-    let persona =
-        ParallelAgentPersona::from_form_value(&form.persona).ok_or(StatusCode::BAD_REQUEST)?;
-    save_parallel_agent_persona_config(
-        state.facade.workspace_dir(),
-        &ParallelAgentPersonaConfig::new(persona),
-    )
-    .map_err(|error| internal_server_error(anyhow!(error)))?;
-    Ok(Redirect::to(&notice_location(
-        "/admin/controls",
-        &format!("parallel agent persona set to {}", persona.label()),
-    ))
-    .into_response())
 }
 
 pub(super) async fn update_agent_profiles_page(
