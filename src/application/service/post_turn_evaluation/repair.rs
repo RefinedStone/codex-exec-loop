@@ -234,3 +234,310 @@ impl PostTurnEvaluationExecutor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+    use crate::adapter::outbound::github::GithubAutomationAdapter;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+    use crate::application::service::planning::{
+        PlanningPostTurnRepairAttempt, PlanningRepairRetryReason, PlanningRuntimeProjection,
+        PlanningServices, PlanningWorkerRunOutcome,
+    };
+    use crate::application::service::post_turn_evaluation::PlanningWorkerPanelState;
+    use crate::domain::planning::{PriorityQueueTask, TaskStatus};
+
+    #[test]
+    fn repair_worker_failure_records_failed_panel_state() {
+        let mut executor = test_executor();
+        let started_runtime_projection = PlanningRuntimeProjection::invalid("broken authority");
+        let repair_outcome = PlanningPostTurnRepairOutcome {
+            runtime_projection: started_runtime_projection.clone(),
+            resolved: false,
+            attempts: vec![PlanningPostTurnRepairAttempt {
+                attempt_number: 1,
+                max_attempts: 2,
+                retry_reason: None,
+                started_runtime_projection: started_runtime_projection.clone(),
+                worker_prompt: "repair prompt".to_string(),
+                result: PlanningPostTurnRepairAttemptResult::WorkerFailed {
+                    detail: "repair worker failed before producing commands".to_string(),
+                    error: "transport failed".to_string(),
+                },
+            }],
+        };
+
+        executor.apply_repair_outcome(log_context(), false, &repair_outcome);
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RepairFailed
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("repair")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_prompt.as_deref(),
+            Some("repair prompt")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("repair worker failed before producing commands")
+        );
+        assert!(executor.planning_worker_panel_state.last_response.is_none());
+        assert!(
+            executor
+                .planning_worker_panel_state
+                .last_queue_summary
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resolved_repair_success_keeps_accepted_summary_and_extra_notices() {
+        let mut executor = test_executor();
+        let runtime_projection = ready_projection("queue ready after repair");
+        let repair_outcome = PlanningPostTurnRepairOutcome {
+            runtime_projection: runtime_projection.clone(),
+            resolved: true,
+            attempts: vec![PlanningPostTurnRepairAttempt {
+                attempt_number: 1,
+                max_attempts: 2,
+                retry_reason: None,
+                started_runtime_projection: PlanningRuntimeProjection::invalid("stale ledger"),
+                worker_prompt: "repair prompt".to_string(),
+                result: PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                    outcome: Box::new(worker_outcome(
+                        runtime_projection,
+                        Some("accepted task authority repair"),
+                        Some("raw worker response"),
+                        Some("discarded stale candidate"),
+                        vec![
+                            "planning worker repair summary: accepted task authority repair",
+                            "kept operator-edited task title",
+                        ],
+                        None,
+                    )),
+                    next_repair_request: None,
+                    next_retry_reason: None,
+                    resolved: true,
+                    exhausted: false,
+                },
+            }],
+        };
+
+        executor.apply_repair_outcome(log_context(), true, &repair_outcome);
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RepairSucceeded
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("accepted task authority repair")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_rejected_summary
+                .as_deref(),
+            Some("discarded stale candidate")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_notice_detail
+                .as_deref(),
+            Some("kept operator-edited task title")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_response
+                .as_deref(),
+            Some("raw worker response")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref(),
+            Some("queue head: Repair follow-up")
+        );
+    }
+
+    #[test]
+    fn retry_then_exhausted_repair_ends_with_blocking_failure_copy() {
+        let mut executor = test_executor();
+        let retry_projection = ready_projection("retry still has queue head");
+        let exhausted_projection = ready_projection("last accepted state kept");
+        let repair_outcome = PlanningPostTurnRepairOutcome {
+            runtime_projection: exhausted_projection.clone(),
+            resolved: false,
+            attempts: vec![
+                PlanningPostTurnRepairAttempt {
+                    attempt_number: 1,
+                    max_attempts: 2,
+                    retry_reason: None,
+                    started_runtime_projection: PlanningRuntimeProjection::invalid("first error"),
+                    worker_prompt: "first repair prompt".to_string(),
+                    result: PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                        outcome: Box::new(worker_outcome(
+                            retry_projection,
+                            Some("first repair accepted"),
+                            Some("first raw response"),
+                            None,
+                            Vec::new(),
+                            Some(repair_request("still invalid after first repair")),
+                        )),
+                        next_repair_request: Some(repair_request(
+                            "still invalid after first repair",
+                        )),
+                        next_retry_reason: Some(
+                            PlanningRepairRetryReason::TaskAuthorityStillInvalid,
+                        ),
+                        resolved: false,
+                        exhausted: false,
+                    },
+                },
+                PlanningPostTurnRepairAttempt {
+                    attempt_number: 2,
+                    max_attempts: 2,
+                    retry_reason: Some(PlanningRepairRetryReason::TaskAuthorityStillInvalid),
+                    started_runtime_projection: PlanningRuntimeProjection::invalid("second error"),
+                    worker_prompt: "second repair prompt".to_string(),
+                    result: PlanningPostTurnRepairAttemptResult::WorkerSucceeded {
+                        outcome: Box::new(worker_outcome(
+                            exhausted_projection,
+                            Some("second repair accepted"),
+                            Some("second raw response"),
+                            None,
+                            Vec::new(),
+                            Some(repair_request("still invalid after second repair")),
+                        )),
+                        next_repair_request: Some(repair_request(
+                            "still invalid after second repair",
+                        )),
+                        next_retry_reason: Some(
+                            PlanningRepairRetryReason::TaskAuthorityStillInvalid,
+                        ),
+                        resolved: false,
+                        exhausted: true,
+                    },
+                },
+            ],
+        };
+
+        executor.apply_repair_outcome(log_context(), false, &repair_outcome);
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RepairFailed
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_prompt.as_deref(),
+            Some("second repair prompt")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some(
+                "planning worker repair exhausted after 2 attempts; the last accepted planning state was kept"
+            )
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref(),
+            Some("queue head: Repair follow-up")
+        );
+        assert!(executor.planning_worker_panel_state.last_response.is_none());
+    }
+
+    fn test_executor() -> PostTurnEvaluationExecutor {
+        PostTurnEvaluationExecutor {
+            planning_feature: PlanningServices::from_ports(
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                Arc::new(NoopPlanningAuthorityPort::default()),
+                Arc::new(NoopPlanningTaskRepositoryPort),
+                Arc::new(NoopPlanningWorkerPort),
+            ),
+            parallel_mode_turn_service: ParallelModeTurnService::new(ParallelModeService::new(
+                Arc::new(SqlitePlanningAuthorityAdapter::new()),
+                Arc::new(GithubAutomationAdapter::new()),
+                Arc::new(GitParallelModeRuntimeAdapter::new()),
+            )),
+            planning_worker_panel_state: PlanningWorkerPanelState::default(),
+        }
+    }
+
+    fn log_context() -> PostTurnWorkerLogContext<'static> {
+        PostTurnWorkerLogContext::new("thread-1", "turn-1", "/tmp/workspace")
+    }
+
+    fn ready_projection(queue_summary: &str) -> PlanningRuntimeProjection {
+        PlanningRuntimeProjection::ready(
+            "Planning Context".to_string(),
+            queue_summary.to_string(),
+            Some(queue_task()),
+        )
+    }
+
+    fn queue_task() -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank: 1,
+            task_id: "task-1".to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_title: "General workstream".to_string(),
+            task_title: "Repair follow-up".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 100,
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+            rank_reasons: vec!["status=ready".to_string()],
+        }
+    }
+
+    fn worker_outcome(
+        runtime_projection: PlanningRuntimeProjection,
+        worker_summary: Option<&str>,
+        worker_response: Option<&str>,
+        rejected_summary: Option<&str>,
+        notices: Vec<&str>,
+        repair_request: Option<PlanningRepairRequest>,
+    ) -> PlanningWorkerRunOutcome {
+        PlanningWorkerRunOutcome {
+            runtime_projection,
+            notices: notices.into_iter().map(str::to_string).collect(),
+            repair_request,
+            worker_summary: worker_summary.map(str::to_string),
+            worker_response: worker_response.map(str::to_string),
+            rejected_summary: rejected_summary.map(str::to_string),
+            task_authority_changed: true,
+        }
+    }
+
+    fn repair_request(failure_summary: &str) -> PlanningRepairRequest {
+        PlanningRepairRequest {
+            failure_summary: failure_summary.to_string(),
+            validation_errors: vec![failure_summary.to_string()],
+            direction_authority_json: "{}".to_string(),
+            accepted_task_authority_json: "{}".to_string(),
+            accepted_queue_projection_json: "{}".to_string(),
+            rejected_task_authority_json: Some("{}".to_string()),
+            rejected_archive_path: Some("planning/rejected/result-output.md".to_string()),
+        }
+    }
+}
