@@ -539,6 +539,12 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "data-detail-type=\"distributor\"",
         "data-detail-type=\"queueItem\"",
         ".office-board.is-pixi-mounted .desk > .speech",
+        "data-detail-title=\"워크트리 풀\"",
+        "data-detail-subtitle=\"{{ slot.bubble_label }}\"",
+        "title=\"워크트리 풀 · {{ slot.bubble_label }}\"",
+        "const slotStatusLabel = optionalText(slot.bubbleLabel || slot.label, \"풀\")",
+        "detailTitle: \"워크트리 풀\"",
+        "createText(\"small\", \"\", \"워크트리\")",
         "class=\"admin-detail-drawer\"",
         "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.",
         "var(--office-bg-image) center / cover no-repeat",
@@ -581,6 +587,24 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         assert!(
             !AKRA_DASHBOARD_TEMPLATE.contains(removed),
             "graphic dashboard should not restore removed top header token {removed}"
+        );
+    }
+
+    for removed in [
+        "data-detail-title=\"풀 슬롯 · {{ slot.slot_id }}\"",
+        "data-detail-subtitle=\"{{ slot.label }} / {{ slot.note }}\"",
+        "title=\"{{ slot.branch_name }} / {{ slot.worktree_label }} / {{ slot.note }}\"",
+        "<strong>{{ slot.slot_id }}</strong>",
+        "<small>{{ slot.owner_agent_id.as_deref().unwrap_or(\"-\") }}</small>",
+        "detailTitle: `풀 슬롯 · ${optionalText(slot.slotId)}`",
+        "detailSubtitle: `${optionalText(slot.label)} / ${optionalText(slot.note)}`",
+        "button.title = `${optionalText(slot.branchName)} / ${optionalText(slot.worktreeLabel)} / ${optionalText(slot.note)}`",
+        "createText(\"strong\", \"\", slot.slotId)",
+        "createText(\"small\", \"\", slot.ownerAgentId || \"-\")",
+    ] {
+        assert!(
+            !AKRA_DASHBOARD_TEMPLATE.contains(removed),
+            "pool slot hover should not expose raw operator token {removed}"
         );
     }
 

@@ -161,6 +161,8 @@ for token in \
   'aria-label="게임발전국 AKRA Admin Control Center"' \
   'class="office-board" id="agents"' \
   'class="pool-overlay" id="pool"' \
+  'data-detail-title="워크트리 풀"' \
+  'title="워크트리 풀 ·' \
   'class="scene-object object-sprite server-rack"' \
   'id="events"' \
   'id="campaign"' \

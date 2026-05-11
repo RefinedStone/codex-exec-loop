@@ -1230,24 +1230,17 @@
           type="button"
           class="slot-card severity-{{ slot.severity }}"
           data-slot-id="{{ slot.slot_id }}"
-          data-agent-id="{{ slot.owner_agent_id.as_deref().unwrap_or("") }}"
-          data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
           data-detail-type="slot"
-          data-detail-title="풀 슬롯 · {{ slot.slot_id }}"
-          data-detail-subtitle="{{ slot.label }} / {{ slot.note }}"
-          data-detail-state="{{ slot.label }}"
+          data-detail-title="워크트리 풀"
+          data-detail-subtitle="{{ slot.bubble_label }}"
+          data-detail-state="{{ slot.bubble_label }}"
           data-detail-severity="{{ slot.severity }}"
-          data-detail-owner="{{ slot.owner_label }}"
-          data-detail-task="{{ slot.task_id.as_deref().unwrap_or("-") }}"
-          data-detail-branch="{{ slot.branch_name }}"
-          data-detail-worktree="{{ slot.worktree_label }}"
-          data-detail-note="{{ slot.note }}"
-          title="{{ slot.branch_name }} / {{ slot.worktree_label }} / {{ slot.note }}"
+          data-detail-note="간단 상태 보기"
+          title="워크트리 풀 · {{ slot.bubble_label }}"
         >
           <div>
-            <strong>{{ slot.slot_id }}</strong>
-            <small>{{ slot.label }}</small>
-            <small>{{ slot.owner_agent_id.as_deref().unwrap_or("-") }}</small>
+            <strong>{{ slot.bubble_label }}</strong>
+            <small>워크트리</small>
           </div>
           <span class="mini-server" aria-hidden="true"></span>
         </button>
@@ -1550,11 +1543,7 @@
   const detailRowsByType = {
     slot: [
       ["상태", "detailState", "chip"],
-      ["소유자", "detailOwner"],
-      ["작업", "detailTask"],
-      ["브랜치", "detailBranch"],
-      ["Worktree", "detailWorktree"],
-      ["운영 메모", "detailNote"]
+      ["요약", "detailNote"]
     ],
     agent: [
       ["상태", "detailState", "chip"],
@@ -2057,27 +2046,21 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = `slot-card ${severityClass(slot.severity)}`;
+    const slotStatusLabel = optionalText(slot.bubbleLabel || slot.label, "풀");
     setDataset(button, {
       slotId: slot.slotId,
-      agentId: slot.ownerAgentId,
-      taskId: slot.taskId,
       detailType: "slot",
-      detailTitle: `풀 슬롯 · ${optionalText(slot.slotId)}`,
-      detailSubtitle: `${optionalText(slot.label)} / ${optionalText(slot.note)}`,
-      detailState: slot.label,
+      detailTitle: "워크트리 풀",
+      detailSubtitle: slotStatusLabel,
+      detailState: slotStatusLabel,
       detailSeverity: slot.severity,
-      detailOwner: slot.ownerLabel,
-      detailTask: slot.taskId || "-",
-      detailBranch: slot.branchName,
-      detailWorktree: slot.worktreeLabel,
-      detailNote: slot.note
+      detailNote: "간단 상태 보기"
     });
-    button.title = `${optionalText(slot.branchName)} / ${optionalText(slot.worktreeLabel)} / ${optionalText(slot.note)}`;
+    button.title = `워크트리 풀 · ${slotStatusLabel}`;
     const body = document.createElement("div");
     body.append(
-      createText("strong", "", slot.slotId),
-      createText("small", "", slot.label),
-      createText("small", "", slot.ownerAgentId || "-")
+      createText("strong", "", slotStatusLabel),
+      createText("small", "", "워크트리")
     );
     const server = document.createElement("span");
     server.className = "mini-server";
