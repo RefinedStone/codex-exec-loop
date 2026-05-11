@@ -8,6 +8,8 @@ const AKRA_OBJECT_SPRITES: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/akra-object-sprites.png");
 const GAMEBALJEONGUK_ATLAS_64X96: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png");
+const GAMEBALJEONGUK_ATLAS_128X192: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png");
 
 // Individual isometric sprites for PixiJS diorama
 const SPRITE_FLOOR_TILE: &[u8] =
@@ -30,6 +32,7 @@ pub(super) async fn admin_graphic_asset(
         "akra-office-background.png" => AKRA_OFFICE_BACKGROUND,
         "akra-object-sprites.png" => AKRA_OBJECT_SPRITES,
         "gamebaljeonguk_atlas_64x96.png" => GAMEBALJEONGUK_ATLAS_64X96,
+        "gamebaljeonguk_atlas_128x192.png" => GAMEBALJEONGUK_ATLAS_128X192,
         "sprite_floor_tile.png" => SPRITE_FLOOR_TILE,
         "sprite_desk_workstation.png" => SPRITE_DESK_WORKSTATION,
         "sprite_server_rack.png" => SPRITE_SERVER_RACK,

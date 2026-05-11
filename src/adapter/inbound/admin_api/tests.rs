@@ -419,7 +419,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "mountDiorama",
         "rebuildAgentUnits",
         "PIXI.Application",
-        "gamebaljeonguk_atlas_64x96.png",
+        "gamebaljeonguk_atlas_128x192.png",
         "src/akra-diorama.ts",
         "chooseRoamPoint",
         "updateRoamMotion",
@@ -473,6 +473,10 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "const chooseRoamPoint",
         "const updateRoamMotion",
         "const applyWalkFrame",
+        "const AGENT_FRAME_WIDTH = 128",
+        "const AGENT_FRAME_HEIGHT = 192",
+        "const AGENT_SPRITE_SCALE = 0.78",
+        "gamebaljeonguk_atlas_128x192.png",
     ] {
         assert!(
             AKRA_DIORAMA_TS.contains(token),
@@ -599,6 +603,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
+        "/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png",
         "/admin/assets/game/akra-diorama.js",
         "/api/admin/akra/dashboard",
         "/api/admin/akra/events?limit=50",
@@ -617,6 +622,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "served office background asset does not match workspace asset",
         "served object sprite asset does not match workspace asset",
         "served gamebaljeonguk agent atlas does not match workspace asset",
+        "served large gamebaljeonguk agent atlas does not match workspace asset",
         "--screenshot=",
         "admin graphic visual contract ok",
     ] {
@@ -630,6 +636,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "include_bytes!(\"../../../../assets/admin/graphics/akra-office-background.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/akra-object-sprites.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png\")",
+        "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png\")",
         "include_bytes!(\"../../../../assets/admin/game/akra-diorama.js\")",
         "image/png",
         "text/javascript; charset=utf-8",

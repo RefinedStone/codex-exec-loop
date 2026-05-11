@@ -24,6 +24,7 @@ game_js="${output_dir}/akra-diorama.js"
 office_asset="${output_dir}/akra-office-background.png"
 sprite_asset="${output_dir}/akra-object-sprites.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
+agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
 screenshot_path="${output_dir}/admin-graphic.png"
 
 mkdir -p "${output_dir}"
@@ -147,6 +148,7 @@ curl -fsS "${base_url}/admin/assets/game/akra-diorama.js" >"${game_js}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-office-background.png" >"${office_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-object-sprites.png" >"${sprite_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
+curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png" >"${agent_atlas_large_asset}"
 events_error_status="$(curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
 if [[ "${events_error_status}" != "400" ]]; then
   echo "expected event limit validation to return 400, got ${events_error_status}" >&2
@@ -219,7 +221,9 @@ for token in \
   'PIXI.Sprite' \
   'PIXI.Container' \
   'app.ticker.add' \
-  'gamebaljeonguk_atlas_64x96.png' \
+  'gamebaljeonguk_atlas_128x192.png' \
+  'AGENT_FRAME_WIDTH' \
+  'AGENT_SPRITE_SCALE' \
   'makePacket' \
   'statusPalette' \
   'chooseRoamPoint' \
@@ -325,6 +329,10 @@ cmp -s assets/admin/graphics/akra-object-sprites.png "${sprite_asset}" || {
 }
 cmp -s assets/admin/graphics/gamebaljeonguk_atlas_64x96.png "${agent_atlas_asset}" || {
   echo "served gamebaljeonguk agent atlas does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/graphics/gamebaljeonguk_atlas_128x192.png "${agent_atlas_large_asset}" || {
+  echo "served large gamebaljeonguk agent atlas does not match workspace asset" >&2
   exit 1
 }
 cmp -s assets/admin/game/akra-diorama.js "${game_js}" || {
