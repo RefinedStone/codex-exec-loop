@@ -2,11 +2,11 @@
 	//#region src/akra-diorama.ts
 	var AGENT_FRAME_WIDTH = 128;
 	var AGENT_FRAME_HEIGHT = 192;
-	var AGENT_SPRITE_SCALE = .55;
-	var AGENT_SHADOW_WIDTH = 31;
-	var AGENT_SHADOW_HEIGHT = 8;
-	var AGENT_RING_WIDTH = 25;
-	var AGENT_RING_HEIGHT = 7;
+	var AGENT_SPRITE_SCALE = .4675;
+	var AGENT_SHADOW_WIDTH = 26.35;
+	var AGENT_SHADOW_HEIGHT = 6.8;
+	var AGENT_RING_WIDTH = 21.25;
+	var AGENT_RING_HEIGHT = 5.95;
 	(() => {
 		const isStatusSeverity = (value) => value === "normal" || value === "success" || value === "warning" || value === "danger" || value === "info" || value === "muted";
 		const isPixiTexture = (texture) => texture !== null;
