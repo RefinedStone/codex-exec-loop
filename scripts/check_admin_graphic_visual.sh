@@ -46,12 +46,30 @@ require_not_contains() {
 }
 
 find_browser() {
+  local browser
   for browser in chromium chromium-browser google-chrome google-chrome-stable microsoft-edge firefox; do
     if command -v "${browser}" >/dev/null 2>&1; then
       command -v "${browser}"
       return 0
     fi
   done
+
+  local candidate
+  for candidate in \
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    "${HOME}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+    "${HOME}/Applications/Chromium.app/Contents/MacOS/Chromium" \
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
+    "${HOME}/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
+    "/Applications/Firefox.app/Contents/MacOS/firefox" \
+    "${HOME}/Applications/Firefox.app/Contents/MacOS/firefox"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
   return 1
 }
 

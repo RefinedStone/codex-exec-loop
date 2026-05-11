@@ -374,6 +374,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/api/admin/akra/dashboard",
         "/api/admin/akra/events?limit=50",
         "/api/admin/akra/events?afterSequence=0&limit=50",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "${HOME}/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
         "id=\"campaign\"",
         "id=\"attempts\"",
         "id=\"intel\"",
