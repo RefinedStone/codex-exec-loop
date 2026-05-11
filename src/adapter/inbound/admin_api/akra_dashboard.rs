@@ -89,6 +89,7 @@ pub(super) struct PoolSummaryView {
 #[serde(rename_all = "camelCase")]
 pub(super) struct PoolSlotView {
     pub slot_id: String,
+    pub display_slot_label: String,
     pub state: String,
     pub label: String,
     pub branch_name: String,
@@ -380,6 +381,7 @@ fn map_pool_slot(slot: &ParallelModePoolSlotSnapshot) -> PoolSlotView {
     let (owner_agent_id, task_id) = parse_owner_label(&slot.owner_label);
     PoolSlotView {
         slot_id: slot.slot_id.clone(),
+        display_slot_label: pool_slot_display_label(&slot.slot_id),
         state: slot.state.label().to_string(),
         label: pool_state_korean_label(slot.state).to_string(),
         branch_name: slot.branch_name.clone(),
@@ -922,6 +924,15 @@ fn pool_slot_note(slot: &ParallelModePoolSlotSnapshot) -> String {
     format!("{} / {}", slot.owner_label, slot.worktree_label)
 }
 
+fn pool_slot_display_label(slot_id: &str) -> String {
+    if let Some(number) = slot_id.strip_prefix("slot-") {
+        if !number.is_empty() && number.chars().all(|character| character.is_ascii_digit()) {
+            return format!("슬롯 {number}");
+        }
+    }
+    slot_id.to_string()
+}
+
 fn parse_owner_label(owner_label: &str) -> (Option<String>, Option<String>) {
     let mut parts = owner_label.split('/').map(str::trim);
     let agent = parts
@@ -1045,6 +1056,13 @@ mod tests {
             assert_eq!(pool_state_severity(state), severity);
             assert!(!pool_state_bubble(state).is_empty());
         }
+    }
+
+    #[test]
+    fn pool_slot_display_label_hides_raw_slot_prefix_when_possible() {
+        assert_eq!(pool_slot_display_label("slot-2"), "슬롯 2");
+        assert_eq!(pool_slot_display_label("slot-12"), "슬롯 12");
+        assert_eq!(pool_slot_display_label("integration"), "integration");
     }
 
     #[test]
