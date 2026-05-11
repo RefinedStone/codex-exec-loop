@@ -257,6 +257,10 @@ fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
         "overview.runtime.proposed_tasks",
         "management.tasks.len()",
         "management.directions.len()",
+        ".task-ticket.status-ready summary",
+        "rgba(53, 208, 127, 0.82)",
+        "rgba(53, 208, 127, 0.22)",
+        "color: #f7fff9",
     ] {
         assert!(
             TASKS_TEMPLATE.contains(token),

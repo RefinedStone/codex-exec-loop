@@ -278,6 +278,8 @@ for token in \
   'class="task-panel task-board-panel"' \
   'id="task-list"' \
   'data-list-filter="task-list"' \
+  '.task-ticket.status-ready summary' \
+  'rgba(53, 208, 127, 0.82)' \
   '/admin/tasks/upsert' \
   '/admin/tasks/delete' \
   '/admin/files/export' \
