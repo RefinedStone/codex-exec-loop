@@ -21,6 +21,7 @@ const SPRITE_WHITEBOARD: &[u8] =
 const SPRITE_SOFA: &[u8] = include_bytes!("../../../../assets/admin/graphics/sprite_sofa.png");
 const SPRITE_POTTED_PLANT: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/sprite_potted_plant.png");
+const AKRA_DIORAMA_JS: &[u8] = include_bytes!("../../../../assets/admin/game/akra-diorama.js");
 
 pub(super) async fn admin_graphic_asset(
     Path(asset_name): Path<String>,
@@ -41,6 +42,24 @@ pub(super) async fn admin_graphic_asset(
     Ok((
         [
             (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+pub(super) async fn admin_game_asset(
+    Path(asset_name): Path<String>,
+) -> std::result::Result<Response, StatusCode> {
+    let (content_type, bytes) = match asset_name.as_str() {
+        "akra-diorama.js" => ("text/javascript; charset=utf-8", AKRA_DIORAMA_JS),
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         bytes,

@@ -139,6 +139,10 @@ fn build_router(state: AdminAppState) -> Router {
             "/admin/assets/graphics/{asset_name}",
             get(static_assets::admin_graphic_asset),
         )
+        .route(
+            "/admin/assets/game/{asset_name}",
+            get(static_assets::admin_game_asset),
+        )
         .route("/admin/directions", get(pages::directions_page))
         .route("/admin/tasks", get(pages::tasks_page))
         .route("/admin/controls", get(pages::controls_page))

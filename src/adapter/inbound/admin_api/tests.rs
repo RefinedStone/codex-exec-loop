@@ -26,6 +26,7 @@ const GAMEBALJEONGUK_SPRITE_PACK_README: &str =
 const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
     "../../../../templates/admin/resources/gamebaljeonguk_sprite_pack/gamebaljeonguk_sprite_metadata.json"
 );
+const AKRA_DIORAMA_JS: &str = include_str!("../../../../assets/admin/game/akra-diorama.js");
 const ADMIN_API: &str = include_str!("api.rs");
 const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
@@ -279,9 +280,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "prependEventRows",
         "stale snapshot",
         "pollEvents",
+        "/admin/assets/game/akra-diorama.js",
         "data-automation-epoch",
         "akra:dashboard-rendered",
-        "rebuildAgentUnits",
         "renderDashboardPanels",
         "dashboardSignature",
         "renderCampaign",
@@ -331,10 +332,23 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "\"/api/admin/akra/distributor\"",
         "\"/api/admin/akra/events\"",
         "\"/admin/assets/graphics/{asset_name}\"",
+        "\"/admin/assets/game/{asset_name}\"",
     ] {
         assert!(
             ADMIN_MOD.contains(route),
             "admin route table should keep {route}"
+        );
+    }
+
+    for token in [
+        "mountDiorama",
+        "rebuildAgentUnits",
+        "PIXI.Application",
+        "gamebaljeonguk_atlas_64x96.png",
+    ] {
+        assert!(
+            AKRA_DIORAMA_JS.contains(token),
+            "admin game diorama asset should expose {token}"
         );
     }
 }
@@ -383,7 +397,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)
                 || BASE_TEMPLATE.contains(token)
-                || AKRA_DASHBOARD_RS.contains(token),
+                || AKRA_DASHBOARD_RS.contains(token)
+                || AKRA_DIORAMA_JS.contains(token),
             "graphic visual contract should keep {token}"
         );
     }
@@ -416,6 +431,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
+        "/admin/assets/game/akra-diorama.js",
         "/api/admin/akra/dashboard",
         "/api/admin/akra/events?limit=50",
         "/api/admin/akra/events?afterSequence=0&limit=50",
@@ -443,7 +459,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "include_bytes!(\"../../../../assets/admin/graphics/akra-office-background.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/akra-object-sprites.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png\")",
+        "include_bytes!(\"../../../../assets/admin/game/akra-diorama.js\")",
         "image/png",
+        "text/javascript; charset=utf-8",
         "public, max-age=86400",
     ] {
         assert!(

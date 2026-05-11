@@ -18,6 +18,7 @@ dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
 events_error_json="${output_dir}/events-error.json"
+game_js="${output_dir}/akra-diorama.js"
 office_asset="${output_dir}/akra-office-background.png"
 sprite_asset="${output_dir}/akra-object-sprites.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
@@ -128,6 +129,7 @@ curl -fsS "${graphic_url}" >"${admin_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
+curl -fsS "${base_url}/admin/assets/game/akra-diorama.js" >"${game_js}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-office-background.png" >"${office_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-object-sprites.png" >"${sprite_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
@@ -157,6 +159,7 @@ for token in \
   'MISSION FLOW' \
   'stage-refresh-btn' \
   '--office-board-height: 620px' \
+  '/admin/assets/game/akra-diorama.js' \
   'data-admin-graphic' \
   'data-api-base' \
   'data-poll-interval-ms' \
@@ -190,6 +193,22 @@ for token in \
   'text-overflow: ellipsis' \
   '@media (max-width: 860px)'; do
   require_contains "${admin_html}" "${token}"
+done
+
+for token in \
+  'window.AkraAdminGame' \
+  'mountDiorama' \
+  'new PIXI.Application' \
+  'PIXI.Assets.load' \
+  'PIXI.Sprite' \
+  'PIXI.Container' \
+  'app.ticker.add' \
+  'gamebaljeonguk_atlas_64x96.png' \
+  'makePacket' \
+  'statusPalette' \
+  'rebuildAgentUnits' \
+  'akra:dashboard-rendered'; do
+  require_contains "${game_js}" "${token}"
 done
 
 for token in \
@@ -247,6 +266,10 @@ cmp -s assets/admin/graphics/akra-object-sprites.png "${sprite_asset}" || {
 }
 cmp -s assets/admin/graphics/gamebaljeonguk_atlas_64x96.png "${agent_atlas_asset}" || {
   echo "served gamebaljeonguk agent atlas does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/game/akra-diorama.js "${game_js}" || {
+  echo "served admin game diorama asset does not match workspace asset" >&2
   exit 1
 }
 
