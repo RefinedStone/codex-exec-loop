@@ -2,7 +2,7 @@
 // when a worker finishes its assigned task.
 use crate::application::service::parallel_mode::ParallelModeOfficialCompletionReport;
 // Official completion refresh turns that report back into planning ledger state and
-// a runtime projection the TUI can use for follow-up gating.
+// a runtime projection inbound surfaces can use for follow-up gating.
 use crate::application::service::planning::{
     PlanningPostTurnOfficialCompletionFinalizationRequest,
     PlanningPostTurnOfficialCompletionPreparation,
@@ -14,15 +14,14 @@ use serde_json::json;
 
 // The refresh path reads conversation context and reports progress through the same
 // planning worker panel used by planning queue refresh and hidden repair.
-use super::super::super::PlanningWorkerStatus;
 // Repeated-head detection is shared with planning queue refresh so official completion
 // cannot requeue a slot task that failed to advance planning.
 use super::logging::post_turn_event_detail;
 // The parent post-turn module owns the failure constant and DTOs; this file owns
 // only the official-completion branch of the executor.
 use super::{
-    OfficialCompletionRefreshOutcome, PostTurnEvaluationContext, PostTurnEvaluationExecutor,
-    PostTurnEvaluationRequest,
+    OfficialCompletionRefreshOutcome, PlanningWorkerStatus, PostTurnEvaluationContext,
+    PostTurnEvaluationExecutor, PostTurnEvaluationRequest,
 };
 
 /*
@@ -119,7 +118,7 @@ impl PostTurnEvaluationExecutor {
     ) -> OfficialCompletionRefreshOutcome {
         let preparation = self
             .planning_feature
-            .worker()
+            .worker
             .prepare_post_turn_official_completion_refresh(
                 PlanningPostTurnOfficialCompletionPreparationRequest {
                     planning_workspace_directory,
@@ -216,11 +215,11 @@ impl PostTurnEvaluationExecutor {
             prepared.worker_prompt().to_string(),
         );
 
-        // Worker orchestration owns filesystem mutation and validation; this adapter
-        // only sends the contract and interprets the outcome for TUI state.
+        // Worker orchestration owns filesystem mutation and validation; this branch
+        // sends the contract and interprets the outcome for operator panel state.
         let worker_outcome = self
             .planning_feature
-            .worker()
+            .worker
             .refresh_prepared_official_completion(prepared.as_ref());
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
@@ -313,7 +312,7 @@ impl PostTurnEvaluationExecutor {
             } else {
                 let repair_block = self
                     .planning_feature
-                    .worker()
+                    .worker
                     .block_unresolved_post_turn_official_completion_repair(
                         PlanningPostTurnOfficialCompletionRepairBlockRequest {
                             runtime_projection: &repair_outcome.runtime_projection,
@@ -346,7 +345,7 @@ impl PostTurnEvaluationExecutor {
 
         let finalization = self
             .planning_feature
-            .worker()
+            .worker
             .finalize_post_turn_official_completion_refresh(
                 PlanningPostTurnOfficialCompletionFinalizationRequest {
                     planning_workspace_directory,

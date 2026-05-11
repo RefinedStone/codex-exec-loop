@@ -11,8 +11,9 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningTaskToolUseCases;
 use crate::application::service::planning::{
     PlanningRuntimeUseCases, PlanningServices, PlanningTurnExecutionSnapshotCapture,
-    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningWorkspaceUseCases,
 };
+use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 #[cfg(test)]
@@ -26,6 +27,7 @@ use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 
+#[cfg(test)]
 use super::conversation_runtime::PostTurnEvaluationOutcome;
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
@@ -62,6 +64,7 @@ pub(super) enum BackgroundMessage {
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
+    #[cfg(test)]
     PostTurnEvaluationCompleted {
         thread_id: String,
         completed_turn_id: String,
@@ -105,33 +108,19 @@ impl NativeTuiAppRuntimeChannels {
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
     conversations: NativeTuiConversationHandle,
-    parallel_turns: ParallelModeTurnService,
     planning_feature: NativeTuiPlanningHandle,
 }
 
 impl NativeTuiApplicationHandle {
-    fn new(
-        conversations: ConversationService,
-        parallel_turns: ParallelModeTurnService,
-        planning_feature: PlanningServices,
-    ) -> Self {
+    fn new(conversations: ConversationService, planning_feature: PlanningServices) -> Self {
         Self {
             conversations: NativeTuiConversationHandle::new(conversations),
-            parallel_turns,
             planning_feature: NativeTuiPlanningHandle::new(planning_feature),
         }
     }
 
     pub(super) fn planning(&self) -> &NativeTuiPlanningHandle {
         &self.planning_feature
-    }
-
-    pub(super) fn planning_handle(&self) -> NativeTuiPlanningHandle {
-        self.planning_feature.clone()
-    }
-
-    pub(super) fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
-        self.parallel_turns.clone()
     }
 
     pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
@@ -180,10 +169,6 @@ impl NativeTuiPlanningHandle {
 
     pub(super) fn runtime(&self) -> &PlanningRuntimeUseCases {
         &self.services.runtime
-    }
-
-    pub(super) fn worker(&self) -> &PlanningWorkerUseCases {
-        &self.services.worker
     }
 
     #[cfg(test)]
@@ -236,11 +221,11 @@ impl NativeTuiApp {
             conversation_service.clone(),
             planning_feature.runtime.clone(),
             parallel_turns.clone(),
+            PostTurnEvaluationService::new(planning_feature.clone(), parallel_turns.clone()),
             core_input_sender,
         );
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
-        let application =
-            NativeTuiApplicationHandle::new(conversation_service, parallel_turns, planning_feature);
+        let application = NativeTuiApplicationHandle::new(conversation_service, planning_feature);
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
@@ -389,13 +374,8 @@ impl NativeTuiApp {
                     ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(stream_snapshot)),
                 );
             }
-            AppEvent::PostTurnEvaluationCompleted(_completion) => {
-                /*
-                 * The background message handler applies the payload after it
-                 * has re-entered core as a completion. Keeping the payload out
-                 * of a TUI pending queue avoids a second routing path that can
-                 * drift from core ordering.
-                 */
+            AppEvent::PostTurnEvaluationCompleted(execution) => {
+                self.apply_post_turn_evaluation_execution(*execution);
             }
             AppEvent::ConversationTurnWorkspaceChanged {
                 workspace_directory,

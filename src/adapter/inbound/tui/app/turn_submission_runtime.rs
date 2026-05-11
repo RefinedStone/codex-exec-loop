@@ -1,14 +1,12 @@
 /* Turn submission is the execution layer for ConversationRuntimeEffect. The
  * reducer decides what should happen; this module gates the prompt against shell
- * readiness, sends stream startup through the core runtime, starts post-turn
- * planning evaluation, and re-enters the reducer for auto-follow prompts.
+ * readiness, sends stream startup and post-turn planning evaluation through the
+ * core runtime, and re-enters the reducer for auto-follow prompts.
  */
 #[path = "turn_submission_runtime/post_turn_execution.rs"]
 mod post_turn_execution;
 
-use crate::application::service::parallel_mode::turn::{
-    ParallelModeTurnService, ParallelTurnSlotLeaseHandoff,
-};
+use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
 use crate::application::service::planning::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
@@ -26,10 +24,6 @@ use super::{
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
 
 impl NativeTuiApp {
-    pub(super) fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
-        self.application.parallel_mode_turn_service()
-    }
-
     pub(super) fn start_turn_submission(&mut self) {
         // Enter first belongs to inline shell commands. Only non-command prompt
         // text becomes a conversation turn, and only when the current conversation

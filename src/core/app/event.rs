@@ -8,6 +8,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::planning::{
     PlanningRuntimeProjection, PlanningTurnExecutionSnapshotCapture,
 };
+use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,13 +36,7 @@ pub enum CoreEffectCompletion {
     StartupChecksLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
     ConversationLoaded(Result<Box<ConversationReadySnapshot>, String>),
-    PostTurnEvaluationCompleted(PostTurnEvaluationCompletion),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnEvaluationCompletion {
-    pub thread_id: String,
-    pub completed_turn_id: String,
+    PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +51,7 @@ pub enum AppEvent {
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
     TurnStreamSnapshotChanged(TurnStreamSnapshot),
-    PostTurnEvaluationCompleted(PostTurnEvaluationCompletion),
+    PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
     ConversationTurnWorkspaceChanged { workspace_directory: String },
     ParallelModeSupervisorSnapshotInvalidated,
 }

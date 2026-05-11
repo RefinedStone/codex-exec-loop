@@ -2,13 +2,12 @@ use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection, PlanningWorkerRunOutcome,
 };
 
-use super::super::super::PlanningWorkerStatus;
-use super::PostTurnEvaluationExecutor;
+use super::{PlanningWorkerStatus, PostTurnEvaluationExecutor};
 
 /*
  * This extension owns the observability side of post-turn planning work.
  * Other PostTurnEvaluationExecutor methods call refresh/repair services and apply host-side follow-up
- * rules; this file keeps the TUI panel cache coherent so normal surfaces show the latest compact state
+ * rules; this file keeps the operator panel cache coherent so normal surfaces show the latest compact state
  * while debug visibility can still expose raw worker prompt/response text.
  */
 impl PostTurnEvaluationExecutor {

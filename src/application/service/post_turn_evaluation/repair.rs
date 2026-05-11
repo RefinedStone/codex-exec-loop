@@ -11,11 +11,10 @@ use serde_json::json;
 
 // Repair 진행 상태는 TUI의 planning worker panel에 남는다. 사용자는 hidden prompt를
 // 직접 조작하지 않지만, panel status가 실행/성공/실패와 마지막 prompt를 추적한다.
-use super::super::super::PlanningWorkerStatus;
 // 이 파일은 post-turn executor의 repair branch만 분리한다. 최대 시도 횟수와 반환 DTO는
 // planning application facade가 소유해 official completion과 normal post-turn path가 같은 repair contract를 쓴다.
 use super::logging::{PostTurnWorkerLogContext, post_turn_worker_event_detail};
-use super::{HiddenPlanningRepairOutcome, PostTurnEvaluationExecutor};
+use super::{HiddenPlanningRepairOutcome, PlanningWorkerStatus, PostTurnEvaluationExecutor};
 
 // Post-turn evaluation 중 planning state가 깨졌을 때 사용자 prompt를 띄우기 전에 내부
 // worker로 복구해 보는 경로다. 실패해도 마지막 runtime projection을 보존해 caller가
@@ -42,7 +41,7 @@ impl PostTurnEvaluationExecutor {
             PostTurnWorkerLogContext::new(thread_id, completed_turn_id, workspace_directory);
         let repair_outcome = self
             .planning_feature
-            .worker()
+            .worker
             .repair_post_turn_task_authority(PlanningPostTurnRepairRequest {
                 workspace_directory,
                 parent_thread_id: Some(thread_id).filter(|thread_id| !thread_id.trim().is_empty()),

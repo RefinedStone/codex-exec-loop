@@ -20,7 +20,7 @@ pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
 pub use conversation::{ConversationReadySnapshot, ConversationSnapshot, ConversationState};
 pub use effect::CoreEffect;
-pub use event::{AppEvent, CoreEffectCompletion, CoreInput, PostTurnEvaluationCompletion};
+pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};
 pub use snapshot::AppSnapshot;
