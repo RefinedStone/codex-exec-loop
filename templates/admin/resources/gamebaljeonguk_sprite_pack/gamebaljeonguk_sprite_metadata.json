@@ -1,0 +1,2067 @@
+{
+  "source_image": "5dbd2858-a650-48a3-9fb9-3d3fb50125e5.png",
+  "notes": [
+    "Original image processed only; no redraw/regeneration.",
+    "White/off-white edge-connected background removed using alpha transparency.",
+    "Standardized atlas cell size is 128x192; half-size atlas is 64x96.",
+    "RPG Maker right-facing rows are mirrored from the side row because the source image did not include a separate right-facing direction."
+  ],
+  "alpha": {
+    "transparent_pixels": 1188588,
+    "opaque_pixels": 383928
+  },
+  "atlas_128x192": {
+    "file": "gamebaljeonguk_atlas_128x192.png",
+    "cell_width": 128,
+    "cell_height": 192,
+    "columns": 8,
+    "rows": 7,
+    "frames": [
+      {
+        "name": "planner_down_01",
+        "type": "walk",
+        "row": 0,
+        "col": 0,
+        "source_bbox": [
+          48,
+          23,
+          79,
+          163
+        ],
+        "atlas_index": 0,
+        "atlas_cell": [
+          0,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          46,
+          21,
+          83,
+          167
+        ],
+        "placed_at": [
+          22,
+          17,
+          83,
+          167
+        ]
+      },
+      {
+        "name": "planner_down_02",
+        "type": "walk",
+        "row": 0,
+        "col": 1,
+        "source_bbox": [
+          176,
+          23,
+          80,
+          163
+        ],
+        "atlas_index": 1,
+        "atlas_cell": [
+          128,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          174,
+          21,
+          84,
+          167
+        ],
+        "placed_at": [
+          150,
+          17,
+          84,
+          167
+        ]
+      },
+      {
+        "name": "planner_down_03",
+        "type": "walk",
+        "row": 0,
+        "col": 2,
+        "source_bbox": [
+          301,
+          23,
+          76,
+          164
+        ],
+        "atlas_index": 2,
+        "atlas_cell": [
+          256,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          299,
+          21,
+          80,
+          168
+        ],
+        "placed_at": [
+          280,
+          16,
+          80,
+          168
+        ]
+      },
+      {
+        "name": "planner_down_04",
+        "type": "walk",
+        "row": 0,
+        "col": 3,
+        "source_bbox": [
+          429,
+          23,
+          87,
+          164
+        ],
+        "atlas_index": 3,
+        "atlas_cell": [
+          384,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          427,
+          21,
+          91,
+          168
+        ],
+        "placed_at": [
+          402,
+          16,
+          91,
+          168
+        ]
+      },
+      {
+        "name": "coffee_addict_down_01",
+        "type": "walk",
+        "row": 0,
+        "col": 4,
+        "source_bbox": [
+          665,
+          19,
+          94,
+          173
+        ],
+        "atlas_index": 4,
+        "atlas_cell": [
+          512,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          663,
+          17,
+          98,
+          177
+        ],
+        "placed_at": [
+          527,
+          7,
+          98,
+          177
+        ]
+      },
+      {
+        "name": "coffee_addict_down_02",
+        "type": "walk",
+        "row": 0,
+        "col": 5,
+        "source_bbox": [
+          804,
+          19,
+          91,
+          173
+        ],
+        "atlas_index": 5,
+        "atlas_cell": [
+          640,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          802,
+          17,
+          95,
+          177
+        ],
+        "placed_at": [
+          656,
+          7,
+          95,
+          177
+        ]
+      },
+      {
+        "name": "coffee_addict_down_03",
+        "type": "walk",
+        "row": 0,
+        "col": 6,
+        "source_bbox": [
+          926,
+          19,
+          91,
+          173
+        ],
+        "atlas_index": 6,
+        "atlas_cell": [
+          768,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          924,
+          17,
+          95,
+          177
+        ],
+        "placed_at": [
+          784,
+          7,
+          95,
+          177
+        ]
+      },
+      {
+        "name": "coffee_addict_down_04",
+        "type": "walk",
+        "row": 0,
+        "col": 7,
+        "source_bbox": [
+          1049,
+          19,
+          93,
+          173
+        ],
+        "atlas_index": 7,
+        "atlas_cell": [
+          896,
+          0,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1047,
+          17,
+          97,
+          177
+        ],
+        "placed_at": [
+          911,
+          7,
+          97,
+          177
+        ]
+      },
+      {
+        "name": "planner_side_01",
+        "type": "walk",
+        "row": 1,
+        "col": 0,
+        "source_bbox": [
+          59,
+          208,
+          60,
+          149
+        ],
+        "atlas_index": 8,
+        "atlas_cell": [
+          0,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          57,
+          206,
+          64,
+          153
+        ],
+        "placed_at": [
+          32,
+          223,
+          64,
+          153
+        ]
+      },
+      {
+        "name": "planner_side_02",
+        "type": "walk",
+        "row": 1,
+        "col": 1,
+        "source_bbox": [
+          179,
+          208,
+          65,
+          148
+        ],
+        "atlas_index": 9,
+        "atlas_cell": [
+          128,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          177,
+          206,
+          69,
+          152
+        ],
+        "placed_at": [
+          157,
+          224,
+          69,
+          152
+        ]
+      },
+      {
+        "name": "planner_side_03",
+        "type": "walk",
+        "row": 1,
+        "col": 2,
+        "source_bbox": [
+          309,
+          208,
+          67,
+          145
+        ],
+        "atlas_index": 10,
+        "atlas_cell": [
+          256,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          307,
+          206,
+          71,
+          149
+        ],
+        "placed_at": [
+          284,
+          227,
+          71,
+          149
+        ]
+      },
+      {
+        "name": "planner_side_04",
+        "type": "walk",
+        "row": 1,
+        "col": 3,
+        "source_bbox": [
+          434,
+          208,
+          63,
+          148
+        ],
+        "atlas_index": 11,
+        "atlas_cell": [
+          384,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          432,
+          206,
+          67,
+          152
+        ],
+        "placed_at": [
+          414,
+          224,
+          67,
+          152
+        ]
+      },
+      {
+        "name": "coffee_addict_side_01",
+        "type": "walk",
+        "row": 1,
+        "col": 4,
+        "source_bbox": [
+          687,
+          210,
+          62,
+          150
+        ],
+        "atlas_index": 12,
+        "atlas_cell": [
+          512,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          685,
+          208,
+          66,
+          154
+        ],
+        "placed_at": [
+          543,
+          222,
+          66,
+          154
+        ]
+      },
+      {
+        "name": "coffee_addict_side_02",
+        "type": "walk",
+        "row": 1,
+        "col": 5,
+        "source_bbox": [
+          816,
+          209,
+          61,
+          150
+        ],
+        "atlas_index": 13,
+        "atlas_cell": [
+          640,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          814,
+          207,
+          65,
+          154
+        ],
+        "placed_at": [
+          671,
+          222,
+          65,
+          154
+        ]
+      },
+      {
+        "name": "coffee_addict_side_03",
+        "type": "walk",
+        "row": 1,
+        "col": 6,
+        "source_bbox": [
+          942,
+          209,
+          61,
+          150
+        ],
+        "atlas_index": 14,
+        "atlas_cell": [
+          768,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          940,
+          207,
+          65,
+          154
+        ],
+        "placed_at": [
+          799,
+          222,
+          65,
+          154
+        ]
+      },
+      {
+        "name": "coffee_addict_side_04",
+        "type": "walk",
+        "row": 1,
+        "col": 7,
+        "source_bbox": [
+          1062,
+          209,
+          61,
+          149
+        ],
+        "atlas_index": 15,
+        "atlas_cell": [
+          896,
+          192,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1060,
+          207,
+          65,
+          153
+        ],
+        "placed_at": [
+          927,
+          223,
+          65,
+          153
+        ]
+      },
+      {
+        "name": "planner_back_01",
+        "type": "walk",
+        "row": 2,
+        "col": 0,
+        "source_bbox": [
+          53,
+          376,
+          74,
+          158
+        ],
+        "atlas_index": 16,
+        "atlas_cell": [
+          0,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          51,
+          374,
+          78,
+          162
+        ],
+        "placed_at": [
+          25,
+          406,
+          78,
+          162
+        ]
+      },
+      {
+        "name": "planner_back_02",
+        "type": "walk",
+        "row": 2,
+        "col": 1,
+        "source_bbox": [
+          180,
+          376,
+          72,
+          157
+        ],
+        "atlas_index": 17,
+        "atlas_cell": [
+          128,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          178,
+          374,
+          76,
+          161
+        ],
+        "placed_at": [
+          154,
+          407,
+          76,
+          161
+        ]
+      },
+      {
+        "name": "planner_back_03",
+        "type": "walk",
+        "row": 2,
+        "col": 2,
+        "source_bbox": [
+          306,
+          376,
+          72,
+          157
+        ],
+        "atlas_index": 18,
+        "atlas_cell": [
+          256,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          304,
+          374,
+          76,
+          161
+        ],
+        "placed_at": [
+          282,
+          407,
+          76,
+          161
+        ]
+      },
+      {
+        "name": "planner_back_04",
+        "type": "walk",
+        "row": 2,
+        "col": 3,
+        "source_bbox": [
+          424,
+          376,
+          81,
+          158
+        ],
+        "atlas_index": 19,
+        "atlas_cell": [
+          384,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          422,
+          374,
+          85,
+          162
+        ],
+        "placed_at": [
+          405,
+          406,
+          85,
+          162
+        ]
+      },
+      {
+        "name": "coffee_addict_back_01",
+        "type": "walk",
+        "row": 2,
+        "col": 4,
+        "source_bbox": [
+          679,
+          378,
+          84,
+          168
+        ],
+        "atlas_index": 20,
+        "atlas_cell": [
+          512,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          677,
+          376,
+          88,
+          172
+        ],
+        "placed_at": [
+          532,
+          396,
+          88,
+          172
+        ]
+      },
+      {
+        "name": "coffee_addict_back_02",
+        "type": "walk",
+        "row": 2,
+        "col": 5,
+        "source_bbox": [
+          806,
+          379,
+          84,
+          167
+        ],
+        "atlas_index": 21,
+        "atlas_cell": [
+          640,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          804,
+          377,
+          88,
+          171
+        ],
+        "placed_at": [
+          660,
+          397,
+          88,
+          171
+        ]
+      },
+      {
+        "name": "coffee_addict_back_03",
+        "type": "walk",
+        "row": 2,
+        "col": 6,
+        "source_bbox": [
+          935,
+          379,
+          80,
+          167
+        ],
+        "atlas_index": 22,
+        "atlas_cell": [
+          768,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          933,
+          377,
+          84,
+          171
+        ],
+        "placed_at": [
+          790,
+          397,
+          84,
+          171
+        ]
+      },
+      {
+        "name": "coffee_addict_back_04",
+        "type": "walk",
+        "row": 2,
+        "col": 7,
+        "source_bbox": [
+          1051,
+          378,
+          88,
+          168
+        ],
+        "atlas_index": 23,
+        "atlas_cell": [
+          896,
+          384,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1049,
+          376,
+          92,
+          172
+        ],
+        "placed_at": [
+          914,
+          396,
+          92,
+          172
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_down_01",
+        "type": "walk",
+        "row": 3,
+        "col": 0,
+        "source_bbox": [
+          53,
+          571,
+          80,
+          169
+        ],
+        "atlas_index": 24,
+        "atlas_cell": [
+          0,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          51,
+          569,
+          84,
+          173
+        ],
+        "placed_at": [
+          22,
+          587,
+          84,
+          173
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_down_02",
+        "type": "walk",
+        "row": 3,
+        "col": 1,
+        "source_bbox": [
+          180,
+          571,
+          73,
+          169
+        ],
+        "atlas_index": 25,
+        "atlas_cell": [
+          128,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          178,
+          569,
+          77,
+          173
+        ],
+        "placed_at": [
+          153,
+          587,
+          77,
+          173
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_down_03",
+        "type": "walk",
+        "row": 3,
+        "col": 2,
+        "source_bbox": [
+          306,
+          571,
+          80,
+          169
+        ],
+        "atlas_index": 26,
+        "atlas_cell": [
+          256,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          304,
+          569,
+          84,
+          173
+        ],
+        "placed_at": [
+          278,
+          587,
+          84,
+          173
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_down_04",
+        "type": "walk",
+        "row": 3,
+        "col": 3,
+        "source_bbox": [
+          440,
+          571,
+          72,
+          169
+        ],
+        "atlas_index": 27,
+        "atlas_cell": [
+          384,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          438,
+          569,
+          76,
+          173
+        ],
+        "placed_at": [
+          410,
+          587,
+          76,
+          173
+        ]
+      },
+      {
+        "name": "designer_or_manager_down_01",
+        "type": "walk",
+        "row": 3,
+        "col": 4,
+        "source_bbox": [
+          681,
+          574,
+          71,
+          168
+        ],
+        "atlas_index": 28,
+        "atlas_cell": [
+          512,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          679,
+          572,
+          75,
+          172
+        ],
+        "placed_at": [
+          538,
+          588,
+          75,
+          172
+        ]
+      },
+      {
+        "name": "designer_or_manager_down_02",
+        "type": "walk",
+        "row": 3,
+        "col": 5,
+        "source_bbox": [
+          809,
+          574,
+          84,
+          168
+        ],
+        "atlas_index": 29,
+        "atlas_cell": [
+          640,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          807,
+          572,
+          88,
+          172
+        ],
+        "placed_at": [
+          660,
+          588,
+          88,
+          172
+        ]
+      },
+      {
+        "name": "designer_or_manager_down_03",
+        "type": "walk",
+        "row": 3,
+        "col": 6,
+        "source_bbox": [
+          935,
+          574,
+          71,
+          168
+        ],
+        "atlas_index": 30,
+        "atlas_cell": [
+          768,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          933,
+          572,
+          75,
+          172
+        ],
+        "placed_at": [
+          794,
+          588,
+          75,
+          172
+        ]
+      },
+      {
+        "name": "designer_or_manager_down_04",
+        "type": "walk",
+        "row": 3,
+        "col": 7,
+        "source_bbox": [
+          1057,
+          574,
+          85,
+          168
+        ],
+        "atlas_index": 31,
+        "atlas_cell": [
+          896,
+          576,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1055,
+          572,
+          89,
+          172
+        ],
+        "placed_at": [
+          915,
+          588,
+          89,
+          172
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_side_01",
+        "type": "walk",
+        "row": 4,
+        "col": 0,
+        "source_bbox": [
+          60,
+          761,
+          58,
+          154
+        ],
+        "atlas_index": 32,
+        "atlas_cell": [
+          0,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          58,
+          759,
+          62,
+          158
+        ],
+        "placed_at": [
+          33,
+          794,
+          62,
+          158
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_side_02",
+        "type": "walk",
+        "row": 4,
+        "col": 1,
+        "source_bbox": [
+          184,
+          761,
+          59,
+          149
+        ],
+        "atlas_index": 33,
+        "atlas_cell": [
+          128,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          182,
+          759,
+          63,
+          153
+        ],
+        "placed_at": [
+          160,
+          799,
+          63,
+          153
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_side_03",
+        "type": "walk",
+        "row": 4,
+        "col": 2,
+        "source_bbox": [
+          310,
+          761,
+          61,
+          154
+        ],
+        "atlas_index": 34,
+        "atlas_cell": [
+          256,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          308,
+          759,
+          65,
+          158
+        ],
+        "placed_at": [
+          287,
+          794,
+          65,
+          158
+        ]
+      },
+      {
+        "name": "ai_researcher_or_night_developer_side_04",
+        "type": "walk",
+        "row": 4,
+        "col": 3,
+        "source_bbox": [
+          434,
+          761,
+          61,
+          149
+        ],
+        "atlas_index": 35,
+        "atlas_cell": [
+          384,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          432,
+          759,
+          65,
+          153
+        ],
+        "placed_at": [
+          415,
+          799,
+          65,
+          153
+        ]
+      },
+      {
+        "name": "designer_or_manager_side_01",
+        "type": "walk",
+        "row": 4,
+        "col": 4,
+        "source_bbox": [
+          677,
+          762,
+          64,
+          157
+        ],
+        "atlas_index": 36,
+        "atlas_cell": [
+          512,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          675,
+          760,
+          68,
+          161
+        ],
+        "placed_at": [
+          542,
+          791,
+          68,
+          161
+        ]
+      },
+      {
+        "name": "designer_or_manager_side_02",
+        "type": "walk",
+        "row": 4,
+        "col": 5,
+        "source_bbox": [
+          807,
+          762,
+          64,
+          157
+        ],
+        "atlas_index": 37,
+        "atlas_cell": [
+          640,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          805,
+          760,
+          68,
+          161
+        ],
+        "placed_at": [
+          670,
+          791,
+          68,
+          161
+        ]
+      },
+      {
+        "name": "designer_or_manager_side_03",
+        "type": "walk",
+        "row": 4,
+        "col": 6,
+        "source_bbox": [
+          938,
+          762,
+          58,
+          159
+        ],
+        "atlas_index": 38,
+        "atlas_cell": [
+          768,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          936,
+          760,
+          62,
+          163
+        ],
+        "placed_at": [
+          801,
+          789,
+          62,
+          163
+        ]
+      },
+      {
+        "name": "designer_or_manager_side_04",
+        "type": "walk",
+        "row": 4,
+        "col": 7,
+        "source_bbox": [
+          1057,
+          762,
+          62,
+          158
+        ],
+        "atlas_index": 39,
+        "atlas_cell": [
+          896,
+          768,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1055,
+          760,
+          66,
+          162
+        ],
+        "placed_at": [
+          927,
+          790,
+          66,
+          162
+        ]
+      },
+      {
+        "name": "emote_01_laptop",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          32,
+          960,
+          63,
+          129
+        ],
+        "atlas_index": 40,
+        "atlas_cell": [
+          0,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          30,
+          958,
+          67,
+          133
+        ],
+        "placed_at": [
+          30,
+          1011,
+          67,
+          133
+        ]
+      },
+      {
+        "name": "emote_02_alert",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          113,
+          960,
+          69,
+          129
+        ],
+        "atlas_index": 41,
+        "atlas_cell": [
+          128,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          111,
+          958,
+          73,
+          133
+        ],
+        "placed_at": [
+          155,
+          1011,
+          73,
+          133
+        ]
+      },
+      {
+        "name": "emote_03_cheer",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          206,
+          969,
+          58,
+          116
+        ],
+        "atlas_index": 42,
+        "atlas_cell": [
+          256,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          204,
+          967,
+          62,
+          120
+        ],
+        "placed_at": [
+          289,
+          1024,
+          62,
+          120
+        ]
+      },
+      {
+        "name": "emote_04_sweat_bubble",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          288,
+          963,
+          94,
+          126
+        ],
+        "atlas_index": 43,
+        "atlas_cell": [
+          384,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          286,
+          961,
+          98,
+          130
+        ],
+        "placed_at": [
+          399,
+          1014,
+          98,
+          130
+        ]
+      },
+      {
+        "name": "emote_05_laptop_female",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          418,
+          970,
+          67,
+          123
+        ],
+        "atlas_index": 44,
+        "atlas_cell": [
+          512,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          416,
+          968,
+          71,
+          127
+        ],
+        "placed_at": [
+          540,
+          1017,
+          71,
+          127
+        ]
+      },
+      {
+        "name": "emote_06_alert_female",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          509,
+          960,
+          75,
+          136
+        ],
+        "atlas_index": 45,
+        "atlas_cell": [
+          640,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          507,
+          958,
+          79,
+          140
+        ],
+        "placed_at": [
+          664,
+          1004,
+          79,
+          140
+        ]
+      },
+      {
+        "name": "emote_07_praise_female",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          594,
+          981,
+          83,
+          102
+        ],
+        "atlas_index": 46,
+        "atlas_cell": [
+          768,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          592,
+          979,
+          87,
+          106
+        ],
+        "placed_at": [
+          788,
+          1038,
+          87,
+          106
+        ]
+      },
+      {
+        "name": "emote_08_sit_bubble",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          695,
+          968,
+          95,
+          128
+        ],
+        "atlas_index": 47,
+        "atlas_cell": [
+          896,
+          960,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          693,
+          966,
+          99,
+          132
+        ],
+        "placed_at": [
+          910,
+          1012,
+          99,
+          132
+        ]
+      },
+      {
+        "name": "emote_09_laptop_white_shirt",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          861,
+          973,
+          69,
+          128
+        ],
+        "atlas_index": 48,
+        "atlas_cell": [
+          0,
+          1152,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          859,
+          971,
+          73,
+          132
+        ],
+        "placed_at": [
+          27,
+          1204,
+          73,
+          132
+        ]
+      },
+      {
+        "name": "emote_10_alert_purple",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          941,
+          973,
+          63,
+          137
+        ],
+        "atlas_index": 49,
+        "atlas_cell": [
+          128,
+          1152,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          939,
+          971,
+          67,
+          141
+        ],
+        "placed_at": [
+          158,
+          1195,
+          67,
+          141
+        ]
+      },
+      {
+        "name": "emote_11_callout",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          1018,
+          978,
+          79,
+          108
+        ],
+        "atlas_index": 50,
+        "atlas_cell": [
+          256,
+          1152,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1016,
+          976,
+          83,
+          112
+        ],
+        "placed_at": [
+          278,
+          1224,
+          83,
+          112
+        ]
+      },
+      {
+        "name": "emote_12_sweat_bubble",
+        "type": "emote",
+        "row": null,
+        "col": null,
+        "source_bbox": [
+          1110,
+          968,
+          121,
+          136
+        ],
+        "atlas_index": 51,
+        "atlas_cell": [
+          384,
+          1152,
+          128,
+          192
+        ],
+        "source_bbox_with_padding": [
+          1108,
+          966,
+          125,
+          140
+        ],
+        "placed_at": [
+          385,
+          1196,
+          125,
+          140
+        ]
+      }
+    ]
+  },
+  "atlas_64x96": {
+    "file": "gamebaljeonguk_atlas_64x96.png",
+    "cell_width": 64,
+    "cell_height": 96,
+    "columns": 8,
+    "rows": 7
+  },
+  "rpg_maker": {
+    "$gamebaljeonguk_planner.png": {
+      "cell_width": 128,
+      "cell_height": 192,
+      "columns": 3,
+      "rows": 4,
+      "frames": [
+        {
+          "direction": "down",
+          "frame": 0,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            174,
+            21,
+            84,
+            167
+          ],
+          "placed_at": [
+            22,
+            17,
+            84,
+            167
+          ]
+        },
+        {
+          "direction": "down",
+          "frame": 1,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            46,
+            21,
+            83,
+            167
+          ],
+          "placed_at": [
+            150,
+            17,
+            83,
+            167
+          ]
+        },
+        {
+          "direction": "down",
+          "frame": 2,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            427,
+            21,
+            91,
+            168
+          ],
+          "placed_at": [
+            274,
+            16,
+            91,
+            168
+          ]
+        },
+        {
+          "direction": "left",
+          "frame": 0,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            177,
+            206,
+            69,
+            152
+          ],
+          "placed_at": [
+            29,
+            224,
+            69,
+            152
+          ]
+        },
+        {
+          "direction": "left",
+          "frame": 1,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            57,
+            206,
+            64,
+            153
+          ],
+          "placed_at": [
+            160,
+            223,
+            64,
+            153
+          ]
+        },
+        {
+          "direction": "left",
+          "frame": 2,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            432,
+            206,
+            67,
+            152
+          ],
+          "placed_at": [
+            286,
+            224,
+            67,
+            152
+          ]
+        },
+        {
+          "direction": "right",
+          "frame": 0,
+          "mirrored": true,
+          "source_bbox_with_padding": [
+            177,
+            206,
+            69,
+            152
+          ],
+          "placed_at": [
+            29,
+            416,
+            69,
+            152
+          ]
+        },
+        {
+          "direction": "right",
+          "frame": 1,
+          "mirrored": true,
+          "source_bbox_with_padding": [
+            57,
+            206,
+            64,
+            153
+          ],
+          "placed_at": [
+            160,
+            415,
+            64,
+            153
+          ]
+        },
+        {
+          "direction": "right",
+          "frame": 2,
+          "mirrored": true,
+          "source_bbox_with_padding": [
+            432,
+            206,
+            67,
+            152
+          ],
+          "placed_at": [
+            286,
+            416,
+            67,
+            152
+          ]
+        },
+        {
+          "direction": "up",
+          "frame": 0,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            178,
+            374,
+            76,
+            161
+          ],
+          "placed_at": [
+            26,
+            599,
+            76,
+            161
+          ]
+        },
+        {
+          "direction": "up",
+          "frame": 1,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            51,
+            374,
+            78,
+            162
+          ],
+          "placed_at": [
+            153,
+            598,
+            78,
+            162
+          ]
+        },
+        {
+          "direction": "up",
+          "frame": 2,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            422,
+            374,
+            85,
+            162
+          ],
+          "placed_at": [
+            277,
+            598,
+            85,
+            162
+          ]
+        }
+      ]
+    },
+    "$gamebaljeonguk_coffee_addict.png": {
+      "cell_width": 128,
+      "cell_height": 192,
+      "columns": 3,
+      "rows": 4,
+      "frames": [
+        {
+          "direction": "down",
+          "frame": 0,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            802,
+            17,
+            95,
+            177
+          ],
+          "placed_at": [
+            16,
+            7,
+            95,
+            177
+          ]
+        },
+        {
+          "direction": "down",
+          "frame": 1,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            663,
+            17,
+            98,
+            177
+          ],
+          "placed_at": [
+            143,
+            7,
+            98,
+            177
+          ]
+        },
+        {
+          "direction": "down",
+          "frame": 2,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            1047,
+            17,
+            97,
+            177
+          ],
+          "placed_at": [
+            271,
+            7,
+            97,
+            177
+          ]
+        },
+        {
+          "direction": "left",
+          "frame": 0,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            814,
+            207,
+            65,
+            154
+          ],
+          "placed_at": [
+            31,
+            222,
+            65,
+            154
+          ]
+        },
+        {
+          "direction": "left",
+          "frame": 1,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            685,
+            208,
+            66,
+            154
+          ],
+          "placed_at": [
+            159,
+            222,
+            66,
+            154
+          ]
+        },
+        {
+          "direction": "left",
+          "frame": 2,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            1060,
+            207,
+            65,
+            153
+          ],
+          "placed_at": [
+            287,
+            223,
+            65,
+            153
+          ]
+        },
+        {
+          "direction": "right",
+          "frame": 0,
+          "mirrored": true,
+          "source_bbox_with_padding": [
+            814,
+            207,
+            65,
+            154
+          ],
+          "placed_at": [
+            31,
+            414,
+            65,
+            154
+          ]
+        },
+        {
+          "direction": "right",
+          "frame": 1,
+          "mirrored": true,
+          "source_bbox_with_padding": [
+            685,
+            208,
+            66,
+            154
+          ],
+          "placed_at": [
+            159,
+            414,
+            66,
+            154
+          ]
+        },
+        {
+          "direction": "right",
+          "frame": 2,
+          "mirrored": true,
+          "source_bbox_with_padding": [
+            1060,
+            207,
+            65,
+            153
+          ],
+          "placed_at": [
+            287,
+            415,
+            65,
+            153
+          ]
+        },
+        {
+          "direction": "up",
+          "frame": 0,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            804,
+            377,
+            88,
+            171
+          ],
+          "placed_at": [
+            20,
+            589,
+            88,
+            171
+          ]
+        },
+        {
+          "direction": "up",
+          "frame": 1,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            677,
+            376,
+            88,
+            172
+          ],
+          "placed_at": [
+            148,
+            588,
+            88,
+            172
+          ]
+        },
+        {
+          "direction": "up",
+          "frame": 2,
+          "mirrored": false,
+          "source_bbox_with_padding": [
+            1049,
+            376,
+            92,
+            172
+          ],
+          "placed_at": [
+            274,
+            588,
+            92,
+            172
+          ]
+        }
+      ]
+    }
+  }
+}

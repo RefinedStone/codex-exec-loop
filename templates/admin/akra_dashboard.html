@@ -16,6 +16,7 @@
     --game-violet: #9d7cff;
     --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
     --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
+    --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -596,15 +597,15 @@
     display: grid;
     place-items: center;
     width: 48px;
-    height: 48px;
+    height: 72px;
     color: #f7fbff;
-    background-color: rgba(53, 208, 127, 0.15);
-    border: 1px solid rgba(53, 208, 127, 0.35);
-    border-radius: 8px;
-    background-image: url("/assets/admin/admin-character-sprites.svg");
+    background-color: transparent;
+    border: 0;
+    background-image: var(--agent-sprite-sheet);
     background-repeat: no-repeat;
     background-position: 0 0;
-    background-size: 672px 96px;
+    background-size: 384px 504px;
+    filter: drop-shadow(0 3px 0 rgba(0,0,0,0.28));
     image-rendering: pixelated;
     font-size: 10px;
     font-weight: 900;
@@ -614,8 +615,8 @@
   .agent-sprite::after {
     content: "";
     position: absolute;
-    top: 4px;
-    right: -3px;
+    top: 9px;
+    right: 0;
     width: 8px;
     height: 8px;
     border: 1px solid rgba(255,255,255,0.5);
@@ -625,8 +626,8 @@
   .agent-sprite .sprite-label {
     position: absolute;
     right: -5px;
-    bottom: -4px;
-    max-width: 42px;
+    bottom: -6px;
+    max-width: 54px;
     padding: 1px 4px;
     border: 1px solid rgba(255,255,255,0.22);
     background: rgba(7, 16, 29, 0.92);
@@ -643,28 +644,21 @@
   .agent-sprite.avatar-Seer { background-position: -192px 0; }
   .agent-sprite.avatar-Runner { background-position: -240px 0; }
   .severity-danger .agent-sprite {
-    background-color: rgba(255, 107, 107, 0.18);
-    border-color: rgba(255, 107, 107, 0.42);
+    background-color: transparent;
   }
   .severity-danger .agent-sprite::after { background: var(--game-red); }
   .severity-warning .agent-sprite {
-    background-color: rgba(245, 200, 75, 0.18);
-    border-color: rgba(245, 200, 75, 0.42);
+    background-color: transparent;
   }
   .severity-warning .agent-sprite::after { background: var(--game-yellow); }
   .severity-normal .agent-sprite {
-    background-color: rgba(53, 208, 127, 0.15);
-    border-color: rgba(53, 208, 127, 0.35);
+    background-color: transparent;
   }
   .agent-sprite.role-distributor {
-    background-color: rgba(157, 124, 255, 0.18);
-    border-color: rgba(157, 124, 255, 0.42);
     background-position: -288px 0;
   }
   .agent-sprite.role-distributor::after { background: var(--game-violet); }
   .agent-sprite.role-events {
-    background-color: rgba(93, 169, 255, 0.18);
-    border-color: rgba(93, 169, 255, 0.42);
     background-position: -336px 0;
   }
   .agent-sprite.role-events::after { background: var(--game-blue); }
@@ -1632,8 +1626,7 @@
     whiteboard: basePath + "sprite_whiteboard.png",
     sofa:       basePath + "sprite_sofa.png",
     plant:      basePath + "sprite_potted_plant.png",
-    agentSit:   basePath + "sprite_agent_sitting.png",
-    agentStand: basePath + "sprite_agent_standing.png",
+    agentAtlas: basePath + "gamebaljeonguk_atlas_64x96.png",
   };
 
   // Load all textures
@@ -1681,6 +1674,13 @@
     return "normal";
   };
   const colorFor = (severity) => statusPalette[severity] || statusPalette.normal;
+  const makeAtlasFrame = (texture, col, row = 0) => {
+    const baseTexture = texture?.baseTexture;
+    if (!baseTexture || typeof PIXI.Rectangle === "undefined") return null;
+    return new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * 64, row * 96, 64, 96));
+  };
+  const agentFrames = Array.from({ length: 8 }, (_, index) => makeAtlasFrame(textures.agentAtlas, index))
+    .filter(Boolean);
   const boardSize = () => ({
     width: boardEl.offsetWidth || W,
     height: boardEl.offsetHeight || H,
@@ -1714,12 +1714,11 @@
     shadow.drawEllipse(0, 0, 30, 8);
     shadow.endFill();
     const ring = new PIXI.Graphics();
-    const texture = index % 3 === 2 ? textures.agentStand : textures.agentSit;
+    const texture = agentFrames.length ? agentFrames[index % agentFrames.length] : null;
     const sprite = texture ? new PIXI.Sprite(texture) : null;
     if (sprite) {
       sprite.anchor.set(0.5, 1);
-      sprite.scale.set(0.062);
-      sprite.tint = severity === "danger" ? 0xffc4c4 : severity === "warning" ? 0xffe8a3 : 0xffffff;
+      sprite.scale.set(0.72);
       group.addChild(shadow, ring, sprite);
     } else {
       group.addChild(shadow, ring);

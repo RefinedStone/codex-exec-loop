@@ -21,8 +21,11 @@ const AKRA_DASHBOARD_TEMPLATE: &str =
     include_str!("../../../../templates/admin/akra_dashboard.html");
 const ADMIN_GRAPHIC_VISUAL_SCRIPT: &str =
     include_str!("../../../../scripts/check_admin_graphic_visual.sh");
-const ADMIN_CHARACTER_SPRITES: &str =
-    include_str!("../../../../assets/admin/admin-character-sprites.svg");
+const GAMEBALJEONGUK_SPRITE_PACK_README: &str =
+    include_str!("../../../../templates/admin/resources/gamebaljeonguk_sprite_pack/README.txt");
+const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
+    "../../../../templates/admin/resources/gamebaljeonguk_sprite_pack/gamebaljeonguk_sprite_metadata.json"
+);
 const ADMIN_API: &str = include_str!("api.rs");
 const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
@@ -237,8 +240,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "정보 카드",
         "data-admin-graphic",
         "data-poll-interval-ms",
-        "/assets/admin/admin-character-sprites.svg",
-        "background-size: 672px 96px",
+        "gamebaljeonguk_atlas_64x96.png",
+        "background-image: var(--agent-sprite-sheet)",
+        "background-size: 384px 504px",
         "avatar-Artificer",
         "agentAvatarClass",
         "background-image: var(--object-sprite-sheet)",
@@ -326,8 +330,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "\"/api/admin/akra/agents\"",
         "\"/api/admin/akra/distributor\"",
         "\"/api/admin/akra/events\"",
-        "\"/assets/admin/admin-character-sprites.svg\"",
-        "admin_character_sprites_asset",
         "\"/admin/assets/graphics/{asset_name}\"",
     ] {
         assert!(
@@ -346,7 +348,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "class=\"scene-object object-sprite server-rack\"",
         "background-image: var(--object-sprite-sheet)",
         "background-size: 627px 627px",
-        "background-size: 672px 96px",
+        "background-image: var(--agent-sprite-sheet)",
+        "background-size: 384px 504px",
         "background-position: -288px 0",
         "max-height: 540px",
         "overflow: auto",
@@ -364,6 +367,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "read-only 운영 관제",
         "--office-bg-image",
         "--object-sprite-sheet",
+        "--agent-sprite-sheet",
         "var(--office-bg-image)",
         "data-detail-type=\"slot\"",
         "data-detail-type=\"agent\"",
@@ -385,14 +389,14 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     }
 
     for token in [
-        "docs/gamification/img.png",
-        "/assets/admin/admin-character-sprites.svg",
-        "admin-character-sprites.svg",
+        "templates/admin/resources/main-sprite.png",
+        "gamebaljeonguk_atlas_64x96.png",
         "ADMIN_GRAPHIC_CAPTURE",
         "akra-admin",
         "/admin/akra",
         "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/akra-object-sprites.png",
+        "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
         "/api/admin/akra/dashboard",
         "/api/admin/akra/events?limit=50",
         "/api/admin/akra/events?afterSequence=0&limit=50",
@@ -406,6 +410,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "\"intelCards\"",
         "served office background asset does not match workspace asset",
         "served object sprite asset does not match workspace asset",
+        "served gamebaljeonguk agent atlas does not match workspace asset",
         "--screenshot=",
         "admin graphic visual contract ok",
     ] {
@@ -418,6 +423,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     for token in [
         "include_bytes!(\"../../../../assets/admin/graphics/akra-office-background.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/akra-object-sprites.png\")",
+        "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png\")",
         "image/png",
         "public, max-age=86400",
     ] {
@@ -486,35 +492,35 @@ fn akra_parallel_admin_surface_is_read_only_snapshot_projection() {
 }
 
 #[test]
-fn akra_graphic_dashboard_character_sprite_asset_is_reviewable() {
+fn akra_graphic_dashboard_gamebaljeonguk_sprite_pack_is_reviewable() {
     for token in [
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"672\" height=\"96\"",
-        "id=\"agent-normal\"",
-        "id=\"agent-warning\"",
-        "id=\"agent-danger\"",
-        "id=\"agent-artificer\"",
-        "id=\"agent-scribe\"",
-        "id=\"agent-ranger\"",
-        "id=\"agent-guardian\"",
-        "id=\"agent-seer\"",
-        "id=\"agent-runner\"",
-        "id=\"distributor\"",
-        "id=\"event-board\"",
-        "id=\"server-rack\"",
-        "id=\"whiteboard\"",
-        "id=\"couch\"",
+        "gamebaljeonguk_original_transparent.png",
+        "gamebaljeonguk_atlas_128x192.png",
+        "gamebaljeonguk_atlas_64x96.png",
+        "$gamebaljeonguk_planner.png",
+        "$gamebaljeonguk_coffee_addict.png",
+        "Cell size: 64x96",
     ] {
         assert!(
-            ADMIN_CHARACTER_SPRITES.contains(token),
-            "character sprite asset should keep {token}"
+            GAMEBALJEONGUK_SPRITE_PACK_README.contains(token),
+            "gamebaljeonguk sprite pack readme should keep {token}"
         );
     }
 
-    assert!(
-        ADMIN_MOD
-            .contains("include_bytes!(\"../../../../assets/admin/admin-character-sprites.svg\")")
-    );
-    assert!(ADMIN_MOD.contains("image/svg+xml; charset=utf-8"));
+    for token in [
+        "\"file\": \"gamebaljeonguk_atlas_64x96.png\"",
+        "\"cell_width\": 64",
+        "\"cell_height\": 96",
+        "\"$gamebaljeonguk_planner.png\"",
+        "\"$gamebaljeonguk_coffee_addict.png\"",
+        "\"planner_down_01\"",
+        "\"coffee_addict_down_01\"",
+    ] {
+        assert!(
+            GAMEBALJEONGUK_SPRITE_METADATA.contains(token),
+            "gamebaljeonguk sprite metadata should keep {token}"
+        );
+    }
 }
 
 /*

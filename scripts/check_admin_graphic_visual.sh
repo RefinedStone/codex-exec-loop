@@ -18,9 +18,9 @@ dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
 events_error_json="${output_dir}/events-error.json"
-sprites_svg="${output_dir}/admin-character-sprites.svg"
 office_asset="${output_dir}/akra-office-background.png"
 sprite_asset="${output_dir}/akra-object-sprites.png"
+agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 screenshot_path="${output_dir}/admin-graphic.png"
 
 mkdir -p "${output_dir}"
@@ -128,9 +128,9 @@ curl -fsS "${graphic_url}" >"${admin_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
-curl -fsS "${base_url}/assets/admin/admin-character-sprites.svg" >"${sprites_svg}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-office-background.png" >"${office_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-object-sprites.png" >"${sprite_asset}"
+curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
 events_error_status="$(curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
 if [[ "${events_error_status}" != "400" ]]; then
   echo "expected event limit validation to return 400, got ${events_error_status}" >&2
@@ -172,12 +172,13 @@ for token in \
   'pulseStage' \
   'is-bursting' \
   'data-event-feed-status' \
-  '/assets/admin/admin-character-sprites.svg' \
+  'gamebaljeonguk_atlas_64x96.png' \
   'background-image: var(--object-sprite-sheet)' \
+  'background-image: var(--agent-sprite-sheet)' \
   'var(--office-bg-image) center / cover no-repeat' \
   'akra-office-background.png' \
   'akra-object-sprites.png' \
-  'background-size: 672px 96px' \
+  'background-size: 384px 504px' \
   'avatar-Artificer' \
   'agentAvatarClass' \
   'background-size: 627px 627px' \
@@ -218,25 +219,6 @@ for token in \
 done
 
 for token in \
-  '<svg xmlns="http://www.w3.org/2000/svg" width="672" height="96"' \
-  'id="agent-normal"' \
-  'id="agent-warning"' \
-  'id="agent-danger"' \
-  'id="agent-artificer"' \
-  'id="agent-scribe"' \
-  'id="agent-ranger"' \
-  'id="agent-guardian"' \
-  'id="agent-seer"' \
-  'id="agent-runner"' \
-  'id="distributor"' \
-  'id="event-board"' \
-  'id="server-rack"' \
-  'id="whiteboard"' \
-  'id="couch"'; do
-  require_contains "${sprites_svg}" "${token}"
-done
-
-for token in \
   '"error":"event_limit_too_large"' \
   '"operatorMessage":"Runtime event API limit must be 200 or less."'; do
   require_contains "${events_error_json}" "${token}"
@@ -250,9 +232,13 @@ cmp -s assets/admin/graphics/akra-object-sprites.png "${sprite_asset}" || {
   echo "served object sprite asset does not match workspace asset" >&2
   exit 1
 }
+cmp -s assets/admin/graphics/gamebaljeonguk_atlas_64x96.png "${agent_atlas_asset}" || {
+  echo "served gamebaljeonguk agent atlas does not match workspace asset" >&2
+  exit 1
+}
 
-if [[ -f docs/gamification/img.png ]]; then
-  sha256sum docs/gamification/img.png >"${output_dir}/reference-img.sha256"
+if [[ -f templates/admin/resources/main-sprite.png ]]; then
+  sha256sum templates/admin/resources/main-sprite.png >"${output_dir}/reference-img.sha256"
 fi
 
 browser_path="$(find_browser || true)"
