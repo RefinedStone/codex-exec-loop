@@ -661,9 +661,29 @@ fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::fmt::Debug;
+    use std::fs;
+    use std::io::Cursor;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc::{self, Sender};
+    use std::thread;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    use super::{AppServerConnectionConfig, RESPONSE_TIMEOUT_ENV_VAR};
+    use anyhow::Result;
+    use serde_json::{Value, json};
+
+    use super::diagnostics::{ConnectionDiagnostics, PendingNotifications};
+    use super::{
+        AppServerConnection, AppServerConnectionConfig, AppServerLine,
+        AppServerTurnInterruptSignal, RESPONSE_TIMEOUT_ENV_VAR, spawn_pipe_reader,
+    };
+    use crate::adapter::outbound::app_server::protocol::{
+        AppServerNotification, ReasoningEffortValue, ThreadListParams, ThreadResumeParams,
+        ThreadStartParams, TurnInputItem, TurnInterruptParams, TurnStartParams,
+    };
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 
     #[test]
     fn response_timeout_defaults_to_fifteen_seconds() {
@@ -701,5 +721,805 @@ mod tests {
             RESPONSE_TIMEOUT_ENV_VAR,
             "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS"
         );
+    }
+
+    #[test]
+    fn interrupt_signal_tracks_newer_stop_generations() {
+        /*
+         * The stream loop compares generation snapshots, so an old stop request must
+         * not cancel a future turn while a newer request must be observable without a lock.
+         */
+        let signal = AppServerTurnInterruptSignal::default();
+
+        assert_eq!(signal.current_generation(), 0);
+        assert!(!signal.requested_after(0));
+
+        signal.request_stop_all_sessions();
+
+        assert_eq!(signal.current_generation(), 1);
+        assert!(signal.requested_after(0));
+        assert!(!signal.requested_after(1));
+    }
+
+    #[test]
+    fn initialize_sends_handshake_notification_and_rejects_second_call() {
+        let mut harness = TestConnection::new(false);
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": {
+                "userAgent": "codex-app-server/test",
+                "platformFamily": "unix",
+                "platformOs": "linux-x64"
+            }
+        }));
+
+        let response = harness
+            .connection
+            .initialize()
+            .expect("initialize response should deserialize");
+
+        assert_eq!(response.user_agent, "codex-app-server/test");
+        assert_eq!(response.platform_family, "unix");
+        assert_eq!(response.platform_os, "linux-x64");
+        assert!(harness.connection.initialized);
+
+        let logged = harness.logged_json_lines(2);
+        assert_eq!(logged[0]["id"], 1);
+        assert_eq!(logged[0]["method"], "initialize");
+        assert_eq!(logged[0]["params"]["clientInfo"]["name"], "test-client");
+        assert_eq!(logged[0]["params"]["clientInfo"]["version"], "test-version");
+        assert_eq!(
+            logged[0]["params"]["capabilities"]["experimentalApi"],
+            false
+        );
+        assert_eq!(logged[1]["method"], "initialized");
+        assert!(logged[1].get("id").is_none());
+
+        let error = harness
+            .connection
+            .initialize()
+            .expect_err("initialize must be exactly once per app-server child");
+
+        assert!(error.to_string().contains("already called"));
+    }
+
+    #[test]
+    fn typed_requests_reject_uninitialized_connections_before_writing() {
+        let mut harness = TestConnection::new(false);
+
+        assert_not_initialized(harness.connection.read_account());
+        assert_not_initialized(harness.connection.list_threads(ThreadListParams::default()));
+        assert_not_initialized(harness.connection.read_thread("thread-1", true));
+        assert_not_initialized(
+            harness
+                .connection
+                .start_thread(ThreadStartParams::default()),
+        );
+        assert_not_initialized(harness.connection.resume_thread(ThreadResumeParams {
+            thread_id: "thread-1".to_string(),
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox: None,
+        }));
+        assert_not_initialized(harness.connection.start_turn(TurnStartParams {
+            thread_id: "thread-1".to_string(),
+            input: vec![TurnInputItem::text("prompt")],
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+        }));
+        assert_not_initialized(harness.connection.interrupt_turn(TurnInterruptParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+        assert!(harness.logged_json_lines(0).is_empty());
+    }
+
+    #[test]
+    fn typed_requests_serialize_method_specific_payloads_after_initialize() {
+        /*
+         * The typed helpers are the only place where higher-level app intent becomes
+         * app-server method names. This keeps method spelling and request field shape
+         * covered without launching a real app-server process.
+         */
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": {
+                "account": null,
+                "requiresOpenAIAuth": false
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 2,
+            "result": {
+                "data": [thread_record_json("thread-listed")],
+                "nextCursor": "cursor-next"
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 3,
+            "result": {
+                "thread": thread_record_json("thread-read")
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 4,
+            "result": {
+                "thread": thread_record_json("thread-started")
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 5,
+            "result": {
+                "thread": thread_record_json("thread-resumed")
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 6,
+            "result": {
+                "turn": {
+                    "id": "turn-started"
+                }
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 7,
+            "result": {}
+        }));
+
+        let account = harness
+            .connection
+            .read_account()
+            .expect("account/read should deserialize");
+        let threads = harness
+            .connection
+            .list_threads(ThreadListParams {
+                archived: Some(false),
+                cwd: Some("/repo".to_string()),
+                limit: Some(25),
+                search_term: Some("planning".to_string()),
+                source_kinds: Some(vec!["vscode".to_string()]),
+            })
+            .expect("thread/list should deserialize");
+        let read_thread = harness
+            .connection
+            .read_thread("thread-read", true)
+            .expect("thread/read should deserialize");
+        let started_thread = harness
+            .connection
+            .start_thread(ThreadStartParams {
+                cwd: Some("/repo".to_string()),
+                model: Some("gpt-test".to_string()),
+                developer_instructions: Some("stay focused".to_string()),
+                service_name: Some("akra-test-worker".to_string()),
+                ephemeral: Some(true),
+                ..ThreadStartParams::default()
+            })
+            .expect("thread/start should deserialize");
+        let resumed_thread = harness
+            .connection
+            .resume_thread(ThreadResumeParams {
+                thread_id: "thread-resumed".to_string(),
+                approval_policy: None,
+                approvals_reviewer: None,
+                sandbox: None,
+            })
+            .expect("thread/resume should deserialize");
+        let started_turn = harness
+            .connection
+            .start_turn(TurnStartParams {
+                thread_id: "thread-started".to_string(),
+                input: vec![
+                    TurnInputItem::skill("akra-test-skill", "/tmp/SKILL.md"),
+                    TurnInputItem::text("prompt"),
+                ],
+                approval_policy: None,
+                approvals_reviewer: None,
+                sandbox_policy: None,
+                model: Some("gpt-test".to_string()),
+                effort: Some(ReasoningEffortValue::Medium),
+            })
+            .expect("turn/start should deserialize");
+        harness
+            .connection
+            .interrupt_turn(TurnInterruptParams {
+                thread_id: "thread-started".to_string(),
+                turn_id: "turn-started".to_string(),
+            })
+            .expect("turn/interrupt should deserialize");
+
+        assert!(account.is_authenticated());
+        assert_eq!(threads.data[0].id, "thread-listed");
+        assert_eq!(threads.next_cursor.as_deref(), Some("cursor-next"));
+        assert_eq!(read_thread.thread.id, "thread-read");
+        assert_eq!(started_thread.thread.id, "thread-started");
+        assert_eq!(resumed_thread._thread.id, "thread-resumed");
+        assert_eq!(started_turn.turn.id, "turn-started");
+
+        let logged = harness.logged_json_lines(7);
+        assert_eq!(logged[0]["method"], "account/read");
+        assert_eq!(logged[1]["method"], "thread/list");
+        assert_eq!(logged[1]["params"]["limit"], 25);
+        assert_eq!(logged[1]["params"]["searchTerm"], "planning");
+        assert_eq!(logged[2]["method"], "thread/read");
+        assert_eq!(logged[2]["params"]["threadId"], "thread-read");
+        assert_eq!(logged[2]["params"]["includeTurns"], true);
+        assert_eq!(logged[3]["method"], "thread/start");
+        assert_eq!(logged[3]["params"]["model"], "gpt-test");
+        assert_eq!(logged[3]["params"]["developerInstructions"], "stay focused");
+        assert_eq!(logged[3]["params"]["serviceName"], "akra-test-worker");
+        assert_eq!(logged[3]["params"]["ephemeral"], true);
+        assert_eq!(logged[4]["method"], "thread/resume");
+        assert_eq!(logged[4]["params"]["threadId"], "thread-resumed");
+        assert_eq!(logged[5]["method"], "turn/start");
+        assert_eq!(logged[5]["params"]["input"][0]["type"], "skill");
+        assert_eq!(logged[5]["params"]["input"][1]["type"], "text");
+        assert_eq!(logged[5]["params"]["effort"], "medium");
+        assert_eq!(logged[6]["method"], "turn/interrupt");
+        assert_eq!(logged[6]["params"]["turnId"], "turn-started");
+    }
+
+    #[test]
+    fn send_request_matches_response_and_preserves_transport_warnings() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stderr("workspace prompt missing");
+        harness.send_stdout(json!({
+            "id": 99,
+            "result": {
+                "ignored": true
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "configWarning",
+            "params": {
+                "summary": "schema config warning"
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "agent-1",
+                "delta": "early"
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": {
+                "ok": true
+            }
+        }));
+
+        let response: Value = harness
+            .connection
+            .send_request("unit/test", json!({ "value": 1 }))
+            .expect("matching response id should complete the request");
+
+        assert_eq!(response, json!({ "ok": true }));
+        assert_eq!(harness.connection.next_request_id, 2);
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["id"], 1);
+        assert_eq!(logged[0]["method"], "unit/test");
+        assert_eq!(logged[0]["params"]["value"], 1);
+
+        let warnings = harness.connection.take_warnings();
+        assert_contains_warning(&warnings, "workspace prompt missing");
+        assert_contains_warning(&warnings, "response id=99 while waiting for id=1");
+        assert_contains_warning(&warnings, "schema config warning");
+        assert_contains_warning(
+            &warnings,
+            "after the response completed without a turn stream consumer",
+        );
+    }
+
+    #[test]
+    fn wait_for_response_reports_protocol_errors_with_diagnostics() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stderr("fatal: child transport crashed");
+        harness.send_stdout(json!({
+            "id": 7,
+            "error": {
+                "message": "boom"
+            }
+        }));
+
+        let error = harness
+            .connection
+            .wait_for_response(7)
+            .expect_err("JSON-RPC error payload should fail the request");
+
+        assert!(error.to_string().contains("returned error for id 7"));
+        assert!(error.to_string().contains("fatal: child transport crashed"));
+    }
+
+    #[test]
+    fn wait_for_response_reports_missing_result_invalid_json_timeout_and_closed_pipe() {
+        let mut missing_result = TestConnection::new(true);
+        missing_result.send_stdout(json!({ "id": 3 }));
+        let error = missing_result
+            .connection
+            .wait_for_response(3)
+            .expect_err("response without result should be rejected");
+        assert!(error.to_string().contains("without a result payload"));
+
+        let mut invalid_json = TestConnection::new(true);
+        invalid_json
+            .tx
+            .send(AppServerLine::Stdout("not-json".to_string()))
+            .expect("test channel should accept stdout line");
+        let error = invalid_json
+            .connection
+            .wait_for_response(1)
+            .expect_err("invalid JSON line should fail the request");
+        assert!(error.to_string().contains("invalid JSON from app-server"));
+
+        let mut timeout = TestConnection::new(true);
+        let error = timeout
+            .connection
+            .wait_for_response(1)
+            .expect_err("silent app-server should time out");
+        assert!(error.to_string().contains("timed out waiting"));
+
+        let closed_pipe = TestConnection::new(true);
+        let mut connection = closed_pipe.connection;
+        drop(closed_pipe.tx);
+        let error = connection
+            .wait_for_response(1)
+            .expect_err("closed reader channel should be reported");
+        assert!(error.to_string().contains("pipe closed"));
+    }
+
+    #[test]
+    fn turn_stream_reduces_stdout_notifications_and_records_loose_messages() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "id": 55,
+            "result": {
+                "not": "a notification"
+            }
+        }));
+        harness.send_stderr("stream side warning");
+        harness.send_stdout(json!({
+            "method": "thread/status/changed",
+            "params": {
+                "threadId": "thread-1",
+                "status": {
+                    "type": "running"
+                }
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "configWarning",
+            "params": {
+                "summary": "stream config warning"
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1"
+                }
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("turn/completed should finish the stream");
+
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![
+                ConversationStreamEvent::StatusUpdated {
+                    text: "thread status: running".to_string(),
+                },
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: Vec::new(),
+                },
+            ]
+        );
+
+        let warnings = harness.connection.take_warnings();
+        assert_contains_warning(&warnings, "non-notification JSON message");
+        assert_contains_warning(&warnings, "stream side warning");
+        assert_contains_warning(&warnings, "stream config warning");
+    }
+
+    #[test]
+    fn turn_stream_consumes_deferred_notifications_before_blocking_for_more_lines() {
+        let mut harness = TestConnection::new(true);
+        harness
+            .connection
+            .pending_notifications
+            .push(notification(json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {
+                        "id": "file-change-1",
+                        "type": "fileChange",
+                        "changes": [
+                            {
+                                "path": ".codex-exec-loop/planning/result-output.md",
+                                "kind": {
+                                    "type": "update"
+                                }
+                            },
+                            {
+                                "path": "src/main.rs",
+                                "kind": {
+                                    "type": "update"
+                                }
+                            }
+                        ]
+                    }
+                }
+            })));
+        harness
+            .connection
+            .pending_notifications
+            .push(notification(json!({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-1"
+                    }
+                }
+            })));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("pending turn/completed should finish the stream");
+
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ConversationStreamEvent::ToolActivity { .. },
+                ConversationStreamEvent::TurnCompleted { .. }
+            ]
+        ));
+        assert_eq!(
+            events.last(),
+            Some(&ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn turn_stream_translates_new_interrupt_generation_once() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": {}
+        }));
+        harness.send_stdout(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1"
+                }
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &signal,
+                observed_generation,
+                &event_sender,
+            )
+            .expect("stream should continue after successful interrupt request");
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["method"], "turn/interrupt");
+        assert_eq!(logged[0]["params"]["threadId"], "thread-1");
+        assert_eq!(logged[0]["params"]["turnId"], "turn-1");
+
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![
+                ConversationStreamEvent::StatusUpdated {
+                    text: "stop requested / app-server interrupt sent".to_string(),
+                },
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: Vec::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn turn_stream_keeps_reading_when_interrupt_request_fails() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "id": 1,
+            "error": {
+                "message": "interrupt rejected"
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1"
+                }
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &signal,
+                observed_generation,
+                &event_sender,
+            )
+            .expect("turn stream should remain authoritative after interrupt failure");
+
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            }]
+        );
+
+        let warnings = harness.connection.take_warnings();
+        assert_contains_warning(&warnings, "interrupt failed");
+        assert_contains_warning(&warnings, "interrupt rejected");
+    }
+
+    #[test]
+    fn is_alive_reflects_child_process_exit() {
+        let mut harness = TestConnection::new(true);
+
+        assert!(
+            harness
+                .connection
+                .is_alive()
+                .expect("live fake child should be observable")
+        );
+
+        harness
+            .connection
+            .child
+            .kill()
+            .expect("fake child should be killable");
+        harness
+            .connection
+            .child
+            .wait()
+            .expect("fake child should exit after kill");
+
+        assert!(
+            !harness
+                .connection
+                .is_alive()
+                .expect("exited fake child should be observable")
+        );
+    }
+
+    #[test]
+    fn pipe_reader_classifies_stdout_and_stderr_lines() {
+        let (tx, rx) = mpsc::channel();
+
+        spawn_pipe_reader(
+            Cursor::new(b"out-one\nout-two\n".to_vec()),
+            tx.clone(),
+            false,
+        );
+        spawn_pipe_reader(Cursor::new(b"err-one\n".to_vec()), tx, true);
+
+        let mut stdout_lines = Vec::new();
+        let mut stderr_lines = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while stdout_lines.len() < 2 || stderr_lines.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "pipe reader did not send all expected lines"
+            );
+            match rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(AppServerLine::Stdout(line)) => stdout_lines.push(line),
+                Ok(AppServerLine::Stderr(line)) => stderr_lines.push(line),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        stdout_lines.sort();
+        assert_eq!(stdout_lines, vec!["out-one", "out-two"]);
+        assert_eq!(stderr_lines, vec!["err-one"]);
+    }
+
+    fn assert_not_initialized<T>(result: Result<T>)
+    where
+        T: Debug,
+    {
+        let error = result.expect_err("typed request should require initialize first");
+        assert!(
+            error
+                .to_string()
+                .contains("app-server connection is not initialized")
+        );
+    }
+
+    fn assert_contains_warning(warnings: &[String], expected_fragment: &str) {
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains(expected_fragment)),
+            "expected warning containing `{expected_fragment}`, got {warnings:?}"
+        );
+    }
+
+    fn notification(value: Value) -> AppServerNotification {
+        AppServerNotification::from_value(value).expect("test value should be a notification")
+    }
+
+    fn thread_record_json(id: &str) -> Value {
+        json!({
+            "id": id,
+            "name": "Thread title",
+            "preview": "Thread preview",
+            "cwd": "/repo",
+            "source": "vscode",
+            "modelProvider": "openai",
+            "updatedAt": 1,
+            "path": null,
+            "status": {
+                "type": "idle"
+            },
+            "gitInfo": null,
+            "turns": []
+        })
+    }
+
+    struct TestConnection {
+        connection: AppServerConnection,
+        tx: Sender<AppServerLine>,
+        log_path: PathBuf,
+    }
+
+    impl TestConnection {
+        fn new(initialized: bool) -> Self {
+            let log_path = unique_log_path();
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg("while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$1\"; done")
+                .arg("fake-app-server-stdin-log")
+                .arg(&log_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("fake app-server child should spawn");
+            let stdin = child
+                .stdin
+                .take()
+                .expect("fake app-server stdin should be piped");
+            let (tx, rx) = mpsc::channel();
+
+            Self {
+                connection: AppServerConnection {
+                    child,
+                    stdin,
+                    rx,
+                    diagnostics: ConnectionDiagnostics::default(),
+                    pending_notifications: PendingNotifications::default(),
+                    next_request_id: 1,
+                    client_name: "test-client".to_string(),
+                    client_version: "test-version".to_string(),
+                    initialized,
+                    config: test_config(),
+                },
+                tx,
+                log_path,
+            }
+        }
+
+        fn send_stdout(&self, value: Value) {
+            self.tx
+                .send(AppServerLine::Stdout(value.to_string()))
+                .expect("test channel should accept stdout JSON");
+        }
+
+        fn send_stderr(&self, line: &str) {
+            self.tx
+                .send(AppServerLine::Stderr(line.to_string()))
+                .expect("test channel should accept stderr line");
+        }
+
+        fn logged_json_lines(&self, expected_count: usize) -> Vec<Value> {
+            logged_json_lines(&self.log_path, expected_count)
+        }
+    }
+
+    fn test_config() -> AppServerConnectionConfig {
+        AppServerConnectionConfig {
+            response_timeout: Duration::from_millis(10),
+            poll_interval: Duration::from_millis(1),
+            drain_timeout: Duration::from_millis(2),
+            drain_poll_interval: Duration::from_millis(1),
+        }
+    }
+
+    fn unique_log_path() -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "codex-exec-loop-app-server-connection-{}-{now}.jsonl",
+            std::process::id()
+        ))
+    }
+
+    fn logged_json_lines(path: &Path, expected_count: usize) -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let body = fs::read_to_string(path).unwrap_or_default();
+            let lines = body
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| {
+                    serde_json::from_str::<Value>(line)
+                        .unwrap_or_else(|error| panic!("logged request should be JSON: {error}"))
+                })
+                .collect::<Vec<_>>();
+
+            if lines.len() >= expected_count {
+                return lines;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected at least {expected_count} logged JSON lines in {}, got {}",
+                path.display(),
+                lines.len()
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }
