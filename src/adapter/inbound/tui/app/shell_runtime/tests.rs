@@ -24,7 +24,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningServices, PlanningTaskIntakeRequest,
+    PlanningRuntimeProjection, PlanningServices, PlanningTaskIntakeRequest,
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -330,7 +330,7 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
     );
     app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
     app.sync_draft_shell_workspace(&workspace_dir);
-    app.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(&workspace_dir);
+    app.refresh_ready_conversation_planning_runtime_projection_for_workspace(&workspace_dir);
 
     ShellRuntimeParallelFixture {
         runtime: ShellRuntime::new(app),
@@ -632,8 +632,8 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
                 completed_turn_id: "turn-1".to_string(),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-                    runtime_snapshot: crate::application::service::planning::PlanningRuntimeSnapshot::invalid(
-                        "stale snapshot".to_string(),
+                    runtime_projection: crate::application::service::planning::PlanningRuntimeProjection::invalid(
+                        "stale projection".to_string(),
                     ),
                     planning_repair_state: None,
                     runtime_notices: vec!["stale notice".to_string()],
@@ -684,7 +684,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
         completed_turn_id: "turn-1".to_string(),
         evaluation: Box::new(PostTurnEvaluationOutcome {
             provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-            runtime_snapshot: PlanningRuntimeSnapshot::invalid(notice.to_string()),
+            runtime_projection: PlanningRuntimeProjection::invalid(notice.to_string()),
             planning_repair_state: None,
             runtime_notices: vec![notice.to_string()],
             action: PostTurnContinuationAction::SkipAutoFollow {

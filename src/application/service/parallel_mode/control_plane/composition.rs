@@ -94,13 +94,13 @@ impl ParallelModeControlPlaneComposition {
         workspace_directory: &str,
         event_request: ParallelModeRuntimeEventLogRequest,
     ) -> ParallelModeControlPlaneDashboardSnapshot {
-        let runtime_snapshot = self
+        let runtime_projection = self
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(workspace_directory);
+            .load_runtime_projection_or_invalid(workspace_directory);
         self.inspect_dashboard_snapshot_from_projection(
             workspace_directory,
-            &PlanningApplicationProjection::from_runtime_snapshot(&runtime_snapshot),
+            &PlanningApplicationProjection::from_runtime_projection(&runtime_projection),
             event_request,
         )
     }

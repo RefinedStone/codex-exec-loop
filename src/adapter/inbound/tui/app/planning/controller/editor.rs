@@ -182,7 +182,7 @@ impl NativeTuiApp {
         /*
          * Promotion writes current editor buffers through the workspace service
          * and, on success, replaces accepted planning authority files. The
-         * runtime snapshot is refreshed regardless of success so footer/queue
+         * runtime projection is refreshed regardless of success so footer/queue
          * status reflects the latest validation attempt.
          */
         let Some(draft_name) = self
@@ -202,11 +202,11 @@ impl NativeTuiApp {
             .workspace()
             .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
         /*
-         * Runtime snapshot refresh happens even on blocked promotion. A validation
+         * Runtime projection refresh happens even on blocked promotion. A validation
          * failure may still update editor validation state or planning status copy, and
          * the inline footer should reflect that latest attempt immediately.
          */
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
         let status_text = match promote_result {
@@ -271,7 +271,7 @@ impl NativeTuiApp {
          * changing direction detail docs or queue-idle prompt can alter queue/runtime
          * guidance shown outside the directions overlay.
          */
-        self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
         let status_text = match promote_result {

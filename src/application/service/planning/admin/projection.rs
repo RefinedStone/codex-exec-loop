@@ -276,7 +276,7 @@ fn direction_state_label(state: DirectionState) -> &'static str {
 mod tests {
     use super::{map_application_projection, map_queue_preview};
     use crate::application::service::planning::{
-        PlanningApplicationProjection, PlanningRuntimeSnapshot,
+        PlanningApplicationProjection, PlanningRuntimeProjection,
     };
     use crate::domain::planning::{PriorityQueueProjection, PriorityQueueTask, TaskStatus};
 
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn admin_runtime_summary_uses_application_projection_queue_lanes() {
-        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
             "queue ready".to_string(),
             Some("proposal ready".to_string()),
@@ -367,7 +367,7 @@ mod tests {
         .with_test_signatures(Some(42), Some(7));
 
         let summary = map_application_projection(
-            PlanningApplicationProjection::from_runtime_snapshot(&snapshot),
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection),
         );
 
         assert!(summary.workspace_present);

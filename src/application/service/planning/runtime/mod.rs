@@ -7,11 +7,11 @@ pub(crate) mod intake;
 // manual_intake는 수동 prompt를 main-session 전에 task authority handoff 또는 즉답 prompt로 정규화한다.
 pub(crate) mod manual_intake;
 // policy는 auto-follow 가능 여부, workspace invalid 처리, queue head 필요 조건처럼 실행 결정을 순수 규칙으로 분리한다.
-// prompt assembly나 adapter I/O 없이 snapshot만 보고 다음 행동을 판단하게 만든다.
+// prompt assembly나 adapter I/O 없이 projection만 보고 다음 행동을 판단하게 만든다.
 pub(crate) mod policy;
-// prompt는 workspace 파일과 task authority를 읽어 runtime snapshot과 worker prompt context로 바꾸는 읽기 모델 계층이다.
+// prompt는 workspace 파일과 task authority를 읽어 runtime projection과 worker prompt context로 바꾸는 읽기 모델 계층이다.
 // file/DB authority를 한 번의 runtime record로 결합해 worker orchestration이 저장소 세부를 알지 않게 한다.
 pub(crate) mod prompt;
-// validation은 runtime/intake/repair가 공유하는 planning 상태 검증 규칙이다. invalid snapshot과 task 입력 오류의 기준점이다.
+// validation은 runtime/intake/repair가 공유하는 planning 상태 검증 규칙이다. invalid projection과 task 입력 오류의 기준점이다.
 // queue policy가 신뢰할 수 있는 precondition을 만들기 위해 domain validation과 workspace-specific 검사를 연결한다.
 pub(crate) mod validation;

@@ -22,7 +22,7 @@ use crate::application::service::planning::repair::reconciliation::{
 use crate::application::service::planning::runtime::facade::{
     PlanningRuntimeFacadeService, PlanningTaskHandoff,
 };
-use crate::application::service::planning::runtime::prompt::PlanningRuntimeSnapshot;
+use crate::application::service::planning::runtime::prompt::PlanningRuntimeProjection;
 use crate::application::service::planning::shared::prompt_sections::PlanningWorkerAuthorityPromptContext;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
@@ -87,9 +87,9 @@ pub struct PlanningLedgerRepairRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningWorkerRunOutcome {
-    // outcome은 worker response보다 일부러 넓다. caller는 refreshed runtime snapshot, reconciliation notice,
+    // outcome은 worker response보다 일부러 넓다. caller는 refreshed runtime projection, reconciliation notice,
     // repair packet, accepted task authority가 실제로 바뀌었는지까지 함께 알아야 한다.
-    pub runtime_snapshot: PlanningRuntimeSnapshot,
+    pub runtime_projection: PlanningRuntimeProjection,
     pub notices: Vec<String>,
     pub repair_request: Option<PlanningRepairRequest>,
     pub worker_summary: Option<String>,
@@ -194,12 +194,12 @@ impl PlanningWorkerOrchestrationService {
         )
     }
 
-    pub fn load_runtime_snapshot_or_invalid(
+    pub fn load_runtime_projection_or_invalid(
         &self,
         workspace_directory: &str,
-    ) -> PlanningRuntimeSnapshot {
+    ) -> PlanningRuntimeProjection {
         self.runtime_facade
-            .load_runtime_snapshot_or_invalid(workspace_directory)
+            .load_runtime_projection_or_invalid(workspace_directory)
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -513,13 +513,13 @@ impl PlanningWorkerOrchestrationService {
         };
         let reconciliation_result =
             merge_reconciliation_results(authority_result, reconciliation_result);
-        let runtime_snapshot =
+        let runtime_projection =
             if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
-                // reconciliation block은 reload로 가리지 않고 즉시 invalid runtime snapshot으로 표면화한다.
-                PlanningRuntimeSnapshot::invalid(block_reason)
+                // reconciliation block은 reload로 가리지 않고 즉시 invalid runtime projection으로 표면화한다.
+                PlanningRuntimeProjection::invalid(block_reason)
             } else {
                 self.runtime_facade
-                    .load_runtime_snapshot_or_invalid(workspace_directory)
+                    .load_runtime_projection_or_invalid(workspace_directory)
             };
         let worker_summary = worker_response
             .final_agent_message
@@ -546,7 +546,7 @@ impl PlanningWorkerOrchestrationService {
                 operation,
                 "completed",
                 Some("return_outcome"),
-                Some(&runtime_snapshot),
+                Some(&runtime_projection),
                 [
                     (
                         "changed_planning_file_count",
@@ -567,7 +567,7 @@ impl PlanningWorkerOrchestrationService {
             )
         });
         Ok(PlanningWorkerRunOutcome {
-            runtime_snapshot,
+            runtime_projection,
             notices,
             repair_request: reconciliation_result.repair_request,
             worker_summary,

@@ -205,7 +205,8 @@ impl PlanningAuthorityRuntimeEventRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 /*
- * runtime projection snapshot은 parallel mode 운영 상태를 한 번에 읽는 read model입니다.
+ * 이 Snapshot은 PlanningRuntimeProjection과 다른 개념입니다. parallel mode가 저장한 여러 runtime projection
+ * row를 한 번의 일관된 authority capture로 묶어 읽기 위한 DB-facing snapshot입니다.
  * authority adapter는 slot lease, session detail, distributor queue를 각각 저장하지만,
  * pool reconcile과 admin file sync는 current row와 최근 runtime event를 같이 봐야 "현재 실행 중인 슬롯",
  * "깨진 lease", "agent session 상태", "통합 대기 큐", "최근 전이"를 일관된 한 화면으로 판단할 수 있습니다.

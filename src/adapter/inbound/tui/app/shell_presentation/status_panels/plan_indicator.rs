@@ -2,12 +2,12 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::application::service::planning::{
-    PlanningApplicationProjection, PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
 };
 
 use super::super::{AkraTheme, ConversationState, NativeTuiApp};
 
-// Compact view model for status/footer surfaces that need planning state but should not know the runtime snapshot shape.
+// Compact view model for status/footer surfaces that need planning state but should not know the runtime projection shape.
 #[derive(Clone, Copy)]
 pub(in super::super) struct PlanModeIndicatorView {
     // Primary label tracks workspace lifecycle, not queue activity, so the footer has one stable visual anchor.
@@ -18,26 +18,29 @@ pub(in super::super) struct PlanModeIndicatorView {
     style: Style,
 }
 
-// Select the freshest planning runtime snapshot available for the current shell phase and project it into footer copy.
+// Select the freshest planning runtime projection available for the current shell phase and project it into footer copy.
 pub(super) fn current_plan_mode_indicator(app: &NativeTuiApp) -> PlanModeIndicatorView {
     match &app.conversation_state {
-        // Ready conversations own the runtime snapshot updated by turn execution, keeping footer copy aligned with auto-follow decisions.
+        // Ready conversations own the runtime projection updated by turn execution, keeping footer copy aligned with auto-follow decisions.
         ConversationState::Ready(conversation) => {
-            plan_mode_indicator_from_snapshot(&conversation.planning_runtime_snapshot)
+            plan_mode_indicator_from_runtime_projection(&conversation.planning_runtime_projection)
         }
         // Startup/loading surfaces lack a conversation cache, so reload from the current workspace to avoid a blank indicator.
         ConversationState::Loading | ConversationState::Failed(_) => {
             let workspace_directory = app.current_workspace_directory();
-            let snapshot = app.load_planning_runtime_snapshot(&workspace_directory);
-            plan_mode_indicator_from_snapshot(&snapshot)
+            let runtime_projection = app.load_planning_runtime_projection(&workspace_directory);
+            plan_mode_indicator_from_runtime_projection(&runtime_projection)
         }
     }
 }
 
 // Derive the execution-level substate that sits beside the broader workspace lifecycle label.
-pub(super) fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
-    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
-    plan_runtime_substate_label_from_projection(&projection)
+pub(super) fn plan_runtime_substate_label(
+    runtime_projection: &PlanningRuntimeProjection,
+) -> &'static str {
+    let application_projection =
+        PlanningApplicationProjection::from_runtime_projection(runtime_projection);
+    plan_runtime_substate_label_from_projection(&application_projection)
 }
 
 fn plan_runtime_substate_label_from_projection(
@@ -70,9 +73,12 @@ pub(super) fn plan_mode_prefixed_spans(
 }
 
 // Central mapping from application planning runtime to TUI vocabulary, shared by footer and tail surfaces.
-fn plan_mode_indicator_from_snapshot(snapshot: &PlanningRuntimeSnapshot) -> PlanModeIndicatorView {
-    let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
-    plan_mode_indicator_from_projection(&projection)
+fn plan_mode_indicator_from_runtime_projection(
+    runtime_projection: &PlanningRuntimeProjection,
+) -> PlanModeIndicatorView {
+    let application_projection =
+        PlanningApplicationProjection::from_runtime_projection(runtime_projection);
+    plan_mode_indicator_from_projection(&application_projection)
 }
 
 // Central mapping from the application planning projection to TUI vocabulary, shared by footer and tail surfaces.
@@ -104,9 +110,9 @@ mod tests {
     use crate::domain::planning::{PriorityQueueTask, TaskStatus};
 
     #[test]
-    fn plan_indicator_projects_invalid_runtime_snapshot_through_application_projection() {
-        let snapshot = PlanningRuntimeSnapshot::invalid("planning validation failed");
-        let indicator = plan_mode_indicator_from_snapshot(&snapshot);
+    fn plan_indicator_projects_invalid_runtime_projection_through_application_projection() {
+        let runtime_projection = PlanningRuntimeProjection::invalid("planning validation failed");
+        let indicator = plan_mode_indicator_from_runtime_projection(&runtime_projection);
 
         assert_eq!(indicator.primary_label, "Plan invalid");
         assert_eq!(indicator.detail_label, Some("invalid"));
@@ -114,13 +120,14 @@ mod tests {
 
     #[test]
     fn plan_indicator_projection_keeps_pause_ahead_of_ready_queue() {
-        let snapshot = PlanningRuntimeSnapshot::ready(
+        let runtime_projection = PlanningRuntimeProjection::ready(
             "Planning Context".to_string(),
             "queue head ready".to_string(),
             Some(queue_task("task-1", "Ready task")),
         )
         .with_auto_follow_pause_reason("queue head repeated");
-        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+        let projection =
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
 
         assert_eq!(
             plan_runtime_substate_label_from_projection(&projection),
@@ -133,18 +140,20 @@ mod tests {
 
     #[test]
     fn plan_indicator_projection_distinguishes_ready_and_idle_queue_state() {
-        let ready =
-            PlanningApplicationProjection::from_runtime_snapshot(&PlanningRuntimeSnapshot::ready(
+        let ready = PlanningApplicationProjection::from_runtime_projection(
+            &PlanningRuntimeProjection::ready(
                 "Planning Context".to_string(),
                 "queue head ready".to_string(),
                 Some(queue_task("task-1", "Ready task")),
-            ));
-        let idle =
-            PlanningApplicationProjection::from_runtime_snapshot(&PlanningRuntimeSnapshot::ready(
+            ),
+        );
+        let idle = PlanningApplicationProjection::from_runtime_projection(
+            &PlanningRuntimeProjection::ready(
                 "Planning Context".to_string(),
                 "no executable tasks".to_string(),
                 None,
-            ));
+            ),
+        );
 
         assert_eq!(plan_runtime_substate_label_from_projection(&ready), "ready");
         assert_eq!(plan_runtime_substate_label_from_projection(&idle), "idle");

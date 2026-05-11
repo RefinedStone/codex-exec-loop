@@ -2,7 +2,7 @@ use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationState, PlanningParallelProjection,
     SessionCatalogReadySnapshot, SessionCatalogState, StartupReadySnapshot, StartupState,
 };
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,11 +82,11 @@ impl AppState {
 
     pub fn apply_planning_runtime_projection(
         &mut self,
-        snapshot: Box<PlanningRuntimeSnapshot>,
+        projection: Box<PlanningRuntimeProjection>,
     ) -> bool {
         let changed = self
             .planning_parallel
-            .apply_planning_runtime_snapshot(snapshot);
+            .apply_planning_runtime_projection(projection);
         if changed {
             self.advance_revision();
         }

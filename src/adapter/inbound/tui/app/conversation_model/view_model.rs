@@ -20,7 +20,7 @@ use crate::application::service::planning::{
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeUseCases,
 };
 use crate::application::service::planning::{
-    PlanningRepairRequest, PlanningRuntimeSnapshot, PlanningTaskHandoff,
+    PlanningRepairRequest, PlanningRuntimeProjection, PlanningTaskHandoff,
 };
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
@@ -114,7 +114,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
     // Cached service snapshot used by post-turn auto-follow decisions.
-    pub(crate) planning_runtime_snapshot: PlanningRuntimeSnapshot,
+    pub(crate) planning_runtime_projection: PlanningRuntimeProjection,
     pub(crate) turn_activity: TurnActivityState,
     // Approval review is tied to the currently streaming turn and cleared on a new turn.
     pub(crate) approval_review: Option<ConversationApprovalReview>,
@@ -156,7 +156,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(),
-            planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
+            planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
@@ -211,7 +211,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(),
-            planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
+            planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
@@ -227,12 +227,12 @@ impl ConversationViewModel {
     pub(crate) fn turn_control_truth(&self) -> ConversationRuntimeControlTruth {
         self.turn_control_truth
     }
-    pub(crate) fn replace_planning_runtime_snapshot(
+    pub(crate) fn replace_planning_runtime_projection(
         &mut self,
-        planning_runtime_snapshot: PlanningRuntimeSnapshot,
+        planning_runtime_projection: PlanningRuntimeProjection,
     ) {
         // The app polls planning state outside the conversation stream; this is the latest copy.
-        self.planning_runtime_snapshot = planning_runtime_snapshot;
+        self.planning_runtime_projection = planning_runtime_projection;
     }
     pub(crate) fn sync_inline_shell_command_palette(&mut self) {
         let preferred_selection = self.inline_shell_command_palette_state.selected_command();
@@ -546,13 +546,13 @@ impl ConversationViewModel {
         &self,
         planning_runtime: &PlanningRuntimeUseCases,
     ) -> AutoFollowDecision {
-        self.decide_auto_follow_with_snapshot(planning_runtime, &self.planning_runtime_snapshot)
+        self.decide_auto_follow_with_snapshot(planning_runtime, &self.planning_runtime_projection)
     }
     #[cfg(test)]
     pub(crate) fn decide_auto_follow_with_snapshot(
         &self,
         planning_runtime: &PlanningRuntimeUseCases,
-        planning_runtime_snapshot: &PlanningRuntimeSnapshot,
+        planning_runtime_projection: &PlanningRuntimeProjection,
     ) -> AutoFollowDecision {
         // Local conversation guards run before asking the planning service to compose a prompt.
         if self.auto_follow_state.post_turn_continuation_paused() {
@@ -583,7 +583,7 @@ impl ConversationViewModel {
         match planning_runtime.decide_auto_follow(PlanningRuntimeAutoFollowRequest {
             stop_keyword: self.auto_follow_state.stop_keyword_value(),
             last_message: last_message.trim(),
-            snapshot: planning_runtime_snapshot,
+            projection: planning_runtime_projection,
         }) {
             PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
                 AutoFollowDecision::QueuePrompt(prompt)

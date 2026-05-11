@@ -4,9 +4,9 @@ use std::sync::Barrier;
 
 // 디스패치 계획 테스트는 실제 planning worker 전체를 띄우지 않고도 큐 우선순위와
 // `next_task` 파생값이 같은 입력에서 만들어졌는지만 검증하면 충분하다.
-// 이 helper는 활성 task 목록을 그대로 rank 순서의 ready snapshot으로 접어,
+// 이 helper는 활성 task 목록을 그대로 rank 순서의 ready projection으로 접어,
 // pool 서비스가 planning snapshot을 소비하는 경계만 작게 고정한다.
-fn planning_snapshot_with_active_tasks(task_ids: &[&str]) -> PlanningRuntimeSnapshot {
+fn planning_projection_with_active_tasks(task_ids: &[&str]) -> PlanningRuntimeProjection {
     let active_tasks = task_ids
         .iter()
         .enumerate()
@@ -18,7 +18,7 @@ fn planning_snapshot_with_active_tasks(task_ids: &[&str]) -> PlanningRuntimeSnap
         proposed_tasks: Vec::new(),
         skipped_tasks: Vec::new(),
     };
-    PlanningRuntimeSnapshot::ready_with_queue_projection(
+    PlanningRuntimeProjection::ready_with_queue_projection(
         "prompt".to_string(),
         queue_projection.queue_summary(),
         None,
@@ -62,10 +62,10 @@ fn unavailable_pool_board_does_not_report_exhausted() {
 fn build_dispatch_plan_fills_idle_slots_with_distinct_active_tasks() {
     let repo = TempGitRepo::new("dispatch-fill");
     let service = test_parallel_mode_service();
-    let planning_snapshot =
-        planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
+    let planning_projection =
+        planning_projection_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
     let plan = service
-        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_projection, usize::MAX)
         .expect("dispatch plan should build");
 
     assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE);
@@ -100,11 +100,11 @@ fn build_dispatch_plan_uses_remaining_idle_capacity_when_other_worktrees_are_blo
         "blocked slot three\n",
         "blocked slot three work",
     );
-    let planning_snapshot =
-        planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
+    let planning_projection =
+        planning_projection_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
 
     let plan = service
-        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_projection, usize::MAX)
         .expect("dispatch plan should build with blocked slots");
 
     assert_eq!(plan.idle_slot_count, 1);
@@ -124,8 +124,8 @@ fn build_dispatch_plan_uses_remaining_idle_capacity_when_other_worktrees_are_blo
 fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
     let repo = TempGitRepo::new("dispatch-excludes");
     let service = test_parallel_mode_service();
-    let planning_snapshot =
-        planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
+    let planning_projection =
+        planning_projection_with_active_tasks(&["task-1", "task-2", "task-3", "task-4"]);
     let _leased = service
         .acquire_slot_lease(
             &repo.workspace_dir(),
@@ -166,7 +166,7 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
     )
     .expect("queued distributor record should be stored");
     let plan = service
-        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_projection, usize::MAX)
         .expect("dispatch plan should build");
 
     assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE - 1);
@@ -187,7 +187,8 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
 fn build_dispatch_plan_excludes_failed_start_tasks_until_task_changes() {
     let repo = TempGitRepo::new("dispatch-excludes-failed-start");
     let service = test_parallel_mode_service();
-    let planning_snapshot = planning_snapshot_with_active_tasks(&["task-1", "task-2", "task-3"]);
+    let planning_projection =
+        planning_projection_with_active_tasks(&["task-1", "task-2", "task-3"]);
     let lease = service
         .acquire_slot_lease(
             &repo.workspace_dir(),
@@ -216,7 +217,7 @@ fn build_dispatch_plan_excludes_failed_start_tasks_until_task_changes() {
     assert_eq!(runtime_projection.task_dispatch_blocks.len(), 1);
 
     let plan = service
-        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_projection, usize::MAX)
         .expect("dispatch plan should build");
 
     assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE);
@@ -256,7 +257,7 @@ fn build_dispatch_plan_allows_failed_start_task_after_task_changes() {
         proposed_tasks: Vec::new(),
         skipped_tasks: Vec::new(),
     };
-    let planning_snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+    let planning_projection = PlanningRuntimeProjection::ready_with_queue_projection(
         "prompt".to_string(),
         queue_projection.queue_summary(),
         None,
@@ -265,7 +266,7 @@ fn build_dispatch_plan_allows_failed_start_task_after_task_changes() {
     );
 
     let plan = service
-        .build_dispatch_plan(&repo.workspace_dir(), &planning_snapshot, usize::MAX)
+        .build_dispatch_plan(&repo.workspace_dir(), &planning_projection, usize::MAX)
         .expect("dispatch plan should build");
 
     assert_eq!(plan.idle_slot_count, DEFAULT_POOL_SIZE);
@@ -441,7 +442,7 @@ fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
         linked_worktree
             .to_str()
             .expect("valid linked worktree path"),
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
             .with_workspace_present(true),
     );
     let capability = snapshot
@@ -464,7 +465,7 @@ fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() 
     let service = test_parallel_mode_service();
     let snapshot = service.inspect_readiness(
         &repo.workspace_dir(),
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
             .with_workspace_present(true),
     );
     let capability = snapshot
@@ -490,7 +491,7 @@ fn inspect_readiness_blocks_missing_standard_branch_when_push_remote_is_absent()
     let service = test_parallel_mode_service();
     let snapshot = service.inspect_readiness(
         &repo.workspace_dir(),
-        &PlanningRuntimeSnapshot::ready("prompt".into(), "queue".into(), None)
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
             .with_workspace_present(true),
     );
     let capability = snapshot

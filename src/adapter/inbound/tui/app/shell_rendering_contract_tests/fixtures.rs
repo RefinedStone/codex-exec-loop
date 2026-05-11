@@ -10,7 +10,7 @@ use crate::application::port::outbound::startup_probe_port::{
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::{
-    PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeSnapshot,
+    PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeProjection,
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
@@ -143,7 +143,7 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
     };
     conversation.cwd = "/tmp/root".to_string();
     conversation.draft_workspace_directory = "/tmp/root".to_string();
-    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::uninitialized());
+    conversation.replace_planning_runtime_projection(PlanningRuntimeProjection::uninitialized());
     app
 }
 

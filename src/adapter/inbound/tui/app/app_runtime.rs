@@ -252,12 +252,12 @@ impl NativeTuiApp {
             workspace_directory.clone(),
             turn_control_truth,
         );
-        let initial_planning_runtime_snapshot = application
+        let initial_planning_runtime_projection = application
             .planning()
             .runtime()
-            .load_runtime_snapshot_or_invalid(&workspace_directory);
+            .load_runtime_projection_or_invalid(&workspace_directory);
         initial_conversation
-            .replace_planning_runtime_snapshot(initial_planning_runtime_snapshot.clone());
+            .replace_planning_runtime_projection(initial_planning_runtime_projection.clone());
         let mut app = Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
@@ -291,7 +291,7 @@ impl NativeTuiApp {
             tx: runtime_channels.tx,
             rx: runtime_channels.rx,
         };
-        app.sync_core_planning_runtime_projection(initial_planning_runtime_snapshot);
+        app.sync_core_planning_runtime_projection(initial_planning_runtime_projection);
         app
     }
 
@@ -430,7 +430,7 @@ impl NativeTuiApp {
             result,
             draft_workspace_directory,
         });
-        self.refresh_ready_conversation_planning_runtime_snapshot();
+        self.refresh_ready_conversation_planning_runtime_projection();
         if loaded_successfully {
             self.surface_resumed_session_planning_context();
         }
@@ -521,18 +521,18 @@ impl NativeTuiApp {
             return false;
         };
 
-        let previous_planning_runtime_snapshot = conversation.planning_runtime_snapshot.clone();
+        let previous_planning_runtime_projection = conversation.planning_runtime_projection.clone();
         let reduction = reduce_conversation_runtime(conversation, event);
-        let next_planning_runtime_snapshot = (previous_planning_runtime_snapshot
-            != reduction.state.planning_runtime_snapshot)
-            .then(|| reduction.state.planning_runtime_snapshot.clone());
+        let next_planning_runtime_projection = (previous_planning_runtime_projection
+            != reduction.state.planning_runtime_projection)
+            .then(|| reduction.state.planning_runtime_projection.clone());
         let mut effects = reduction.effects;
         let started_stream = effects
             .iter()
             .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
-        if let Some(snapshot) = next_planning_runtime_snapshot {
-            self.sync_core_planning_runtime_projection(snapshot);
+        if let Some(runtime_projection) = next_planning_runtime_projection {
+            self.sync_core_planning_runtime_projection(runtime_projection);
         }
         self.route_post_turn_continuation_effects(post_turn_context, &mut effects);
         for effect in effects {
@@ -600,7 +600,7 @@ impl NativeTuiApp {
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
                     workspace_directory: workspace_directory.clone(),
                 });
-                self.refresh_ready_conversation_planning_runtime_snapshot();
+                self.refresh_ready_conversation_planning_runtime_projection();
                 self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
                     max_auto_turns: self.current_max_auto_turns_label(),
                 });

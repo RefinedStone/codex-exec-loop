@@ -15,7 +15,7 @@ use super::super::authoring::bootstrap::PlanningBootstrapService;
 // directions service는 방향 문서와 queue-idle prompt editor session을 다룬다. workspace use case가
 // draft/summary 흐름을 열어 주기 때문에 이 dependency bundle에 포함된다.
 use super::super::authoring::directions::PlanningDirectionsService;
-// prompt service는 workspace 파일과 task repository를 읽어 runtime snapshot/prompt context를 만들며, workspace summary와
+// prompt service는 workspace 파일과 task repository를 읽어 runtime projection/prompt context를 만들며, workspace summary와
 // runtime preview 사이를 이어 주는 읽기 서비스이다.
 use super::super::runtime::prompt::PlanningPromptService;
 // validation service는 workspace 파일 내용과 planning 상태 전환을 같은 규칙으로 검증하게 하는 공통 부품이다.

@@ -1,5 +1,5 @@
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::planning::{
     PriorityQueueSkippedTask, PriorityQueueTask, QueueIdlePolicy, TaskStatus,
@@ -7,7 +7,7 @@ use crate::domain::planning::{
 
 /*
  * PlanningApplicationProjection은 inbound surface가 planning runtime facts를 읽기 위한
- * 공통 read model이다. 지금은 PlanningRuntimeSnapshot에서 시작하지만, 목표는 admin/TUI/CLI/Telegram이
+ * 공통 read model이다. 지금은 PlanningRuntimeProjection에서 시작하지만, 목표는 admin/TUI/CLI/Telegram이
  * queue/proposal/blocked 상태를 각자 다시 해석하지 않고 이 타입을 통해 같은 사실을 보는 것이다.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,13 +55,13 @@ pub struct PlanningApplicationSkippedTask {
 }
 
 impl PlanningApplicationProjection {
-    pub fn from_runtime_snapshot(snapshot: &PlanningRuntimeSnapshot) -> Self {
+    pub fn from_runtime_projection(runtime_projection: &PlanningRuntimeProjection) -> Self {
         /*
          * Queue projection이 있으면 그 structured lane을 source로 삼는다. projection이 없는
-         * old/invalid snapshot은 snapshot accessor만 사용해 status와 optional queue head를 보존한다.
+         * old/invalid projection은 accessor만 사용해 status와 optional queue head를 보존한다.
          */
-        let queue_projection = snapshot.queue_projection();
-        let queue_head = snapshot
+        let queue_projection = runtime_projection.queue_projection();
+        let queue_head = runtime_projection
             .queue_head()
             .map(PlanningApplicationQueueTask::from);
         let visible_tasks = queue_projection
@@ -93,17 +93,19 @@ impl PlanningApplicationProjection {
             .unwrap_or_default();
 
         Self {
-            workspace_present: snapshot.workspace_present(),
-            workspace_status: snapshot.workspace_status(),
-            task_authority_signature: snapshot.task_authority_signature(),
-            queue_head_task_signature: snapshot.queue_head_task_signature(),
-            auto_follow_paused: snapshot.auto_follow_pause_reason().is_some(),
-            status_label: snapshot.preview_status_label().to_string(),
-            status_detail: snapshot.preview_detail().map(str::to_string),
-            queue_summary: snapshot.queue_summary().map(str::to_string),
-            proposal_summary: snapshot.proposal_summary().map(str::to_string),
-            queue_idle_policy: snapshot.queue_idle_policy(),
-            queue_idle_prompt_path: snapshot.queue_idle_prompt_path().map(str::to_string),
+            workspace_present: runtime_projection.workspace_present(),
+            workspace_status: runtime_projection.workspace_status(),
+            task_authority_signature: runtime_projection.task_authority_signature(),
+            queue_head_task_signature: runtime_projection.queue_head_task_signature(),
+            auto_follow_paused: runtime_projection.auto_follow_pause_reason().is_some(),
+            status_label: runtime_projection.preview_status_label().to_string(),
+            status_detail: runtime_projection.preview_detail().map(str::to_string),
+            queue_summary: runtime_projection.queue_summary().map(str::to_string),
+            proposal_summary: runtime_projection.proposal_summary().map(str::to_string),
+            queue_idle_policy: runtime_projection.queue_idle_policy(),
+            queue_idle_prompt_path: runtime_projection
+                .queue_idle_prompt_path()
+                .map(str::to_string),
             has_structured_queue_projection: queue_projection.is_some(),
             queue_head,
             visible_tasks,
@@ -146,7 +148,7 @@ impl From<&PriorityQueueSkippedTask> for PlanningApplicationSkippedTask {
 #[cfg(test)]
 mod tests {
     use super::PlanningApplicationProjection;
-    use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::domain::planning::{
         PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdlePolicy,
         TaskStatus,
@@ -155,7 +157,7 @@ mod tests {
     #[test]
     fn projection_preserves_runtime_status_and_structured_queue_lanes() {
         let head = queue_task(1, "task-1", "Current task", TaskStatus::Ready);
-        let snapshot = PlanningRuntimeSnapshot::ready_with_queue_projection(
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
             "Planning Context".to_string(),
             "queue head: rank 1 / task-1 / Current task / priority 90".to_string(),
             Some("2 promotable follow-up proposals available".to_string()),
@@ -185,7 +187,8 @@ mod tests {
         )
         .with_test_signatures(Some(42), Some(7));
 
-        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+        let projection =
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
 
         assert!(projection.workspace_present);
         assert_eq!(projection.task_authority_signature, Some(42));
@@ -221,11 +224,12 @@ mod tests {
     }
 
     #[test]
-    fn projection_preserves_invalid_snapshot_without_queue_lanes() {
-        let snapshot = PlanningRuntimeSnapshot::invalid(
+    fn projection_preserves_invalid_projection_without_queue_lanes() {
+        let runtime_projection = PlanningRuntimeProjection::invalid(
             "planning validation failed: task authority is unavailable".to_string(),
         );
-        let projection = PlanningApplicationProjection::from_runtime_snapshot(&snapshot);
+        let projection =
+            PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
 
         assert!(projection.workspace_present);
         assert_eq!(projection.status_label, "blocked");

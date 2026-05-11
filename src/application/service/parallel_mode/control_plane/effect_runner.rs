@@ -217,12 +217,12 @@ where
         let event_sink = self.event_sink.clone();
 
         thread::spawn(move || {
-            let planning_snapshot = planning
+            let planning_projection = planning
                 .runtime
-                .load_runtime_snapshot_or_invalid(&workspace_directory);
-            let has_actionable_queue_head = planning_snapshot.has_actionable_queue_head();
+                .load_runtime_projection_or_invalid(&workspace_directory);
+            let has_actionable_queue_head = planning_projection.has_actionable_queue_head();
             let readiness_snapshot =
-                parallel_mode_service.inspect_readiness(&workspace_directory, &planning_snapshot);
+                parallel_mode_service.inspect_readiness(&workspace_directory, &planning_projection);
             let entry_decision = ParallelModeOrchestratorStateMachine::decide_parallel_entry(
                 mode_was_enabled,
                 readiness_snapshot.allows_parallel_mode(),
@@ -463,13 +463,13 @@ where
         ParallelModeReadinessSnapshot,
         ParallelModeSupervisorSnapshot,
     ) {
-        let planning_snapshot = self
+        let planning_projection = self
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(workspace_directory);
+            .load_runtime_projection_or_invalid(workspace_directory);
         let readiness_snapshot = self
             .parallel_mode_service
-            .inspect_readiness(workspace_directory, &planning_snapshot);
+            .inspect_readiness(workspace_directory, &planning_projection);
         let supervisor_snapshot = if reconcile_pool {
             self.parallel_mode_service.reconcile_supervisor_snapshot(
                 workspace_directory,
@@ -496,7 +496,7 @@ where
         let has_actionable_queue_head = self
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(&workspace_directory)
+            .load_runtime_projection_or_invalid(&workspace_directory)
             .has_actionable_queue_head();
         ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
             workspace_directory,
@@ -520,15 +520,15 @@ where
         workspace_directory: &str,
         epoch_id: u64,
     ) -> Result<usize, String> {
-        let planning_snapshot = self
+        let planning_projection = self
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(workspace_directory);
+            .load_runtime_projection_or_invalid(workspace_directory);
         self.parallel_mode_service
             .enqueue_dispatch_commands_for_event(
                 workspace_directory,
                 ParallelModeRuntimeEvent::SlotCapacityAvailable,
-                &planning_snapshot,
+                &planning_projection,
                 Some(epoch_id),
             )
     }
@@ -539,15 +539,15 @@ where
         trigger: crate::domain::parallel_mode::ParallelModeAutomationTrigger,
         epoch_id: u64,
     ) -> Result<usize, String> {
-        let planning_snapshot = self
+        let planning_projection = self
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(workspace_directory);
+            .load_runtime_projection_or_invalid(workspace_directory);
         self.parallel_mode_service
             .enqueue_dispatch_commands_for_trigger(
                 workspace_directory,
                 trigger,
-                &planning_snapshot,
+                &planning_projection,
                 Some(epoch_id),
             )
     }
@@ -564,7 +564,7 @@ fn background_event_from_parallel_loop_event(
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => {
             let has_actionable_queue_head = planning
                 .runtime
-                .load_runtime_snapshot_or_invalid(&event.workspace_directory)
+                .load_runtime_projection_or_invalid(&event.workspace_directory)
                 .has_actionable_queue_head();
             ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
                 event,

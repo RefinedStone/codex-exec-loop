@@ -131,11 +131,11 @@ impl PlanningControlSurface for PlanningControlFacadeService {
         let runtime = self
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(self.workspace_dir.as_str());
+            .load_runtime_projection_or_invalid(self.workspace_dir.as_str());
         Ok(map_control_status_snapshot(
             self.workspace_dir.clone(),
             doctor,
-            PlanningApplicationProjection::from_runtime_snapshot(&runtime),
+            PlanningApplicationProjection::from_runtime_projection(&runtime),
         ))
     }
 

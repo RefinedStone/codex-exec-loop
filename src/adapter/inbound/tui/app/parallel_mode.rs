@@ -116,7 +116,7 @@ impl NativeTuiApp {
             ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
                 workspace_directory,
             } => {
-                self.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(
+                self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                     &workspace_directory,
                 );
             }

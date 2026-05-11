@@ -43,7 +43,7 @@ pub(super) struct PlanningFeaturePorts {
     workspace: Arc<dyn PlanningWorkspacePort>,
     // task repository는 mutable task authority와 commit conflict handling을 담당한다.
     task_repository: Arc<dyn PlanningTaskRepositoryPort>,
-    // authority port는 accepted runtime snapshot, queue projection, distributor state를 뒷받침한다.
+    // authority port는 accepted runtime projection, queue projection, distributor state를 뒷받침한다.
     authority: Arc<dyn PlanningAuthorityPort>,
     // worker port는 hidden planning-worker execution을 outbound adapter로 위임하는 실행 경계다.
     worker: Arc<dyn PlanningWorkerPort>,

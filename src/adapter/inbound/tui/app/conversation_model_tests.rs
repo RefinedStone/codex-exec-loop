@@ -5,14 +5,14 @@ use super::{
 };
 use crate::adapter::inbound::tui::app::INFINITE_AUTO_FOLLOW_MAX_TURNS;
 use crate::adapter::inbound::tui::app::test_helpers::{
-    sample_planning_runtime_snapshot, sample_proposal_only_planning_runtime_snapshot,
+    sample_planning_runtime_projection, sample_proposal_only_planning_runtime_projection,
     test_planning_services,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
     PlanningStagedFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningRuntimeUseCases};
+use crate::application::service::planning::{PlanningRuntimeProjection, PlanningRuntimeUseCases};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationRuntimeControlTruth,
     ConversationSnapshot,
@@ -46,7 +46,7 @@ fn ready_conversation() -> ConversationViewModel {
         planning_repair_state: None,
         input_state: ConversationInputState::ReadyToContinue,
         auto_follow_state: AutoFollowState::new(),
-        planning_runtime_snapshot: PlanningRuntimeSnapshot::uninitialized(),
+        planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
         turn_activity: TurnActivityState::default(),
         approval_review: None,
         turn_control_truth: ConversationRuntimeControlTruth::default(),
@@ -165,7 +165,7 @@ fn planning_runtime() -> PlanningRuntimeUseCases {
 #[test]
 fn queue_handoff_prompt_renders_for_auto_follow() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: task-1",
     ));
@@ -378,7 +378,7 @@ fn auto_follow_stops_without_file_changes_when_rule_is_enabled() {
 #[test]
 fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: task-1",
     ));
@@ -411,11 +411,13 @@ fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
 #[test]
 fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(sample_proposal_only_planning_runtime_snapshot(
-        "Planning Context\nRuntime Follow-up Proposal Rules",
-        "queue idle: no executable planning task",
-        "2 promotable follow-up proposals available: Plan A | +1 more",
-    ));
+    conversation.replace_planning_runtime_projection(
+        sample_proposal_only_planning_runtime_projection(
+            "Planning Context\nRuntime Follow-up Proposal Rules",
+            "queue idle: no executable planning task",
+            "2 promotable follow-up proposals available: Plan A | +1 more",
+        ),
+    );
     conversation.messages.push(ConversationMessage::new(
         ConversationMessageKind::Agent,
         "latest answer",
@@ -430,9 +432,9 @@ fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
 }
 
 #[test]
-fn auto_follow_skips_when_planning_runtime_snapshot_is_invalid() {
+fn auto_follow_skips_when_planning_runtime_projection_is_invalid() {
     let mut conversation = ready_conversation();
-    conversation.replace_planning_runtime_snapshot(PlanningRuntimeSnapshot::invalid(
+    conversation.replace_planning_runtime_projection(PlanningRuntimeProjection::invalid(
         "planning validation failed: task authority is invalid",
     ));
     conversation.messages.push(ConversationMessage::new(

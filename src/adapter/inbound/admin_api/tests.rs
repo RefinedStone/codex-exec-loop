@@ -436,7 +436,7 @@ fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
         "dashboard should pass planning projection facts into parallel control-plane readiness"
     );
     assert!(
-        !AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_snapshot"),
+        !AKRA_DASHBOARD_RS.contains("PlanningApplicationProjection::from_runtime_projection"),
         "dashboard adapter should not rebuild planning projection from runtime internals"
     );
     assert!(

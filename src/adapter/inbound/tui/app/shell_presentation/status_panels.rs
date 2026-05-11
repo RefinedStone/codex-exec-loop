@@ -2,7 +2,7 @@
 // needed by shell rendering, overlays, and contract tests.
 use ratatui::text::Line;
 
-use crate::application::service::planning::PlanningRuntimeSnapshot;
+use crate::application::service::planning::PlanningRuntimeProjection;
 
 use super::ConversationViewModel;
 use super::NativeTuiApp;
@@ -42,6 +42,8 @@ pub(super) fn current_live_agent_lines(
 }
 
 // Re-export the planning substate label so workspace popups and footer indicators share the same wording.
-pub(super) fn plan_runtime_substate_label(snapshot: &PlanningRuntimeSnapshot) -> &'static str {
-    plan_indicator::plan_runtime_substate_label(snapshot)
+pub(super) fn plan_runtime_substate_label(
+    runtime_projection: &PlanningRuntimeProjection,
+) -> &'static str {
+    plan_indicator::plan_runtime_substate_label(runtime_projection)
 }

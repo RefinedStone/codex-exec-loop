@@ -1,5 +1,5 @@
 #[derive(Debug, Default, Clone)]
-// queue-follow policy는 runtime snapshot이나 UI state를 모르는 순수 automation gate다.
+// queue-follow policy는 runtime projection이나 UI state를 모르는 순수 automation gate다.
 pub struct PlanningQueueFollowPolicy;
 
 impl PlanningQueueFollowPolicy {

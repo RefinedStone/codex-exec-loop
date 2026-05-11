@@ -2,7 +2,7 @@ use super::super::super::super::super::planning_draft_editor_ui::PlanningDraftEd
 use super::super::super::super::{AkraTheme, Line, PlanningValidationSeverity};
 
 // Existing-workspace copy is the guard screen schema for "planning already exists here".
-// Input builders collapse runtime snapshots into strings so line builders do not need planning service enums.
+// Input builders collapse runtime projections into strings so line builders do not need planning service enums.
 pub(super) struct PlanningExistingWorkspaceCopy {
     // Workspace root anchors the warning to the directory that would otherwise receive a new bootstrap.
     pub(super) workspace_directory: String,

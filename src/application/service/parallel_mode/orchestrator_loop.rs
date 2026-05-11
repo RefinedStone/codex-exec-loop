@@ -7,7 +7,7 @@ use crate::application::service::parallel_agent_persona::{
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
-    PlanningOfficialCompletionRefreshRequest, PlanningRuntimeSnapshot,
+    PlanningOfficialCompletionRefreshRequest, PlanningRuntimeProjection,
     PlanningRuntimeWorkspaceStatus, PlanningServices, PlanningTaskHandoff,
 };
 use crate::diagnostics::event_log;
@@ -54,13 +54,13 @@ impl ParallelModeService {
         &self,
         workspace_dir: &str,
         trigger: ParallelModeAutomationTrigger,
-        planning_snapshot: &PlanningRuntimeSnapshot,
+        planning_projection: &PlanningRuntimeProjection,
         epoch_id: Option<u64>,
     ) -> Result<usize, String> {
         self.enqueue_dispatch_commands_for_event(
             workspace_dir,
             parallel_runtime_event_for_dispatch_trigger(trigger),
-            planning_snapshot,
+            planning_projection,
             epoch_id,
         )
     }
@@ -70,11 +70,11 @@ impl ParallelModeService {
         request: ParallelModeDispatchOrchestratorTickRequest,
     ) -> ParallelModeDispatchOrchestratorTickResult {
         let workspace_directory = request.workspace_directory;
-        let planning_snapshot = request
+        let planning_projection = request
             .planning
             .runtime
-            .load_runtime_snapshot_or_invalid(&workspace_directory);
-        let readiness_snapshot = self.inspect_readiness(&workspace_directory, &planning_snapshot);
+            .load_runtime_projection_or_invalid(&workspace_directory);
+        let readiness_snapshot = self.inspect_readiness(&workspace_directory, &planning_projection);
 
         let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
             if let Some(enqueue_trigger) = request.enqueue_trigger {
@@ -82,7 +82,7 @@ impl ParallelModeService {
                 if let Err(error) = self.enqueue_dispatch_commands_for_event(
                     &workspace_directory,
                     runtime_event,
-                    &planning_snapshot,
+                    &planning_projection,
                     Some(request.epoch_id),
                 ) {
                     event_log::emit_lazy("parallel_dispatch_command_enqueue_failed", || {
@@ -101,7 +101,7 @@ impl ParallelModeService {
                         self,
                         ParallelModeDispatchExecutionContext {
                             workspace_directory: &workspace_directory,
-                            planning_snapshot: &planning_snapshot,
+                            planning_projection: &planning_projection,
                             worker_port: request.worker_port,
                             turn_service: request.turn_service,
                             planning: request.planning,
@@ -181,7 +181,7 @@ impl ParallelModeService {
 
 struct ParallelModeDispatchExecutionContext<'a> {
     workspace_directory: &'a str,
-    planning_snapshot: &'a PlanningRuntimeSnapshot,
+    planning_projection: &'a PlanningRuntimeProjection,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
@@ -208,7 +208,7 @@ fn dispatch_parallel_queue_pool(
 
     let dispatch_plan = match service.build_dispatch_plan(
         workspace_directory,
-        context.planning_snapshot,
+        context.planning_projection,
         usize::MAX,
     ) {
         Ok(plan) => plan,
@@ -1008,11 +1008,11 @@ fn run_parallel_dispatch_official_completion(
         }
     };
 
-    // A repair request or blocked runtime snapshot means the authority file is not safe for
+    // A repair request or blocked runtime projection means the authority file is not safe for
     // auto-follow even if the worker itself produced a valid TurnCompleted event.
-    if outcome.repair_request.is_some() || outcome.runtime_snapshot.blocks_auto_follow() {
+    if outcome.repair_request.is_some() || outcome.runtime_projection.blocks_auto_follow() {
         let detail = outcome
-            .runtime_snapshot
+            .runtime_projection
             .preview_detail()
             .unwrap_or("parallel official completion refresh requires planning repair")
             .to_string();
@@ -1035,11 +1035,11 @@ fn run_parallel_dispatch_official_completion(
     }
 
     if !matches!(
-        outcome.runtime_snapshot.workspace_status(),
+        outcome.runtime_projection.workspace_status(),
         PlanningRuntimeWorkspaceStatus::ReadyNoTask | PlanningRuntimeWorkspaceStatus::ReadyWithTask
     ) {
         /*
-         * A non-ready snapshot after refresh means the worker may have changed files but
+         * A non-ready projection after refresh means the worker may have changed files but
          * the runtime cannot safely choose a next queue head. Marking official completion
          * failed keeps auto-follow from chaining on top of unavailable planning state.
          */

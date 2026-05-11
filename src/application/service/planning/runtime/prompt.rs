@@ -1,7 +1,7 @@
 /*
  * planning runtime의 읽기 모델 경계다. operator가 관리하는 workspace markdown과 DB가
- * 승인한 direction/task authority를 한 번의 snapshot으로 합친 뒤, policy.rs, facade.rs,
- * TUI overlay, auto-follow prompt assembly가 공유하는 `PlanningRuntimeSnapshot`으로 낮춘다.
+ * 승인한 direction/task authority를 한 번의 일관된 read로 합친 뒤, policy.rs, facade.rs,
+ * TUI overlay, auto-follow prompt assembly가 공유하는 `PlanningRuntimeProjection`으로 낮춘다.
  *
  * 중요한 점은 validator 입력 형태가 여전히 "파일 묶음"이라는 것이다. runtime은 오래된
  * 검증/fragment 조립 코드를 넓히지 않기 위해 file-shaped contract를 유지하지만,
@@ -35,7 +35,7 @@ const MAX_PROPOSAL_SUMMARY_TITLES: usize = 2;
 #[derive(Clone)]
 pub struct PlanningPromptService {
     // workspace port와 repository port는 분리해 둔다. runtime prompt loading은 operator-authored markdown file과
-    // DB-accepted planning authority라는 두 authority plane을 한 snapshot으로 합치기 때문이다.
+    // DB-accepted planning authority라는 두 authority plane을 한 projection으로 합치기 때문이다.
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
@@ -52,9 +52,9 @@ pub enum PlanningRuntimeWorkspaceStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningRuntimeSnapshot {
+pub struct PlanningRuntimeProjection {
     /*
-     * snapshot은 이 모듈 밖에서 의도적으로 immutable하다.
+     * projection은 이 모듈 밖에서 의도적으로 immutable하다.
      * policy/UI code는 workspace가 invalid/actionable/repeated/proposal-only인지 다시 계산하지 않고,
      * 이미 파생된 fact를 관찰해야 한다. field를 private으로 유지하면 status, queue head, prompt fragment,
      * failure text, authority signature 사이의 관계가 깨지지 않는다.
@@ -74,7 +74,7 @@ pub struct PlanningRuntimeSnapshot {
     auto_follow_pause_reason: Option<String>,
 }
 
-impl PlanningRuntimeSnapshot {
+impl PlanningRuntimeProjection {
     // 파일이 하나도 없으면 planning이 아직 시작되지 않은 상태다. 일부 파일만 있는 partial
     // workspace와 달리 repair 대상이 아니므로 inactive surface로 내려간다.
     pub fn uninitialized() -> Self {
@@ -95,7 +95,7 @@ impl PlanningRuntimeSnapshot {
         }
     }
 
-    // invalid snapshot은 기본적으로 workspace_present=true를 유지한다. TUI가 planning을
+    // invalid projection은 기본적으로 workspace_present=true를 유지한다. TUI가 planning을
     // 단순 비활성으로 숨기지 않고, 깨진 authority/workspace를 doctor나 repair 안내로
     // 설명하게 하려는 상태 표현이다.
     pub fn invalid(reason: impl Into<String>) -> Self {
@@ -124,7 +124,7 @@ impl PlanningRuntimeSnapshot {
         Self::ready_with_details(prompt_fragment, queue_summary, None, queue_head)
     }
 
-    // 테스트와 일부 projection 호출자는 full queue projection 없이 ready snapshot만 필요하다.
+    // 테스트와 일부 projection 호출자는 full queue projection 없이 ready projection만 필요하다.
     // 실제 runtime loading은 아래의 richer constructor를 써서 TUI가 active/proposed/skipped
     // 세부 queue를 다시 조회하지 않고도 렌더링할 수 있게 한다.
     pub fn ready_with_details(
@@ -258,10 +258,10 @@ impl PlanningRuntimeSnapshot {
     }
 
     pub fn with_auto_follow_pause_reason(&self, reason: impl Into<String>) -> Self {
-        // pause reason은 snapshot 자체의 read model을 보존한 채 auto-follow policy가 runtime-local block 사유만 덧붙이는 경로다.
-        let mut snapshot = self.clone();
-        snapshot.auto_follow_pause_reason = Some(reason.into());
-        snapshot
+        // pause reason은 projection 자체의 read model을 보존한 채 auto-follow policy가 runtime-local block 사유만 덧붙이는 경로다.
+        let mut projection = self.clone();
+        projection.auto_follow_pause_reason = Some(reason.into());
+        projection
     }
 
     #[cfg(test)]
@@ -271,10 +271,10 @@ impl PlanningRuntimeSnapshot {
         queue_head_task_signature: Option<u64>,
     ) -> Self {
         // test helper는 queue 반복 감지에 필요한 signature만 주입한다. production loader의 DB/workspace read path를 우회하기 위한 장치다.
-        let mut snapshot = self.clone();
-        snapshot.task_authority_signature = task_authority_signature;
-        snapshot.queue_head_task_signature = queue_head_task_signature;
-        snapshot
+        let mut projection = self.clone();
+        projection.task_authority_signature = task_authority_signature;
+        projection.queue_head_task_signature = queue_head_task_signature;
+        projection
     }
 
     pub fn preview_status_label(&self) -> &'static str {
@@ -372,11 +372,14 @@ impl PlanningPromptService {
         }
     }
 
-    pub fn load_runtime_snapshot(&self, workspace_dir: &str) -> Result<PlanningRuntimeSnapshot> {
+    pub fn load_runtime_projection(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningRuntimeProjection> {
         /*
          * runtime planning read pipeline이다. 복구 가능한 planning 문제는 application error로
-         * 터뜨리지 않고 invalid snapshot으로 접는다. TUI와 repair service가 incomplete file,
-         * validation failure, queue construction failure를 같은 snapshot surface에서 설명해야
+         * 터뜨리지 않고 invalid projection으로 접는다. TUI와 repair service가 incomplete file,
+         * validation failure, queue construction failure를 같은 projection surface에서 설명해야
          * 하기 때문이다.
          */
         self.authority_seed_service
@@ -386,7 +389,7 @@ impl PlanningPromptService {
             .load_planning_workspace_files(workspace_dir)?;
         let workspace_present = workspace_record.has_any_files();
         if !workspace_present {
-            return Ok(PlanningRuntimeSnapshot::uninitialized());
+            return Ok(PlanningRuntimeProjection::uninitialized());
         }
 
         let missing_paths = missing_workspace_paths(&workspace_record);
@@ -396,7 +399,7 @@ impl PlanningPromptService {
              * inactive로 되돌리면 사용자가 왜 planning이 사라졌는지 알 수 없으므로 invalid로
              * 유지해 repair/doctor 안내가 보이게 한다.
              */
-            return Ok(PlanningRuntimeSnapshot::invalid(format!(
+            return Ok(PlanningRuntimeProjection::invalid(format!(
                 "planning files incomplete: missing {}",
                 missing_paths.join(", ")
             ))
@@ -456,7 +459,7 @@ impl PlanningPromptService {
                 .first()
                 .map(|issue| issue.message.clone())
                 .unwrap_or_else(|| "planning validation failed".to_string());
-            return Ok(PlanningRuntimeSnapshot::invalid(format!(
+            return Ok(PlanningRuntimeProjection::invalid(format!(
                 "planning validation failed: {first_error}"
             ))
             .with_workspace_present(workspace_present));
@@ -478,10 +481,10 @@ impl PlanningPromptService {
                 /*
                  * ledger가 schema/semantic validation을 통과해도 execution precondition이
                  * 모순이면 queue construction이 실패할 수 있다. 이 경우도 runtime failure로
-                 * 끊지 않고 invalid runtime snapshot으로 표면화해 repair 경로가 구체적인
+                 * 끊지 않고 invalid runtime projection으로 표면화해 repair 경로가 구체적인
                  * 원인을 보여 주게 한다.
                  */
-                return Ok(PlanningRuntimeSnapshot::invalid(format!(
+                return Ok(PlanningRuntimeProjection::invalid(format!(
                     "planning queue build failed: {error}"
                 ))
                 .with_workspace_present(workspace_present));
@@ -521,7 +524,7 @@ impl PlanningPromptService {
             })
             .map(normalized_task_signature);
 
-        Ok(PlanningRuntimeSnapshot {
+        Ok(PlanningRuntimeProjection {
             workspace_present,
             workspace_status: if queue_projection.next_task.is_some() {
                 PlanningRuntimeWorkspaceStatus::ReadyWithTask
@@ -568,7 +571,7 @@ fn normalized_json_signature<T>(value: &T) -> u64
 where
     T: serde::Serialize,
 {
-    // snapshot signature는 로컬 process 내부의 비교 신호이므로 serde JSON + DefaultHasher로 충분하다.
+    // projection signature는 로컬 process 내부의 비교 신호이므로 serde JSON + DefaultHasher로 충분하다.
     // 외부 저장/호환 포맷이 아니어서 hash algorithm 안정성을 API 계약으로 노출하지 않는다.
     let json = serde_json::to_string(value)
         .expect("valid planning state should serialize into a signature");
@@ -633,6 +636,24 @@ mod tests {
 
         assert!(rules.contains("accepted DB authority"));
         assert!(!rules.contains("task-ledger.json"));
+    }
+
+    #[test]
+    fn planning_runtime_read_model_uses_projection_vocabulary() {
+        let legacy_type_name = ["PlanningRuntime", "Snapshot"].concat();
+        let legacy_loader_name = ["load_runtime", "_snapshot"].concat();
+        let legacy_field_name = ["runtime", "_snapshot"].concat();
+        for source in [
+            include_str!("prompt.rs"),
+            include_str!("facade.rs"),
+            include_str!("policy.rs"),
+            include_str!("../application_projection.rs"),
+            include_str!("../use_cases.rs"),
+        ] {
+            assert!(!source.contains(&legacy_type_name));
+            assert!(!source.contains(&legacy_loader_name));
+            assert!(!source.contains(&legacy_field_name));
+        }
     }
 
     #[test]

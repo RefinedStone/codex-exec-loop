@@ -24,7 +24,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         ConversationState::Loading => QueueOverlayView {
             header_lines,
             /*
-             * Conversation이 아직 load 중이면 planning runtime snapshot 자체가 없다. 이 상태에서 queue/proposal
+             * Conversation이 아직 load 중이면 planning runtime projection 자체가 없다. 이 상태에서 queue/proposal
              * section을 추측하지 않고 "thread load 뒤 가능" copy로 고정해 stale planning data처럼 보이지 않게 한다.
              */
             summary_lines: vec![Line::from("status: loading conversation planning state")],
@@ -38,7 +38,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         ConversationState::Failed(message) => QueueOverlayView {
             header_lines,
             /*
-             * Conversation load 실패는 planning queue failure와 다르다. queue snapshot을 만들 수 없는 상태라
+             * Conversation load 실패는 planning queue failure와 다르다. queue projection을 만들 수 없는 상태라
              * queue 자체를 empty로 오해시키지 않고 load error와 recovery action만 보여 준다.
              */
             summary_lines: vec![Line::from("status: conversation unavailable")],
@@ -55,11 +55,12 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             key_lines: build_queue_overlay_key_lines(),
         },
         ConversationState::Ready(conversation) => {
-            // Ready conversation만 runtime snapshot을 갖는다. popup은 여기서 read model을 빌려 presentation copy만 만든다.
-            let snapshot = &conversation.planning_runtime_snapshot;
-            let projection = PlanningApplicationProjection::from_runtime_snapshot(snapshot);
+            // Ready conversation만 runtime projection을 갖는다. popup은 여기서 read model을 빌려 presentation copy만 만든다.
+            let runtime_projection = &conversation.planning_runtime_projection;
+            let projection =
+                PlanningApplicationProjection::from_runtime_projection(runtime_projection);
             /*
-             * 새 queue projection이 있으면 active task preview 전체를 보여 준다. 오래된 snapshot이나
+             * 새 queue projection이 있으면 active task preview 전체를 보여 준다. 오래된 projection이나
              * compatibility path처럼 projection이 없을 때만 legacy queue_head 한 줄로 fallback한다.
              */
             let queue_lines = if projection.has_structured_queue_projection {
@@ -139,12 +140,12 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planning worker host detail은 그 다음 진단이다.
              */
             let mut note_lines = Vec::new();
-            if let Some(detail) = snapshot.auto_follow_pause_reason() {
+            if let Some(detail) = runtime_projection.auto_follow_pause_reason() {
                 note_lines.push(Line::from(format!(
                     "pause: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
-            } else if let Some(detail) = snapshot.failure_reason() {
+            } else if let Some(detail) = runtime_projection.failure_reason() {
                 note_lines.push(Line::from(format!(
                     "blocking issue: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)

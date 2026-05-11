@@ -1,6 +1,6 @@
 use super::super::{AkraTheme, InlineShellCommand, Line};
 
-// help overlay는 domain/runtime snapshot이 아니라 shell command catalog의 read-only view다.
+// help overlay는 domain/runtime projection이 아니라 shell command catalog의 read-only view다.
 // section을 header, command list, key footer로 미리 나눠 inline inspection renderer가
 // `InlineShellCommand` registry나 column alignment 규칙을 직접 알지 않게 한다.
 pub(crate) struct HelpOverlayView {

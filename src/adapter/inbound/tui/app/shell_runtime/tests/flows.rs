@@ -14,7 +14,7 @@ use crate::application::service::planning::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolUpdateRequest, PlanningTaskUpdatePayload,
 };
 use crate::application::service::planning::{
-    PlanningRuntimeSnapshot, PlanningTaskIntakeCommitResult,
+    PlanningRuntimeProjection, PlanningTaskIntakeCommitResult,
 };
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::{
@@ -239,7 +239,7 @@ impl NativeFlowHarness {
         );
         app.startup_state = StartupState::Ready(sample_startup_diagnostics(&workspace_dir));
         app.sync_draft_shell_workspace(&workspace_dir);
-        app.refresh_ready_conversation_planning_runtime_snapshot_for_workspace(&workspace_dir);
+        app.refresh_ready_conversation_planning_runtime_projection_for_workspace(&workspace_dir);
 
         Self {
             runtime: ShellRuntime::new(app),
@@ -393,13 +393,13 @@ impl NativeFlowHarness {
     }
 
     fn send_post_turn_auto_prompt(&mut self, turn_id: &str) {
-        let planning_snapshot = self
+        let planning_projection = self
             .runtime
             .app()
             .application
             .planning()
             .runtime()
-            .load_runtime_snapshot_or_invalid(&self.workspace_dir);
+            .load_runtime_projection_or_invalid(&self.workspace_dir);
         let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
         else {
             panic!("expected ready conversation state");
@@ -415,7 +415,7 @@ impl NativeFlowHarness {
                 completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
-                    runtime_snapshot: planning_snapshot,
+                    runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
@@ -433,15 +433,15 @@ impl NativeFlowHarness {
     }
 
     fn send_parallel_completion_with_ready_queue_head(&mut self, turn_id: &str) {
-        let planning_snapshot = self
+        let planning_projection = self
             .runtime
             .app()
             .application
             .planning()
             .runtime()
-            .load_runtime_snapshot_or_invalid(&self.workspace_dir);
+            .load_runtime_projection_or_invalid(&self.workspace_dir);
         assert!(
-            planning_snapshot.has_actionable_queue_head(),
+            planning_projection.has_actionable_queue_head(),
             "test setup should leave a ready queue head"
         );
         let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
@@ -462,7 +462,7 @@ impl NativeFlowHarness {
                         .with_parallel_queue_signal(Some(
                             ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
                         )),
-                    runtime_snapshot: planning_snapshot,
+                    runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {
@@ -476,7 +476,7 @@ impl NativeFlowHarness {
     }
 
     fn send_parallel_completion_with_drained_queue(&mut self, turn_id: &str) {
-        let planning_snapshot = PlanningRuntimeSnapshot::ready_with_details(
+        let planning_projection = PlanningRuntimeProjection::ready_with_details(
             "Planning Context".to_string(),
             "queue idle: no executable planning task".to_string(),
             None,
@@ -497,7 +497,7 @@ impl NativeFlowHarness {
                 completed_turn_id: turn_id.to_string(),
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
-                    runtime_snapshot: planning_snapshot,
+                    runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {

@@ -5,7 +5,7 @@ use super::contract_tests::{
     make_test_app, sample_planning_editor_session, sample_startup_diagnostics,
 };
 use super::*;
-use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_snapshot;
+use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
 
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
@@ -27,7 +27,7 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
 #[test]
 fn queue_overlay_matches_snapshot() {
     /*
-     * Queue overlay snapshot은 planning runtime snapshot을 popup summary/queue/proposal/note section으로
+     * Queue overlay snapshot은 planning runtime projection을 popup summary/queue/proposal/note section으로
      * 압축되는 presentation contract를 잠근다. domain queue ranking 자체는 다른 테스트가 맡고,
      * 여기서는 shell frame이 그 read model을 좁은 overlay에 어떻게 배치하는지 본다.
      */
@@ -36,7 +36,7 @@ fn queue_overlay_matches_snapshot() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context\nQueue Summary",
         "Queue Summary",
     ));
@@ -88,7 +88,7 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: rank 1 / terminal-bridge plan",
     ));
@@ -215,7 +215,7 @@ fn vt100_queue_overlay_matches_snapshot() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.replace_planning_runtime_snapshot(sample_planning_runtime_snapshot(
+    conversation.replace_planning_runtime_projection(sample_planning_runtime_projection(
         "Planning Context\nQueue Summary",
         "Queue Summary",
     ));

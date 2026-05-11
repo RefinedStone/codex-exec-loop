@@ -124,8 +124,8 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
-            CoreInput::PlanningRuntimeProjectionChanged(snapshot) => {
-                let changed = self.state.apply_planning_runtime_projection(snapshot);
+            CoreInput::PlanningRuntimeProjectionChanged(projection) => {
+                let changed = self.state.apply_planning_runtime_projection(projection);
                 self.snapshot_changed_outcome(changed)
             }
             CoreInput::ParallelModeReadinessProjectionChanged(snapshot) => {
@@ -191,7 +191,7 @@ impl Default for CoreController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::service::planning::PlanningRuntimeSnapshot;
+    use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
         ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
         SessionCatalogSnapshot,
@@ -601,17 +601,17 @@ mod tests {
     #[test]
     fn planning_parallel_projection_changes_appear_in_app_snapshot() {
         let mut controller = CoreController::new();
-        let planning_snapshot =
-            PlanningRuntimeSnapshot::invalid("planning validation failed in projection");
+        let planning_projection =
+            PlanningRuntimeProjection::invalid("planning validation failed in projection");
 
         let outcome = controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(
-            Box::new(planning_snapshot.clone()),
+            Box::new(planning_projection.clone()),
         ));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
             *outcome.snapshot.planning_parallel.planning_runtime,
-            planning_snapshot
+            planning_projection
         );
         assert_eq!(
             outcome.events,
@@ -649,14 +649,14 @@ mod tests {
     #[test]
     fn repeated_projection_input_does_not_advance_snapshot_revision() {
         let mut controller = CoreController::new();
-        let planning_snapshot =
-            PlanningRuntimeSnapshot::invalid("planning validation failed in projection");
+        let planning_projection =
+            PlanningRuntimeProjection::invalid("planning validation failed in projection");
         controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(Box::new(
-            planning_snapshot.clone(),
+            planning_projection.clone(),
         )));
 
         let outcome = controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(
-            Box::new(planning_snapshot),
+            Box::new(planning_projection),
         ));
 
         assert_eq!(outcome.snapshot.revision, 1);

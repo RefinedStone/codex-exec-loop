@@ -1,11 +1,11 @@
 /*
- * runtime policy는 PlanningRuntimeSnapshot을 adapter-facing 의미로 해석하는 계층이다. prompt builder는 raw snapshot
+ * runtime policy는 PlanningRuntimeProjection을 adapter-facing 의미로 해석하는 계층이다. prompt builder는 raw projection
  * assembly를 담당하고, 이 service는 automation이 다음 turn으로 진행해도 되는지, TUI footer/preview/diagnostics에
  * 어떤 compact status string을 보여 줄지 결정한다. 즉 여기의 출력은 domain state 자체가 아니라 operator와 adapter가
  * 소비하는 실행 정책 projection이다.
  */
 use crate::application::service::planning::runtime::prompt::{
-    PlanningRuntimeSnapshot, PlanningRuntimeWorkspaceStatus,
+    PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus,
 };
 use crate::domain::planning::{
     PlanningQueueFollowBlockReason, PlanningQueueFollowDecision, PlanningQueueFollowFacts,
@@ -57,7 +57,7 @@ pub struct PlanningRuntimeAutoFollowPreviewView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanningRuntimeSummaryRequest<'a> {
-    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub projection: &'a PlanningRuntimeProjection,
     pub has_running_turn: bool,
     pub is_repairing: bool,
     pub repair_failure_summary: Option<&'a str>,
@@ -71,7 +71,7 @@ pub struct PlanningRuntimeRepairAttempt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanningRuntimeSummaryLineRequest<'a> {
-    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub projection: &'a PlanningRuntimeProjection,
     pub has_running_turn: bool,
     pub is_repairing: bool,
     pub repair_failure_summary: Option<&'a str>,
@@ -83,7 +83,7 @@ pub struct PlanningRuntimeSummaryLineRequest<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanningRuntimeStatusProjectionRequest<'a> {
-    pub snapshot: &'a PlanningRuntimeSnapshot,
+    pub projection: &'a PlanningRuntimeProjection,
     pub has_running_turn: bool,
     pub is_repairing: bool,
     pub repair_failure_summary: Option<&'a str>,
@@ -109,16 +109,16 @@ impl PlanningRuntimePolicyService {
 
     pub fn decide_auto_follow(
         &self,
-        snapshot: &PlanningRuntimeSnapshot,
+        projection: &PlanningRuntimeProjection,
     ) -> PlanningAutoFollowPolicyDecision {
         /*
-         * auto-follow는 queue-driven으로만 허용된다. workspace가 valid하다는 사실만으로는 부족하고, snapshot에
+         * auto-follow는 queue-driven으로만 허용된다. workspace가 valid하다는 사실만으로는 부족하고, projection에
          * actionable queue head가 있어야 하며, pause guard가 같은 head를 이미 handoff하지 않았음을 확인해야 한다.
          * 이렇게 해야 proposal refresh나 empty planning state가 무한한 assistant turn을 만들지 않는다.
          */
         map_queue_follow_decision(
             self.queue_follow_policy
-                .decide(queue_follow_facts(snapshot)),
+                .decide(queue_follow_facts(projection)),
         )
     }
 
@@ -127,14 +127,14 @@ impl PlanningRuntimePolicyService {
         request: PlanningRuntimeSummaryRequest<'_>,
     ) -> PlanningRuntimeSummaryView {
         /*
-         * summary view는 live runtime state를 planning domain state vocabulary로 접는다. snapshot file state는
+         * summary view는 live runtime state를 planning domain state vocabulary로 접는다. loaded file state는
          * "ready"라고 말할 수 있지만, 실제 app은 repair 중이거나 이미 turn을 실행 중일 수 있다. 이 overlay를 여기서
          * projection해 footer, popup, status command가 하나의 status model을 공유하게 한다.
          */
         let workspace_state = if request.is_repairing {
             PlanningWorkspaceState::Repairing
         } else {
-            match request.snapshot.workspace_status() {
+            match request.projection.workspace_status() {
                 PlanningRuntimeWorkspaceStatus::Uninitialized => {
                     PlanningWorkspaceState::Uninitialized
                 }
@@ -152,12 +152,12 @@ impl PlanningRuntimePolicyService {
 
         PlanningRuntimeSummaryView {
             status_label: workspace_status_label(workspace_state),
-            queue_summary: request.snapshot.queue_summary().map(str::to_string),
-            proposal_summary: request.snapshot.proposal_summary().map(str::to_string),
+            queue_summary: request.projection.queue_summary().map(str::to_string),
+            proposal_summary: request.projection.proposal_summary().map(str::to_string),
             failure_summary: request
                 .repair_failure_summary
-                .or_else(|| request.snapshot.auto_follow_pause_reason())
-                .or_else(|| request.snapshot.failure_reason())
+                .or_else(|| request.projection.auto_follow_pause_reason())
+                .or_else(|| request.projection.failure_reason())
                 .map(str::to_string),
             workspace_state,
         }
@@ -166,7 +166,7 @@ impl PlanningRuntimePolicyService {
     pub fn build_preview_view_for_decision(
         &self,
         decision: PlanningAutoFollowPolicyDecision,
-        snapshot: &PlanningRuntimeSnapshot,
+        projection: &PlanningRuntimeProjection,
     ) -> PlanningRuntimeAutoFollowPreviewView {
         /*
          * preview는 policy를 다시 계산하지 않고 이미 내려진 decision에서 파생한다. blocked decision은 automation을 멈춘
@@ -178,7 +178,7 @@ impl PlanningRuntimePolicyService {
                     "planning files are invalid or incomplete".to_string()
                 }
                 PlanningAutoFollowBlockReason::ActionableQueueRequired => {
-                    if let Some(proposal_summary) = snapshot.proposal_summary() {
+                    if let Some(proposal_summary) = projection.proposal_summary() {
                         format!(
                             "queue-driven auto-follow requires an actionable planning queue head; {proposal_summary}"
                         )
@@ -187,7 +187,7 @@ impl PlanningRuntimePolicyService {
                             .to_string()
                     }
                 }
-                PlanningAutoFollowBlockReason::RepeatedQueueHead => snapshot
+                PlanningAutoFollowBlockReason::RepeatedQueueHead => projection
                     .auto_follow_pause_reason()
                     .unwrap_or(
                         "queue-driven auto-follow is paused until the planning queue advances beyond the previously handed-off task",
@@ -201,13 +201,13 @@ impl PlanningRuntimePolicyService {
         }
 
         PlanningRuntimeAutoFollowPreviewView {
-            status_label: match snapshot.workspace_status() {
+            status_label: match projection.workspace_status() {
                 PlanningRuntimeWorkspaceStatus::Uninitialized => "inactive",
                 PlanningRuntimeWorkspaceStatus::Invalid => "blocked",
                 PlanningRuntimeWorkspaceStatus::ReadyNoTask
                 | PlanningRuntimeWorkspaceStatus::ReadyWithTask => "ready",
             },
-            detail: non_blocked_preview_detail(snapshot),
+            detail: non_blocked_preview_detail(projection),
         }
     }
 
@@ -221,7 +221,7 @@ impl PlanningRuntimePolicyService {
          * context만 담는다.
          */
         let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
-            snapshot: request.snapshot,
+            projection: request.projection,
             has_running_turn: request.has_running_turn,
             is_repairing: request.is_repairing,
             repair_failure_summary: request.repair_failure_summary,
@@ -245,7 +245,7 @@ impl PlanningRuntimePolicyService {
                     segments.push(format!(
                         "queue: {}",
                         compact_queue_summary(
-                            request.snapshot,
+                            request.projection,
                             queue_summary,
                             request.max_detail_len
                         )
@@ -269,7 +269,7 @@ impl PlanningRuntimePolicyService {
                     segments.push(format!(
                         "queue: {}",
                         compact_queue_summary(
-                            request.snapshot,
+                            request.projection,
                             queue_summary,
                             request.max_detail_len
                         )
@@ -303,7 +303,7 @@ impl PlanningRuntimePolicyService {
         // status projection은 같은 summary model을 command output/diagnostics용 개별 line으로 펼친다. caller가 compact
         // footer string을 parsing하지 않고 필요한 line만 선택해 렌더링할 수 있게 한다.
         let summary = self.build_summary_view(PlanningRuntimeSummaryRequest {
-            snapshot: request.snapshot,
+            projection: request.projection,
             has_running_turn: request.has_running_turn,
             is_repairing: request.is_repairing,
             repair_failure_summary: request.repair_failure_summary,
@@ -318,9 +318,12 @@ impl PlanningRuntimePolicyService {
                 )
             }),
             queue_head_line: summary.queue_summary.as_deref().map(|queue_summary| {
-                let compact_summary =
-                    compact_queue_summary(request.snapshot, queue_summary, request.max_detail_len);
-                if request.snapshot.queue_head().is_some() {
+                let compact_summary = compact_queue_summary(
+                    request.projection,
+                    queue_summary,
+                    request.max_detail_len,
+                );
+                if request.projection.queue_head().is_some() {
                     let queue_head_summary = compact_summary
                         .strip_prefix("queue head: ")
                         .unwrap_or(compact_summary.as_str());
@@ -345,11 +348,11 @@ impl PlanningRuntimePolicyService {
     }
 }
 
-fn queue_follow_facts(snapshot: &PlanningRuntimeSnapshot) -> PlanningQueueFollowFacts {
+fn queue_follow_facts(projection: &PlanningRuntimeProjection) -> PlanningQueueFollowFacts {
     PlanningQueueFollowFacts {
-        workspace_valid: snapshot.workspace_status() != PlanningRuntimeWorkspaceStatus::Invalid,
-        has_actionable_queue_head: snapshot.queue_head().is_some(),
-        repeated_queue_head: snapshot.auto_follow_pause_reason().is_some(),
+        workspace_valid: projection.workspace_status() != PlanningRuntimeWorkspaceStatus::Invalid,
+        has_actionable_queue_head: projection.queue_head().is_some(),
+        repeated_queue_head: projection.auto_follow_pause_reason().is_some(),
     }
 }
 
@@ -385,17 +388,17 @@ fn map_queue_follow_block_reason(
 }
 
 fn compact_queue_summary(
-    snapshot: &PlanningRuntimeSnapshot,
+    projection: &PlanningRuntimeProjection,
     queue_summary: &str,
     max_detail_len: usize,
 ) -> String {
     let mut detail = compact_projection_detail(queue_summary, max_detail_len);
     // queue head가 없을 때 idle policy는 그 부재가 예상된 상태인지 operator-actionable 상태인지 설명한다. generic queue
     // summary를 TUI용으로 compact하면 이 signal이 사라질 수 있어 뒤에 붙인다.
-    if snapshot.queue_head().is_none() {
+    if projection.queue_head().is_none() {
         detail.push_str(&format!(
             " / policy {}",
-            snapshot.queue_idle_policy().label()
+            projection.queue_idle_policy().label()
         ));
     }
     detail
@@ -423,16 +426,16 @@ fn preview_block_label(reason: PlanningAutoFollowBlockReason) -> &'static str {
     }
 }
 
-fn non_blocked_preview_detail(snapshot: &PlanningRuntimeSnapshot) -> Option<String> {
+fn non_blocked_preview_detail(projection: &PlanningRuntimeProjection) -> Option<String> {
     // non-blocked preview는 actionable queue context를 먼저 보여 주고, 다음으로 proposal을 보여 준다. live planning
     // work가 없을 때만 failure text로 fallback한다.
-    match (snapshot.queue_summary(), snapshot.proposal_summary()) {
+    match (projection.queue_summary(), projection.proposal_summary()) {
         (Some(queue_summary), Some(proposal_summary)) => {
             Some(format!("{queue_summary}  |  {proposal_summary}"))
         }
         (Some(queue_summary), None) => Some(queue_summary.to_string()),
         (None, Some(proposal_summary)) => Some(proposal_summary.to_string()),
-        (None, None) => snapshot.failure_reason().map(str::to_string),
+        (None, None) => projection.failure_reason().map(str::to_string),
     }
 }
 

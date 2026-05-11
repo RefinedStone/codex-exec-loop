@@ -115,16 +115,16 @@ fn dispatch_orchestrator_loop_claims_one_durable_command_across_two_ticks() {
         Arc::new(FakeGithubAutomationPort::ready()),
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     );
-    let planning_snapshot = planning
+    let planning_projection = planning
         .runtime
-        .load_runtime_snapshot_or_invalid(&workspace_dir);
-    assert!(planning_snapshot.has_actionable_queue_head());
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    assert!(planning_projection.has_actionable_queue_head());
     assert_eq!(
         service
             .enqueue_dispatch_commands_for_event(
                 &workspace_dir,
                 ParallelModeRuntimeEvent::TaskIntakeCommitted,
-                &planning_snapshot,
+                &planning_projection,
                 Some(1),
             )
             .expect("dispatch command should enqueue"),
@@ -230,16 +230,16 @@ fn slot_capacity_available_event_dispatches_next_ready_task_when_only_one_slot_i
         )
         .expect("second occupied slot should be leased");
 
-    let planning_snapshot = planning
+    let planning_projection = planning
         .runtime
-        .load_runtime_snapshot_or_invalid(&workspace_dir);
-    assert!(planning_snapshot.has_actionable_queue_head());
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    assert!(planning_projection.has_actionable_queue_head());
     assert_eq!(
         service
             .enqueue_dispatch_commands_for_event(
                 &workspace_dir,
                 ParallelModeRuntimeEvent::SlotCapacityAvailable,
-                &planning_snapshot,
+                &planning_projection,
                 Some(9),
             )
             .expect("capacity event should enqueue dispatch command"),

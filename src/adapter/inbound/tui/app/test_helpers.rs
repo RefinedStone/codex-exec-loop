@@ -16,7 +16,7 @@ use crate::application::port::outbound::planning_worker_port::NoopPlanningWorker
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-use crate::application::service::planning::{PlanningRuntimeSnapshot, PlanningServices};
+use crate::application::service::planning::{PlanningRuntimeProjection, PlanningServices};
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
@@ -49,17 +49,17 @@ pub(crate) fn sample_queue_head() -> PriorityQueueTask {
     }
 }
 
-pub(crate) fn sample_planning_runtime_snapshot(
+pub(crate) fn sample_planning_runtime_projection(
     prompt_fragment: &str,
     queue_summary: &str,
-) -> PlanningRuntimeSnapshot {
+) -> PlanningRuntimeProjection {
     /*
      * This snapshot models the normal ready queue: a head task, another active task, and one blocked
      * task that should appear only in skipped/diagnostic surfaces. Tests can vary prompt and summary
      * copy while preserving a queue shape rich enough for footer, popup, and inline-tail projections.
      */
     let queue_head = sample_queue_head();
-    PlanningRuntimeSnapshot::ready_with_queue_projection(
+    PlanningRuntimeProjection::ready_with_queue_projection(
         prompt_fragment.to_string(),
         queue_summary.to_string(),
         None,
@@ -92,17 +92,17 @@ pub(crate) fn sample_planning_runtime_snapshot(
     )
 }
 
-pub(crate) fn sample_proposal_only_planning_runtime_snapshot(
+pub(crate) fn sample_proposal_only_planning_runtime_projection(
     prompt_fragment: &str,
     queue_summary: &str,
     proposal_summary: &str,
-) -> PlanningRuntimeSnapshot {
+) -> PlanningRuntimeProjection {
     /*
      * Proposal-only state is distinct from an empty queue: the planning worker has candidate work, but no
      * actionable head. Rendering tests use this to ensure proposal copy does not masquerade as a
      * runnable task and that planning notices still surface without active work.
      */
-    PlanningRuntimeSnapshot::ready_with_queue_projection(
+    PlanningRuntimeProjection::ready_with_queue_projection(
         prompt_fragment.to_string(),
         queue_summary.to_string(),
         Some(proposal_summary.to_string()),
