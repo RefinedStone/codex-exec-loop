@@ -1224,6 +1224,7 @@
           type="button"
           class="slot-card severity-{{ slot.severity }}"
           data-slot-id="{{ slot.slot_id }}"
+          data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
           data-detail-type="slot"
           data-detail-title="워크트리 풀 · {{ slot.display_slot_label }}"
           data-detail-subtitle="{{ slot.label }}"
@@ -1253,9 +1254,9 @@
         data-agent-id="{{ slot.slot_id }}"
         data-slot-id="{{ slot.slot_id }}"
         data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
-        data-detail-type="agent"
-        data-detail-title="슬롯 요원 · {{ slot.display_slot_label }}"
-        data-detail-subtitle="{{ slot.label }} / {{ slot.owner_label }}"
+        data-detail-type="slot"
+        data-detail-title="워크트리 풀 · {{ slot.display_slot_label }}"
+        data-detail-subtitle="{{ slot.label }}"
         data-detail-state="{{ slot.label }}"
         data-detail-severity="{{ slot.severity }}"
         data-detail-slot="{{ slot.display_slot_label }}"
@@ -1264,8 +1265,6 @@
         data-detail-worktree="{{ slot.worktree_label }}"
         data-detail-owner="{{ slot.owner_label }}"
         data-detail-note="{{ slot.note }}"
-        data-agent-status="{{ slot.state }}"
-        data-agent-progress="{{ slot.label }}"
         title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
       >
         <span class="speech">{{ slot.bubble_label }}</span>
@@ -1656,7 +1655,7 @@
   const setSelectedDetail = (source) => {
     const nextKey = detailSourceKey(source);
     for (const node of root.querySelectorAll(detailSourceSelector)) {
-      const selected = Boolean(source) && node === source;
+      const selected = Boolean(source) && detailSourceKey(node) === nextKey;
       node.classList.toggle("is-selected", selected);
       node.setAttribute("aria-pressed", selected ? "true" : "false");
       node.setAttribute("aria-expanded", selected && detailDrawer && !detailDrawer.hidden ? "true" : "false");
@@ -2053,6 +2052,7 @@
     const slotNote = optionalText(slot.note, "-");
     setDataset(button, {
       slotId: slot.slotId,
+      taskId: slot.taskId || "",
       detailType: "slot",
       detailTitle: `워크트리 풀 · ${slotDisplayLabel}`,
       detailSubtitle: slotStateLabel,
@@ -2103,9 +2103,9 @@
       agentId: slot.slotId,
       slotId: slot.slotId,
       taskId: slot.taskId || "",
-      detailType: "agent",
-      detailTitle: `슬롯 요원 · ${slotDisplayLabel}`,
-      detailSubtitle: `${slotStateLabel} / ${slotOwnerLabel}`,
+      detailType: "slot",
+      detailTitle: `워크트리 풀 · ${slotDisplayLabel}`,
+      detailSubtitle: slotStateLabel,
       detailState: slotStateLabel,
       detailSeverity: slot.severity,
       detailSlot: slotDisplayLabel,
@@ -2113,9 +2113,7 @@
       detailBranch: slotBranchName,
       detailWorktree: slotWorktreeLabel,
       detailOwner: slotOwnerLabel,
-      detailNote: slotNote,
-      agentStatus: slot.state,
-      agentProgress: slotStateLabel
+      detailNote: slotNote
     });
     button.title = `${slotDisplayLabel} · ${slotStateLabel} · task ${slotTaskId} · branch ${slotBranchName} · worktree ${slotWorktreeLabel} · owner ${slotOwnerLabel} · note ${slotNote}`;
     const sprite = document.createElement("span");

@@ -164,6 +164,8 @@ for token in \
   'data-detail-title="워크트리 풀 · 슬롯' \
   'data-detail-slot="슬롯' \
   'data-detail-task="' \
+  'data-detail-type="slot"' \
+  'data-task-id="' \
   'data-detail-branch="' \
   'data-detail-worktree="' \
   'data-detail-owner="' \
@@ -192,7 +194,7 @@ for token in \
   'data-event-drawer' \
   'data-detail-drawer' \
   'data-refresh-dashboard' \
-  'data-agent-progress' \
+  'detailSourceKey(node) === nextKey' \
   'openDetailDrawer' \
   'openRefreshDetail' \
   'akra:mission-pulse' \
@@ -258,6 +260,13 @@ for token in \
   '도메인 매핑' \
   'blocked slot은 operator recovery' \
   'blocked-copy'; do
+  require_not_contains "${admin_html}" "${token}"
+done
+
+for token in \
+  'data-agent-progress' \
+  'data-detail-type="agent"' \
+  'data-detail-title="슬롯 요원'; do
   require_not_contains "${admin_html}" "${token}"
 done
 
