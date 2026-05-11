@@ -8,6 +8,13 @@ struct BoundaryRule {
     forbidden_patterns: &'static [&'static str],
 }
 
+#[derive(Clone, Copy)]
+struct AllowedCrateReferenceRule {
+    name: &'static str,
+    root: &'static str,
+    allowed_prefixes: &'static [&'static str],
+}
+
 struct SourceLine {
     number: usize,
     text: String,
@@ -124,12 +131,12 @@ const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
 ];
 
 #[test]
-fn domain_layer_has_no_application_or_adapter_dependencies() {
+fn domain_layer_has_no_application_core_or_adapter_dependencies() {
     // Static guard: dependency direction is a source graph property, not a runtime behavior.
     assert_no_forbidden_references(BoundaryRule {
-        name: "domain must stay independent from application and adapters",
+        name: "domain must stay independent from application, core, and adapters",
         root: "src/domain",
-        forbidden_patterns: &["crate::application::", "crate::adapter::"],
+        forbidden_patterns: &["crate::application::", "crate::core::", "crate::adapter::"],
     });
 }
 
@@ -163,6 +170,16 @@ fn application_layer_has_no_concrete_adapter_dependencies() {
 }
 
 #[test]
+fn application_layer_has_no_core_runtime_dependencies() {
+    // Static guard: core coordinates application services; application code must not call back into core.
+    assert_no_forbidden_references(BoundaryRule {
+        name: "application must not depend on the core app runtime boundary",
+        root: "src/application",
+        forbidden_patterns: &["crate::core::"],
+    });
+}
+
+#[test]
 fn application_layer_has_no_ui_framework_dependencies() {
     // Static guard: UI framework imports in application compile cleanly but invert the hexagonal boundary.
     assert_no_forbidden_references(BoundaryRule {
@@ -179,6 +196,17 @@ fn application_layer_has_no_ui_framework_dependencies() {
 }
 
 #[test]
+fn core_layer_only_depends_on_application_domain_and_core_modules() {
+    // Static guard: core sits above application/domain and below inbound adapters. Any crate-local
+    // dependency outside these prefixes is a new boundary that should be designed explicitly first.
+    assert_only_allowed_crate_references(AllowedCrateReferenceRule {
+        name: "core may only reference application, domain, and core modules",
+        root: "src/core",
+        allowed_prefixes: &["crate::application::", "crate::core::", "crate::domain::"],
+    });
+}
+
+#[test]
 fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
     // Static guard: core is a headless application runtime. It may coordinate application services,
     // but it must not become a TUI, HTTP, Telegram, or concrete outbound adapter layer.
@@ -189,11 +217,135 @@ fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
             "ratatui",
             "crossterm",
             "axum",
+            "askama",
+            "rusqlite",
+            "tower",
+            "which",
+            "serde_json",
+            "tracing_appender",
             "crate::adapter::inbound",
             "crate::adapter::outbound",
+            "crate::composition::",
+            "crate::diagnostics",
+            "crate::subprocess",
+            "crate::test_utils",
             "telegram_bot",
         ],
     });
+}
+
+#[test]
+fn core_app_layer_has_no_effect_execution_dependencies() {
+    // Static guard: core/app owns commands, events, snapshots, and reducer state only. Service
+    // execution, threads, channels, ports, and IO belong in core/runtime or lower application ports.
+    assert_no_forbidden_references(BoundaryRule {
+        name: "core app must stay a pure contract and reducer layer",
+        root: "src/core/app",
+        forbidden_patterns: &[
+            "std::thread",
+            "thread::spawn",
+            "std::sync::mpsc",
+            "mpsc::",
+            "tokio::",
+            "std::fs",
+            "std::process",
+            "Command::new",
+            "crate::core::runtime::",
+            "CoreRuntime",
+            "CoreEffectRunner",
+            "CoreEffectExecutor",
+            "StartupService",
+            "SessionService",
+            "ConversationService",
+            "PlanningServices",
+            "PlanningRuntimeUseCases",
+            "ParallelModeTurnService",
+            "ManualPromptPreparationService",
+            "PostTurnEvaluationService",
+            "crate::application::port::",
+        ],
+    });
+}
+
+#[test]
+fn core_runtime_driver_stays_service_agnostic() {
+    // Static guard: the runtime loop may dispatch effects through a trait, but concrete application
+    // service wiring belongs to CoreEffectRunner so the command loop stays reusable and testable.
+    assert_no_forbidden_references_in_paths(
+        "core runtime driver must not own application service or domain dependencies",
+        &["src/core/runtime/driver.rs"],
+        &[
+            "crate::application::",
+            "crate::domain::",
+            "crate::adapter::",
+            "crate::composition::",
+            "CoreEffectRunner",
+            "StartupService",
+            "SessionService",
+            "ConversationService",
+            "PlanningServices",
+            "PlanningRuntimeUseCases",
+            "ParallelModeTurnService",
+            "ManualPromptPreparationService",
+            "PostTurnEvaluationService",
+            "std::thread",
+            "thread::spawn",
+        ],
+    );
+}
+
+#[test]
+fn core_runtime_has_no_concrete_boundary_or_framework_dependencies() {
+    // Static guard: core/runtime may execute application services, but it must not instantiate
+    // concrete adapters, ports, process commands, persistence, telemetry, or UI/web frameworks.
+    assert_no_forbidden_references(BoundaryRule {
+        name: "core runtime must execute effects without owning concrete infrastructure boundaries",
+        root: "src/core/runtime",
+        forbidden_patterns: &[
+            "crate::adapter::",
+            "crate::composition::",
+            "crate::application::port::",
+            "crate::diagnostics",
+            "crate::subprocess",
+            "std::fs",
+            "std::process",
+            "Command::new",
+            "tokio::",
+            "ratatui",
+            "crossterm",
+            "axum",
+            "askama",
+            "rusqlite",
+            "Sqlite",
+            "Filesystem",
+            "CodexAppServer",
+            "Github",
+            "Telegram",
+            "tower",
+            "which",
+            "serde_json",
+            "tracing::",
+        ],
+    });
+}
+
+#[test]
+fn core_runtime_worker_modules_stay_private_to_effect_boundary() {
+    // Static guard: workers such as turn submission are implementation detail behind CoreEffectRunner.
+    let repo_root = repo_root();
+    let runtime_mod_path = repo_root.join("src/core/runtime/mod.rs");
+    let source = fs::read_to_string(&runtime_mod_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", runtime_mod_path.display());
+    });
+
+    assert!(
+        source.contains("mod turn_submission;"),
+        "turn submission worker module must stay private to core/runtime"
+    );
+    assert!(
+        !source.contains("pub mod turn_submission;"),
+        "turn submission worker module must not become part of the public core runtime contract"
+    );
 }
 
 #[test]
@@ -352,9 +504,9 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
 fn outbound_adapters_do_not_depend_on_inbound_adapters() {
     // Static guard: outbound adapters implement ports and should never depend on inbound transport/UI code.
     assert_no_forbidden_references(BoundaryRule {
-        name: "outbound adapters must not depend on inbound adapters",
+        name: "outbound adapters must not depend on inbound adapters or core runtime",
         root: "src/adapter/outbound",
-        forbidden_patterns: &["crate::adapter::inbound::"],
+        forbidden_patterns: &["crate::adapter::inbound::", "crate::core::"],
     });
 }
 
@@ -505,6 +657,51 @@ fn assert_no_forbidden_references(rule: BoundaryRule) {
     );
 }
 
+fn assert_only_allowed_crate_references(rule: AllowedCrateReferenceRule) {
+    let repo_root = repo_root();
+    let root = repo_root.join(rule.root);
+    let mut violations = Vec::new();
+
+    for path in rust_files_under(&root) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        let relative_path = relative_path(&repo_root, &path);
+
+        for source_line in production_lines(&source) {
+            if is_comment_only_line(&source_line.text) {
+                continue;
+            }
+
+            for crate_reference in crate_references(&source_line.text) {
+                if !rule
+                    .allowed_prefixes
+                    .iter()
+                    .any(|allowed_prefix| crate_reference.starts_with(allowed_prefix))
+                {
+                    violations.push(BoundaryViolation {
+                        rule: rule.name,
+                        path: relative_path.clone(),
+                        line: source_line.number,
+                        pattern: "crate::",
+                        text: source_line.text.trim().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "architecture boundary violations:\n{}",
+        format_violations(&violations)
+    );
+}
+
 fn assert_no_forbidden_references_in_paths(
     rule_name: &'static str,
     path_suffixes: &[&str],
@@ -550,6 +747,19 @@ fn assert_no_forbidden_references_in_paths(
         "architecture boundary violations:\n{}",
         format_violations(&violations)
     );
+}
+
+fn crate_references(line: &str) -> Vec<&str> {
+    let mut references = Vec::new();
+    let mut start = 0;
+
+    while let Some(offset) = line[start..].find("crate::") {
+        let reference_start = start + offset;
+        references.push(&line[reference_start..]);
+        start = reference_start + "crate::".len();
+    }
+
+    references
 }
 
 fn inbound_outbound_boundary_rule() -> BoundaryRule {
