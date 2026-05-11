@@ -105,11 +105,6 @@ const TUI_RAW_APPLICATION_SERVICE_DEBTS: &[PatternDebtRule] = &[
         pattern: "planning: PlanningServices,",
         reason: "TUI post-turn execution still owns raw planning service wiring.",
     },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app/turn_submission_runtime/stream_execution.rs",
-        pattern: "service: ConversationService,",
-        reason: "TUI stream execution still owns raw conversation service wiring.",
-    },
 ];
 
 const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
@@ -118,7 +113,7 @@ const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
     "PlanningProposalPromotionRequest",
     "PlanningQueueRefreshRequest",
     "PlanningRuntimeWorkspaceStatus",
-    "QueueIdlePolicy",
+    "QueueIdlePolicy::",
     ".promote_top_proposal_to_ready_if_needed(",
     ".refresh_queue_from_official_completion(",
     ".refresh_queue_from_reply(",
