@@ -207,6 +207,21 @@ fn core_layer_only_depends_on_application_domain_and_core_modules() {
 }
 
 #[test]
+#[ignore]
+fn future_core_app_contracts_are_application_dto_free() {
+    /*
+     * Disabled target: core/app should eventually expose core-owned commands,
+     * effects, events, and snapshots instead of leaking application service DTOs
+     * into the public headless runtime contract.
+     */
+    assert_no_forbidden_references(BoundaryRule {
+        name: "future core app contracts must not depend on application DTOs",
+        root: "src/core/app",
+        forbidden_patterns: &["crate::application::"],
+    });
+}
+
+#[test]
 fn core_layer_has_no_ui_transport_or_concrete_adapter_dependencies() {
     // Static guard: core is a headless application runtime. It may coordinate application services,
     // but it must not become a TUI, HTTP, Telegram, or concrete outbound adapter layer.
@@ -263,6 +278,29 @@ fn core_app_layer_has_no_effect_execution_dependencies() {
             "ManualPromptPreparationService",
             "PostTurnEvaluationService",
             "crate::application::port::",
+        ],
+    });
+}
+
+#[test]
+#[ignore]
+fn future_core_runtime_does_not_hold_raw_application_services() {
+    /*
+     * Disabled target: core/runtime may keep the effect boundary, but the concrete
+     * field set should collapse behind a narrow application-facing facade before
+     * this becomes an always-on architecture gate.
+     */
+    assert_no_forbidden_references(BoundaryRule {
+        name: "future core runtime must depend on a narrow application facade instead of raw services",
+        root: "src/core/runtime",
+        forbidden_patterns: &[
+            "startup_service: StartupService",
+            "session_service: SessionService",
+            "conversation_service: ConversationService",
+            "planning_runtime: PlanningRuntimeUseCases",
+            "parallel_mode_turn_service: ParallelModeTurnService",
+            "manual_prompt_preparation_service: ManualPromptPreparationService",
+            "post_turn_evaluation_service: PostTurnEvaluationService",
         ],
     });
 }
