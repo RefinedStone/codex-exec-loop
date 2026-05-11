@@ -1,5 +1,6 @@
 use crate::application::service::planning::{
-    PlanningPostTurnWorkerPanelStartRequest, PlanningTurnExecutionSnapshotCapture,
+    PlanningPostTurnWorkerPanelStartRequest, PlanningRuntimeProjection,
+    PlanningTurnExecutionSnapshotCapture,
 };
 use crate::application::service::post_turn_evaluation::{
     PlanningWorkerPanelState as ApplicationPlanningWorkerPanelState,
@@ -56,10 +57,12 @@ impl NativeTuiApp {
         &self,
         request: &PostTurnEvaluationRequest,
     ) -> Option<PostTurnEvaluationContext> {
+        let current_runtime_projection = self.planning_runtime_projection_snapshot();
         match &self.conversation_state {
             ConversationState::Ready(conversation) => Some(post_turn_context_from_conversation(
                 conversation.as_ref(),
                 request,
+                current_runtime_projection,
             )),
             ConversationState::Loading | ConversationState::Failed(_) => None,
         }
@@ -98,6 +101,7 @@ fn application_post_turn_request(
 fn post_turn_context_from_conversation(
     conversation: &ConversationViewModel,
     request: &PostTurnEvaluationRequest,
+    current_runtime_projection: PlanningRuntimeProjection,
 ) -> PostTurnEvaluationContext {
     let latest_main_reply = conversation.latest_agent_message_text().map(str::to_string);
     let stop_keyword_matched = latest_main_reply
@@ -126,7 +130,7 @@ fn post_turn_context_from_conversation(
         latest_user_message: conversation.latest_user_message_text().map(str::to_string),
         latest_main_reply,
         previous_handoff_task: conversation.last_planning_task_handoff().cloned(),
-        current_runtime_projection: conversation.cached_planning_runtime_projection().clone(),
+        current_runtime_projection,
         continuation_paused: conversation
             .auto_follow_state
             .post_turn_continuation_paused(),

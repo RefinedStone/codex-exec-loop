@@ -396,8 +396,8 @@ projection에서만 읽고, 별도 TUI write-through cache/fallback field는 없
 planning footer도 conversation cache가 없는 loading/failed surface에서는 core
 planning projection을 읽는다. Ready conversation의 planning footer, queue overlay,
 planning status tail, existing workspace popup도 core planning projection을 읽고,
-resumed-session status copy도 core planning projection을 읽는다. conversation cache는
-private reducer/post-turn automation compatibility cache로만 남아 있다.
+resumed-session status copy와 post-turn evaluation context도 core planning projection을
+읽는다. conversation cache는 private reducer/event compatibility cache로만 남아 있다.
 
 ## 상태 소유권 표
 
@@ -408,8 +408,8 @@ private reducer/post-turn automation compatibility cache로만 남아 있다.
 | conversation lifecycle | TUI conversation reducers | core app state | CLI/admin/automation도 현재 conversation 상태를 읽을 수 있다. |
 | turn stream reduction | core runtime | core runtime | app-server stream은 UI가 아니라 app runtime event다. |
 | manual prompt intake/bootstrap | core effect + application service; TUI overlay application | core/application runtime | planning task intake는 terminal input 편집 상태와 독립된 use case다. |
-| post-turn continuation/evaluation | TUI context mapping + core runtime/application service + TUI completion application | core runtime/application service | turn completion 이후 정책은 화면과 독립적이다. |
-| planning runtime projection | core projection + private Ready conversation reducer/automation cache | core app state 또는 application projection | 여러 surface가 같은 planning 상태를 본다. |
+| post-turn continuation/evaluation | core projection을 읽는 TUI context mapping + core runtime/application service + TUI completion application | core runtime/application service | turn completion 이후 정책은 화면과 독립적이다. |
+| planning runtime projection | core projection + private Ready conversation reducer/event compatibility cache | core app state 또는 application projection | 여러 surface가 같은 planning 상태를 본다. |
 | parallel-mode status | application control-plane + core projection | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출해야 한다. |
 | overlay open/close | TUI | TUI | presentation state다. |
 | prompt input buffer | TUI | TUI | terminal editing state다. |

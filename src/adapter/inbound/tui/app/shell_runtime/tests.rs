@@ -1,7 +1,8 @@
 use super::*;
 use crate::adapter::inbound::tui::app::conversation_model::AutoFollowSkipReason;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
-    PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
+    ConversationRuntimeEffect, PostTurnContinuationAction, PostTurnEvaluationOutcome,
+    PostTurnEvaluationProvenance,
 };
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, NativeTuiParallelModeBinding,
@@ -299,6 +300,8 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     const PLANNING_STATUS_PROJECTION_RS: &str = include_str!("../planning/status_projection.rs");
     const PLANNING_EXISTING_WORKSPACE_RS: &str =
         include_str!("../shell_presentation/overlays/popup/planning_existing_workspace.rs");
+    const POST_TURN_EXECUTION_RS: &str =
+        include_str!("../turn_submission_runtime/post_turn_execution.rs");
 
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_readiness_snapshot"));
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_supervisor_snapshot"));
@@ -312,6 +315,8 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
         !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
     );
     assert!(!PLAN_INDICATOR_RS.contains("load_planning_runtime_projection"));
+    assert!(POST_TURN_EXECUTION_RS.contains("self.planning_runtime_projection_snapshot()"));
+    assert!(!POST_TURN_EXECUTION_RS.contains("cached_planning_runtime_projection"));
     for source in [
         PLAN_INDICATOR_RS,
         QUEUE_OVERLAY_RS,
@@ -572,6 +577,38 @@ fn resumed_session_status_reads_core_projection_before_reducer_cache() {
             .contains("planning status: blocked"),
         "status should not use reducer cache: {}",
         conversation.status_text
+    );
+}
+
+#[test]
+fn post_turn_evaluation_start_state_reads_core_projection_before_reducer_cache() {
+    let mut runtime = make_test_runtime();
+    runtime
+        .app_mut()
+        .sync_ready_conversation_planning_runtime_projection(PlanningRuntimeProjection::invalid(
+            "stale reducer cache detail",
+        ));
+    runtime
+        .app_mut()
+        .sync_core_planning_runtime_projection(PlanningRuntimeProjection::ready(
+            "core snapshot prompt".to_string(),
+            "queue idle from core snapshot".to_string(),
+            None,
+        ));
+
+    runtime.app_mut().execute_conversation_runtime_effect(
+        ConversationRuntimeEffect::EvaluatePostTurn {
+            workspace_directory: "/tmp/workspace".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: None,
+        },
+    );
+
+    assert_eq!(
+        runtime.app().planning_worker_panel_state.status,
+        PlanningWorkerStatus::Idle,
+        "ready/no-task core projection should preserve the panel instead of using stale reducer cache"
     );
 }
 
