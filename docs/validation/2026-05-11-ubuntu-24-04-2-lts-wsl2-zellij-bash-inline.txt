@@ -1,0 +1,17 @@
+date: 2026-05-11
+commit: 62bcee81fed9324bb42634aa3d8f50d2b0bdba6a
+os: Ubuntu 24.04.2 LTS / WSL2 6.6.114.1-microsoft-standard-WSL2
+terminal: Zellij
+shell: bash
+frontend: inline
+term: xterm-256color
+check_profile: prompt-input-delay-pty
+checks:
+- launch with detached PTY backend
+- prompt input echoes without visible delay
+- multiline input stays editable before submit
+- submitted prompt transitions into streaming output
+- completion preserves prompt history and cursor recovery
+- interrupt and recovery remain responsive after delayed input checks
+result: blocker
+notes: Zellij is not installed in this environment, so the Linux Zellij prompt-delay row could not be exercised.
