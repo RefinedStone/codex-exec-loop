@@ -380,3 +380,311 @@ fn file_key_for_kind(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+    use crate::application::service::planning::PlanningServices;
+    use crate::application::service::planning::admin::PlanningAdminDraftFileUpdate;
+    use crate::domain::planning::{
+        DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION, QueueIdleConfig,
+        QueueIdlePolicy,
+    };
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn file_key_mapping_filters_files_by_editor_kind() {
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::FullPlanning,
+                RESULT_OUTPUT_FILE_PATH
+            ),
+            Some(PlanningAdminFileKey::ResultOutput)
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::QueueIdlePrompt,
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+            ),
+            Some(PlanningAdminFileKey::QueueIdlePrompt)
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::DirectionDetail,
+                ".codex-exec-loop/planning/directions/general.md"
+            ),
+            Some(PlanningAdminFileKey::DirectionDetail)
+        );
+        assert_eq!(
+            file_key_for_kind(
+                PlanningAdminDraftKind::QueueIdlePrompt,
+                ".codex-exec-loop/planning/directions/general.md"
+            ),
+            None
+        );
+        assert_eq!(
+            file_key_for_kind(PlanningAdminDraftKind::FullPlanning, "unknown/path.md"),
+            None
+        );
+    }
+
+    #[test]
+    fn supporting_path_collection_deduplicates_and_sorts_authority_references() {
+        let directions = direction_catalog_with_supporting_paths();
+
+        assert_eq!(
+            collect_direction_supporting_paths(&directions),
+            vec![
+                DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
+                "directions/general.md".to_string(),
+                "directions/release.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn create_full_planning_draft_stages_active_result_output_with_validation() {
+        let fixture = TestAdminFixture::new("admin-full-draft");
+
+        let session = fixture
+            .facade
+            .create_draft_session(PlanningAdminDraftKind::FullPlanning, None)
+            .expect("full planning draft should open");
+
+        assert_eq!(session.kind, PlanningAdminDraftKind::FullPlanning);
+        assert_eq!(session.editor_heading, "Full Planning Draft");
+        assert_eq!(session.return_path, "/admin");
+        assert_eq!(session.files.len(), 1);
+        assert_eq!(session.files[0].key, PlanningAdminFileKey::ResultOutput);
+        assert_eq!(session.files[0].editor_language, "markdown");
+        assert!(session.files[0].body.contains("# Result Output Prompt"));
+        assert!(session.validation.is_valid);
+        assert_eq!(session.validation.error_count, 0);
+        assert!(session.queue_preview.is_some());
+    }
+
+    #[test]
+    fn specialized_draft_creation_requires_direction_id_for_detail_editor() {
+        let fixture = TestAdminFixture::new("admin-detail-draft-missing-id");
+
+        let error = fixture
+            .facade
+            .create_draft_session(PlanningAdminDraftKind::DirectionDetail, None)
+            .expect_err("detail draft without direction id should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "direction detail drafts require direction_id"
+        );
+    }
+
+    #[test]
+    fn queue_idle_draft_save_updates_visible_file_and_keeps_hidden_context() {
+        let fixture = TestAdminFixture::new("admin-queue-idle-save");
+        let session = fixture
+            .facade
+            .create_draft_session(PlanningAdminDraftKind::QueueIdlePrompt, None)
+            .expect("queue-idle draft should open");
+
+        let (save_result, saved_session) = fixture
+            .facade
+            .save_draft(PlanningAdminDraftMutationRequest {
+                draft_name: session.draft_name.clone(),
+                kind: PlanningAdminDraftKind::QueueIdlePrompt,
+                direction_id: None,
+                files: vec![
+                    PlanningAdminDraftFileUpdate {
+                        key: PlanningAdminFileKey::ResultOutput,
+                        body: "ignored hidden result body".to_string(),
+                    },
+                    PlanningAdminDraftFileUpdate {
+                        key: PlanningAdminFileKey::QueueIdlePrompt,
+                        body: "# Queue Review\n\nUse the latest answer only.".to_string(),
+                    },
+                ],
+            })
+            .expect("queue-idle draft save should succeed");
+
+        assert_eq!(save_result.draft_name, session.draft_name);
+        assert!(save_result.validation_report.is_valid());
+        assert_eq!(saved_session.files.len(), 1);
+        assert_eq!(
+            saved_session.files[0].key,
+            PlanningAdminFileKey::QueueIdlePrompt
+        );
+        assert_eq!(
+            saved_session.files[0].body,
+            "# Queue Review\n\nUse the latest answer only."
+        );
+
+        let loaded = fixture
+            .workspace_port
+            .load_planning_draft_files(&fixture.workspace.path, &saved_session.draft_name)
+            .expect("saved draft should remain loadable");
+        let result_output = loaded
+            .staged_files
+            .iter()
+            .find(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
+            .expect("hidden result output should remain staged");
+        assert_ne!(result_output.body, "ignored hidden result body");
+    }
+
+    #[test]
+    fn direction_detail_draft_surfaces_only_selected_detail_file() {
+        let fixture = TestAdminFixture::new("admin-direction-detail-draft");
+
+        let session = fixture
+            .facade
+            .create_draft_session(
+                PlanningAdminDraftKind::DirectionDetail,
+                Some("general-workstream"),
+            )
+            .expect("direction detail draft should open for seeded direction");
+
+        assert_eq!(session.kind, PlanningAdminDraftKind::DirectionDetail);
+        assert_eq!(session.direction_id.as_deref(), Some("general-workstream"));
+        assert_eq!(session.files.len(), 1);
+        assert_eq!(session.files[0].key, PlanningAdminFileKey::DirectionDetail);
+        assert!(
+            session.files[0]
+                .active_path
+                .starts_with(PLANNING_DIRECTION_DOCS_DIRECTORY)
+        );
+        assert!(session.validation.is_valid);
+    }
+
+    #[test]
+    fn session_view_requires_effective_result_output_for_validation() {
+        let fixture = TestAdminFixture::new("admin-missing-result-output");
+        fixture
+            .facade
+            .ensure_default_authority()
+            .expect("authority seed should be available before draft validation");
+        fixture
+            .workspace_port
+            .replace_planning_workspace_file(&fixture.workspace.path, RESULT_OUTPUT_FILE_PATH, None)
+            .expect("active result output should be removable for missing-core test");
+        let loaded = PlanningDraftLoadRecord {
+            draft_name: "draft-without-result-output".to_string(),
+            draft_directory: "drafts/draft-without-result-output".to_string(),
+            staged_files: Vec::new(),
+        };
+
+        let error = fixture
+            .facade
+            .build_session_view(PlanningAdminDraftKind::FullPlanning, None, loaded)
+            .expect_err("session without result output should fail");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "draft is missing required result output content at {}",
+                RESULT_OUTPUT_FILE_PATH
+            )
+        );
+    }
+
+    fn direction_catalog_with_supporting_paths() -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::ReviewAndEnqueue,
+                prompt_path: DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH.to_string(),
+            },
+            directions: vec![
+                DirectionDefinition {
+                    id: "general-workstream".to_string(),
+                    title: "General".to_string(),
+                    summary: "General work".to_string(),
+                    success_criteria: vec!["Done".to_string()],
+                    scope_hints: Vec::new(),
+                    detail_doc_path: "directions/general.md".to_string(),
+                    state: DirectionState::Active,
+                },
+                DirectionDefinition {
+                    id: "release".to_string(),
+                    title: "Release".to_string(),
+                    summary: "Release work".to_string(),
+                    success_criteria: vec!["Shipped".to_string()],
+                    scope_hints: Vec::new(),
+                    detail_doc_path: "directions/release.md".to_string(),
+                    state: DirectionState::Active,
+                },
+                DirectionDefinition {
+                    id: "duplicate".to_string(),
+                    title: "Duplicate".to_string(),
+                    summary: "Duplicate detail path".to_string(),
+                    success_criteria: vec!["Done".to_string()],
+                    scope_hints: Vec::new(),
+                    detail_doc_path: "directions/general.md".to_string(),
+                    state: DirectionState::Paused,
+                },
+            ],
+        }
+    }
+
+    struct TestAdminFixture {
+        workspace: TempPlanningWorkspace,
+        facade: PlanningAdminFacadeService,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+    }
+
+    impl TestAdminFixture {
+        fn new(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let workspace_port: Arc<dyn PlanningWorkspacePort> =
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+            let authority_port = Arc::new(NoopPlanningAuthorityPort::default());
+            let task_repository_port = Arc::new(NoopPlanningTaskRepositoryPort);
+            let planning = PlanningServices::from_ports(
+                workspace_port.clone(),
+                authority_port.clone(),
+                task_repository_port.clone(),
+                Arc::new(NoopPlanningWorkerPort),
+            );
+            let facade = PlanningAdminFacadeService::from_planning_with_authority(
+                workspace.path.clone(),
+                planning,
+                workspace_port.clone(),
+                authority_port,
+                task_repository_port,
+            );
+            Self {
+                workspace,
+                facade,
+                workspace_port,
+            }
+        }
+    }
+
+    struct TempPlanningWorkspace {
+        path: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            Self {
+                path: path.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
