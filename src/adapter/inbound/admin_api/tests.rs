@@ -365,7 +365,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "CampaignView",
         "map_campaign",
         "stage {progress}/100",
-        "read-only 운영 관제",
         "--office-bg-image",
         "--object-sprite-sheet",
         "--agent-sprite-sheet",
@@ -389,7 +388,19 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         );
     }
 
-    for removed in ["class=\"akra-topbar\"", "akra_admin", "Last Updated"] {
+    for removed in [
+        "class=\"akra-topbar\"",
+        "class=\"ops-status\"",
+        "akra_admin",
+        "Last Updated",
+        "read-only 운영 관제",
+        "게임화 정책",
+        "도메인 매핑",
+        "blocked-copy",
+        "renderOpsStatus",
+        "syncTopNotice",
+        "error-notice",
+    ] {
         assert!(
             !AKRA_DASHBOARD_TEMPLATE.contains(removed),
             "graphic dashboard should not restore removed top header token {removed}"

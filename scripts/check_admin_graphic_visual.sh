@@ -194,8 +194,15 @@ done
 
 for token in \
   'class="akra-topbar"' \
+  'class="ops-status"' \
   'akra_admin' \
-  'Last Updated'; do
+  'Last Updated' \
+  'control tower is live in read-only supervisor mode' \
+  'read-only 운영 관제' \
+  '게임화 정책' \
+  '도메인 매핑' \
+  'blocked slot은 operator recovery' \
+  'blocked-copy'; do
   require_not_contains "${admin_html}" "${token}"
 done
 

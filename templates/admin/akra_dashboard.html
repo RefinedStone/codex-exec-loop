@@ -878,13 +878,6 @@
     border-radius: 0;
     text-align: center;
   }
-  .error-notice {
-    margin: 14px 0;
-    border-color: rgba(255, 107, 107, 0.34);
-    background: rgba(255, 107, 107, 0.1);
-    color: var(--game-ink);
-  }
-  .ops-status,
   .event-detail {
     margin: 12px 0;
     padding: 12px;
@@ -892,17 +885,6 @@
     border-radius: 0;
     background: rgba(255,255,255,0.04);
   }
-  .ops-status {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .ops-status strong,
-  .ops-status small {
-    display: block;
-    overflow-wrap: anywhere;
-  }
-  .ops-status .blocked-copy { color: var(--game-yellow); }
   .event-detail[hidden] { display: none; }
   .event-detail pre {
     margin: 8px 0 0;
@@ -1091,7 +1073,6 @@
       z-index: 1;
     }
     .speech { position: static; display: inline-block; margin-bottom: 8px; }
-    .ops-status { grid-template-columns: 1fr; }
     .admin-detail-drawer {
       right: 14px;
       bottom: 14px;
@@ -1119,17 +1100,6 @@
   data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
   data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
-  {% if let Some(notice) = dashboard.workspace.top_notice %}
-  <div class="notice error-notice">{{ notice }}</div>
-  {% endif %}
-
-  <div class="ops-status" aria-label="AKRA Admin product and operation contract">
-    <div><small>목적</small><strong>{{ dashboard.workspace.purpose_label }}</strong></div>
-    <div><small>게임화 정책</small><strong>{{ dashboard.workspace.gamification_policy }}</strong></div>
-    <div><small>도메인 매핑</small><strong>{{ dashboard.workspace.domain_mapping_note }}</strong></div>
-    <div><small>readiness</small><strong>{{ dashboard.workspace.readiness_notice }}</strong><small class="blocked-copy">{{ dashboard.workspace.blocked_action }}</small></div>
-  </div>
-
   <div class="kpi-grid" aria-label="AKRA operation KPIs">
     <div class="kpi is-success" data-kpi="totalTasks"><span class="kpi-head"><i class="kpi-icon yellow">T</i>총 작업</span><strong data-value>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small class="positive">{{ dashboard.kpis.metric_source_label }}</small></div>
     <div class="kpi is-success" data-kpi="successRate"><span class="kpi-head"><i class="kpi-icon green">S</i>성공률</span><strong data-value>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
@@ -2638,37 +2608,6 @@
     ]);
   };
 
-  const renderOpsStatus = (workspace) => {
-    const ops = root.querySelector(".ops-status");
-    if (!ops || !workspace) return;
-    const items = [
-      ["목적", workspace.purposeLabel],
-      ["게임화 정책", workspace.gamificationPolicy],
-      ["도메인 매핑", workspace.domainMappingNote],
-      ["readiness", workspace.readinessNotice, workspace.blockedAction]
-    ];
-    ops.replaceChildren(...items.map(([label, value, note]) => {
-      const item = document.createElement("div");
-      item.append(createText("small", "", label), createText("strong", "", value));
-      if (note) item.appendChild(createText("small", "blocked-copy", note));
-      return item;
-    }));
-  };
-
-  const syncTopNotice = (workspace) => {
-    let notice = root.querySelector(".notice.error-notice");
-    if (!workspace?.topNotice) {
-      notice?.remove();
-      return;
-    }
-    if (!notice) {
-      notice = document.createElement("div");
-      notice.className = "notice error-notice";
-      root.insertBefore(notice, root.querySelector(".ops-status"));
-    }
-    notice.textContent = workspace.topNotice;
-  };
-
   const dashboardSignature = (dashboard) => JSON.stringify({
     agents: dashboard.agents || null,
     pool: dashboard.pool || null,
@@ -2683,8 +2622,6 @@
   });
 
   const renderDashboardPanels = (dashboard) => {
-    syncTopNotice(dashboard.workspace);
-    renderOpsStatus(dashboard.workspace);
     renderCampaign(dashboard);
     renderBoard(dashboard);
     renderMetrics(dashboard.metrics);
