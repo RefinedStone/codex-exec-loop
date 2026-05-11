@@ -219,11 +219,14 @@ fn classify_doctor_state(projection: &PlanningRuntimeProjection) -> PlanningDoct
 mod tests {
     use std::sync::Arc;
 
-    use super::{PlanningDoctorService, PlanningDoctorState};
+    use super::*;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::service::planning::runtime::prompt::PlanningPromptService;
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
-    use crate::domain::planning::PriorityQueueService;
+    use crate::domain::planning::{
+        PriorityQueueProjection, PriorityQueueService, PriorityQueueTask, QueueIdlePolicy,
+        TaskStatus,
+    };
 
     // temp workspace helper는 runtime bootstrap-through-inspection 동작을 검증하려고 일부러 빈 상태로 시작한다.
     fn create_temp_workspace(label: &str) -> String {
@@ -240,6 +243,13 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    fn create_temp_file(label: &str) -> String {
+        let path = create_temp_workspace(label);
+        std::fs::remove_dir_all(&path).expect("temp directory should be replaced with file");
+        std::fs::write(&path, "not a directory").expect("temp file should be created");
+        path
+    }
+
     // 실제 service stack을 만들어 filesystem loading과 runtime validation을 함께 검증한다.
     fn doctor_service() -> PlanningDoctorService {
         let workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
@@ -250,6 +260,127 @@ mod tests {
             PriorityQueueService::new(),
         );
         PlanningDoctorService::new(prompt_service)
+    }
+
+    #[test]
+    fn doctor_state_labels_and_exit_codes_are_stable() {
+        let states = [
+            (PlanningDoctorState::Absent, "absent", 0),
+            (PlanningDoctorState::Incomplete, "incomplete", 1),
+            (PlanningDoctorState::Invalid, "invalid", 1),
+            (
+                PlanningDoctorState::ReadyWithoutTask,
+                "ready_without_task",
+                0,
+            ),
+            (PlanningDoctorState::ReadyWithTask, "ready_with_task", 0),
+        ];
+
+        for (state, label, exit_code) in states {
+            assert_eq!(state.label(), label);
+            assert_eq!(state.exit_code(), exit_code);
+        }
+    }
+
+    #[test]
+    fn path_issue_report_is_invalid_without_runtime_queue_context() {
+        let report = PlanningDoctorReport::path_issue("workspace path does not exist".to_string());
+
+        assert_eq!(report.planning_state(), PlanningDoctorState::Invalid);
+        assert_eq!(report.issue(), Some("workspace path does not exist"));
+        assert_eq!(report.exit_code(), 1);
+        assert_eq!(report.queue_idle_policy(), None);
+        assert_eq!(report.queue_summary(), None);
+        assert_eq!(report.proposal_summary(), None);
+        assert_eq!(report.health(), None);
+        assert_eq!(report.note(), None);
+    }
+
+    #[test]
+    fn runtime_projection_classifies_absent_incomplete_and_invalid_states() {
+        let absent = PlanningDoctorReport::from_runtime_projection(
+            &PlanningRuntimeProjection::uninitialized(),
+        );
+        let incomplete = PlanningDoctorReport::from_runtime_projection(
+            &PlanningRuntimeProjection::invalid(format!("{INCOMPLETE_PREFIX} task file missing")),
+        );
+        let invalid = PlanningDoctorReport::from_runtime_projection(
+            &PlanningRuntimeProjection::invalid("task authority JSON is invalid"),
+        );
+
+        assert_eq!(absent.planning_state(), PlanningDoctorState::Absent);
+        assert_eq!(
+            absent.health(),
+            Some("planning workspace is not initialized")
+        );
+        assert_eq!(absent.exit_code(), 0);
+        assert_eq!(incomplete.planning_state(), PlanningDoctorState::Incomplete);
+        assert_eq!(
+            incomplete.issue(),
+            Some("planning files incomplete: task file missing")
+        );
+        assert_eq!(incomplete.exit_code(), 1);
+        assert_eq!(invalid.planning_state(), PlanningDoctorState::Invalid);
+        assert_eq!(invalid.issue(), Some("task authority JSON is invalid"));
+        assert_eq!(invalid.exit_code(), 1);
+    }
+
+    #[test]
+    fn ready_projection_prefers_queue_head_and_first_proposal_details() {
+        let queue_head = queue_task("task-a", "  Run the current repair task  ", 1);
+        let first_proposal = queue_task("task-b", "  Review follow-up proposal  ", 2);
+        let second_proposal = queue_task("task-c", "Ignored proposal", 3);
+        let projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "prompt".to_string(),
+            "queue summary fallback".to_string(),
+            Some("proposal summary fallback".to_string()),
+            Some(queue_head.clone()),
+            PriorityQueueProjection {
+                next_task: Some(queue_head),
+                active_tasks: Vec::new(),
+                proposed_tasks: vec![first_proposal, second_proposal],
+                skipped_tasks: Vec::new(),
+            },
+        )
+        .with_queue_idle_policy(
+            QueueIdlePolicy::ReviewAndEnqueue,
+            Some("queue.md".to_string()),
+        );
+
+        let report = PlanningDoctorReport::from_runtime_projection(&projection);
+
+        assert_eq!(report.planning_state(), PlanningDoctorState::ReadyWithTask);
+        assert_eq!(report.health(), Some("planning workspace is healthy"));
+        assert_eq!(report.queue_idle_policy(), Some("review_and_enqueue"));
+        assert_eq!(
+            report.queue_summary(),
+            Some("now: Run the current repair task")
+        );
+        assert_eq!(report.proposal_summary(), Some("Review follow-up proposal"));
+        assert_eq!(report.issue(), None);
+        assert_eq!(report.note(), None);
+    }
+
+    #[test]
+    fn ready_projection_falls_back_to_aggregate_summaries_without_head_or_proposals() {
+        let projection = PlanningRuntimeProjection::ready_with_details(
+            "prompt".to_string(),
+            "queue idle aggregate".to_string(),
+            Some("proposal aggregate".to_string()),
+            None,
+        );
+
+        let report = PlanningDoctorReport::from_runtime_projection(&projection);
+
+        assert_eq!(
+            report.planning_state(),
+            PlanningDoctorState::ReadyWithoutTask
+        );
+        assert_eq!(report.health(), Some("planning workspace is healthy"));
+        assert_eq!(report.queue_idle_policy(), Some("stop"));
+        assert_eq!(report.queue_summary(), Some("queue idle aggregate"));
+        assert_eq!(report.proposal_summary(), Some("proposal aggregate"));
+        assert_eq!(report.exit_code(), 0);
     }
 
     #[test]
@@ -268,5 +399,35 @@ mod tests {
         assert_eq!(report.health(), Some("planning workspace is healthy"));
         assert_eq!(report.exit_code(), 0);
         std::fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
+    }
+
+    #[test]
+    fn inspect_workspace_reports_loader_errors_as_invalid_report() {
+        let workspace_file = create_temp_file("planning-doctor-loader-error");
+        let report = doctor_service().inspect_workspace(&workspace_file);
+
+        assert_eq!(report.planning_state(), PlanningDoctorState::Invalid);
+        assert_eq!(report.health(), None);
+        assert_eq!(report.exit_code(), 1);
+        assert!(
+            report
+                .issue()
+                .is_some_and(|issue| issue.starts_with("failed to load planning workspace:"))
+        );
+        std::fs::remove_file(workspace_file).expect("temp workspace file should be removed");
+    }
+
+    fn queue_task(task_id: &str, task_title: &str, rank: usize) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank,
+            task_id: task_id.to_string(),
+            direction_id: "direction-a".to_string(),
+            direction_title: "Direction A".to_string(),
+            task_title: task_title.to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 50,
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+            rank_reasons: vec!["test rank".to_string()],
+        }
     }
 }
