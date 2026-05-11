@@ -35,6 +35,7 @@
 			const pathLayer = new PIXI.Graphics();
 			const packetLayer = new PIXI.Container();
 			const agentLayer = new PIXI.Container();
+			agentLayer.sortableChildren = true;
 			app.stage.addChild(pathLayer, packetLayer, agentLayer);
 			const statusPalette = {
 				normal: 3526783,
@@ -45,8 +46,9 @@
 				muted: 10005444
 			};
 			let textures = {};
-			let agentFrames = [];
+			let agentFrameSets = [];
 			let agentUnits = [];
+			let roamSnapshots = /* @__PURE__ */ new Map();
 			let stageBurst = 0;
 			let elapsed = 0;
 			let resizeObserver = null;
@@ -97,10 +99,68 @@
 				return "normal";
 			};
 			const colorFor = (severity) => statusPalette[severity] || statusPalette.normal;
+			const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+			const lerp = (a, b, t) => a + (b - a) * t;
+			const distanceBetween = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+			const seededRatio = (index, routeIndex, salt) => {
+				const raw = Math.sin((index + 1) * 12.9898 + (routeIndex + 1) * 78.233 + salt * 37.719) * 43758.5453;
+				return raw - Math.floor(raw);
+			};
+			const roamBounds = () => {
+				const { width, height } = boardSize();
+				const horizontalInset = Math.min(width * .5, Math.max(56, width * .08));
+				const topInset = Math.min(height * .5, Math.max(118, height * .19));
+				const bottomInset = Math.max(58, height * .08);
+				return {
+					left: horizontalInset,
+					right: Math.max(horizontalInset, width - horizontalInset),
+					top: topInset,
+					bottom: Math.max(topInset, height - bottomInset)
+				};
+			};
+			const clampRoamPoint = (point) => {
+				const bounds = roamBounds();
+				return {
+					x: clamp(point.x, bounds.left, bounds.right),
+					y: clamp(point.y, bounds.top, bounds.bottom)
+				};
+			};
+			const chooseRoamPoint = (index, routeIndex) => {
+				const bounds = roamBounds();
+				return {
+					x: lerp(bounds.left, bounds.right, seededRatio(index, routeIndex, 1)),
+					y: lerp(bounds.top, bounds.bottom, seededRatio(index, routeIndex, 2))
+				};
+			};
 			const makeAtlasFrame = (texture, col, row = 0) => {
 				const baseTexture = texture?.baseTexture;
 				if (!baseTexture || typeof PIXI.Rectangle === "undefined") return null;
 				return new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * 64, row * 96, 64, 96));
+			};
+			const makeFrameRow = (texture, row, startCol) => Array.from({ length: 4 }, (_, index) => makeAtlasFrame(texture, startCol + index, row)).filter(isPixiTexture);
+			const buildAgentFrameSets = (texture) => {
+				return [
+					{
+						down: makeFrameRow(texture, 0, 0),
+						side: makeFrameRow(texture, 1, 0),
+						up: makeFrameRow(texture, 2, 0)
+					},
+					{
+						down: makeFrameRow(texture, 0, 4),
+						side: makeFrameRow(texture, 1, 4),
+						up: makeFrameRow(texture, 2, 4)
+					},
+					{
+						down: makeFrameRow(texture, 3, 0),
+						side: makeFrameRow(texture, 4, 0),
+						up: makeFrameRow(texture, 4, 0)
+					},
+					{
+						down: makeFrameRow(texture, 3, 4),
+						side: makeFrameRow(texture, 4, 4),
+						up: makeFrameRow(texture, 4, 4)
+					}
+				].filter((set) => set.down.length > 0 && set.side.length > 0 && set.up.length > 0);
 			};
 			const resolvePoint = (node, fallback, xBias = .5, yBias = .76) => {
 				if (!node) return fallback;
@@ -132,6 +192,7 @@
 				return packet;
 			};
 			const makeAgentUnit = (node, index) => {
+				const agentId = node.dataset.agentId || `agent-${index}`;
 				const severity = parseSeverity(node);
 				const color = colorFor(severity);
 				const group = new PIXI.Container();
@@ -140,7 +201,8 @@
 				shadow.drawEllipse(0, 0, 30, 8);
 				shadow.endFill();
 				const ring = new PIXI.Graphics();
-				const texture = agentFrames.length ? agentFrames[index % agentFrames.length] : null;
+				const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
+				const texture = frameSet?.down[0] || null;
 				const sprite = texture ? new PIXI.Sprite(texture) : null;
 				if (sprite) {
 					sprite.anchor.set(.5, 1);
@@ -162,7 +224,14 @@
 					stageBurst = Math.min(stageBurst + .55, 1.4);
 				});
 				const points = fallbackPoints();
+				const fallbackPoint = resolvePoint(node, points[index % points.length], .5, .78);
+				const snapshot = roamSnapshots.get(agentId);
+				const routeIndex = snapshot?.routeIndex ?? index * 5;
+				const point = clampRoamPoint(snapshot?.point || fallbackPoint);
+				let destination = clampRoamPoint(snapshot?.destination || chooseRoamPoint(index, routeIndex));
+				if (distanceBetween(point, destination) < 54) destination = chooseRoamPoint(index, routeIndex + 1);
 				return {
+					agentId,
 					node,
 					index,
 					color,
@@ -170,9 +239,17 @@
 					ring,
 					sprite,
 					packet,
-					point: points[index % points.length],
+					frameSet,
+					point,
+					destination,
 					phase: index * .23,
 					speed: .16 + index * .025,
+					walkSpeed: 34 + index * 4,
+					routeIndex,
+					waitUntil: snapshot?.waitUntil ?? 0,
+					facing: "down",
+					facingSign: 1,
+					isWalking: false,
 					targetKind: index % 2 === 0 ? "distributor" : "events"
 				};
 			};
@@ -191,23 +268,79 @@
 				};
 				const points = fallbackPoints();
 				for (const unit of agentUnits) {
-					unit.point = resolvePoint(unit.node, points[unit.index % points.length], .5, .78);
+					const fallbackPoint = resolvePoint(unit.node, points[unit.index % points.length], .5, .78);
+					unit.point = clampRoamPoint(unit.point || fallbackPoint);
+					unit.destination = clampRoamPoint(unit.destination || chooseRoamPoint(unit.index, 0));
 					unit.group.x = unit.point.x;
 					unit.group.y = unit.point.y;
 				}
 			};
+			const rememberRoamSnapshots = () => {
+				roamSnapshots = new Map(agentUnits.map((unit) => [unit.agentId, {
+					point: { ...unit.point },
+					destination: { ...unit.destination },
+					routeIndex: unit.routeIndex,
+					waitUntil: unit.waitUntil
+				}]));
+			};
 			const rebuildAgentUnits = () => {
+				rememberRoamSnapshots();
 				for (const child of packetLayer.removeChildren()) child.destroy({ children: true });
 				for (const child of agentLayer.removeChildren()) child.destroy({ children: true });
 				agentUnits = root ? [...root.querySelectorAll(".desk[data-agent-id]")].map(makeAgentUnit) : [];
 				syncLayout();
 			};
-			const lerp = (a, b, t) => a + (b - a) * t;
+			const setNextRoamTarget = (unit) => {
+				unit.routeIndex += 1;
+				unit.destination = chooseRoamPoint(unit.index, unit.routeIndex);
+				if (distanceBetween(unit.point, unit.destination) < 72) {
+					unit.routeIndex += 1;
+					unit.destination = chooseRoamPoint(unit.index, unit.routeIndex);
+				}
+				unit.waitUntil = 0;
+			};
+			const updateFacing = (unit, dx, dy) => {
+				if (Math.abs(dx) > Math.abs(dy) * .72) {
+					unit.facing = "side";
+					unit.facingSign = dx < 0 ? 1 : -1;
+					return;
+				}
+				unit.facing = dy < 0 ? "up" : "down";
+			};
+			const updateRoamMotion = (unit, delta) => {
+				const dt = Math.min(delta / 60, .08);
+				const dx = unit.destination.x - unit.point.x;
+				const dy = unit.destination.y - unit.point.y;
+				const distance = Math.hypot(dx, dy);
+				if (distance <= 3) {
+					unit.isWalking = false;
+					if (unit.waitUntil === 0) unit.waitUntil = elapsed + .2 + seededRatio(unit.index, unit.routeIndex, 3) * .8;
+					if (elapsed >= unit.waitUntil) setNextRoamTarget(unit);
+					return;
+				}
+				unit.isWalking = true;
+				updateFacing(unit, dx, dy);
+				const step = Math.min(distance, unit.walkSpeed * (1 + stageBurst * .1) * dt);
+				unit.point = clampRoamPoint({
+					x: unit.point.x + dx / distance * step,
+					y: unit.point.y + dy / distance * step
+				});
+			};
+			const applyWalkFrame = (unit) => {
+				if (!unit.sprite || !unit.frameSet) return;
+				const frames = unit.frameSet[unit.facing];
+				if (frames.length === 0) return;
+				const frameIndex = unit.isWalking ? Math.floor((elapsed * 7.5 + unit.phase * 6) % frames.length) : 0;
+				unit.sprite.texture = frames[frameIndex] || frames[0];
+				unit.sprite.scale.set(unit.facing === "side" ? unit.facingSign * .72 : .72, .72);
+			};
 			const renderTick = (delta) => {
 				elapsed += delta / 60;
 				stageBurst = Math.max(0, stageBurst - delta * .018);
 				pathLayer.clear();
 				for (const unit of agentUnits) {
+					updateRoamMotion(unit, delta);
+					applyWalkFrame(unit);
 					const target = targets[unit.targetKind] || targets.distributor;
 					const start = {
 						x: unit.point.x,
@@ -229,7 +362,9 @@
 					unit.packet.alpha = .42 + Math.sin(travel * Math.PI) * .42 + stageBurst * .12;
 					unit.packet.scale.set(.92 + stageBurst * .18);
 					const bob = Math.sin(elapsed * 3.4 + unit.phase * 8) * 2.2;
+					unit.group.x = unit.point.x;
 					unit.group.y = unit.point.y + bob - stageBurst * 1.5;
+					unit.group.zIndex = unit.point.y;
 					unit.ring.clear();
 					unit.ring.lineStyle(2, unit.color, .58 + stageBurst * .2);
 					const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * .12 + stageBurst * .12;
@@ -243,7 +378,7 @@
 				} catch (error) {
 					console.warn(`Failed to load sprite: ${key}`, error);
 				}
-				agentFrames = Array.from({ length: 8 }, (_, index) => makeAtlasFrame(textures.agentAtlas, index)).filter(isPixiTexture);
+				agentFrameSets = buildAgentFrameSets(textures.agentAtlas);
 			};
 			const onMissionPulse = (event) => {
 				const detail = event.detail;

@@ -216,6 +216,10 @@ for token in \
   'gamebaljeonguk_atlas_64x96.png' \
   'makePacket' \
   'statusPalette' \
+  'chooseRoamPoint' \
+  'updateRoamMotion' \
+  'applyWalkFrame' \
+  'buildAgentFrameSets' \
   'rebuildAgentUnits' \
   'akra:dashboard-rendered'; do
   require_contains "${game_js}" "${token}"
