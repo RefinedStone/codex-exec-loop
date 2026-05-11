@@ -398,7 +398,9 @@ planning footer도 conversation cache가 없는 loading/failed surface에서는 
 planning projection을 읽는다. Ready conversation의 planning footer, queue overlay,
 planning status tail, existing workspace popup도 core planning projection을 읽고,
 resumed-session status copy와 post-turn evaluation context도 core planning projection을
-읽는다. conversation cache는 private reducer/event compatibility cache로만 남아 있다.
+읽는다. conversation cache는 `reducer_event_projection_cache` 이름의 private reducer/event
+compatibility cache로만 남아 있고, production rendering/post-turn worker context가 이를
+authority로 읽지 못하게 source guard를 둔다.
 
 ## 상태 소유권 표
 
@@ -410,7 +412,7 @@ resumed-session status copy와 post-turn evaluation context도 core planning pro
 | turn stream reduction | core runtime | core runtime | 완료된 orchestration 기준선이다. app-server stream은 UI가 아니라 app runtime event다. |
 | manual prompt intake/bootstrap | core effect + application service; TUI overlay application | core/application runtime | planning task intake는 use case다. TUI는 prompt buffer와 review overlay 표시만 가진다. |
 | post-turn continuation/evaluation | core effect/application service + TUI accepted completion application/stale guard 일부 | core runtime/application service | 남은 orchestration이다. stale/duplicate guard는 core/application completion boundary로 옮기고 TUI는 accepted presentation update만 적용한다. |
-| planning runtime projection | core projection + private Ready conversation reducer/event compatibility cache | core app state 또는 application projection | 남은 compatibility cache다. 제거하거나 authority가 아닌 reducer/event projection cache로 이름과 guard를 낮춘다. |
+| planning runtime projection | core projection + private Ready conversation `reducer_event_projection_cache` | core app state 또는 application projection | TUI cache는 reducer/event sync 전용이다. rendering과 post-turn worker context는 core projection을 읽고, source guard가 production leak을 막는다. |
 | parallel-mode status | application control-plane + core projection | application control-plane + core projection | 기존 single-writer gate를 유지하고 core는 projection만 노출한다. TUI fallback authority는 두지 않는다. |
 | inline command/overlay/auto-follow routing | TUI shell/input reducers | TUI presentation routing + application/domain decision | 남은 분류 작업이다. UI-only routing은 TUI에 남기고 business policy는 application/domain으로 이동한다. |
 | overlay open/close | TUI | TUI | 남겨도 되는 presentation state다. |

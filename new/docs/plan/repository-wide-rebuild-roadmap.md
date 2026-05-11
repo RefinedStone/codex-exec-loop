@@ -50,13 +50,14 @@ app lifecycle, business decision, background orchestration은 core/application/d
 `AppCommand::PrepareManualPrompt` -> `CoreEffect::PrepareManualPrompt` ->
 application `ManualPromptPreparationService` 경로를 탄다. parallel/planning 표시 경로는
 core `AppSnapshot` projection을 우선 읽고, TUI write-through cache/fallback authority는
-제거됐다.
+제거됐다. Ready conversation의 compatibility cache는
+`reducer_event_projection_cache`로 낮췄고, production rendering/post-turn worker
+context가 이 cache를 authority로 읽지 못하게 source guard를 둔다.
 
 남은 기준은 TUI가 화면 adapter로만 남는지이다.
 
 | 영역 | 남은 문제 |
 | --- | --- |
-| Ready conversation compatibility cache | `planning_runtime_projection` 호환 cache가 private reducer/event 범위로 남아 있다. 제거하거나 이름을 `reducer_event_projection_cache` 수준으로 더 낮추고, production 경로가 authority처럼 읽지 않는다는 guard가 필요하다. |
 | TUI post-turn completion application | stale/duplicate post-turn completion guard와 accepted completion 적용 boundary가 아직 TUI view model에 남아 있다. guard는 core/application completion boundary로 이동하고, TUI는 승인된 presentation update만 적용해야 한다. |
 | conversation lifecycle presentation reducer | `ConversationState::Loading/Ready/Failed`가 app lifecycle 의미까지 담는 경로가 남아 있다. core snapshot을 lifecycle authority로 읽고, TUI에는 prompt buffer, cursor, transcript render cache만 남긴다. |
 | inline shell/overlay routing | inline command, overlay, auto-follow controls 중 application/domain policy가 섞인 routing을 재분류해야 한다. TUI-only routing은 유지하고 business decision은 application/domain으로 이동한다. |
@@ -65,9 +66,7 @@ core `AppSnapshot` projection을 우선 읽고, TUI write-through cache/fallback
 
 | Slice | 상태 | 목표 |
 | --- | --- | --- |
-| TUI-THIN-DOC-01 | next | 완료된 core-runtime slice 기록을 제거하고 남은 thin-adapter 기준만 문서화한다. 코드 변경은 없다. |
-| TUI-THIN-CACHE-02 | todo | Ready conversation `planning_runtime_projection` compatibility cache를 제거하거나, 제거 불가 시 `reducer_event_projection_cache` 수준으로 축소하고 production path guard를 추가한다. |
-| TUI-THIN-POSTTURN-03 | todo | stale/duplicate post-turn completion guard를 TUI view model에서 core/application completion boundary로 옮긴다. TUI는 accepted completion을 presentation state에 적용한다. |
+| TUI-THIN-POSTTURN-03 | next | stale/duplicate post-turn completion guard를 TUI view model에서 core/application completion boundary로 옮긴다. TUI는 accepted completion을 presentation state에 적용한다. |
 | TUI-THIN-CONVERSATION-04 | todo | `ConversationState::Loading/Ready/Failed` 중 app lifecycle 의미를 core snapshot 기준으로 읽게 하고, TUI에는 prompt buffer, cursor, transcript render cache만 남긴다. |
 | TUI-THIN-ROUTING-05 | todo | inline command, overlay, auto-follow controls 중 application/domain policy가 섞인 routing을 재분류한다. TUI-only routing은 유지하고 business decision은 application/domain으로 이동한다. |
 

@@ -403,7 +403,7 @@ pub(super) fn reduce_conversation_runtime(
             } = *evaluation;
             // Apply the new planning view before acting on the decision; queued
             // or skipped auto-follow copy should describe the latest queue state.
-            state.replace_cached_planning_runtime_projection(runtime_projection);
+            state.replace_reducer_event_projection_cache(runtime_projection);
             state.planning_repair_state = planning_repair_state;
             state.extend_runtime_notices(runtime_notices);
             match action {

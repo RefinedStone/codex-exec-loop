@@ -144,7 +144,7 @@ fn planning_runtime() -> PlanningRuntimeUseCases {
 #[test]
 fn queue_handoff_prompt_renders_for_auto_follow() {
     let mut conversation = ready_conversation();
-    conversation.replace_cached_planning_runtime_projection(sample_planning_runtime_projection(
+    conversation.replace_reducer_event_projection_cache(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: task-1",
     ));
@@ -357,7 +357,7 @@ fn auto_follow_stops_without_file_changes_when_rule_is_enabled() {
 #[test]
 fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
     let mut conversation = ready_conversation();
-    conversation.replace_cached_planning_runtime_projection(sample_planning_runtime_projection(
+    conversation.replace_reducer_event_projection_cache(sample_planning_runtime_projection(
         "Planning Context",
         "queue head: task-1",
     ));
@@ -390,7 +390,7 @@ fn auto_follow_continues_when_file_changes_exist_and_stop_rule_is_enabled() {
 #[test]
 fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
     let mut conversation = ready_conversation();
-    conversation.replace_cached_planning_runtime_projection(
+    conversation.replace_reducer_event_projection_cache(
         sample_proposal_only_planning_runtime_projection(
             "Planning Context\nRuntime Follow-up Proposal Rules",
             "queue idle: no executable planning task",
@@ -413,7 +413,7 @@ fn auto_follow_skips_main_refresh_prompt_when_queue_is_idle() {
 #[test]
 fn auto_follow_skips_when_planning_runtime_projection_is_invalid() {
     let mut conversation = ready_conversation();
-    conversation.replace_cached_planning_runtime_projection(PlanningRuntimeProjection::invalid(
+    conversation.replace_reducer_event_projection_cache(PlanningRuntimeProjection::invalid(
         "planning validation failed: task authority is invalid",
     ));
     conversation.messages.push(ConversationMessage::new(

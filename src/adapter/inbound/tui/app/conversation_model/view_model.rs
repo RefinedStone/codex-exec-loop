@@ -113,8 +113,9 @@ pub(crate) struct ConversationViewModel {
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
-    // Transitional service snapshot used only by reducers and post-turn automation decisions.
-    planning_runtime_projection: PlanningRuntimeProjection,
+    // Transitional service snapshot used only by reducer/event synchronization.
+    // Rendering and post-turn worker context must read the core snapshot instead.
+    reducer_event_projection_cache: PlanningRuntimeProjection,
     pub(crate) turn_activity: TurnActivityState,
     // Approval review is tied to the currently streaming turn and cleared on a new turn.
     pub(crate) approval_review: Option<ConversationApprovalReview>,
@@ -156,7 +157,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(),
-            planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
+            reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
@@ -211,7 +212,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(),
-            planning_runtime_projection: PlanningRuntimeProjection::uninitialized(),
+            reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
@@ -227,15 +228,15 @@ impl ConversationViewModel {
     pub(crate) fn turn_control_truth(&self) -> ConversationRuntimeControlTruth {
         self.turn_control_truth
     }
-    pub(crate) fn cached_planning_runtime_projection(&self) -> &PlanningRuntimeProjection {
-        &self.planning_runtime_projection
+    pub(crate) fn reducer_event_projection_cache(&self) -> &PlanningRuntimeProjection {
+        &self.reducer_event_projection_cache
     }
-    pub(crate) fn replace_cached_planning_runtime_projection(
+    pub(crate) fn replace_reducer_event_projection_cache(
         &mut self,
-        planning_runtime_projection: PlanningRuntimeProjection,
+        reducer_event_projection_cache: PlanningRuntimeProjection,
     ) {
         // The app polls planning state outside the conversation stream; reducers keep this compatibility copy.
-        self.planning_runtime_projection = planning_runtime_projection;
+        self.reducer_event_projection_cache = reducer_event_projection_cache;
     }
     pub(crate) fn sync_inline_shell_command_palette(&mut self) {
         let preferred_selection = self.inline_shell_command_palette_state.selected_command();
@@ -549,7 +550,10 @@ impl ConversationViewModel {
         &self,
         planning_runtime: &PlanningRuntimeUseCases,
     ) -> AutoFollowDecision {
-        self.decide_auto_follow_with_snapshot(planning_runtime, &self.planning_runtime_projection)
+        self.decide_auto_follow_with_snapshot(
+            planning_runtime,
+            &self.reducer_event_projection_cache,
+        )
     }
     #[cfg(test)]
     pub(crate) fn decide_auto_follow_with_snapshot(

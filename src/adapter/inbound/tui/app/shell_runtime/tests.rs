@@ -309,14 +309,19 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
     assert!(!APP_RS.contains("parallel_mode_readiness_snapshot:"));
     assert!(!APP_RS.contains("parallel_mode_supervisor_snapshot:"));
-    assert!(CONVERSATION_VIEW_MODEL_RS.contains("fn cached_planning_runtime_projection"));
+    assert!(CONVERSATION_VIEW_MODEL_RS.contains("fn reducer_event_projection_cache"));
     assert!(!CONVERSATION_VIEW_MODEL_RS.contains("pub(crate) planning_runtime_projection"));
     assert!(
         !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
     );
     assert!(!PLAN_INDICATOR_RS.contains("load_planning_runtime_projection"));
     assert!(POST_TURN_EXECUTION_RS.contains("self.planning_runtime_projection_snapshot()"));
-    assert!(!POST_TURN_EXECUTION_RS.contains("cached_planning_runtime_projection"));
+    assert!(!POST_TURN_EXECUTION_RS.contains("reducer_event_projection_cache"));
+    assert!(!CONVERSATION_VIEW_MODEL_RS.contains("cached_planning_runtime_projection"));
+    assert!(
+        !CONVERSATION_VIEW_MODEL_RS
+            .contains("planning_runtime_projection: PlanningRuntimeProjection")
+    );
     for source in [
         PLAN_INDICATOR_RS,
         QUEUE_OVERLAY_RS,
@@ -325,6 +330,75 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     ] {
         assert!(!source.contains("conversation.planning_runtime_projection"));
     }
+}
+
+#[test]
+fn reducer_event_projection_cache_stays_out_of_production_read_paths() {
+    fn collect_rust_sources(root: &Path, sources: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(root).expect("source directory should be readable") {
+            let path = entry.expect("source entry should be readable").path();
+            if path.is_dir() {
+                collect_rust_sources(&path, sources);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                sources.push(path);
+            }
+        }
+    }
+
+    fn is_test_source(relative_path: &Path) -> bool {
+        relative_path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+            || relative_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+    }
+
+    const ALLOWED_PRODUCTION_CACHE_FILES: &[&str] = &[
+        "app_runtime.rs",
+        "conversation/controller.rs",
+        "conversation_model/view_model.rs",
+        "conversation_runtime.rs",
+    ];
+
+    let app_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapter/inbound/tui/app");
+    let mut sources = Vec::new();
+    collect_rust_sources(&app_dir, &mut sources);
+
+    let mut unexpected_cache_mentions = Vec::new();
+    let mut legacy_cache_mentions = Vec::new();
+    for path in sources {
+        let relative_path = path
+            .strip_prefix(&app_dir)
+            .expect("source path should be below app dir");
+        if is_test_source(relative_path) {
+            continue;
+        }
+        let relative_name = relative_path.to_string_lossy().replace('\\', "/");
+        let source = fs::read_to_string(&path).expect("source file should be readable");
+        if source.contains("cached_planning_runtime_projection")
+            || source.contains("replace_cached_planning_runtime_projection")
+        {
+            legacy_cache_mentions.push(relative_name.clone());
+        }
+        if source.contains("reducer_event_projection_cache")
+            && !ALLOWED_PRODUCTION_CACHE_FILES
+                .iter()
+                .any(|allowed| *allowed == relative_name)
+        {
+            unexpected_cache_mentions.push(relative_name);
+        }
+    }
+
+    assert!(
+        legacy_cache_mentions.is_empty(),
+        "legacy ready-conversation planning cache names remain in production sources: {legacy_cache_mentions:?}"
+    );
+    assert!(
+        unexpected_cache_mentions.is_empty(),
+        "reducer/event planning cache leaked outside reducer synchronization files: {unexpected_cache_mentions:?}"
+    );
 }
 
 fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFixture {
