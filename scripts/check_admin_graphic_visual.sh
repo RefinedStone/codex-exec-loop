@@ -29,7 +29,7 @@ require_contains() {
   local file="$1"
   local needle="$2"
 
-  if ! grep -Fq "${needle}" "${file}"; then
+  if ! grep -Fq -- "${needle}" "${file}"; then
     echo "missing expected visual contract token in ${file}: ${needle}" >&2
     return 1
   fi
@@ -39,7 +39,7 @@ require_not_contains() {
   local file="$1"
   local needle="$2"
 
-  if grep -Fq "${needle}" "${file}"; then
+  if grep -Fq -- "${needle}" "${file}"; then
     echo "unexpected visual contract token in ${file}: ${needle}" >&2
     return 1
   fi
@@ -155,9 +155,8 @@ for token in \
   '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
   'MISSION FLOW' \
-  'Automation Epoch' \
-  'Last Updated' \
-  'akra_admin' \
+  'stage-refresh-btn' \
+  '--office-board-height: 620px' \
   'data-admin-graphic' \
   'data-api-base' \
   'data-poll-interval-ms' \
@@ -186,11 +185,18 @@ for token in \
   'stale snapshot' \
   'skeleton-line' \
   'grid-template-columns: repeat(8' \
-  'max-height: 540px' \
+  'max-height: var(--office-board-height)' \
   'overflow: auto' \
   'text-overflow: ellipsis' \
   '@media (max-width: 860px)'; do
   require_contains "${admin_html}" "${token}"
+done
+
+for token in \
+  'class="akra-topbar"' \
+  'akra_admin' \
+  'Last Updated'; do
+  require_not_contains "${admin_html}" "${token}"
 done
 
 for token in \

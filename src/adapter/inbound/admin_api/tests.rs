@@ -233,7 +233,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "배포 파이프라인",
         "실시간 이벤트",
         "운영 지표",
-        "akra_admin",
         "길드 성과",
         "시도 보드",
         "최근 시도 로그",
@@ -271,6 +270,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "akra-office-background.png",
         "akra-object-sprites.png",
         "MISSION FLOW",
+        "stage-refresh-btn",
         "data-agent-progress",
         "is-bursting",
         "akra:mission-pulse",
@@ -351,7 +351,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "background-image: var(--agent-sprite-sheet)",
         "background-size: 384px 504px",
         "background-position: -288px 0",
-        "max-height: 540px",
+        "--office-board-height: 620px",
+        "max-height: var(--office-board-height)",
         "overflow: auto",
         "text-overflow: ellipsis",
         "@media (max-width: 860px)",
@@ -385,6 +386,13 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
                 || BASE_TEMPLATE.contains(token)
                 || AKRA_DASHBOARD_RS.contains(token),
             "graphic visual contract should keep {token}"
+        );
+    }
+
+    for removed in ["class=\"akra-topbar\"", "akra_admin", "Last Updated"] {
+        assert!(
+            !AKRA_DASHBOARD_TEMPLATE.contains(removed),
+            "graphic dashboard should not restore removed top header token {removed}"
         );
     }
 

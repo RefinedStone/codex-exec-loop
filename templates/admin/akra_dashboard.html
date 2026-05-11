@@ -17,6 +17,7 @@
     --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
     --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
     --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
+    --office-board-height: 620px;
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -31,96 +32,11 @@
     pointer-events: none;
     background-image: var(--office-bg-image);
   }
-  .akra-topbar {
-    display: grid;
-    grid-template-columns: minmax(260px, 1fr) repeat(4, auto) minmax(180px, auto);
-    gap: 18px;
-    align-items: center;
-    padding: 0 2px 16px;
-    border-bottom: 1px solid rgba(148, 170, 204, 0.12);
-  }
-  .akra-title {
-    display: flex;
-    gap: 13px;
-    align-items: center;
-  }
-  .pixel-emblem,
-  .pixel-avatar {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 46px;
-    height: 46px;
-    border-radius: 0;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    background:
-      linear-gradient(90deg, transparent 12px, rgba(255,255,255,0.08) 12px 14px, transparent 14px),
-      linear-gradient(#203b63 0 48%, #5a442e 48% 100%);
-    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.5);
-  }
-  .pixel-emblem::before,
-  .pixel-avatar::before {
-    content: "";
-    width: 24px;
-    height: 20px;
-    border-radius: 0;
-    background:
-      linear-gradient(90deg, #f0c64c 0 5px, transparent 5px 9px, #f0c64c 9px 14px, transparent 14px 18px, #f0c64c 18px 100%),
-      linear-gradient(#1d304e 0 50%, #2b1720 50% 100%);
-  }
-  .pixel-avatar {
-    width: 38px;
-    height: 38px;
-    background: linear-gradient(#143b5e 0 45%, #513c28 45% 100%);
-  }
-  .akra-title h2 {
-    margin: 0;
-    font-size: 27px;
-    line-height: 1.05;
-    letter-spacing: 0;
-  }
-  .akra-title small,
-  .top-stat small,
+  .stage-hud small,
   .akra-game p,
   .akra-game small {
     color: var(--game-muted);
   }
-  .top-stat {
-    display: grid;
-    gap: 4px;
-    min-width: 130px;
-    padding: 0 18px;
-    border-left: 1px solid rgba(148, 170, 204, 0.14);
-  }
-  .top-stat strong {
-    color: var(--game-ink);
-    font-size: 14px;
-  }
-  .mode-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    white-space: nowrap;
-  }
-  .mode-toggle b {
-    padding: 4px 10px;
-    border-radius: 0;
-    color: #061525;
-    background: var(--game-green);
-    font-size: 12px;
-    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
-  }
-  .admin-user {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 10px;
-  }
-  .admin-user strong,
-  .admin-user small {
-    display: block;
-  }
-  .graphic-action-btn,
   .drawer-close {
     appearance: none;
     color: var(--game-ink);
@@ -131,17 +47,10 @@
     background: rgba(93, 169, 255, 0.12);
     box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.08);
   }
-  .graphic-action-btn {
-    min-height: 40px;
-    padding: 8px 12px;
-    white-space: nowrap;
-  }
-  .graphic-action-btn:hover,
   .drawer-close:hover {
     border-color: rgba(53, 208, 127, 0.55);
     background: rgba(53, 208, 127, 0.13);
   }
-  .graphic-action-btn:active,
   .drawer-close:active,
   .slot-card:active,
   .campaign-lane:active,
@@ -152,7 +61,6 @@
   .queue-row[data-detail-type]:active {
     transform: translate(2px, 2px);
   }
-  .graphic-action-btn:focus-visible,
   .drawer-close:focus-visible,
   [data-detail-type]:focus-visible {
     outline: 3px solid rgba(93, 169, 255, 0.78);
@@ -336,7 +244,7 @@
   }
   .office-board {
     position: relative;
-    min-height: 540px;
+    min-height: var(--office-board-height);
     overflow: hidden;
     isolation: isolate;
     background:
@@ -394,12 +302,19 @@
     top: 16px;
     z-index: 6;
     display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 3px;
     min-width: 150px;
     padding: 10px 12px;
     border: 2px solid rgba(53, 208, 127, 0.36);
     background: rgba(5, 15, 28, 0.78);
     box-shadow: inset 2px 2px 0 rgba(255,255,255,0.08), inset -2px -2px 0 rgba(0,0,0,0.38), 4px 4px 0 rgba(0,0,0,0.38);
+  }
+  .stage-hud span,
+  .stage-hud strong,
+  .stage-hud small,
+  .poll-status {
+    grid-column: 1;
   }
   .stage-hud span {
     color: var(--game-muted);
@@ -410,6 +325,35 @@
     color: var(--game-green);
     font-size: 20px;
     line-height: 1;
+  }
+  .stage-refresh-btn {
+    appearance: none;
+    grid-column: 2;
+    grid-row: 1 / span 4;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    color: #061525;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 900;
+    cursor: pointer;
+    border-radius: 0;
+    border: 2px solid rgba(255,255,255,0.2);
+    background: var(--game-green);
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.16);
+  }
+  .stage-refresh-btn:hover {
+    filter: brightness(1.12);
+  }
+  .stage-refresh-btn:active {
+    transform: translate(2px, 2px);
+  }
+  .stage-refresh-btn:focus-visible {
+    outline: 3px solid rgba(93, 169, 255, 0.78);
+    outline-offset: 3px;
   }
   .room {
     position: absolute;
@@ -680,8 +624,8 @@
     gap: 12px;
   }
   .right-stack {
-    grid-template-rows: minmax(250px, 1.15fr) minmax(210px, 0.85fr);
-    max-height: 540px;
+    grid-template-rows: minmax(290px, 1.15fr) minmax(250px, 0.85fr);
+    max-height: var(--office-board-height);
   }
   .game-panel {
     padding: 14px;
@@ -1059,6 +1003,7 @@
     background: rgba(255, 107, 107, 0.12);
   }
   .poll-status {
+    display: block;
     color: var(--game-muted);
   }
   .poll-status.is-stale,
@@ -1116,14 +1061,12 @@
     .bottom-grid { grid-template-columns: 1fr; }
   }
   @media (max-width: 860px) {
-    .akra-topbar,
     .kpi-grid,
     .campaign-grid,
     .campaign-summary,
     .intel-grid,
     .pipeline,
     .timeline { grid-template-columns: 1fr; }
-    .admin-user { justify-content: flex-start; }
     .office-board {
       display: grid;
       gap: 12px;
@@ -1176,36 +1119,6 @@
   data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
   data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
-  <header class="akra-topbar">
-    <div class="akra-title">
-      <span class="pixel-emblem" aria-hidden="true"></span>
-      <div>
-        <h2>게임발전국</h2>
-        <small>AKRA ADMIN CONTROL CENTER</small>
-      </div>
-    </div>
-    <div class="top-stat mode-toggle">
-      <small>Parallel Mode</small>
-      <b>ON</b>
-    </div>
-    <div class="top-stat">
-      <small>Automation Epoch</small>
-      <strong data-automation-epoch>#{{ dashboard.automation_epoch }}</strong>
-    </div>
-    <div class="top-stat">
-      <small>Last Updated</small>
-      <strong data-last-updated>{{ dashboard.generated_time_label }}</strong>
-    </div>
-    <button type="button" class="graphic-action-btn" data-refresh-dashboard>Refresh</button>
-    <div class="admin-user">
-      <span class="pixel-avatar" aria-hidden="true"></span>
-      <div>
-        <strong>akra_admin</strong>
-        <small>최고 관리자</small>
-      </div>
-    </div>
-  </header>
-
   {% if let Some(notice) = dashboard.workspace.top_notice %}
   <div class="notice error-notice">{{ notice }}</div>
   {% endif %}
@@ -1327,10 +1240,12 @@
   <div class="board-row">
     <div class="office-board" id="agents" aria-label="AKRA isometric office board">
       <div id="pixi-diorama" aria-hidden="true"></div>
-      <div class="stage-hud" aria-hidden="true">
+      <div class="stage-hud" aria-label="Mission flow">
         <span>MISSION FLOW</span>
         <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>
-        <small>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
+        <small data-stage-summary>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
+        <small data-automation-epoch>#{{ dashboard.automation_epoch }}</small>
+        <button type="button" class="stage-refresh-btn" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">R</button>
       </div>
       <div class="scene-object object-sprite server-rack" aria-hidden="true"></div>
       <div class="scene-object object-sprite whiteboard" aria-hidden="true"></div>
@@ -2532,7 +2447,7 @@
     const hud = root.querySelector(".stage-hud");
     if (!hud) return;
     const strong = hud.querySelector("strong");
-    const small = hud.querySelector("small");
+    const small = hud.querySelector("[data-stage-summary]");
     if (strong) strong.textContent = `${formatValue(dashboard.campaign?.activeLaneCount, "0")} lanes`;
     if (small) {
       small.textContent = `${optionalText(dashboard.distributor?.barrierState)} · ${formatValue(dashboard.eventFeed?.totalEventCount, "0")} signals`;
@@ -2782,7 +2697,6 @@
   };
 
   const updateDashboard = (dashboard) => {
-    setText("[data-last-updated]", dashboard.generatedTimeLabel);
     setText("[data-automation-epoch]", `#${formatValue(dashboard.automationEpoch, "0")}`);
     const values = {
       totalTasks: formatValue(dashboard.kpis.totalTasks),
@@ -2891,7 +2805,7 @@
   const pollStatus = document.createElement("small");
   pollStatus.className = "poll-status";
   pollStatus.textContent = "polling ready";
-  root.querySelector(".akra-topbar")?.appendChild(pollStatus);
+  root.querySelector(".stage-hud")?.appendChild(pollStatus);
 
   const pollDashboard = async () => {
     setKpiState("loading");
