@@ -289,14 +289,20 @@ impl ParallelModeDistributorService {
             )]);
         };
 
-        process_distributor_queue_record(
+        let notices = process_distributor_queue_record(
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
             &context.repo_root,
             &context.pool_root,
             head,
             self.github_automation.as_ref(),
-        )
+        );
+        let _ = reconcile_pool_board(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            workspace_dir,
+        );
+        notices
     }
 
     // snapshot 읽기는 실패를 운영 오류로 끌어올리지 않고 placeholder로 접는다.

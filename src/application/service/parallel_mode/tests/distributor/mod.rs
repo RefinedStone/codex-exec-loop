@@ -265,6 +265,8 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
     let drained_snapshot =
         service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
     assert_eq!(drained_snapshot.roster.active_count(), 0);
+    assert_eq!(drained_snapshot.pool.blocked_slots, 0);
+    assert_eq!(drained_snapshot.pool.idle_slots, DEFAULT_POOL_SIZE);
     assert_eq!(drained_snapshot.distributor.head_summary, "idle");
     assert_eq!(drained_snapshot.distributor.queue_depth(), 0);
     let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
