@@ -415,3 +415,301 @@ impl PlanningRepairRetryReason {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::planning::{
+        OriginSessionKind, PLANNING_FORMAT_VERSION, TaskActor, TaskMutationProvenance, TaskStatus,
+    };
+
+    #[test]
+    fn repair_prompt_focuses_changed_validation_handoff_and_related_tasks() {
+        let mut accepted_a = task("task-a", "Accepted A", TaskStatus::Ready);
+        accepted_a.depends_on = vec!["task-b".to_string()];
+        let accepted_b = task("task-b", "Accepted B", TaskStatus::Done);
+        let accepted_c = task("task-c", "Unrelated C", TaskStatus::Ready);
+        let accepted = authority(vec![accepted_a, accepted_b, accepted_c]);
+
+        let mut rejected_a = task("task-a", "Accepted A", TaskStatus::Blocked);
+        rejected_a.depends_on = vec!["task-b".to_string()];
+        let rejected_b = task("task-b", "Accepted B", TaskStatus::Done);
+        let rejected_c = task("task-c", "Unrelated C", TaskStatus::Ready);
+        let rejected = authority(vec![rejected_a, rejected_b, rejected_c]);
+        let request = repair_request(
+            authority_json(&accepted),
+            Some(authority_json(&rejected)),
+            vec!["task task-b still blocks the accepted handoff".to_string()],
+        );
+
+        let prompt = build_planning_repair_prompt(
+            &request,
+            Some(PlanningRepairPromptHandoff {
+                task_id: "task-a",
+                task_title: "Accepted A",
+                updated_at: "2026-05-12T00:00:00Z",
+                status_label: "ready",
+            }),
+            2,
+            3,
+            Some(PlanningRepairRetryReason::TaskAuthorityStillInvalid),
+        );
+
+        assert!(prompt.contains("[accepted-task-authority-focus-current-handoff-and-validation]"));
+        assert!(prompt.contains("[rejected-candidate-focus-changed-tasks-and-validation]"));
+        assert!(prompt.contains("\"id\": \"task-a\""));
+        assert!(prompt.contains("\"id\": \"task-b\""));
+        assert!(!prompt.contains("\"id\": \"task-c\""));
+        assert!(prompt.contains("attempt=2/3"));
+        assert!(prompt.contains("validation still failed"));
+        assert!(prompt.contains("task_id=task-a"));
+    }
+
+    #[test]
+    fn repair_prompt_falls_back_to_raw_rejected_candidate_when_json_is_malformed() {
+        let accepted = authority(vec![task("task-a", "Accepted A", TaskStatus::Ready)]);
+        let request = PlanningRepairRequest {
+            failure_summary: "candidate could not be parsed".to_string(),
+            validation_errors: vec!["candidate parse failed near task-a".to_string()],
+            direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
+            accepted_task_authority_json: authority_json(&accepted),
+            accepted_queue_projection_json:
+                "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                    .to_string(),
+            rejected_task_authority_json: Some("{not-json".to_string()),
+            rejected_archive_path: Some("/tmp/rejected/task-authority.json".to_string()),
+        };
+
+        let prompt = build_planning_repair_prompt(&request, None, 1, 2, None);
+
+        assert!(prompt.contains("[rejected-candidate]"));
+        assert!(prompt.contains("{not-json"));
+        assert!(prompt.contains("rejected_archive=/tmp/rejected/task-authority.json"));
+    }
+
+    #[test]
+    fn repair_prompt_falls_back_to_raw_evidence_when_accepted_authority_is_malformed() {
+        let rejected = authority(vec![task("task-a", "Rejected A", TaskStatus::Blocked)]);
+        let request = PlanningRepairRequest {
+            failure_summary: "accepted authority could not be parsed".to_string(),
+            validation_errors: vec!["task task-a failed validation".to_string()],
+            direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
+            accepted_task_authority_json: "{not-json".to_string(),
+            accepted_queue_projection_json:
+                "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                    .to_string(),
+            rejected_task_authority_json: Some(authority_json(&rejected)),
+            rejected_archive_path: None,
+        };
+
+        let prompt = build_planning_repair_prompt(&request, None, 1, 2, None);
+
+        assert!(prompt.contains("[accepted-task-authority]"));
+        assert!(prompt.contains("{not-json"));
+        assert!(prompt.contains("[rejected-candidate]"));
+        assert!(!prompt.contains("[accepted-task-authority-focus-current-handoff-and-validation]"));
+    }
+
+    #[test]
+    fn retry_instruction_lines_cover_all_retry_reasons() {
+        assert!(retry_instruction_lines(None).is_empty());
+        assert!(
+            retry_instruction_lines(Some(PlanningRepairRetryReason::TaskAuthorityUnchanged))[0]
+                .contains("did not change the task command payload")
+        );
+        assert!(
+            retry_instruction_lines(Some(PlanningRepairRetryReason::TaskAuthorityStillInvalid))[0]
+                .contains("validation still failed")
+        );
+    }
+
+    #[test]
+    fn validation_lines_filter_blank_errors_and_include_archive_path() {
+        let request = repair_request(
+            authority_json(&authority(Vec::new())),
+            None,
+            vec![" ".to_string(), "bad status for task-a".to_string()],
+        );
+        let mut request = request;
+        request.rejected_archive_path = Some("/tmp/rejected.json".to_string());
+
+        let lines = validation_lines(&request);
+
+        assert_eq!(lines[0], "failure_summary=repair failed");
+        assert!(lines.contains(&"- bad status for task-a".to_string()));
+        assert!(!lines.iter().any(|line| line == "-  "));
+        assert!(lines.contains(&"rejected_archive=/tmp/rejected.json".to_string()));
+    }
+
+    #[test]
+    fn validation_error_task_id_matching_is_token_exact() {
+        assert!(validation_error_mentions_task_id(
+            "task task-1 has invalid status",
+            "task-1"
+        ));
+        assert!(!validation_error_mentions_task_id(
+            "task task-10 has invalid status",
+            "task-1"
+        ));
+        assert!(validation_error_mentions_task_id(
+            "task task_1 has invalid status",
+            "task_1"
+        ));
+    }
+
+    #[test]
+    fn changed_task_ids_detects_added_removed_and_meaningful_changes() {
+        let mut accepted_unchanged = task("unchanged", "Same title", TaskStatus::Ready);
+        accepted_unchanged.depends_on = vec!["task-z".to_string(), "task-a".to_string()];
+        accepted_unchanged.blocked_by = vec!["blocker-z".to_string(), "blocker-a".to_string()];
+        let accepted = authority(vec![
+            accepted_unchanged,
+            task("removed", "Removed", TaskStatus::Ready),
+            task("changed", "Changed", TaskStatus::Ready),
+        ]);
+        let mut unchanged = task("unchanged", "Same title", TaskStatus::Ready);
+        unchanged.depends_on = vec!["task-a".to_string(), "task-z".to_string()];
+        unchanged.blocked_by = vec!["blocker-a".to_string(), "blocker-z".to_string()];
+        let mut changed = task("changed", "Changed", TaskStatus::Blocked);
+        changed.blocked_by = vec!["new-blocker".to_string()];
+        let rejected = authority(vec![
+            unchanged,
+            changed,
+            task("added", "Added", TaskStatus::Ready),
+        ]);
+
+        let changed_ids = changed_task_ids(&accepted, &rejected);
+
+        assert!(changed_ids.contains("added"));
+        assert!(changed_ids.contains("removed"));
+        assert!(changed_ids.contains("changed"));
+        assert!(!changed_ids.contains("unchanged"));
+    }
+
+    #[test]
+    fn collect_focus_task_ids_expands_dependency_and_blocker_neighborhood() {
+        let mut accepted_a = task("task-a", "A", TaskStatus::Ready);
+        accepted_a.depends_on = vec!["task-b".to_string()];
+        let mut accepted_c = task("task-c", "C", TaskStatus::Blocked);
+        accepted_c.blocked_by = vec!["task-a".to_string()];
+        let accepted = authority(vec![
+            accepted_a,
+            task("task-b", "B", TaskStatus::Done),
+            accepted_c,
+            task("task-d", "D", TaskStatus::Ready),
+        ]);
+
+        let focus_ids = collect_focus_task_ids(
+            &accepted,
+            None,
+            &["task task-a failed validation".to_string()],
+            None,
+        );
+
+        assert!(focus_ids.contains("task-a"));
+        assert!(focus_ids.contains("task-b"));
+        assert!(focus_ids.contains("task-c"));
+        assert!(!focus_ids.contains("task-d"));
+    }
+
+    #[test]
+    fn focus_collection_ignores_blank_handoff_and_keeps_existing_related_ids_stable() {
+        let mut accepted_a = task("task-a", "A", TaskStatus::Ready);
+        accepted_a.depends_on = vec!["task-b".to_string(), " ".to_string()];
+        accepted_a.blocked_by = vec!["task-c".to_string(), String::new()];
+        let accepted = authority(vec![
+            accepted_a,
+            task("task-b", "B", TaskStatus::Ready),
+            task("task-c", "C", TaskStatus::Ready),
+        ]);
+
+        let blank_handoff_focus = collect_focus_task_ids(
+            &accepted,
+            None,
+            &[],
+            Some(PlanningRepairPromptHandoff {
+                task_id: "  ",
+                task_title: "Blank",
+                updated_at: "2026-05-12T00:00:00Z",
+                status_label: "ready",
+            }),
+        );
+        let mut related_focus = BTreeSet::from([
+            "task-a".to_string(),
+            "task-b".to_string(),
+            "task-c".to_string(),
+        ]);
+
+        expand_related_task_ids(&mut related_focus, &accepted);
+
+        assert!(blank_handoff_focus.is_empty());
+        assert_eq!(
+            related_focus,
+            BTreeSet::from([
+                "task-a".to_string(),
+                "task-b".to_string(),
+                "task-c".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn serialize_focused_excerpt_returns_none_without_matching_tasks() {
+        let excerpt = serialize_focused_task_authority_excerpt(
+            &authority(vec![task("task-a", "A", TaskStatus::Ready)]),
+            &BTreeSet::from(["missing-task".to_string()]),
+        );
+
+        assert!(excerpt.is_none());
+    }
+
+    fn repair_request(
+        accepted_task_authority_json: String,
+        rejected_task_authority_json: Option<String>,
+        validation_errors: Vec<String>,
+    ) -> PlanningRepairRequest {
+        PlanningRepairRequest {
+            failure_summary: "repair failed".to_string(),
+            validation_errors,
+            direction_authority_json: "{\"version\":1,\"directions\":[]}".to_string(),
+            accepted_task_authority_json,
+            accepted_queue_projection_json:
+                "{\"next_task\":null,\"active_tasks\":[],\"proposed_tasks\":[],\"skipped_tasks\":[]}"
+                    .to_string(),
+            rejected_task_authority_json,
+            rejected_archive_path: None,
+        }
+    }
+
+    fn authority(tasks: Vec<TaskDefinition>) -> TaskAuthorityDocument {
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks,
+        }
+    }
+
+    fn authority_json(authority: &TaskAuthorityDocument) -> String {
+        serde_json::to_string(authority).expect("authority should serialize")
+    }
+
+    fn task(id: &str, title: &str, status: TaskStatus) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: "dir".to_string(),
+            direction_relation_note: "relation".to_string(),
+            title: title.to_string(),
+            description: format!("Do {title}."),
+            status,
+            base_priority: 10,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::Worker,
+            last_updated_by: TaskActor::Worker,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
+    }
+}
