@@ -45,10 +45,15 @@ impl GithubAutomationCapabilities {
     }
 
     // PR 생성/조회/close 같은 GitHub API/CLI 작업 가능성을 판단한다.
-    // push remote가 ready여도 gh binary/auth가 없으면 PR delivery는 blocked로 남아야 한다.
-    pub fn github_ready(&self) -> bool {
+    // push remote가 ready여도 gh binary/auth가 없으면 PR delivery는 별도 정책으로 처리해야 한다.
+    pub fn pull_request_workflow_ready(&self) -> bool {
         self.gh_binary.state == ParallelModeCapabilityState::Ready
             && self.gh_auth.state == ParallelModeCapabilityState::Ready
+    }
+
+    // 기존 호출부와 serialized 의미를 깨지 않기 위한 호환 helper다.
+    pub fn github_ready(&self) -> bool {
+        self.pull_request_workflow_ready()
     }
 }
 

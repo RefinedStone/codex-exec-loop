@@ -145,9 +145,10 @@ pub(super) fn inspect_akra_branch(
 
 /*
 push remote capability는 distributor가 source branch와 integration branch를 원격에 push할 수
-있는지를 미리 진단한다. remote URL이 없거나 HTTPS GitHub 형식이 아니거나 credential fill이
-실패하면 degraded로 둔다. degraded는 병렬 모드 자체를 완전히 막지는 않지만, GitHub delivery
-자동화가 나중에 blocked될 수 있음을 supervisor에 보여 준다.
+있는지를 미리 진단한다. HTTPS credential fill은 빠른 로컬 credential probe로 사용하고, 현재
+branch가 있으면 기본적으로 `git push --dry-run`까지 실행해 SSH/HTTPS/로컬 remote 모두 같은
+git push 경로로 확인한다. degraded는 병렬 모드 자체를 완전히 막지는 않지만, delivery 자동화가
+나중에 blocked될 수 있음을 supervisor에 보여 준다.
 */
 pub(super) fn inspect_push_remote(
     runtime: &dyn ParallelModeRuntimePort,
@@ -179,60 +180,94 @@ pub(super) fn inspect_push_remote(
             ),
         );
     };
-    let Some((host, path)) = parse_https_remote(&push_url) else {
+
+    let credential_detail = if let Some((host, path)) = parse_https_remote(&push_url) {
         /*
-        Non-HTTPS remotes might still be usable by a human, but the automated
-        credential probe below only knows Git's HTTPS credential protocol shape.
-        Keep this as degraded so readiness reports the automation limitation
-        without rejecting all parallel-mode preparation.
+        credential fill is a local probe for the exact host/path distributor push
+        will hit. It catches the common "remote exists but no noninteractive
+        credential is configured" case before a network push is attempted.
         */
+        let Some(credentials) = runtime.run_command_with_stdin(
+            "git",
+            &["credential", "fill"],
+            &format!("protocol=https\nhost={host}\npath={path}\n\n"),
+        ) else {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Degraded,
+                "git credentials are not available for the push remote",
+                Some(
+                    "restore push credentials before relying on distributor automation".to_string(),
+                ),
+            );
+        };
+        let Some(username) = credentials.lines().find_map(|line| {
+            line.strip_prefix("username=")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        }) else {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Degraded,
+                "push remote exists but no username was resolved",
+                Some(
+                    "restore repository credentials before relying on distributor automation"
+                        .to_string(),
+                ),
+            );
+        };
+        Some(format!("credential user: {username}"))
+    } else {
+        None
+    };
+
+    if let Some(current_branch) =
+        runtime.run_command("git", &["-C", repo_root, "branch", "--show-current"], None)
+    {
+        let refspec = format!("HEAD:refs/heads/{current_branch}");
+        if runtime.command_succeeds(
+            "git",
+            &[
+                "-C",
+                repo_root,
+                "push",
+                "--dry-run",
+                DEFAULT_PUSH_REMOTE_NAME,
+                refspec.as_str(),
+            ],
+        ) {
+            let suffix = credential_detail
+                .map(|detail| format!(" / {detail}"))
+                .unwrap_or_default();
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Ready,
+                format!("push dry-run succeeded for `{current_branch}`{suffix}"),
+                None,
+            );
+        }
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
             ParallelModeCapabilityState::Degraded,
-            format!("unsupported push remote `{push_url}`"),
-            Some("use an https GitHub remote to enable push capability checks".to_string()),
+            format!("git push --dry-run failed for `{current_branch}` to `{push_url}`"),
+            Some("repair git push credentials or remote branch permissions".to_string()),
         );
-    };
-    /*
-    credential fill is a dry-run for the exact host/path distributor push will
-    hit. It avoids network writes while still catching the common "remote exists
-    but no noninteractive credential is configured" case before dispatch.
-    */
-    let Some(credentials) = runtime.run_command_with_stdin(
-        "git",
-        &["credential", "fill"],
-        &format!("protocol=https\nhost={host}\npath={path}\n\n"),
-    ) else {
-        return ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::PushRemote,
-            ParallelModeCapabilityState::Degraded,
-            "git credentials are not available for the push remote",
-            Some("restore push credentials before relying on distributor automation".to_string()),
-        );
-    };
-    let username = credentials.lines().find_map(|line| {
-        line.strip_prefix("username=")
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    });
-    match username {
-        Some(username) => ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::PushRemote,
-            ParallelModeCapabilityState::Ready,
-            format!("push remote is configured and resolves credentials for {username}"),
-            None,
-        ),
-        None => ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::PushRemote,
-            ParallelModeCapabilityState::Degraded,
-            "push remote exists but no username was resolved",
-            Some(
-                "restore repository credentials before relying on distributor automation"
-                    .to_string(),
-            ),
-        ),
     }
+
+    let detail = credential_detail
+        .map(|detail| format!("push remote is configured ({detail})"))
+        .unwrap_or_else(|| {
+            format!(
+                "push remote `{push_url}` is configured but no branch was available for dry-run"
+            )
+        });
+    ParallelModeCapabilitySnapshot::new(
+        ParallelModeCapabilityKey::PushRemote,
+        ParallelModeCapabilityState::Ready,
+        detail,
+        None,
+    )
 }
 
 /*
@@ -532,8 +567,7 @@ pub(super) fn blocked_prerequisite_capability(
 
 /*
 credential fill에는 protocol, host, path를 분리해 넘겨야 하므로 HTTPS remote URL을 간단히
-파싱한다. SSH remote나 비 GitHub 형식은 여기서 None이 되어 push capability가 degraded로
-표시된다. distributor 자동화는 현재 HTTPS credential flow를 기준으로 설계되어 있기 때문이다.
+파싱한다. SSH remote는 credential helper가 아니라 `git push --dry-run`으로 검증한다.
 */
 pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
     let stripped = push_url.trim().strip_prefix("https://")?;

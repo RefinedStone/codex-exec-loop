@@ -49,6 +49,9 @@ parse_repo_full_name() {
     git@github.com:*)
       origin_url="${origin_url#git@github.com:}"
       ;;
+    ssh://git@github.com/*)
+      origin_url="${origin_url#ssh://git@github.com/}"
+      ;;
     https://*github.com/*)
       origin_url="${origin_url#https://}"
       origin_url="${origin_url#*@github.com/}"
@@ -149,27 +152,82 @@ parse_git_credential_password() {
   printf '%s\n' "${token}"
 }
 
+parse_git_credential_username() {
+  local credential_output
+  local username
+  credential_output="$1"
+
+  username="$(printf '%s\n' "${credential_output}" | awk -F= '$1 == "username" && $2 != "" {print substr($0, 10); exit}')"
+  [[ -n "${username}" ]] || return 1
+  printf '%s\n' "${username}"
+}
+
+github_login_for_token() {
+  local candidate_token
+  local response_body
+  candidate_token="$1"
+
+  response_body="$(
+    curl -sS -L \
+      --connect-timeout 10 \
+      --max-time 30 \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer ${candidate_token}" \
+      -H "User-Agent: gh-akra.sh" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/user" 2>/dev/null
+  )" || return 1
+  json_string_field "${response_body}" "login"
+}
+
+token_matches_desired_login() {
+  local candidate_token
+  local actual_login
+  candidate_token="$1"
+
+  [[ -n "${desired_login}" ]] || return 0
+  actual_login="$(github_login_for_token "${candidate_token}")"
+  [[ "${actual_login}" == "${desired_login}" ]]
+}
+
 token_from_git_credential_fill() {
   local credential_output
   local token
+  local username
+  local username_line
   local repo_path
   repo_path="${repo_full_name}"
+  username_line=""
+  if [[ -n "${desired_login}" ]]; then
+    username_line="$(printf 'username=%s\n' "${desired_login}")"
+  fi
 
   credential_output="$(
-    printf 'protocol=https\nhost=github.com\npath=%s\n\n' "${repo_path}" |
+    printf 'protocol=https\nhost=github.com\n%spath=%s\n\n' "${username_line}" "${repo_path}" |
       GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
   )"
   token="$(parse_git_credential_password "${credential_output}")"
   if [[ -n "${token}" ]]; then
+    username="$(parse_git_credential_username "${credential_output}" 2>/dev/null || true)"
+    if [[ -n "${desired_login}" && "${username}" != "${desired_login}" ]] &&
+      ! token_matches_desired_login "${token}"; then
+      return 1
+    fi
     printf '%s\n' "${token}"
     return 0
   fi
 
   credential_output="$(
-    printf 'protocol=https\nhost=github.com\n\n' |
+    printf 'protocol=https\nhost=github.com\n%s\n' "${username_line}" |
       GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
   )"
-  parse_git_credential_password "${credential_output}" || return 1
+  token="$(parse_git_credential_password "${credential_output}")" || return 1
+  username="$(parse_git_credential_username "${credential_output}" 2>/dev/null || true)"
+  if [[ -n "${desired_login}" && "${username}" != "${desired_login}" ]] &&
+    ! token_matches_desired_login "${token}"; then
+    return 1
+  fi
+  printf '%s\n' "${token}"
 }
 
 read_first_non_empty_line() {
@@ -198,7 +256,7 @@ token_from_named_credential_files() {
       printf '%s\n' "${token}"
       return 0
     fi
-    if [[ "${line}" != https://* ]]; then
+    if [[ "${line}" != https://* ]] && token_matches_desired_login "${line}"; then
       printf '%s\n' "${line}"
       return 0
     fi

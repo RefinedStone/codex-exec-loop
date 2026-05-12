@@ -820,8 +820,8 @@ mod pool;
 mod runtime_events;
 mod supervisor;
 
-// HTTPS remote parsing은 GitHub automation URL 정규화의 narrow contract다.
-// SSH remote는 다른 parser가 명시적으로 다루기 전까지 여기서 None으로 남겨 둔다.
+// HTTPS remote parsing은 git credential fill에 넘길 host/path 정규화의 narrow contract다.
+// SSH remote는 credential fill 대상이 아니므로 push dry-run probe가 별도로 다룬다.
 #[test]
 fn parse_https_remote_extracts_host_and_path() {
     assert_eq!(

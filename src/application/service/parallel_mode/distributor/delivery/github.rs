@@ -1,4 +1,25 @@
 use super::*;
+use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
+
+const AKRA_GITHUB_PR_MODE_ENV: &str = "AKRA_GITHUB_PR_MODE";
+const AKRA_GITHUB_PR_MODE_CONFIG_KEY: &str = "akra.githubPrMode";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullRequestDeliveryMode {
+    Auto,
+    Required,
+    Disabled,
+}
+
+impl PullRequestDeliveryMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Required => "required",
+            Self::Disabled => "disabled",
+        }
+    }
+}
 
 /*
 distributor delivery의 첫 GitHub 단계는 slot agent branch를 원격에 push하는
@@ -75,7 +96,7 @@ pub(super) fn distributor_push_source_branch(
     }
 
     record.integration_note = format!(
-        "source branch pushed to `{DEFAULT_PUSH_REMOTE_NAME}` and is waiting for pull request ensure"
+        "source branch pushed to `{DEFAULT_PUSH_REMOTE_NAME}` and delivery policy is selecting the pull request workflow"
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
@@ -90,6 +111,92 @@ pub(super) fn distributor_push_source_branch(
         "distributor pushed source branch / agent: {} / branch: {}",
         record.agent_id, record.branch_name
     ))
+}
+
+/*
+PR workflow는 push와 독립적인 delivery 선택지다.
+
+`required`는 기존 동작처럼 gh/인증이 없으면 block한다. `auto`는 push가 가능하지만 PR surface만
+불가능한 환경에서 direct integration으로 진행하고, `disabled`는 PR 가능 여부와 상관없이 direct
+integration을 선택한다. 이 분기를 source branch push 뒤에 두어 "git push는 되지만 PR은 안 되는"
+환경을 실제 배포 가능한 상태로 취급한다.
+*/
+pub(super) fn distributor_prepare_pull_request_or_skip(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+    github_automation: &dyn GithubAutomationPort,
+) -> Result<Vec<String>, String> {
+    let repo_root = resolution.context.repo_root.clone();
+    let mode = resolve_pull_request_delivery_mode(runtime, &repo_root);
+
+    match mode {
+        PullRequestDeliveryMode::Disabled => {
+            return Ok(vec![distributor_skip_pull_request_workflow(
+                planning_authority,
+                runtime,
+                resolution,
+                record,
+                "disabled by PR delivery mode".to_string(),
+            )?]);
+        }
+        PullRequestDeliveryMode::Auto => {
+            let capabilities = github_automation.inspect_capabilities(&repo_root);
+            record.github_capabilities = Some(capabilities.clone());
+            if !capabilities.pull_request_workflow_ready() {
+                return Ok(vec![distributor_skip_pull_request_workflow(
+                    planning_authority,
+                    runtime,
+                    resolution,
+                    record,
+                    format!(
+                        "unavailable in auto mode: {}",
+                        pull_request_workflow_unavailable_summary(&capabilities)
+                    ),
+                )?]);
+            }
+        }
+        PullRequestDeliveryMode::Required => {
+            let capabilities = github_automation.inspect_capabilities(&repo_root);
+            record.github_capabilities = Some(capabilities.clone());
+            if !capabilities.pull_request_workflow_ready() {
+                return Ok(vec![block_distributor_queue_record(
+                    planning_authority,
+                    runtime,
+                    &resolution.context.repo_root,
+                    &resolution.context.pool_root,
+                    Some(&resolution.lease),
+                    record,
+                    format!(
+                        "pull request workflow is required but unavailable: {}",
+                        pull_request_workflow_unavailable_summary(&capabilities)
+                    ),
+                )?]);
+            }
+        }
+    }
+
+    let mut notices = Vec::new();
+    notices.push(distributor_ensure_pull_request(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+    )?);
+    if record.queue_state == ParallelModeQueueItemState::Blocked {
+        return Ok(notices);
+    }
+
+    notices.push(distributor_check_pull_request_merge_readiness(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+    )?);
+    Ok(notices)
 }
 
 /*
@@ -112,15 +219,8 @@ pub(super) fn distributor_ensure_pull_request(
     let repo_root = resolution.context.repo_root.clone();
     let capabilities = github_automation.inspect_capabilities(&repo_root);
     record.github_capabilities = Some(capabilities.clone());
-    if !capabilities.github_ready() {
+    if !capabilities.pull_request_workflow_ready() {
         // binary 부재와 auth 부재 중 더 직접적인 원인을 골라 block note를 짧고 실행 가능하게 만든다.
-        let capability_summary = if capabilities.gh_binary.state
-            != crate::domain::parallel_mode::ParallelModeCapabilityState::Ready
-        {
-            capabilities.gh_binary.summary()
-        } else {
-            capabilities.gh_auth.summary()
-        };
         return block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -129,7 +229,8 @@ pub(super) fn distributor_ensure_pull_request(
             Some(&resolution.lease),
             record,
             format!(
-                "source branch was pushed but GitHub automation is unavailable: {capability_summary}"
+                "source branch was pushed but pull request workflow is unavailable: {}",
+                pull_request_workflow_unavailable_summary(&capabilities)
             ),
         );
     }
@@ -369,4 +470,90 @@ fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueReco
         record.validation_summary.trim(),
         record.authority_refresh_outcome.trim()
     )
+}
+
+fn resolve_pull_request_delivery_mode(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> PullRequestDeliveryMode {
+    if let Ok(value) = std::env::var(AKRA_GITHUB_PR_MODE_ENV)
+        && let Some(mode) = parse_pull_request_delivery_mode(&value)
+    {
+        return mode;
+    }
+
+    runtime
+        .run_command(
+            "git",
+            &[
+                "-C",
+                repo_root,
+                "config",
+                "--get",
+                AKRA_GITHUB_PR_MODE_CONFIG_KEY,
+            ],
+            None,
+        )
+        .and_then(|value| parse_pull_request_delivery_mode(&value))
+        .unwrap_or(PullRequestDeliveryMode::Auto)
+}
+
+fn parse_pull_request_delivery_mode(value: &str) -> Option<PullRequestDeliveryMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(PullRequestDeliveryMode::Auto),
+        "required" | "require" => Some(PullRequestDeliveryMode::Required),
+        "disabled" | "disable" | "off" | "false" | "none" => {
+            Some(PullRequestDeliveryMode::Disabled)
+        }
+        _ => None,
+    }
+}
+
+fn pull_request_workflow_unavailable_summary(
+    capabilities: &GithubAutomationCapabilities,
+) -> String {
+    if capabilities.gh_binary.state
+        != crate::domain::parallel_mode::ParallelModeCapabilityState::Ready
+    {
+        return capabilities.gh_binary.summary();
+    }
+    capabilities.gh_auth.summary()
+}
+
+fn distributor_skip_pull_request_workflow(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+    reason: String,
+) -> Result<String, String> {
+    record.pull_request_number = None;
+    record.pull_request_url = None;
+    record.queue_state = ParallelModeQueueItemState::MergePending;
+    record.integration_note = format!(
+        "pull request workflow skipped ({reason}); queued branch will be integrated directly into `{DISTRIBUTOR_INTEGRATION_BRANCH}`"
+    );
+    record.updated_at = current_timestamp();
+    write_distributor_queue_record(
+        planning_authority,
+        runtime,
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        record,
+    )?;
+    let _ = record_merge_pending_session_detail(
+        planning_authority,
+        runtime,
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        &resolution.lease,
+        &record.integration_note,
+    );
+
+    Ok(format!(
+        "distributor skipped pull request workflow / mode: {} / agent: {} / branch: {}",
+        resolve_pull_request_delivery_mode(runtime, &resolution.context.repo_root).label(),
+        record.agent_id,
+        record.branch_name
+    ))
 }

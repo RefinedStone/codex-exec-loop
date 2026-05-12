@@ -1,12 +1,7 @@
 use super::*;
 
-// push는 가능하지만 `gh` 실행과 인증이 degraded인 상태를 만든다. distributor는
-// branch push까지는 진행하되 PR 자동화를 이어갈 수 없으므로 queue head를
-// blocked로 남기고, slot lease와 session history를 실패 상태로 보존해야 한다.
-#[test]
-fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
-    let repo = TempGitRepo::new("distributor-queue-gh-blocked");
-    let github = FakeGithubAutomationPort::with_capabilities(GithubAutomationCapabilities::new(
+fn push_ready_pr_unavailable_capabilities() -> GithubAutomationCapabilities {
+    GithubAutomationCapabilities::new(
         ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
             ParallelModeCapabilityState::Ready,
@@ -25,7 +20,63 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
             "gh auth cannot run without gh",
             Some("restore gh".to_string()),
         ),
-    ));
+    )
+}
+
+fn enqueue_single_commit_ready_result(
+    service: &ParallelModeService,
+    repo: &TempGitRepo,
+    turn_id: &str,
+) -> ParallelModeSlotLeaseSnapshot {
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "feature.txt", "done\n", "agent work");
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            turn_id,
+            None,
+            Some("Distributor queue wiring completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: distributor delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should be enqueued")
+        .expect("queue item should be created");
+    lease
+}
+
+// PR workflow가 required인 상태에서 `gh` 실행과 인증이 degraded라면 distributor는
+// branch push까지는 진행하되 PR 자동화를 이어갈 수 없으므로 queue head를
+// blocked로 남기고, slot lease와 session history를 실패 상태로 보존해야 한다.
+#[test]
+fn distributor_queue_blocks_after_push_when_pull_request_workflow_is_required_and_unavailable() {
+    let repo = TempGitRepo::new("distributor-queue-gh-blocked");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "required"],
+    );
+    let github =
+        FakeGithubAutomationPort::with_capabilities(push_ready_pr_unavailable_capabilities());
     let operations = github.operations.clone();
     let service = test_parallel_mode_service_with_github(Arc::new(github));
     let lease = service
@@ -68,7 +119,7 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
     assert!(
         notices
             .iter()
-            .any(|notice| notice.contains("GitHub automation is unavailable"))
+            .any(|notice| notice.contains("pull request workflow is required but unavailable"))
     );
     assert_eq!(
         operations
@@ -86,7 +137,7 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
     assert!(
         queue_records[0]
             .integration_note
-            .contains("GitHub automation is unavailable")
+            .contains("pull request workflow is required but unavailable")
     );
     assert!(repo.slot_lease_path(1).exists());
     let detail = read_agent_session_detail_record(
@@ -113,6 +164,101 @@ fn distributor_queue_blocks_after_push_when_github_automation_is_unavailable() {
             "failed"
         ]
     );
+}
+
+// 기본 auto 모드에서는 git push가 가능하고 PR workflow만 불가능한 환경을 direct delivery로
+// 처리해야 한다. 이 경로가 있어야 gh 인증이 없는 사용자의 로컬 git push 가능 상태와 같은
+// 동작을 제공할 수 있다.
+#[test]
+fn distributor_auto_mode_direct_integrates_when_pull_request_workflow_is_unavailable() {
+    let repo = TempGitRepo::new("distributor-auto-direct-delivery");
+    let github =
+        FakeGithubAutomationPort::with_capabilities(push_ready_pr_unavailable_capabilities());
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-auto-direct");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor skipped pull request workflow")),
+        "auto mode should explain the PR skip: {notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "direct delivery should integrate after skipping PR: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            "push-integration:prerelease".to_string(),
+        ]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
+    assert!(queue_record.pull_request_number.is_none());
+    assert!(
+        queue_record
+            .integration_note
+            .contains("direct delivery completed without PR automation")
+    );
+}
+
+// disabled 모드는 gh/인증이 준비되어 있어도 PR surface를 사용하지 않는다. 이 설정은
+// PR 없이 로컬 인증 git push만으로 prerelease 통합을 운영하려는 저장소를 위한 명시적 override다.
+#[test]
+fn distributor_disabled_mode_skips_pull_request_workflow_even_when_available() {
+    let repo = TempGitRepo::new("distributor-disabled-direct-delivery");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "disabled"],
+    );
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-disabled-direct");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor skipped pull request workflow")),
+        "disabled mode should report the PR skip: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            "push-integration:prerelease".to_string(),
+        ]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
+    assert!(queue_record.pull_request_number.is_none());
 }
 
 // source branch push가 실패하면 PR ensure를 실행하지 않아야 한다. 빈 원격 branch에 대한

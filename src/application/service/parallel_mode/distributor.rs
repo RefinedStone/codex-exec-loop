@@ -751,7 +751,8 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
         || detail.contains("push capability is unavailable for distributor delivery")
         || detail.contains("source branch `") && detail.contains("` could not be pushed to `")
         || detail.contains(INTEGRATION_BRANCH_PUSH_BLOCK_FRAGMENT)
-        || detail.contains("source branch was pushed but GitHub automation is unavailable")
+        || detail.contains("source branch was pushed but pull request workflow is unavailable")
+        || detail.contains("pull request workflow is required but unavailable")
 }
 
 fn record_is_cleanup_recovery_candidate(record: &ParallelModeDistributorQueueRecord) -> bool {
@@ -764,6 +765,10 @@ fn record_is_cleanup_recovery_candidate(record: &ParallelModeDistributorQueueRec
         || record
             .integration_note
             .contains("GitHub delivery completed")
+        || record.integration_note.contains("PR delivery completed")
+        || record
+            .integration_note
+            .contains("direct delivery completed without PR automation")
 }
 
 fn queue_record_is_integrated_or_patch_equivalent(
