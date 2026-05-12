@@ -133,6 +133,8 @@ impl NativeTuiApp {
             }
             InlineShellCommand::Turns => self.handle_turns_shell_command(command_input.argument()),
             InlineShellCommand::Stop => self.handle_stop_shell_command(),
+            InlineShellCommand::Model => self.handle_model_shell_command(command_input.argument()),
+            InlineShellCommand::Think => self.handle_think_shell_command(command_input.argument()),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::PlanningInit => {
                 self.handle_planning_shell_command(command_input.argument())
@@ -163,6 +165,53 @@ impl NativeTuiApp {
     fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
         self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: argument.unwrap_or_default().to_string(),
+        });
+    }
+    fn handle_model_shell_command(&mut self, argument: Option<&str>) {
+        let status_text = match argument {
+            None => format!(
+                "model override unchanged / current: {} / use :model <model|default>",
+                self.turn_options.model.as_deref().unwrap_or("default")
+            ),
+            Some(value) if is_turn_option_clear_argument(value) => {
+                self.turn_options.model = None;
+                "model override cleared; app-server default will be used".to_string()
+            }
+            Some(value) => match normalize_model_override_argument(value) {
+                Some(model) => {
+                    self.turn_options.model = Some(model.clone());
+                    format!("model override set to {model}")
+                }
+                None => "model override unchanged; use :model <model|default>".to_string(),
+            },
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+    fn handle_think_shell_command(&mut self, argument: Option<&str>) {
+        let status_text = match argument {
+            None => format!(
+                "think override unchanged / current: {} / use :think <none|minimal|low|medium|high|xhigh|default>",
+                self.turn_options
+                    .reasoning_effort
+                    .map(ConversationReasoningEffort::label)
+                    .unwrap_or("default")
+            ),
+            Some(value) if is_turn_option_clear_argument(value) => {
+                self.turn_options.reasoning_effort = None;
+                "think override cleared; app-server default will be used".to_string()
+            }
+            Some(value) => match ConversationReasoningEffort::parse(value) {
+                Some(effort) => {
+                    self.turn_options.reasoning_effort = Some(effort);
+                    format!("think override set to {}", effort.label())
+                }
+                None => "think override unchanged; supported values: none, minimal, low, medium, high, xhigh, default".to_string(),
+            },
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
         });
     }
     fn handle_stop_shell_command(&mut self) {

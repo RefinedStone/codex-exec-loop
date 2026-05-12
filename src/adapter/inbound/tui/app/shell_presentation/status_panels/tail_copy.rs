@@ -156,6 +156,12 @@ pub(super) fn build_inline_tail_lines_with_context(
                 runtime_notice_summary.as_deref().unwrap_or("clear"),
                 warning_summary,
             )));
+            if !app.turn_options.is_default() {
+                lines.push(Line::from(format!(
+                    "turn options: {}",
+                    app.turn_options.summary_label()
+                )));
+            }
             lines.push(Line::from(parallel_mode_summary_line(app)));
 
             if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(app) {

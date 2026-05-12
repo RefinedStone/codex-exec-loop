@@ -51,7 +51,9 @@ use crate::application::service::conversation_runtime_event::{
     emit_codex_app_server_reattach_attachment,
 };
 use crate::diagnostics::event_log;
-use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+use crate::domain::conversation::{
+    ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+};
 use crate::domain::recent_sessions::{
     RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
 };
@@ -138,8 +140,7 @@ impl CodexAppServerAdapter {
         &self,
         cwd: &str,
         prompt: &str,
-        model: Option<&str>,
-        effort: Option<ReasoningEffortValue>,
+        options: ConversationTurnOptions,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         /*
@@ -147,6 +148,8 @@ impl CodexAppServerAdapter {
          * ThreadPrepared arrives before assistant tokens so the UI can display thread id/title/cwd and persist reattach state.
          */
         let result = self.with_streaming_runtime(|connection| {
+            let model = options.model.as_deref();
+            let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(cwd.to_string()),
                 approval_policy: Some(self.execution_policy.approval_policy),
@@ -601,9 +604,10 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         &self,
         cwd: &str,
         prompt: &str,
+        options: ConversationTurnOptions,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        self.run_new_thread_stream_request(cwd, prompt, None, None, event_sender)
+        self.run_new_thread_stream_request(cwd, prompt, options, event_sender)
     }
 
     #[tracing::instrument(level = "trace", skip(self, event_sender))]
@@ -611,6 +615,7 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         &self,
         thread_id: &str,
         prompt: &str,
+        options: ConversationTurnOptions,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         /*
@@ -620,6 +625,8 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
          * existing app-server session, not a freshly created thread.
          */
         let result = self.with_streaming_runtime(|connection| {
+            let model = options.model.as_deref();
+            let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
             connection.resume_thread(ThreadResumeParams {
                 thread_id: thread_id.to_string(),
                 approval_policy: Some(self.execution_policy.approval_policy),
@@ -631,8 +638,8 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
                 connection,
                 thread_id,
                 vec![TurnInputItem::text(prompt)],
-                None,
-                None,
+                model,
+                effort,
                 &event_sender,
             )
         });
@@ -738,7 +745,9 @@ mod tests {
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::port::outbound::startup_probe_port::StartupProbePort;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::domain::conversation::ConversationRuntimeControlTruth;
+    use crate::domain::conversation::{
+        ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationTurnOptions,
+    };
     use crate::domain::recent_sessions::{
         SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
     };
@@ -806,7 +815,12 @@ mod tests {
 
         let (new_tx, new_rx) = mpsc::channel();
         adapter
-            .run_new_thread_stream("/repo", "start a new session", new_tx)
+            .run_new_thread_stream(
+                "/repo",
+                "start a new session",
+                ConversationTurnOptions::default(),
+                new_tx,
+            )
             .expect("new thread stream should complete");
         let new_events = new_rx.try_iter().collect::<Vec<_>>();
         assert!(has_launch_attachment(&new_events));
@@ -815,7 +829,12 @@ mod tests {
 
         let (resume_tx, resume_rx) = mpsc::channel();
         adapter
-            .run_turn_stream("resume-thread", "continue session", resume_tx)
+            .run_turn_stream(
+                "resume-thread",
+                "continue session",
+                ConversationTurnOptions::default(),
+                resume_tx,
+            )
             .expect("existing thread stream should complete");
         let resume_events = resume_rx.try_iter().collect::<Vec<_>>();
         assert!(has_reattach_attachment(&resume_events));
@@ -833,6 +852,51 @@ mod tests {
                 "turn/start"
             ]
         );
+    }
+
+    #[test]
+    fn user_thread_streams_pass_turn_option_overrides_to_app_server() {
+        let fake_codex = FakeCodex::install("user-turn-options");
+        let adapter = test_adapter();
+        let options = ConversationTurnOptions {
+            model: Some("gpt-5.4".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::High),
+        };
+
+        let (new_tx, new_rx) = mpsc::channel();
+        adapter
+            .run_new_thread_stream("/repo", "start with overrides", options.clone(), new_tx)
+            .expect("new thread stream should complete");
+        assert!(has_turn_completed(&new_rx.try_iter().collect::<Vec<_>>()));
+
+        let (resume_tx, resume_rx) = mpsc::channel();
+        adapter
+            .run_turn_stream(
+                "resume-thread",
+                "continue with overrides",
+                options,
+                resume_tx,
+            )
+            .expect("existing thread stream should complete");
+        assert!(has_turn_completed(
+            &resume_rx.try_iter().collect::<Vec<_>>()
+        ));
+
+        let requests = fake_codex.logged_requests();
+        let thread_starts = requests
+            .iter()
+            .filter(|request| request["method"] == "thread/start")
+            .collect::<Vec<_>>();
+        let turn_starts = requests
+            .iter()
+            .filter(|request| request["method"] == "turn/start")
+            .collect::<Vec<_>>();
+
+        assert_eq!(thread_starts[0]["params"]["model"], "gpt-5.4");
+        assert_eq!(turn_starts[0]["params"]["model"], "gpt-5.4");
+        assert_eq!(turn_starts[0]["params"]["effort"], "high");
+        assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.4");
+        assert_eq!(turn_starts[1]["params"]["effort"], "high");
     }
 
     #[test]

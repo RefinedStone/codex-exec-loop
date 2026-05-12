@@ -11,7 +11,9 @@ use anyhow::Result;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 // snapshot은 저장된 conversation read model이고, runtime control truth는 중단/제어의 실제 소유자를 나타낸다.
 // 둘 다 TUI가 구체 adapter 타입을 몰라도 대화 화면과 제어 버튼을 구성하게 해 주는 domain 값이다.
-use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+use crate::domain::conversation::{
+    ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+};
 
 // `InteractiveTurnRuntimePort`는 `ConversationService`가 outbound runtime에 요구하는 대화 실행 계약이다.
 // 실제 구현은 Codex app-server adapter이지만, application 계층은 새 thread 실행, 기존 thread 실행, snapshot 조회,
@@ -40,6 +42,8 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         cwd: &str,
         // 사용자 prompt 또는 조립된 main-session prompt이다. adapter가 Codex protocol request로 매핑한다.
         prompt: &str,
+        // model/think 같은 operator-selected turn overrides이다.
+        options: ConversationTurnOptions,
         // outbound runtime이 `ThreadPrepared`, `TurnStarted`, delta, tool activity, completion/failure를 보낼 채널이다.
         // sender 소유권을 넘기는 이유는 runtime worker가 호출 stack보다 오래 살아 있을 수 있기 때문이다.
         event_sender: Sender<ConversationStreamEvent>,
@@ -53,6 +57,8 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         thread_id: &str,
         // 기존 thread에 이어 붙일 prompt이다.
         prompt: &str,
+        // model/think 같은 operator-selected turn overrides이다.
+        options: ConversationTurnOptions,
         // 후속 turn의 stream event를 전달할 채널이다. 실패도 panic이 아니라 `Failed` 이벤트나 `Result` 오류로 표현된다.
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()>;

@@ -7,6 +7,7 @@ use super::planning_reset_shell_command::{
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
 use crate::application::service::planning::PlanningResetTarget;
+use crate::domain::conversation::ConversationReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
@@ -17,6 +18,8 @@ pub(crate) enum InlineShellCommand {
     Directions,
     Turns,
     Stop,
+    Model,
+    Think,
     Doctor,
     PlanningInit,
     Reset,
@@ -57,9 +60,13 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model <model|default>  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
+const MODEL_USAGE: &str = "Type `:model <model|default>` to choose the model override.";
+const THINK_USAGE: &str =
+    "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
+const THINK_SUPPORTED_VALUES: &str = "none, minimal, low, medium, high, xhigh, default";
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
@@ -124,6 +131,24 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         buffered_hint: "Press Enter to stop active app-server sessions.",
         execution_status: None,
         requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Model,
+        primary_name: ":model",
+        aliases: &[":model"],
+        suggestion_detail: "model override",
+        buffered_hint: MODEL_USAGE,
+        execution_status: None,
+        requires_argument: true,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Think,
+        primary_name: ":think",
+        aliases: &[":think"],
+        suggestion_detail: "reasoning effort",
+        buffered_hint: THINK_USAGE,
+        execution_status: None,
+        requires_argument: true,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Doctor,
@@ -200,6 +225,8 @@ impl InlineShellCommandInput {
                 }
                 None => self.command.spec().buffered_hint.to_string(),
             },
+            InlineShellCommand::Model => model_argument_hint(self.argument()),
+            InlineShellCommand::Think => think_argument_hint(self.argument()),
             InlineShellCommand::Queue => {
                 planning_overlay_argument_hint(self.argument(), InlineShellCommand::Queue, "queue")
             }
@@ -217,6 +244,8 @@ impl InlineShellCommandInput {
             InlineShellCommand::Queue if self.argument().is_some() => None,
             InlineShellCommand::Turns => None,
             InlineShellCommand::Stop => None,
+            InlineShellCommand::Model => None,
+            InlineShellCommand::Think => None,
             _ => self.command.spec().execution_status.map(str::to_string),
         }
     }
@@ -333,6 +362,8 @@ impl InlineShellCommand {
         match self {
             InlineShellCommand::Reset => ":reset ",
             InlineShellCommand::Turns => ":turns ",
+            InlineShellCommand::Model => ":model ",
+            InlineShellCommand::Think => ":think ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
             | InlineShellCommand::Sessions
@@ -361,6 +392,8 @@ impl InlineShellCommand {
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::Stop => ":stop",
+            InlineShellCommand::Model => ":model <model|default>",
+            InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|default>",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
             InlineShellCommand::Diagnostics
@@ -419,6 +452,50 @@ fn parallel_argument_hint(argument: Option<&str>) -> String {
         Err(error) => format!(
             "Press Enter to apply `:parallel {}`. Supported command forms: :parallel, :pa, :parallel off, :pa off.",
             error.argument()
+        ),
+    }
+}
+pub(super) fn is_turn_option_clear_argument(argument: &str) -> bool {
+    matches!(
+        argument.trim().to_ascii_lowercase().as_str(),
+        "default" | "auto" | "clear" | "unset"
+    )
+}
+pub(super) fn normalize_model_override_argument(argument: &str) -> Option<String> {
+    let trimmed = argument.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    Some(trimmed.to_string())
+}
+fn model_argument_hint(argument: Option<&str>) -> String {
+    let Some(argument) = argument else {
+        return MODEL_USAGE.to_string();
+    };
+    if is_turn_option_clear_argument(argument) {
+        return "Press Enter to clear the model override.".to_string();
+    }
+    match normalize_model_override_argument(argument) {
+        Some(model) => format!("Press Enter to set model to `{model}`."),
+        None => format!(
+            "Press Enter to apply `:model {}`. Supported form: :model <model|default>.",
+            argument.trim()
+        ),
+    }
+}
+fn think_argument_hint(argument: Option<&str>) -> String {
+    let Some(argument) = argument else {
+        return THINK_USAGE.to_string();
+    };
+    if is_turn_option_clear_argument(argument) {
+        return "Press Enter to clear the think override.".to_string();
+    }
+    match ConversationReasoningEffort::parse(argument) {
+        Some(effort) => format!("Press Enter to set think to `{}`.", effort.label()),
+        None => format!(
+            "Press Enter to apply `:think {}`. Supported values: {THINK_SUPPORTED_VALUES}.",
+            argument.trim()
         ),
     }
 }

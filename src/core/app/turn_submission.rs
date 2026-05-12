@@ -1,4 +1,5 @@
 use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
+use crate::domain::conversation::ConversationTurnOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorePromptOrigin {
@@ -13,6 +14,7 @@ pub struct TurnSubmissionRequest {
     pub thread_id: Option<String>,
     pub prompt: String,
     pub prompt_origin: CorePromptOrigin,
+    pub turn_options: ConversationTurnOptions,
     pub slot_lease_handoff: Option<ParallelTurnSlotLeaseHandoff>,
 }
 
