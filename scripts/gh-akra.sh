@@ -212,10 +212,25 @@ token_matches_desired_login() {
   [[ "${actual_login}" == "${desired_login}" ]]
 }
 
+verify_git_credential_token_login() {
+  local candidate_token
+  local credential_output
+  local username
+  candidate_token="$1"
+  credential_output="$2"
+
+  [[ -n "${desired_login}" ]] || return 0
+  username="$(parse_git_credential_username "${credential_output}" 2>/dev/null || true)"
+  if [[ "${username}" != "${desired_login}" ]] &&
+    ! token_matches_desired_login "${candidate_token}"; then
+    return 1
+  fi
+  return 0
+}
+
 token_from_git_credential_fill() {
   local credential_output
   local token
-  local username
   local username_line
   local repo_path
   repo_path="${repo_full_name}"
@@ -230,11 +245,7 @@ token_from_git_credential_fill() {
   )"
   token="$(parse_git_credential_password "${credential_output}")"
   if [[ -n "${token}" ]]; then
-    username="$(parse_git_credential_username "${credential_output}" 2>/dev/null || true)"
-    if [[ -n "${desired_login}" && "${username}" != "${desired_login}" ]] &&
-      ! token_matches_desired_login "${token}"; then
-      return 1
-    fi
+    verify_git_credential_token_login "${token}" "${credential_output}" || return 1
     printf '%s\n' "${token}"
     return 0
   fi
@@ -244,11 +255,7 @@ token_from_git_credential_fill() {
       GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
   )"
   token="$(parse_git_credential_password "${credential_output}")" || return 1
-  username="$(parse_git_credential_username "${credential_output}" 2>/dev/null || true)"
-  if [[ -n "${desired_login}" && "${username}" != "${desired_login}" ]] &&
-    ! token_matches_desired_login "${token}"; then
-    return 1
-  fi
+  verify_git_credential_token_login "${token}" "${credential_output}" || return 1
   printf '%s\n' "${token}"
 }
 

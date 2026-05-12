@@ -261,6 +261,74 @@ fn distributor_disabled_mode_skips_pull_request_workflow_even_when_available() {
     assert!(queue_record.pull_request_number.is_none());
 }
 
+// direct delivery로 전환하더라도 이미 durable record에 남아 있던 PR metadata는
+// 보존해야 한다. 그래야 재시도 중 정책이 바뀌어도 integration 이후 기존 PR close 경로가
+// 실행되고, 열린 PR을 잃어버리지 않는다.
+#[test]
+fn distributor_skip_preserves_existing_pull_request_metadata_for_close() {
+    let repo = TempGitRepo::new("distributor-skip-preserves-pr");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "disabled"],
+    );
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-preserve-pr");
+    let mut queue_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
+    queue_record.pull_request_number = Some(123);
+    queue_record.pull_request_url = Some("https://example.invalid/pr/123".to_string());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &queue_record,
+    )
+    .expect("queue record with existing PR metadata should persist");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor skipped pull request workflow")),
+        "disabled mode should still report the PR skip: {notices:?}"
+    );
+    let operations = operations
+        .lock()
+        .expect("fake github operations mutex poisoned")
+        .clone();
+    assert!(
+        operations.contains(&format!("push:{}:false", lease.branch_name)),
+        "source push should still run before direct integration: {operations:?}"
+    );
+    assert!(
+        operations.contains(&"push-integration:prerelease".to_string()),
+        "integration branch push should run: {operations:?}"
+    );
+    assert!(
+        operations.contains(&"close-pr:123".to_string()),
+        "existing PR metadata should drive PR close: {operations:?}"
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|operation| !operation.starts_with("ensure-pr:")),
+        "skip mode must not create or re-ensure a PR: {operations:?}"
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
+    assert_eq!(queue_record.pull_request_number, Some(123));
+}
+
 // source branch push가 실패하면 PR ensure를 실행하지 않아야 한다. 빈 원격 branch에 대한
 // 빈/잘못된 PR을 만들면 operator가 실제 실패 원인을 GitHub 표면에서 추적하기 어려워진다.
 #[test]
