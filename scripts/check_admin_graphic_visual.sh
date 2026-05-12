@@ -288,7 +288,8 @@ for token in \
 done
 
 for token in \
-  '<body class="akra-graphic">' \
+  '<body class="">' \
+  'href="/admin/tasks" class="active">Tasks</a>' \
   'aria-label="게임발전국 작업 관리"' \
   'aria-label="작업 관리 탭"' \
   'href="/admin/directions"' \
@@ -312,6 +313,7 @@ for token in \
   require_contains "${tasks_html}" "${token}"
 done
 
+require_not_contains "${tasks_html}" '<body class="akra-graphic">'
 require_not_contains "${tasks_html}" 'Task catalog view'
 
 for token in \

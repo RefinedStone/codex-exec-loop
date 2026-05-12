@@ -698,6 +698,24 @@ async fn admin_html_page_routes_render_live_templates() {
             "HTML page {uri} should render {expected}"
         );
     }
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin/tasks")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("tasks page request should build"),
+        )
+        .await
+        .expect("tasks page request should be served");
+    assert_eq!(response.status(), StatusCode::OK, "/admin/tasks");
+    let tasks_body = text_body(response).await;
+    assert!(tasks_body.contains(r#"<body class="">"#));
+    assert!(tasks_body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
+    assert!(!tasks_body.contains(r#"<body class="akra-graphic">"#));
 }
 
 #[tokio::test]
@@ -1093,7 +1111,12 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pool\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pipeline\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra/metrics#system\""));
-    assert!(BASE_TEMPLATE.contains(r#"current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks""#));
+    assert!(BASE_TEMPLATE.contains(
+        r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" %}akra-graphic{% endif %}">"#
+    ));
+    assert!(!BASE_TEMPLATE.contains(
+        r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks" %}akra-graphic{% endif %}">"#
+    ));
     assert!(BASE_TEMPLATE.contains(
         r#"href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}""#
     ));
