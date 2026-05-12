@@ -128,7 +128,7 @@ jobs:
             gh release create "${tag}" "${files[@]}" \
               --repo "${GH_REPO}" \
               --title "${title}" \
-              --generate-notes
+              --notes "Automated native/npm release for ${tag}."
           fi
 
           gh release view "${tag}" --repo "${GH_REPO}" --json url --jq '.url'
