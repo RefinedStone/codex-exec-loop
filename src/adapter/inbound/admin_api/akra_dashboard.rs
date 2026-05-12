@@ -1142,6 +1142,460 @@ fn current_git_branch(workspace_dir: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
+        ParallelModeAgentSessionHistoryEntry, ParallelModeDistributorSnapshot,
+        ParallelModeOrchestratorStatus, ParallelModePoolBoardSnapshot,
+        ParallelModeRuntimeEventsSnapshot, ParallelModeSupervisorState,
+    };
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "akra-dashboard-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should be after epoch")
+                .as_nanos()
+        ))
+    }
+
+    fn profile_config() -> ParallelAgentProfileConfig {
+        ParallelAgentProfileConfig {
+            profiles: vec![ParallelAgentProfile {
+                agent_id: "agent-one".to_string(),
+                display_name: "Alpha".to_string(),
+                role: "Builder".to_string(),
+                persona_prompt: "Ship small slices".to_string(),
+                avatar_class: "Seer".to_string(),
+                capabilities: vec!["tests".to_string()],
+                enabled: true,
+            }],
+        }
+    }
+
+    fn rich_session_detail() -> ParallelModeAgentSessionDetailSnapshot {
+        ParallelModeAgentSessionDetailSnapshot::new(
+            "session-1",
+            "agent-one",
+            "task-1",
+            "Cover dashboard mapping",
+            "slot-1",
+            Some("thread-1".to_string()),
+            "/tmp/slot-1",
+            "akra-agent/slot-1/task-1",
+            "2026-05-12T01:00:00Z",
+            "commit_ready",
+            "approved",
+            "ready for distributor",
+            "cargo test passed",
+            "official refresh accepted",
+            Some("pull request is ready".to_string()),
+            vec![
+                ParallelModeAgentSessionHistoryEntry::new(
+                    "assigned",
+                    "2026-05-12T01:00:00Z",
+                    "slot lease acquired",
+                ),
+                ParallelModeAgentSessionHistoryEntry::new(
+                    "running",
+                    "2026-05-12T01:05:00Z",
+                    "worker is running",
+                ),
+                ParallelModeAgentSessionHistoryEntry::new(
+                    "commit_ready",
+                    "2026-05-12T01:10:00Z",
+                    "official completion accepted",
+                ),
+            ],
+            "2026-05-12T01:10:00Z",
+        )
+    }
+
+    fn rich_supervisor_snapshot() -> ParallelModeSupervisorSnapshot {
+        let pool = ParallelModePoolBoardSnapshot::new(
+            3,
+            "pool-root",
+            "ready",
+            vec![
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-1/task-1",
+                    "slot-1",
+                    "agent-one / task-1",
+                ),
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-2",
+                    ParallelModePoolSlotState::Idle,
+                    "prerelease",
+                    "slot-2",
+                    "-",
+                ),
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-3",
+                    ParallelModePoolSlotState::Blocked,
+                    "akra-agent/slot-3/task-3",
+                    "slot-3",
+                    "agent-three / task-3",
+                ),
+            ],
+        );
+        let roster = ParallelModeAgentRosterSnapshot::new(
+            vec![
+                ParallelModeAgentRosterEntry::new(
+                    "agent-one",
+                    "Cover dashboard mapping",
+                    "slot-1",
+                    "akra-agent/slot-1/task-1",
+                    "commit_ready",
+                    "45m",
+                    "ready for distributor",
+                ),
+                ParallelModeAgentRosterEntry::new(
+                    "agent-two",
+                    "Investigate dashboard copy",
+                    "slot-2",
+                    "akra-agent/slot-2/task-2",
+                    "running",
+                    "2h 10m",
+                    "still running",
+                ),
+            ],
+            "no active agents",
+        );
+        let detail =
+            ParallelModeSupervisorDetailSnapshot::new(Some(rich_session_detail()), "no detail");
+        let status = ParallelModeOrchestratorStatus {
+            queue_head: "agent-one/task-1".to_string(),
+            barrier_state: "blocked".to_string(),
+            blocked_reason: Some("orchestrator blocked".to_string()),
+            conflict_files: vec!["src/lib.rs".to_string()],
+            held_queue_count: 2,
+            integration_worktree_readiness: "dirty".to_string(),
+            slot_return_wait_reason: None,
+        };
+        let distributor = ParallelModeDistributorSnapshot::new(
+            vec![
+                ParallelModeDistributorQueueItem::new(
+                    "agent-one",
+                    "Cover dashboard mapping",
+                    ParallelModeQueueItemState::Pushing,
+                    "akra-agent/slot-1/task-1",
+                    "abc1234",
+                    "pushing source branch",
+                ),
+                ParallelModeDistributorQueueItem::new(
+                    "agent-two",
+                    "Investigate dashboard copy",
+                    ParallelModeQueueItemState::Blocked,
+                    "akra-agent/slot-2/task-2",
+                    "def5678",
+                    "merge conflict",
+                ),
+            ],
+            Vec::new(),
+            "agent-one ready",
+            "integration queue active",
+        )
+        .with_head_blocked_detail(Some("head blocked by conflict".to_string()))
+        .with_orchestrator_status(status);
+
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/workspace",
+            pool,
+            roster,
+            detail,
+            distributor,
+            Some("parallel mode running".to_string()),
+        )
+    }
+
+    fn runtime_events() -> Vec<RuntimeEventView> {
+        vec![
+            map_runtime_event(&ParallelModeRuntimeEventEntry::new(
+                12,
+                "cleanup_completed",
+                "slot",
+                "slot-1",
+                7,
+                "cleanup finished",
+                "2026-05-12T01:20:00Z",
+            )),
+            map_runtime_event(&ParallelModeRuntimeEventEntry::new(
+                11,
+                "worktree_status_blocked",
+                "worktree",
+                "integration",
+                7,
+                "worktree blocked",
+                "2026-05-12T01:19:00Z",
+            )),
+        ]
+    }
+
+    #[test]
+    fn dashboard_mapping_projects_rich_supervisor_snapshot() {
+        let supervisor = rich_supervisor_snapshot();
+        let pool = map_pool(&supervisor);
+        let agents = map_agents(&supervisor, &profile_config());
+        let selected_task = map_selected_task(&supervisor).expect("selected task should map");
+        let distributor = map_distributor(&supervisor);
+        let events_snapshot = ParallelModeRuntimeEventsSnapshot::new(
+            vec![
+                ParallelModeRuntimeEventEntry::new(
+                    12,
+                    "cleanup_completed",
+                    "slot",
+                    "slot-1",
+                    7,
+                    "cleanup finished",
+                    "2026-05-12T01:20:00Z",
+                ),
+                ParallelModeRuntimeEventEntry::new(
+                    11,
+                    "worktree_status_blocked",
+                    "worktree",
+                    "integration",
+                    7,
+                    "worktree blocked",
+                    "2026-05-12T01:19:00Z",
+                ),
+            ],
+            9,
+            "no events",
+        );
+        let event_feed = map_event_feed(&events_snapshot, DASHBOARD_EVENT_LIMIT, false);
+        let events = events_snapshot
+            .entries
+            .iter()
+            .map(map_runtime_event)
+            .collect::<Vec<_>>();
+        let metrics = map_metrics(&pool, &agents, &distributor);
+        let campaign = map_campaign(
+            &supervisor,
+            &pool,
+            &agents,
+            &distributor,
+            &events,
+            &event_feed,
+            "blocked",
+        );
+
+        assert_eq!(pool.configured_size, 3);
+        assert_eq!(pool.summary.idle, 1);
+        assert_eq!(pool.summary.running, 1);
+        assert_eq!(pool.summary.blocked, 1);
+        assert_eq!(pool.slots[0].display_slot_label, "슬롯 1");
+        assert_eq!(pool.slots[0].owner_agent_id.as_deref(), Some("agent-one"));
+        assert_eq!(pool.slots[0].task_id.as_deref(), Some("task-1"));
+        assert_eq!(pool.slots[0].note, "agent-one / task-1 / slot-1");
+        assert_eq!(pool.slots[0].bubble_label, "검수 통과");
+        assert_eq!(pool.slots[1].owner_agent_id, None);
+        assert_eq!(pool.slots[1].note, "slot-2");
+
+        assert_eq!(agents.active_count, 2);
+        assert_eq!(agents.entries[0].display_name, "Alpha");
+        assert_eq!(agents.entries[0].class_label, "Seer");
+        assert_eq!(agents.entries[0].role_label, "Builder");
+        assert_eq!(agents.entries[0].progress_label, "75%");
+        assert_eq!(agents.entries[0].bubble_label, "공식 승인");
+        assert_eq!(agents.entries[1].display_name, "A02");
+        assert_eq!(agents.entries[1].class_label, "Scribe");
+        assert!(agents.entries[1].overload);
+
+        assert_eq!(selected_task.task_id, "task-1");
+        assert_eq!(selected_task.progress_percent, 75);
+        assert_eq!(
+            selected_task.trail,
+            vec![
+                "assigned".to_string(),
+                "running".to_string(),
+                "commit_ready".to_string()
+            ]
+        );
+
+        assert_eq!(
+            distributor.blocked_reason.as_deref(),
+            Some("head blocked by conflict")
+        );
+        assert_eq!(distributor.queue_depth, 2);
+        assert_eq!(distributor.conflict_files, vec!["src/lib.rs".to_string()]);
+        assert_eq!(distributor.queue_items[0].queue_state, "pushing");
+        assert_eq!(distributor.pipeline[0].state, "done");
+        assert_eq!(distributor.pipeline[1].state, "active");
+        assert_eq!(distributor.pipeline[2].state, "active");
+
+        assert_eq!(event_feed.total_event_count, 9);
+        assert_eq!(event_feed.visible_event_count, 2);
+        assert_eq!(event_feed.newest_sequence, Some(12));
+        assert_eq!(events[0].icon, "clean");
+        assert_eq!(events[0].severity, "success");
+
+        assert_eq!(metrics.pool_utilization_percent, 66);
+        assert_eq!(metrics.active_agent_count, 2);
+        assert_eq!(metrics.waiting_task_count, 2);
+        assert_eq!(metrics.blocked_slot_count, 1);
+        assert!(metrics.badges.contains(&"복구 필요".to_string()));
+        assert!(!metrics.badges.contains(&"풀 관리자".to_string()));
+
+        assert_eq!(campaign.active_lane_count, 2);
+        assert_eq!(campaign.attempt_count, 3);
+        assert_eq!(campaign.visible_attempt_count, 3);
+        assert_eq!(campaign.signal_count, 9);
+        assert!(campaign.summary.contains("2개 병렬 시도 진행 중"));
+        assert_eq!(campaign.lane_cards[0].score_label, "stage 75/100");
+        assert_eq!(campaign.attempts[0].label, "시도 #3");
+        assert_eq!(campaign.attempts[0].severity, "success");
+        assert_eq!(campaign.intel_cards[0].severity, "danger");
+        assert_eq!(campaign.intel_cards[2].severity, "danger");
+        assert_eq!(campaign.intel_cards[3].note, "latest #12");
+    }
+
+    #[test]
+    fn campaign_attempts_fall_back_to_distributor_queue_then_runtime_events() {
+        let mut supervisor = rich_supervisor_snapshot();
+        supervisor.detail = ParallelModeSupervisorDetailSnapshot::new(None, "no detail");
+        let distributor = map_distributor(&supervisor);
+        let events = runtime_events();
+
+        let (queue_total, queue_attempts) =
+            map_campaign_attempts(&supervisor, &distributor, &events);
+        assert_eq!(queue_total, 2);
+        assert_eq!(queue_attempts[0].label, "큐 시도 #1");
+        assert_eq!(queue_attempts[0].source, "agent-one");
+        assert_eq!(queue_attempts[0].severity, "info");
+        assert_eq!(queue_attempts[1].severity, "danger");
+
+        supervisor.distributor =
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "no queue");
+        let empty_distributor = map_distributor(&supervisor);
+        let (event_total, event_attempts) =
+            map_campaign_attempts(&supervisor, &empty_distributor, &events);
+        assert_eq!(event_total, 2);
+        assert_eq!(event_attempts[0].label, "신호 #12");
+        assert_eq!(event_attempts[0].state, "cleanup_completed");
+        assert_eq!(event_attempts[0].severity, "success");
+        assert_eq!(event_attempts[1].severity, "danger");
+    }
+
+    #[test]
+    fn dashboard_copy_helpers_cover_status_progress_and_severity_edges() {
+        assert_eq!(
+            parse_owner_label(" agent-one / task-1 "),
+            (Some("agent-one".to_string()), Some("task-1".to_string()))
+        );
+        assert_eq!(
+            parse_owner_label(" - / task-2 "),
+            (None, Some("task-2".to_string()))
+        );
+        assert_eq!(
+            parse_owner_label("agent-only"),
+            (Some("agent-only".to_string()), None)
+        );
+
+        let blank_owner_slot = ParallelModePoolSlotSnapshot::new(
+            "slot-x",
+            ParallelModePoolSlotState::Idle,
+            "prerelease",
+            "slot-x",
+            " ",
+        );
+        assert_eq!(pool_slot_note(&blank_owner_slot), "slot-x");
+        assert_eq!(agent_class_label(6), "Artificer");
+
+        assert_eq!(agent_status("failed"), "blocked");
+        assert_eq!(agent_status("cleanup_pending"), "cleanup");
+        assert_eq!(agent_status("assigned"), "running");
+        assert_eq!(agent_status("unknown"), "idle");
+        assert_eq!(agent_bubble("official_refresh_recovery_needed"), "차단됨");
+        assert_eq!(agent_bubble("cleanup_pending"), "정리중");
+        assert_eq!(agent_bubble("unknown"), "대기중");
+
+        assert_eq!(progress_percent("assigned"), 15);
+        assert_eq!(progress_percent("starting"), 25);
+        assert_eq!(progress_percent("cleanup_pending"), 100);
+        assert_eq!(progress_percent("failed"), 35);
+        assert_eq!(progress_percent("unknown"), 10);
+        assert_eq!(progress_label("running"), "45%");
+
+        assert_eq!(lifecycle_severity("failed"), "danger");
+        assert_eq!(lifecycle_severity("integrating"), "warning");
+        assert_eq!(lifecycle_severity("done"), "success");
+        assert_eq!(lifecycle_severity("running"), "success");
+        assert_eq!(lifecycle_severity("unknown"), "info");
+        assert_eq!(queue_state_severity("failed"), "danger");
+        assert_eq!(queue_state_severity("cleaning"), "warning");
+        assert_eq!(queue_state_severity("done"), "success");
+        assert_eq!(queue_state_severity("queued"), "info");
+        assert_eq!(readiness_severity("ready"), "success");
+        assert_eq!(readiness_severity("repairing"), "warning");
+        assert_eq!(readiness_severity("blocked"), "danger");
+
+        let mut pool = map_pool(&rich_supervisor_snapshot());
+        assert_eq!(pool_pressure_severity(&pool), "danger");
+        pool.summary.blocked = 0;
+        pool.summary.missing = 0;
+        pool.summary.unavailable = 0;
+        pool.summary.cleanup = 1;
+        assert_eq!(pool_pressure_severity(&pool), "warning");
+        pool.summary.cleanup = 0;
+        pool.exhausted = false;
+        pool.summary.running = 1;
+        assert_eq!(pool_pressure_severity(&pool), "success");
+        pool.summary.running = 0;
+        assert_eq!(pool_pressure_severity(&pool), "info");
+
+        let mut distributor = map_distributor(&rich_supervisor_snapshot());
+        assert_eq!(distributor_severity(&distributor), "danger");
+        distributor.blocked_reason = None;
+        assert_eq!(distributor_severity(&distributor), "warning");
+        distributor.barrier_state = "idle".to_string();
+        distributor.queue_items.clear();
+        distributor.queue_depth = 0;
+        assert_eq!(distributor_severity(&distributor), "success");
+
+        assert_eq!(event_icon("slot_lease_upsert"), "seat");
+        assert_eq!(event_icon("session_detail_upsert"), "agent");
+        assert_eq!(event_icon("distributor_queue"), "route");
+        assert_eq!(event_icon("worktree_status"), "git");
+        assert_eq!(event_icon("unknown"), "event");
+        assert_eq!(event_severity("worker_failed"), "danger");
+        assert_eq!(event_severity("cleanup_completed"), "success");
+        assert_eq!(event_severity("worktree_status"), "warning");
+        assert_eq!(event_severity("slot_lease_upsert"), "info");
+    }
+
+    #[test]
+    fn current_git_branch_reads_git_branch_and_ignores_non_repositories() {
+        let non_repo = temp_path("non-repo");
+        std::fs::create_dir_all(&non_repo).expect("non-repo temp dir should be created");
+        assert_eq!(
+            current_git_branch(non_repo.to_string_lossy().as_ref()),
+            None
+        );
+        std::fs::remove_dir_all(&non_repo).expect("non-repo temp dir should be removed");
+
+        let repo = temp_path("repo");
+        std::fs::create_dir_all(&repo).expect("repo temp dir should be created");
+        let status = Command::new("git")
+            .args(["init", "-b", "dashboard-test"])
+            .arg(&repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .status()
+            .expect("git init should run");
+        assert!(status.success());
+
+        assert_eq!(
+            current_git_branch(repo.to_string_lossy().as_ref()).as_deref(),
+            Some("dashboard-test")
+        );
+        std::fs::remove_dir_all(&repo).expect("repo temp dir should be removed");
+    }
 
     #[test]
     fn pool_slot_state_mapping_covers_all_states() {
