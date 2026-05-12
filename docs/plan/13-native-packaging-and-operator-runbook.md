@@ -36,7 +36,7 @@ dist/native/
 Bundle contents:
 
 - native binary
-- `assets/`
+- runtime app-server skill assets under `assets/app-server/skills/`
 - `scripts/gh-akra.sh`
 - `akra` launcher on macOS/Linux or `akra.cmd` on Windows
 - `README.md`
@@ -199,7 +199,7 @@ npm publish notes:
 
 - publish platform packages before the main `@refinedstone/akra` package
 - npm versions are immutable, so a corrected republish needs a new tag version
-- the npm platform package ships the native binary plus runtime `assets/` and `scripts/` under `vendor/<target>/akra/`
+- the npm platform package ships the native binary plus runtime app-server skill assets and `scripts/` under `vendor/<target>/akra/`; admin visual assets are embedded in the binary and ignored build output such as `node_modules/`, `.vite/`, and `dist/` must not be published
 
 Typical release flow:
 

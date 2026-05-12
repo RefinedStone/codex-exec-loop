@@ -117,13 +117,68 @@ verify_checksum_file() {
   printf 'verified_count=%s\n' "${verified_count}"
 }
 
+forbidden_release_path() {
+  local relative_path="$1"
+
+  case "${relative_path}" in
+    assets/admin/game/node_modules|assets/admin/game/node_modules/*)
+      return 0
+      ;;
+    */assets/admin/game/node_modules|*/assets/admin/game/node_modules/*)
+      return 0
+      ;;
+    assets/admin/game/dist|assets/admin/game/dist/*)
+      return 0
+      ;;
+    */assets/admin/game/dist|*/assets/admin/game/dist/*)
+      return 0
+      ;;
+    assets/admin/game/.vite|assets/admin/game/.vite/*)
+      return 0
+      ;;
+    */assets/admin/game/.vite|*/assets/admin/game/.vite/*)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+verify_no_forbidden_bundle_paths() {
+  local root_dir="$1"
+  local artifact_path
+  local relative_path
+
+  while IFS= read -r artifact_path; do
+    relative_path="${artifact_path#${root_dir}/}"
+    if forbidden_release_path "${relative_path}"; then
+      echo "verify_native_release: forbidden build artifact found in bundle: ${relative_path}" >&2
+      exit 1
+    fi
+  done < <(find "${root_dir}" -print)
+}
+
+verify_no_forbidden_archive_paths() {
+  local archive="$1"
+  local relative_path
+
+  while IFS= read -r relative_path; do
+    if forbidden_release_path "${relative_path}"; then
+      echo "verify_native_release: forbidden build artifact found in archive: ${relative_path}" >&2
+      exit 1
+    fi
+  done < <(tar -tzf "${archive}")
+}
+
 if [[ -n "${archive_path}" ]]; then
   archive_path="$(cd "$(dirname "${archive_path}")" && pwd)/$(basename "${archive_path}")"
   archive_checksum_path="${archive_path}.sha256"
   verify_checksum_file "${archive_checksum_path}" "$(dirname "${archive_path}")"
+  verify_no_forbidden_archive_paths "${archive_path}"
 fi
 
 if [[ -n "${bundle_dir}" ]]; then
   bundle_dir="$(cd "${bundle_dir}" && pwd)"
   verify_checksum_file "${bundle_dir}/SHA256SUMS.txt" "${bundle_dir}"
+  verify_no_forbidden_bundle_paths "${bundle_dir}"
 fi

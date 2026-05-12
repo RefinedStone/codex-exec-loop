@@ -66,6 +66,22 @@ function copyDir(sourceDir, destinationDir) {
   }
 }
 
+function copyRuntimeAssets(bundleRoot, vendorDir) {
+  const runtimeSkillAssets = path.join(
+    bundleRoot,
+    "assets",
+    "app-server",
+    "skills",
+  );
+  if (!fs.existsSync(runtimeSkillAssets)) {
+    throw new Error(`Bundled runtime skill assets are missing: ${runtimeSkillAssets}`);
+  }
+  copyDir(
+    runtimeSkillAssets,
+    path.join(vendorDir, "assets", "app-server", "skills"),
+  );
+}
+
 function findArchive(releaseAssetsDir, targetTriple) {
   const suffix = `${targetTriple}.tar.gz`;
   const archiveName = fs
@@ -117,10 +133,6 @@ function stagePlatformPackage({
     if (!fs.existsSync(sourceBinaryPath)) {
       throw new Error(`Bundled binary is missing: ${sourceBinaryPath}`);
     }
-    const sourceAssetsPath = path.join(bundleRoot, "assets");
-    if (!fs.existsSync(sourceAssetsPath)) {
-      throw new Error(`Bundled runtime assets are missing: ${sourceAssetsPath}`);
-    }
     const sourceScriptsPath = path.join(bundleRoot, "scripts");
     if (!fs.existsSync(sourceScriptsPath)) {
       throw new Error(`Bundled runtime scripts are missing: ${sourceScriptsPath}`);
@@ -142,7 +154,7 @@ function stagePlatformPackage({
     if (config.os !== "win32") {
       fs.chmodSync(destinationBinaryPath, 0o755);
     }
-    copyDir(sourceAssetsPath, path.join(vendorDir, "assets"));
+    copyRuntimeAssets(bundleRoot, vendorDir);
     copyDir(sourceScriptsPath, path.join(vendorDir, "scripts"));
 
     writeJson(path.join(packageDir, "package.json"), {

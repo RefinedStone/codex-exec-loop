@@ -18,7 +18,6 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 manifest_path="${repo_root}/Cargo.toml"
 runbook_path="${repo_root}/docs/plan/13-native-packaging-and-operator-runbook.md"
-assets_dir="${repo_root}/assets"
 runtime_scripts_dir="${repo_root}/scripts"
 
 checksum_tool=""
@@ -136,10 +135,22 @@ rm -f "${archive_path}"
 rm -f "${archive_checksum_path}"
 mkdir -p "${bundle_dir}"
 
+copy_tracked_paths() {
+  local relative_path
+  while IFS= read -r -d '' relative_path; do
+    [[ -z "${relative_path}" ]] && continue
+
+    local source_path="${repo_root}/${relative_path}"
+    local destination_path="${bundle_dir}/${relative_path}"
+    mkdir -p "$(dirname "${destination_path}")"
+    cp "${source_path}" "${destination_path}"
+  done < <(git -C "${repo_root}" ls-files -z -- "$@")
+}
+
 cp "${binary_path}" "${bundle_dir}/${binary_file_name}"
 cp "${repo_root}/README.md" "${bundle_dir}/README.md"
 cp "${runbook_path}" "${bundle_dir}/OPERATOR.md"
-cp -R "${assets_dir}" "${bundle_dir}/assets"
+copy_tracked_paths assets/app-server/skills
 mkdir -p "${bundle_dir}/scripts"
 cp "${runtime_scripts_dir}/gh-akra.sh" "${bundle_dir}/scripts/gh-akra.sh"
 chmod +x "${bundle_dir}/scripts/gh-akra.sh"
@@ -173,17 +184,6 @@ profile=${profile}
 binary=${binary_file_name}
 launcher=akra
 EOF
-
-copy_tracked_bundle_samples() {
-  while IFS= read -r relative_path; do
-    [[ -z "${relative_path}" ]] && continue
-
-    local source_path="${repo_root}/${relative_path}"
-    local destination_path="${bundle_dir}/${relative_path}"
-    mkdir -p "$(dirname "${destination_path}")"
-    cp "${source_path}" "${destination_path}"
-  done < <(git -C "${repo_root}" ls-files examples .codex-exec-loop/followups)
-}
 
 compute_sha256() {
   local path="$1"
@@ -219,7 +219,7 @@ write_bundle_checksums() {
 }
 
 write_bundle_launcher
-copy_tracked_bundle_samples
+copy_tracked_paths examples .codex-exec-loop/followups
 write_bundle_checksums > "${bundle_checksum_path}"
 
 tar -C "${out_dir}" -czf "${archive_path}" "${package_name}"
