@@ -292,6 +292,7 @@ for token in \
   'href="/admin/tasks" class="active">Tasks</a>' \
   '<summary>Add task</summary>' \
   'Task catalog view' \
+  'Skipped tasks' \
   'class="toolbar"' \
   'class="create-panel"' \
   'class="metric-row"' \
