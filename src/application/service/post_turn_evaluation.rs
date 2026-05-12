@@ -1397,224 +1397,239 @@ mod tests {
 
     #[test]
     fn official_completion_capture_failure_updates_panel_state() {
-        let mut executor = test_executor();
-        let context = test_context(ready_projection(Some(queue_task())));
-        let mut request = test_request(context.clone());
-        request.changed_planning_file_paths = vec![".codex-exec-loop/planning/result.md".into()];
+        with_test_event_logging(|| {
+            let mut executor = test_executor();
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.changed_planning_file_paths =
+                vec![".codex-exec-loop/planning/result.md".into()];
 
-        let report = executor.begin_official_completion_if_needed(&context, &request);
+            let report = executor.begin_official_completion_if_needed(&context, &request);
 
-        assert!(report.is_none());
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("parallel completion capture failed: repository inspection failed")
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_queue_summary
-                .as_deref(),
-            Some("queue head: Queue head")
-        );
+            assert!(report.is_none());
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("parallel completion capture failed: repository inspection failed")
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_queue_summary
+                    .as_deref(),
+                Some("queue head: Queue head")
+            );
+        });
     }
 
     #[test]
     fn official_completion_refresh_blocks_when_planning_workspace_is_unavailable() {
-        let blocked_workspace = TempPlanningWorkspaceBlocker::new("official-refresh-blocked");
-        let mut executor = test_executor();
-        let context = test_context(ready_projection(Some(queue_task())));
-        let request = test_request(context.clone());
-        let contract = official_completion_contract();
+        with_test_event_logging(|| {
+            let blocked_workspace = TempPlanningWorkspaceBlocker::new("official-refresh-blocked");
+            let mut executor = test_executor();
+            let context = test_context(ready_projection(Some(queue_task())));
+            let request = test_request(context.clone());
+            let contract = official_completion_contract();
 
-        let outcome = executor.run_official_completion_refresh(
-            &context,
-            &request,
-            &blocked_workspace.path,
-            &context.current_runtime_projection,
-            &contract,
-        );
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &blocked_workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        let failure_detail = executor
-            .planning_worker_panel_state
-            .last_summary
-            .as_deref()
-            .expect("blocked refresh should record a panel failure detail");
-        assert!(failure_detail.starts_with("failed to load planning workspace: failed to create "));
-        assert!(failure_detail.contains(&blocked_workspace.path));
-        assert_eq!(
-            outcome.runtime_projection.failure_reason(),
-            Some(failure_detail)
-        );
-        assert!(outcome.runtime_notices.is_empty());
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            let failure_detail = executor
+                .planning_worker_panel_state
+                .last_summary
+                .as_deref()
+                .expect("blocked refresh should record a panel failure detail");
+            assert!(
+                failure_detail.starts_with("failed to load planning workspace: failed to create ")
+            );
+            assert!(failure_detail.contains(&blocked_workspace.path));
+            assert_eq!(
+                outcome.runtime_projection.failure_reason(),
+                Some(failure_detail)
+            );
+            assert!(outcome.runtime_notices.is_empty());
+        });
     }
 
     #[test]
     fn official_completion_refresh_records_worker_execution_failure() {
-        let workspace = TempPlanningWorkspace::new("official-refresh-worker-failure");
-        let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
-        let context = test_context(ready_projection(Some(queue_task())));
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
-        let contract = official_completion_contract();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("official-refresh-worker-failure");
+            let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+            let contract = official_completion_contract();
 
-        let outcome = executor.run_official_completion_refresh(
-            &context,
-            &request,
-            &workspace.path,
-            &context.current_runtime_projection,
-            &contract,
-        );
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("official-refresh")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("official completion refresh failed: worker boom")
-        );
-        assert_eq!(
-            outcome.runtime_projection.auto_follow_pause_reason(),
-            Some("official completion refresh failed: worker boom")
-        );
-        assert!(outcome.runtime_notices.iter().any(|notice| {
-            notice.contains("official completion refreshing state could not be recorded")
-        }));
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("official-refresh")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("official completion refresh failed: worker boom")
+            );
+            assert_eq!(
+                outcome.runtime_projection.auto_follow_pause_reason(),
+                Some("official completion refresh failed: worker boom")
+            );
+            assert!(outcome.runtime_notices.iter().any(|notice| {
+                notice.contains("official completion refreshing state could not be recorded")
+            }));
+        });
     }
 
     #[test]
     fn official_completion_refresh_success_finalizes_slot_and_preserves_worker_summary() {
-        let workspace = TempPlanningWorkspace::new("official-refresh-success");
-        let mut executor = test_executor();
-        let context = test_context(ready_projection(Some(queue_task())));
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
-        let contract = official_completion_contract();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("official-refresh-success");
+            let mut executor = test_executor();
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+            let contract = official_completion_contract();
 
-        let outcome = executor.run_official_completion_refresh(
-            &context,
-            &request,
-            &workspace.path,
-            &context.current_runtime_projection,
-            &contract,
-        );
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("official-refresh")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("planning worker disabled")
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_notice_detail
-                .as_deref(),
-            None
-        );
-        assert_eq!(
-            outcome.runtime_projection.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("official-refresh")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("planning worker disabled")
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_notice_detail
+                    .as_deref(),
+                None
+            );
+            assert_eq!(
+                outcome.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+        });
     }
 
     #[test]
     fn official_completion_refresh_unresolved_repair_blocks_slot_finalization() {
-        let workspace = TempPlanningWorkspace::new("official-refresh-unresolved-repair");
-        let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
-            invalid_task_command_worker_message(),
-        )));
-        let context = test_context(ready_projection(Some(queue_task())));
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
-        let contract = official_completion_contract();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("official-refresh-unresolved-repair");
+            let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+                invalid_task_command_worker_message(),
+            )));
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+            let contract = official_completion_contract();
 
-        let outcome = executor.run_official_completion_refresh(
-            &context,
-            &request,
-            &workspace.path,
-            &context.current_runtime_projection,
-            &contract,
-        );
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
-        );
-        assert_eq!(
-            outcome.runtime_projection.auto_follow_pause_reason(),
-            Some(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
+            );
+            assert_eq!(
+                outcome.runtime_projection.auto_follow_pause_reason(),
+                Some(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
+            );
+        });
     }
 
     #[test]
     fn official_completion_refresh_repeated_queue_head_blocks_slot_finalization() {
-        let workspace = TempPlanningWorkspace::new("official-refresh-repeated-head");
-        seed_ready_queue_authority(&workspace.path);
-        let mut executor = test_executor();
-        let current_projection = executor
-            .planning_feature
-            .runtime
-            .load_runtime_projection_or_invalid(&workspace.path);
-        let mut context = test_context(current_projection);
-        context.previous_handoff_task = Some(queue_handoff());
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
-        let contract = official_completion_contract();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("official-refresh-repeated-head");
+            seed_ready_queue_authority(&workspace.path);
+            let mut executor = test_executor();
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let mut context = test_context(current_projection);
+            context.previous_handoff_task = Some(queue_handoff());
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+            let contract = official_completion_contract();
 
-        let outcome = executor.run_official_completion_refresh(
-            &context,
-            &request,
-            &workspace.path,
-            &context.current_runtime_projection,
-            &contract,
-        );
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert!(
-            executor
-                .planning_worker_panel_state
-                .last_summary
-                .as_deref()
-                .is_some_and(|summary| summary.contains("previously handed-off task unchanged"))
-        );
-        assert!(
-            outcome
-                .runtime_projection
-                .auto_follow_pause_reason()
-                .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert!(
+                executor
+                    .planning_worker_panel_state
+                    .last_summary
+                    .as_deref()
+                    .is_some_and(|summary| summary.contains("previously handed-off task unchanged"))
+            );
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
+            );
+        });
     }
 
     fn test_executor() -> PostTurnEvaluationExecutor {
@@ -1777,6 +1792,18 @@ mod tests {
                 },
             )
             .expect("task authority should be seeded");
+    }
+
+    fn with_test_event_logging<T>(action: impl FnOnce() -> T) -> T {
+        use tracing_subscriber::prelude::*;
+
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(format!(
+                "{}=debug",
+                crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET
+            )))
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+        tracing::subscriber::with_default(subscriber, action)
     }
 
     fn official_completion_contract() -> PlanningOfficialCompletionRefreshContract {
