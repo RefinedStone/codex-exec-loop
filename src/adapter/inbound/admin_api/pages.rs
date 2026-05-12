@@ -185,7 +185,7 @@ pub(super) async fn tasks_page(
     render_html(
         jar,
         TasksTemplate {
-            page_title: "작업 관리".to_string(),
+            page_title: "Tasks".to_string(),
             current_nav: "tasks",
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
