@@ -126,6 +126,55 @@ row_key() {
   printf '%s|%s|%s|%s' "$1" "$2" "$3" "$4"
 }
 
+row_key_exists() {
+  local needle="$1"
+  local key
+  for key in "${row_keys[@]}"; do
+    if [[ "${key}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+set_latest_for_row() {
+  local key="$1"
+  local result="$2"
+  local file="$3"
+  local index
+  for index in "${!latest_keys[@]}"; do
+    if [[ "${latest_keys[${index}]}" == "${key}" ]]; then
+      latest_results[${index}]="${result}"
+      latest_files[${index}]="${file}"
+      return
+    fi
+  done
+  latest_keys+=("${key}")
+  latest_results+=("${result}")
+  latest_files+=("${file}")
+}
+
+latest_row_value() {
+  local key="$1"
+  local field="$2"
+  local default_value="$3"
+  local index
+  for index in "${!latest_keys[@]}"; do
+    if [[ "${latest_keys[${index}]}" == "${key}" ]]; then
+      case "${field}" in
+        result)
+          printf '%s' "${latest_results[${index}]}"
+          ;;
+        file)
+          printf '%s' "${latest_files[${index}]}"
+          ;;
+      esac
+      return
+    fi
+  done
+  printf '%s' "${default_value}"
+}
+
 canonical_check_profile() {
   local value
   value="$(slugify "$1")"
@@ -243,18 +292,16 @@ esac
 declare -a row_specs=()
 load_row_specs "${check_profile}"
 
-declare -A row_labels=()
-declare -A row_kinds=()
-declare -A latest_result_by_row=()
-declare -A latest_file_by_row=()
-declare -A latest_label_by_row=()
+declare -a row_keys=()
+declare -a latest_keys=()
+declare -a latest_results=()
+declare -a latest_files=()
 declare -a unmatched_entries=()
 
 for spec in "${row_specs[@]}"; do
   IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
   key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-  row_labels["${key}"]="${label}"
-  row_kinds["${key}"]="${kind}"
+  row_keys+=("${key}")
 done
 
 if [[ -d "${records_dir}" ]]; then
@@ -277,10 +324,8 @@ if [[ -d "${records_dir}" ]]; then
       "$(canonical_shell "${shell_value}")" \
       "$(canonical_frontend "${frontend_value}")")"
 
-    if [[ -n "${row_labels["${key}"]+set}" ]]; then
-      latest_result_by_row["${key}"]="$(slugify "${result_value}")"
-      latest_file_by_row["${key}"]="${record_file}"
-      latest_label_by_row["${key}"]="os=${os_value}; terminal=${terminal_value}; shell=${shell_value}; frontend=${frontend_value}"
+    if row_key_exists "${key}"; then
+      set_latest_for_row "${key}" "$(slugify "${result_value}")" "${record_file}"
     else
       unmatched_entries+=("${record_file}|${os_value}|${terminal_value}|${shell_value}|${frontend_value}|${result_value}")
     fi
@@ -297,7 +342,7 @@ optional_pass=0
 for spec in "${row_specs[@]}"; do
   IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
   key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-  result="${latest_result_by_row["${key}"]-missing}"
+  result="$(latest_row_value "${key}" result missing)"
 
   if [[ "${kind}" == "required" ]]; then
     ((required_total += 1))
@@ -326,8 +371,8 @@ if [[ "${output_format}" == "text" ]]; then
   for spec in "${row_specs[@]}"; do
     IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
     key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-    result="${latest_result_by_row["${key}"]-missing}"
-    source_file="${latest_file_by_row["${key}"]-}"
+    result="$(latest_row_value "${key}" result missing)"
+    source_file="$(latest_row_value "${key}" file "")"
 
     if [[ "${kind}" == "required" ]]; then
       if [[ -n "${source_file}" ]]; then
@@ -343,8 +388,8 @@ if [[ "${output_format}" == "text" ]]; then
   for spec in "${row_specs[@]}"; do
     IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
     key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-    result="${latest_result_by_row["${key}"]-missing}"
-    source_file="${latest_file_by_row["${key}"]-}"
+    result="$(latest_row_value "${key}" result missing)"
+    source_file="$(latest_row_value "${key}" file "")"
 
     if [[ "${kind}" == "optional" ]]; then
       if [[ -n "${source_file}" ]]; then
@@ -386,8 +431,8 @@ else
   for spec in "${row_specs[@]}"; do
     IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
     key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-    result="${latest_result_by_row["${key}"]-missing}"
-    source_file="${latest_file_by_row["${key}"]-}"
+    result="$(latest_row_value "${key}" result missing)"
+    source_file="$(latest_row_value "${key}" file "")"
     if [[ "${kind}" == "required" ]]; then
       if [[ -n "${source_file}" ]]; then
         printf '| `%s` | %s | `%s` |\n' "${result}" "${label}" "${source_file}"
@@ -404,8 +449,8 @@ else
   for spec in "${row_specs[@]}"; do
     IFS='|' read -r kind os terminal shell_name frontend label <<<"${spec}"
     key="$(row_key "${os}" "${terminal}" "${shell_name}" "${frontend}")"
-    result="${latest_result_by_row["${key}"]-missing}"
-    source_file="${latest_file_by_row["${key}"]-}"
+    result="$(latest_row_value "${key}" result missing)"
+    source_file="$(latest_row_value "${key}" file "")"
     if [[ "${kind}" == "optional" ]]; then
       if [[ -n "${source_file}" ]]; then
         printf '| `%s` | %s | `%s` |\n' "${result}" "${label}" "${source_file}"

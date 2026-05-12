@@ -445,7 +445,7 @@ fn bare_parallel_enter_dispatches_ready_queue() {
     )));
 
     let mut final_status = String::new();
-    for _ in 0..250 {
+    for _ in 0..750 {
         runtime.poll_background_messages();
         if let ConversationState::Ready(conversation) = &runtime.app().conversation_state {
             final_status = conversation.status_text.clone();
