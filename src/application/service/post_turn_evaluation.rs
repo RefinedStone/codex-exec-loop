@@ -1186,6 +1186,159 @@ mod tests {
     }
 
     #[test]
+    fn service_evaluate_paused_request_skips_worker_refresh_and_preserves_panel_state() {
+        let service = test_service();
+        let mut context = test_context(ready_projection(Some(queue_task())));
+        let workspace_directory = std::env::current_dir()
+            .expect("test should run inside a git workspace")
+            .display()
+            .to_string();
+        context.planning_workspace_directory = workspace_directory.clone();
+        context.continuation_paused = true;
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace_directory;
+        request.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
+        request.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
+
+        assert_eq!(
+            service.worker_panel_start_state(&request),
+            PlanningPostTurnWorkerPanelStartState::PreserveCurrent
+        );
+
+        let execution = service.evaluate(request);
+
+        assert_eq!(
+            execution.evaluation.action,
+            PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused
+            }
+        );
+        assert_eq!(
+            execution.evaluation.runtime_projection,
+            context.current_runtime_projection
+        );
+        assert!(execution.evaluation.runtime_notices.is_empty());
+        assert_eq!(
+            execution.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            execution
+                .planning_worker_panel_state
+                .last_summary
+                .as_deref(),
+            Some("previous summary")
+        );
+    }
+
+    #[test]
+    fn queue_refresh_worker_failure_records_refresh_failure_panel() {
+        let workspace = TempPlanningWorkspace::new("queue-refresh-worker-failure");
+        let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            outcome.runtime_projection.failure_reason(),
+            Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("refresh")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("planning worker refresh failed: worker boom")
+        );
+    }
+
+    #[test]
+    fn queue_idle_derivation_worker_failure_records_idle_specific_panel_copy() {
+        let workspace = TempPlanningWorkspace::new("queue-idle-worker-failure");
+        let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
+        let mut context = test_context(ready_projection(None));
+        context.previous_handoff_task = None;
+        context.latest_main_reply = Some("finished the requested work".to_string());
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            outcome.runtime_projection.failure_reason(),
+            Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("queue-idle-derive")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("planning worker queue-idle derivation failed: worker boom")
+        );
+    }
+
+    #[test]
+    fn queue_refresh_success_records_worker_outcome_and_drained_projection() {
+        let workspace = TempPlanningWorkspace::new("queue-refresh-success");
+        let mut executor = test_executor();
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("refresh")
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some("planning worker disabled")
+        );
+        assert_eq!(
+            outcome.runtime_projection.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+    }
+
+    #[test]
     fn auto_follow_decision_queues_prompt_with_handoff_provenance() {
         let executor = test_executor();
         let context = test_context(ready_projection(Some(queue_task())));
@@ -1385,6 +1538,22 @@ mod tests {
 
     fn test_executor() -> PostTurnEvaluationExecutor {
         test_executor_with_worker(Arc::new(NoopPlanningWorkerPort))
+    }
+
+    fn test_service() -> PostTurnEvaluationService {
+        PostTurnEvaluationService::new(
+            PlanningServices::from_ports(
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                Arc::new(NoopPlanningAuthorityPort::default()),
+                Arc::new(NoopPlanningTaskRepositoryPort),
+                Arc::new(NoopPlanningWorkerPort),
+            ),
+            ParallelModeTurnService::new(ParallelModeService::new(
+                Arc::new(SqlitePlanningAuthorityAdapter::new()),
+                Arc::new(GithubAutomationAdapter::new()),
+                Arc::new(GitParallelModeRuntimeAdapter::new()),
+            )),
+        )
     }
 
     fn test_executor_with_worker(
