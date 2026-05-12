@@ -1,5 +1,60 @@
 {% extends "admin/base.html" %}
 {% block content %}
+<style>
+  .direction-task-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .direction-task-list-head,
+  .direction-task-row,
+  .direction-task-main,
+  .direction-task-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .direction-task-list-head {
+    justify-content: space-between;
+  }
+  .direction-task-list-head h3,
+  .direction-task-list-head p {
+    margin: 0;
+  }
+  .direction-task-list-head p,
+  .direction-task-meta {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .direction-task-rows {
+    display: grid;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--panel);
+  }
+  .direction-task-row {
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .direction-task-row:last-child {
+    border-bottom: 0;
+  }
+  .direction-task-title {
+    overflow-wrap: anywhere;
+    font-weight: 700;
+  }
+  @media (max-width: 640px) {
+    .direction-task-row {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+  }
+</style>
 <section class="toolbar">
   <details class="create-panel">
     <summary>Add direction</summary>
@@ -140,6 +195,33 @@
             <button type="submit">Save direction</button>
           </div>
         </form>
+        <section class="direction-task-list" aria-label="Tasks for {{ direction.title }}">
+          <div class="direction-task-list-head">
+            <div>
+              <h3>Linked tasks</h3>
+              <p>linked task count: {{ direction.task_count }}</p>
+            </div>
+          </div>
+          {% if direction.tasks.is_empty() %}
+          <p class="empty-state">No tasks reference this direction.</p>
+          {% else %}
+          <div class="direction-task-rows">
+            {% for task in direction.tasks %}
+            <article class="direction-task-row status-{{ task.status }}">
+              <span class="direction-task-main">
+                <strong class="direction-task-title">{{ task.title }}</strong>
+                <span class="mono">{{ task.id }}</span>
+              </span>
+              <span class="direction-task-meta">
+                <span class="status-pill {{ task.status }}">{{ task.status }}</span>
+                <span>priority {{ task.base_priority }} / {{ task.dynamic_priority_delta }}</span>
+                <span class="mono">{{ task.updated_at }}</span>
+              </span>
+            </article>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </section>
         <div class="inline-actions danger-zone">
           <form method="post" action="/admin/drafts">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

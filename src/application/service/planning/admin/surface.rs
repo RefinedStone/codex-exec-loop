@@ -241,6 +241,16 @@ pub struct PlanningAdminDirectionsSummaryView {
  * 이 계약 덕분에 template은 domain Vec<String>과 textarea 사이의 변환 규칙을 몰라도 된다.
  */
 #[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminDirectionTaskView {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub base_priority: i32,
+    pub dynamic_priority_delta: i32,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminDirectionManagementView {
     pub id: String,
     pub title: String,
@@ -250,6 +260,7 @@ pub struct PlanningAdminDirectionManagementView {
     pub detail_doc_path: String,
     pub state: String,
     pub task_count: usize,
+    pub tasks: Vec<PlanningAdminDirectionTaskView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
