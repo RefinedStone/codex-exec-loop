@@ -101,6 +101,28 @@ if isinstance(data, dict):
 ' "${field_name}"
 }
 
+json_path_string_field() {
+  local body
+  local field_path
+  body="$1"
+  field_path="$2"
+
+  JSON_BODY="${body}" python3 -c '
+import json
+import os
+import sys
+
+value = json.loads(os.environ["JSON_BODY"])
+for part in sys.argv[1].split("."):
+    if not isinstance(value, dict):
+        value = None
+        break
+    value = value.get(part)
+if isinstance(value, str):
+    print(value)
+' "${field_path}"
+}
+
 url_encode() {
   local value
   value="$1"
@@ -666,6 +688,63 @@ close_pr_with_api() {
   printf '%s\n' "$(json_string_field "${response_body}" "html_url")"
 }
 
+merge_pr_with_api() {
+  local pr_number
+  local merge_method
+  local delete_branch
+  local pull_request_body
+  local pull_request_url
+  local head_branch
+  local head_repo_full_name
+  local payload
+
+  pr_number="${1-}"
+  shift || true
+  merge_method="merge"
+  delete_branch="false"
+
+  if [[ -z "${pr_number}" ]]; then
+    usage_error "pr merge requires a pull request number"
+  fi
+
+  while (($# > 0)); do
+    case "$1" in
+      --rebase)
+        merge_method="rebase"
+        shift
+        ;;
+      --squash)
+        merge_method="squash"
+        shift
+        ;;
+      --merge)
+        merge_method="merge"
+        shift
+        ;;
+      --delete-branch)
+        delete_branch="true"
+        shift
+        ;;
+      *)
+        usage_error "unsupported pr merge option ${1} without gh installed"
+        ;;
+    esac
+  done
+
+  pull_request_body="$(api_request GET "/repos/${repo_full_name}/pulls/${pr_number}")"
+  pull_request_url="$(json_string_field "${pull_request_body}" "html_url")"
+  head_branch="$(json_path_string_field "${pull_request_body}" "head.ref")"
+  head_repo_full_name="$(json_path_string_field "${pull_request_body}" "head.repo.full_name")"
+  payload="$(printf '{"merge_method":"%s"}' "${merge_method}")"
+  api_request PUT "/repos/${repo_full_name}/pulls/${pr_number}/merge" "${payload}" >/dev/null
+
+  if [[ "${delete_branch}" == "true" && "${head_repo_full_name}" == "${repo_full_name}" && -n "${head_branch}" ]]; then
+    api_request DELETE "/repos/${repo_full_name}/git/refs/heads/${head_branch}" >/dev/null || true
+  fi
+
+  printf '%s\n' "${pull_request_url:-https://github.com/${repo_full_name}/pull/${pr_number}}"
+}
+
 parse_review_reply_args() {
   pr_number=""
   comment_id=""
@@ -765,12 +844,17 @@ case "${1-}:${2-}" in
     shift 2
     close_pr_with_api "$@"
     ;;
+  pr:merge)
+    verify_api_login_if_requested
+    shift 2
+    merge_pr_with_api "$@"
+    ;;
   review-reply:*)
     verify_api_login_if_requested
     shift
     reply_review_comment_with_api "$@"
     ;;
   *)
-    usage_error "gh is not installed and direct fallback supports 'auth status', 'pr create', 'pr list', 'pr view', 'pr close', and 'review-reply'"
+    usage_error "gh is not installed and direct fallback supports 'auth status', 'pr create', 'pr list', 'pr view', 'pr close', 'pr merge', and 'review-reply'"
     ;;
 esac
