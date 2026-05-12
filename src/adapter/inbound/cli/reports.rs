@@ -170,3 +170,121 @@ pub(super) fn render_json_line<T: Serialize>(stdout: &mut impl Write, value: &T)
     writeln!(stdout)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DoctorReport, PlanningToolErrorReport, ResetReport, render_doctor_report, render_json_line,
+        render_reset_report,
+    };
+    use crate::application::service::planning::{
+        PlanningResetTarget, PlanningWorkspaceResetResult,
+    };
+
+    fn rendered_utf8(output: Vec<u8>) -> String {
+        String::from_utf8(output).expect("report output should be UTF-8")
+    }
+
+    #[test]
+    fn doctor_report_renders_path_issue_with_exit_code() {
+        let report = DoctorReport::path_issue(
+            "/tmp/missing-workspace".to_string(),
+            "workspace path does not exist".to_string(),
+        );
+        let mut output = Vec::new();
+
+        render_doctor_report(&mut output, &report).expect("doctor report should render");
+        let rendered = rendered_utf8(output);
+
+        assert_eq!(report.exit_code(), 1);
+        assert!(rendered.contains("workspace: /tmp/missing-workspace\n"));
+        assert!(rendered.contains("planning state: invalid\n"));
+        assert!(rendered.contains("issue: workspace path does not exist\n"));
+        assert!(!rendered.contains("queue summary:"));
+        assert!(!rendered.contains("health:"));
+    }
+
+    #[test]
+    fn reset_reports_render_success_failure_and_path_issue_shapes() {
+        let success = ResetReport::success(
+            "/tmp/workspace".to_string(),
+            &PlanningWorkspaceResetResult {
+                target: PlanningResetTarget::All,
+                rewritten_paths: vec![
+                    "planning/result_output.md".to_string(),
+                    "planning/task_authority.json".to_string(),
+                ],
+                removed_paths: vec!["planning/generated/old.json".to_string()],
+            },
+        );
+        let mut success_output = Vec::new();
+        render_reset_report(&mut success_output, &success).expect("success should render");
+        let success_rendered = rendered_utf8(success_output);
+
+        assert_eq!(success.exit_code(), 0);
+        assert!(success_rendered.contains("workspace: /tmp/workspace\n"));
+        assert!(success_rendered.contains("command: reset\n"));
+        assert!(success_rendered.contains("target: all\n"));
+        assert!(success_rendered.contains("rewritten: planning/result_output.md\n"));
+        assert!(success_rendered.contains("rewritten: planning/task_authority.json\n"));
+        assert!(success_rendered.contains("removed: planning/generated/old.json\n"));
+        assert!(success_rendered.contains("status: planning workspace reset\n"));
+
+        let failure = ResetReport::failure(
+            "/tmp/workspace".to_string(),
+            PlanningResetTarget::Queue,
+            "planning workspace is busy".to_string(),
+        );
+        let mut failure_output = Vec::new();
+        render_reset_report(&mut failure_output, &failure).expect("failure should render");
+        let failure_rendered = rendered_utf8(failure_output);
+
+        assert_eq!(failure.exit_code(), 1);
+        assert!(failure_rendered.contains("target: queue\n"));
+        assert!(failure_rendered.contains("issue: planning workspace is busy\n"));
+        assert!(!failure_rendered.contains("status: planning workspace reset"));
+
+        let path_issue = ResetReport::path_issue(
+            "/tmp/not-a-workspace".to_string(),
+            "workspace path is not a directory".to_string(),
+        );
+        let mut path_issue_output = Vec::new();
+        render_reset_report(&mut path_issue_output, &path_issue).expect("path issue should render");
+        let path_issue_rendered = rendered_utf8(path_issue_output);
+
+        assert_eq!(path_issue.exit_code(), 1);
+        assert!(path_issue_rendered.contains("workspace: /tmp/not-a-workspace\n"));
+        assert!(path_issue_rendered.contains("command: reset\n"));
+        assert!(path_issue_rendered.contains("issue: workspace path is not a directory\n"));
+        assert!(!path_issue_rendered.contains("target:"));
+        assert!(!path_issue_rendered.contains("rewritten:"));
+    }
+
+    #[test]
+    fn json_line_report_uses_serde_escaping_and_newline_delimiter() {
+        let report = PlanningToolErrorReport {
+            ok: false,
+            operation: "planning-tool".to_string(),
+            error: "bad \"json\" payload".to_string(),
+            guidance: vec![
+                "Run `akra planning-tool contract`".to_string(),
+                "Keep each request narrow\nand explicit".to_string(),
+            ],
+        };
+        let mut output = Vec::new();
+
+        render_json_line(&mut output, &report).expect("JSON line should render");
+        let rendered = rendered_utf8(output);
+        let parsed: serde_json::Value =
+            serde_json::from_str(rendered.trim_end()).expect("JSONL payload should parse");
+
+        assert!(rendered.ends_with('\n'));
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["operation"], "planning-tool");
+        assert_eq!(parsed["error"], "bad \"json\" payload");
+        assert_eq!(
+            parsed["guidance"][1],
+            "Keep each request narrow\nand explicit"
+        );
+    }
+}
