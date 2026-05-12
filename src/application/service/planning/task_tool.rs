@@ -542,31 +542,22 @@ mod tests {
             .and_then(|value| value.as_object())
             .expect("contract should include request examples");
 
-        let list_example = examples
-            .get("list_tasks")
-            .expect("list_tasks example should exist");
-        let create_example = examples
-            .get("create_task")
-            .expect("create_task example should exist");
-        let update_example = examples
-            .get("update_task")
-            .expect("update_task example should exist");
-
-        assert!(matches!(
-            serde_json::from_value::<PlanningTaskToolRequest>(list_example.clone())
-                .expect("list_tasks example should parse"),
-            PlanningTaskToolRequest::ListTasks(_)
-        ));
-        assert!(matches!(
-            serde_json::from_value::<PlanningTaskToolRequest>(create_example.clone())
-                .expect("create_task example should parse"),
-            PlanningTaskToolRequest::CreateTask(_)
-        ));
-        assert!(matches!(
-            serde_json::from_value::<PlanningTaskToolRequest>(update_example.clone())
-                .expect("update_task example should parse"),
-            PlanningTaskToolRequest::UpdateTask(_)
-        ));
+        for (op_name, example_value) in examples {
+            let request = serde_json::from_value::<PlanningTaskToolRequest>(example_value.clone())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "example for `{op_name}` should parse as PlanningTaskToolRequest: {error}"
+                    )
+                });
+            match (op_name.as_str(), request) {
+                ("list_tasks", PlanningTaskToolRequest::ListTasks(_)) => {}
+                ("create_task", PlanningTaskToolRequest::CreateTask(_)) => {}
+                ("update_task", PlanningTaskToolRequest::UpdateTask(_)) => {}
+                (name, request) => {
+                    panic!("example `{name}` parsed into an unexpected variant: {request:?}")
+                }
+            }
+        }
     }
 
     #[test]

@@ -835,6 +835,11 @@ impl PriorityQueueProjection {
     pub fn visible_proposed_tasks(&self, limit: usize) -> Vec<PriorityQueueTask> {
         self.proposed_tasks.iter().take(limit).cloned().collect()
     }
+
+    // skipped task panel도 queue projection이 소유한 동일한 visible-limit contract를 쓴다.
+    pub fn visible_skipped_tasks(&self, limit: usize) -> Vec<PriorityQueueSkippedTask> {
+        self.skipped_tasks.iter().take(limit).cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -852,6 +857,16 @@ mod priority_queue_projection_tests {
             combined_priority: 80,
             updated_at: "2026-04-30T00:00:00Z".to_string(),
             rank_reasons: vec!["status=ready".to_string()],
+        }
+    }
+
+    fn skipped_task(task_id: &str) -> PriorityQueueSkippedTask {
+        PriorityQueueSkippedTask {
+            task_id: task_id.to_string(),
+            task_title: format!("Skipped {task_id}"),
+            direction_id: "general-workstream".to_string(),
+            status: TaskStatus::Blocked,
+            reason: "blocked by another task".to_string(),
         }
     }
 
@@ -904,6 +919,25 @@ mod priority_queue_projection_tests {
         assert_eq!(
             projection.proposal_summary(2).as_deref(),
             Some("3 promotable follow-up proposals available: Plan A | Plan B | +1 more")
+        );
+    }
+
+    #[test]
+    fn visible_skipped_tasks_applies_same_visible_limit_contract() {
+        let mut projection = projection(None, Vec::new());
+        projection.skipped_tasks = vec![
+            skipped_task("skipped-1"),
+            skipped_task("skipped-2"),
+            skipped_task("skipped-3"),
+        ];
+
+        assert_eq!(
+            projection
+                .visible_skipped_tasks(2)
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skipped-1", "skipped-2"]
         );
     }
 }

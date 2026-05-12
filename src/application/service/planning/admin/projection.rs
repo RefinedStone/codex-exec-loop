@@ -30,10 +30,10 @@ pub(super) fn map_management_view(
     // task count는 direction id를 trim한 값으로 합산한다. queue resolution도 공백을 제거한 id로 연결을
     // 판단하므로, admin 화면의 "이 direction에 몇 개 task가 붙었는가"가 runtime 판단과 어긋나지 않는다.
     // 다만 editable row에는 원문 id를 유지해 operator가 실제 문서에 들어 있는 값을 그대로 볼 수 있게 한다.
-    let mut tasks_by_direction = BTreeMap::<String, Vec<PlanningAdminDirectionTaskView>>::new();
+    let mut tasks_by_direction = BTreeMap::<&str, Vec<PlanningAdminDirectionTaskView>>::new();
     for task in &task_authority.tasks {
         tasks_by_direction
-            .entry(task.direction_id.trim().to_string())
+            .entry(task.direction_id.trim())
             .or_default()
             .push(map_direction_task_view(task));
     }
@@ -51,22 +51,19 @@ pub(super) fn map_management_view(
         directions: directions
             .directions
             .iter()
-            .map(|direction| PlanningAdminDirectionManagementView {
-                tasks: tasks_by_direction
-                    .get(direction.id.trim())
-                    .cloned()
-                    .unwrap_or_default(),
-                id: direction.id.clone(),
-                title: direction.title.clone(),
-                summary: direction.summary.clone(),
-                success_criteria_text: direction.success_criteria.join("\n"),
-                scope_hints_text: direction.scope_hints.join("\n"),
-                detail_doc_path: direction.detail_doc_path.clone(),
-                state: direction_state_label(direction.state).to_string(),
-                task_count: tasks_by_direction
-                    .get(direction.id.trim())
-                    .map(Vec::len)
-                    .unwrap_or_default(),
+            .map(|direction| {
+                let tasks = tasks_by_direction.get(direction.id.trim());
+                PlanningAdminDirectionManagementView {
+                    tasks: tasks.cloned().unwrap_or_default(),
+                    id: direction.id.clone(),
+                    title: direction.title.clone(),
+                    summary: direction.summary.clone(),
+                    success_criteria_text: direction.success_criteria.join("\n"),
+                    scope_hints_text: direction.scope_hints.join("\n"),
+                    detail_doc_path: direction.detail_doc_path.clone(),
+                    state: direction_state_label(direction.state).to_string(),
+                    task_count: tasks.map(Vec::len).unwrap_or_default(),
+                }
             })
             .collect(),
         // task dependency/blocker 목록도 같은 newline 표현을 쓴다. 순서가 유지되는 text block으로 내보내야
@@ -144,6 +141,7 @@ pub(super) fn map_application_projection(
             .take(5)
             .map(map_application_queue_task)
             .collect(),
+        skipped_count: projection.skipped_tasks.len(),
         skipped_tasks: projection
             .skipped_tasks
             .into_iter()
@@ -270,16 +268,16 @@ pub(super) fn map_queue_preview(snapshot: &PriorityQueueProjection) -> PlanningA
                 updated_at: task.updated_at,
             })
             .collect(),
+        skipped_count: snapshot.skipped_tasks.len(),
         skipped_tasks: snapshot
-            .skipped_tasks
-            .iter()
-            .take(5)
+            .visible_skipped_tasks(5)
+            .into_iter()
             .map(|task| PlanningAdminSkippedTaskView {
-                task_id: task.task_id.clone(),
-                task_title: task.task_title.clone(),
-                direction_id: task.direction_id.clone(),
+                task_id: task.task_id,
+                task_title: task.task_title,
+                direction_id: task.direction_id,
                 status: task.status.label().to_string(),
-                reason: task.reason.clone(),
+                reason: task.reason,
             })
             .collect(),
     }
@@ -509,6 +507,7 @@ mod tests {
         assert!(preview.queue_head.is_none());
         assert!(preview.visible_tasks.is_empty());
         assert!(preview.proposed_tasks.is_empty());
+        assert_eq!(preview.skipped_count, 1);
         assert_eq!(preview.skipped_tasks[0].reason, "blocked by another task");
     }
 
@@ -558,6 +557,7 @@ mod tests {
             vec!["task-1", "task-2"]
         );
         assert_eq!(summary.proposed_tasks[0].status, "proposed");
+        assert_eq!(summary.skipped_count, 1);
         assert_eq!(summary.skipped_tasks[0].reason, "blocked by another task");
     }
 
@@ -608,6 +608,7 @@ mod tests {
 
         assert_eq!(summary.visible_tasks.len(), 5);
         assert_eq!(summary.proposed_tasks.len(), 5);
+        assert_eq!(summary.skipped_count, 6);
         assert_eq!(summary.skipped_tasks.len(), 5);
         assert_eq!(summary.visible_tasks[4].task_id, "task-5");
         assert_eq!(summary.proposed_tasks[4].task_id, "proposal-5");

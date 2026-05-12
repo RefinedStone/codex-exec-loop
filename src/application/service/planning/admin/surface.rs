@@ -190,6 +190,7 @@ pub struct PlanningAdminQueuePreview {
     pub queue_head: Option<PlanningAdminQueueHeadView>,
     pub visible_tasks: Vec<PlanningAdminQueueTaskView>,
     pub proposed_tasks: Vec<PlanningAdminQueueTaskView>,
+    pub skipped_count: usize,
     pub skipped_tasks: Vec<PlanningAdminSkippedTaskView>,
 }
 
@@ -392,6 +393,7 @@ pub struct PlanningAdminRuntimeSummary {
     pub queue_head: Option<PlanningAdminQueueHeadView>,
     pub visible_tasks: Vec<PlanningAdminQueueTaskView>,
     pub proposed_tasks: Vec<PlanningAdminQueueTaskView>,
+    pub skipped_count: usize,
     pub skipped_tasks: Vec<PlanningAdminSkippedTaskView>,
 }
 
