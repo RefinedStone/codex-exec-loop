@@ -149,6 +149,188 @@ fn build_test_planning_services(
 }
 
 #[test]
+fn enqueue_dispatch_commands_for_trigger_maps_public_entrypoint_to_durable_command() {
+    let repo = TempGitRepo::new("orchestrator-trigger-entrypoint");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+
+    assert_eq!(
+        service
+            .enqueue_dispatch_commands_for_trigger(
+                &workspace_dir,
+                ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                &planning_projection,
+                Some(21),
+            )
+            .expect("trigger entrypoint should enqueue"),
+        1
+    );
+
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].trigger,
+        ParallelModeAutomationTrigger::MainTurnPostEvaluation
+    );
+}
+
+#[test]
+fn dispatch_tick_reports_no_pending_durable_command_without_mutating_queue() {
+    let repo = TempGitRepo::new("orchestrator-no-pending-command");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+
+    let service = Arc::new(ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 22,
+            enqueue_trigger: None,
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(
+        result.outcome.blocked_reason.as_deref(),
+        Some("no pending durable dispatch command")
+    );
+    assert_eq!(worker_port.launch_count(), 0);
+    assert!(
+        event_receiver
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert!(projections.dispatch_commands.is_empty());
+}
+
+#[test]
+fn dispatch_tick_blocks_before_claim_when_readiness_fails() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let workspace_path = std::env::temp_dir().join(format!(
+        "parallel-mode-orchestrator-readiness-blocked-{unique}"
+    ));
+    fs::create_dir_all(&workspace_path).expect("non-git workspace should be created");
+    let workspace_dir = workspace_path.display().to_string();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+
+    let service = Arc::new(ParallelModeService::new(
+        authority,
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir,
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 23,
+            enqueue_trigger: Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+            planning,
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert!(!result.readiness_snapshot.allows_parallel_mode());
+    assert!(
+        result
+            .outcome
+            .blocked_reason
+            .as_deref()
+            .expect("readiness failure should block")
+            .starts_with("readiness:")
+    );
+    assert_eq!(worker_port.launch_count(), 0);
+    assert!(
+        event_receiver
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+    fs::remove_dir_all(workspace_path).expect("non-git workspace should be removed");
+}
+
+#[test]
+fn dispatch_tick_enqueue_trigger_claims_and_runs_new_command() {
+    let repo = TempGitRepo::new("orchestrator-enqueue-trigger");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+
+    let service = Arc::new(ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, _event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 24,
+            enqueue_trigger: Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    for _ in 0..100 {
+        if worker_port.launch_count() >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(worker_port.launch_count(), 1);
+
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
+    );
+}
+
+#[test]
 fn dispatch_orchestrator_loop_claims_one_durable_command_across_two_ticks() {
     let repo = TempGitRepo::new("orchestrator-loop-claim-once");
     let workspace_dir = repo.workspace_dir();

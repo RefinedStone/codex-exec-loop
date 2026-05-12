@@ -1186,13 +1186,474 @@ fn parallel_worker_agent_message_completed_trace_payload(
 #[cfg(test)]
 mod tests {
     use super::{
-        ParallelDispatchTurnCompleted, ParallelDispatchWorkerRequest,
-        parallel_dispatch_validation_summary, parallel_official_completion_started_trace_payload,
+        ParallelDispatchOfficialCompletionOutcome, ParallelDispatchTurnCompleted,
+        ParallelDispatchWorkerRequest, ParallelDispatchWorkerRunResult,
+        ParallelDispatchWorkerStreamState, parallel_dispatch_validation_summary,
+        parallel_official_completion_started_trace_payload,
+        parallel_runtime_event_for_dispatch_trigger,
         parallel_worker_agent_message_completed_trace_payload,
-        parallel_worker_stream_starting_trace_payload,
+        parallel_worker_stream_starting_trace_payload, run_parallel_dispatch_worker,
+        sync_parallel_dispatch_worker_event,
     };
-    use crate::application::service::planning::PlanningTaskHandoff;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+    use crate::application::port::outbound::github_automation_port::{
+        GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+    };
+    use crate::application::port::outbound::parallel_agent_worker_port::{
+        ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+    };
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+    use crate::application::service::planning::{PlanningServices, PlanningTaskHandoff};
+    use crate::domain::parallel_mode::{
+        ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+        ParallelModeCapabilityState, ParallelModeControlPlaneWorkerEventKind,
+        ParallelModeRuntimeEvent,
+    };
     use crate::test_utils::json_payload_contains;
+    use anyhow::{Result, anyhow};
+    use std::sync::{Arc, Mutex};
+
+    struct NoopGithubAutomationPort;
+
+    impl GithubAutomationPort for NoopGithubAutomationPort {
+        fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+            GithubAutomationCapabilities::new(
+                ready_capability(ParallelModeCapabilityKey::PushRemote),
+                ready_capability(ParallelModeCapabilityKey::GhBinary),
+                ready_capability(ParallelModeCapabilityKey::GhAuth),
+            )
+        }
+
+        fn push_branch(
+            &self,
+            _repo_root: &str,
+            _branch_name: &str,
+            _force_with_lease: bool,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn ensure_pull_request(
+            &self,
+            _repo_root: &str,
+            base_branch: &str,
+            head_branch: &str,
+            _title: &str,
+            _body: &str,
+        ) -> Result<GithubAutomationPullRequest> {
+            Ok(GithubAutomationPullRequest::new(
+                1,
+                "https://github.example/pr/1",
+                "open",
+                base_branch,
+                head_branch,
+                false,
+            ))
+        }
+
+        fn inspect_pull_request(
+            &self,
+            _repo_root: &str,
+            pr_number: u64,
+        ) -> Result<GithubAutomationPullRequest> {
+            Ok(GithubAutomationPullRequest::new(
+                pr_number,
+                "https://github.example/pr/1",
+                "open",
+                "prerelease",
+                "akra-agent/slot-1/task",
+                false,
+            ))
+        }
+
+        fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn close_pull_request(&self, _repo_root: &str, _pr_number: u64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn ready_capability(key: ParallelModeCapabilityKey) -> ParallelModeCapabilitySnapshot {
+        ParallelModeCapabilitySnapshot::new(key, ParallelModeCapabilityState::Ready, "ready", None)
+    }
+
+    fn test_turn_service() -> ParallelModeTurnService {
+        ParallelModeTurnService::new(test_parallel_service(Arc::new(
+            SqlitePlanningAuthorityAdapter::new(),
+        )))
+    }
+
+    fn test_parallel_service(
+        authority: Arc<SqlitePlanningAuthorityAdapter>,
+    ) -> ParallelModeService {
+        ParallelModeService::new(
+            authority,
+            Arc::new(NoopGithubAutomationPort),
+            Arc::new(GitParallelModeRuntimeAdapter::new()),
+        )
+    }
+
+    fn test_planning_services(authority: Arc<SqlitePlanningAuthorityAdapter>) -> PlanningServices {
+        PlanningServices::from_ports(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            authority.clone(),
+            authority,
+            Arc::new(NoopPlanningWorkerPort),
+        )
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum WorkerExit {
+        Ok,
+        Err,
+        Panic,
+    }
+
+    #[derive(Debug)]
+    struct ScriptedParallelAgentWorkerPort {
+        events: Mutex<Vec<ConversationStreamEvent>>,
+        exit: WorkerExit,
+    }
+
+    impl ScriptedParallelAgentWorkerPort {
+        fn new(events: Vec<ConversationStreamEvent>, exit: WorkerExit) -> Self {
+            Self {
+                events: Mutex::new(events),
+                exit,
+            }
+        }
+    }
+
+    impl ParallelAgentWorkerPort for ScriptedParallelAgentWorkerPort {
+        fn run_isolated_new_thread_stream(
+            &self,
+            _request: ParallelAgentWorkerStreamRequest<'_>,
+            event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            let events = self
+                .events
+                .lock()
+                .expect("scripted worker events mutex should not be poisoned")
+                .clone();
+            for event in events {
+                event_sender
+                    .send(event)
+                    .expect("worker reducer should still receive scripted events");
+            }
+            match self.exit {
+                WorkerExit::Ok => Ok(()),
+                WorkerExit::Err => Err(anyhow!("scripted worker port failed")),
+                WorkerExit::Panic => panic!("scripted worker port panicked"),
+            }
+        }
+    }
+
+    fn run_scripted_worker(
+        events: Vec<ConversationStreamEvent>,
+        exit: WorkerExit,
+    ) -> ParallelDispatchWorkerRunResult {
+        run_scripted_worker_with_request(worker_request_with_secret_bodies(), events, exit)
+    }
+
+    fn run_scripted_worker_with_request(
+        request: ParallelDispatchWorkerRequest,
+        events: Vec<ConversationStreamEvent>,
+        exit: WorkerExit,
+    ) -> ParallelDispatchWorkerRunResult {
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let turn_service = ParallelModeTurnService::new(test_parallel_service(authority.clone()));
+        let planning = test_planning_services(authority);
+        run_parallel_dispatch_worker(
+            request,
+            Arc::new(ScriptedParallelAgentWorkerPort::new(events, exit)),
+            turn_service,
+            planning,
+        )
+    }
+
+    #[test]
+    fn trigger_mapping_covers_public_automation_triggers() {
+        assert_eq!(
+            parallel_runtime_event_for_dispatch_trigger(
+                ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+            ),
+            ParallelModeRuntimeEvent::AutoFollowQueued
+        );
+        assert_eq!(
+            parallel_runtime_event_for_dispatch_trigger(
+                ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+            ),
+            ParallelModeRuntimeEvent::ParallelCompletionFinalized
+        );
+        assert_eq!(
+            parallel_runtime_event_for_dispatch_trigger(
+                ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            ),
+            ParallelModeRuntimeEvent::TaskIntakeCommitted
+        );
+    }
+
+    #[test]
+    fn worker_result_constructors_preserve_control_plane_event_kinds() {
+        let launch_failed = ParallelDispatchWorkerRunResult::launch_failed(vec!["launch".into()]);
+        assert_eq!(
+            launch_failed.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        assert_eq!(launch_failed.notices, vec!["launch".to_string()]);
+
+        let stream_failed = ParallelDispatchWorkerRunResult::stream_failed(vec!["stream".into()]);
+        assert_eq!(
+            stream_failed.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+
+        let completed = ParallelDispatchWorkerRunResult::completed(vec!["done".into()]);
+        assert_eq!(
+            completed.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::Completed
+        );
+        assert_eq!(completed.notices, vec!["done".to_string()]);
+    }
+
+    #[test]
+    fn official_completion_outcome_constructors_mark_refresh_success_flag() {
+        let failed = ParallelDispatchOfficialCompletionOutcome::failed(vec!["blocked".into()]);
+        assert!(!failed.official_completion_refresh_succeeded);
+        assert_eq!(failed.notices, vec!["blocked".to_string()]);
+
+        let succeeded = ParallelDispatchOfficialCompletionOutcome::succeeded(vec!["ok".into()]);
+        assert!(succeeded.official_completion_refresh_succeeded);
+        assert_eq!(succeeded.notices, vec!["ok".to_string()]);
+    }
+
+    #[test]
+    fn scripted_worker_run_classifies_missing_completion_error_and_panic_paths() {
+        let missing_completion = run_scripted_worker(Vec::new(), WorkerExit::Ok);
+        assert_eq!(
+            missing_completion.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        assert!(
+            missing_completion
+                .notices
+                .iter()
+                .any(|notice| notice.contains("ended without a completed turn"))
+        );
+
+        let port_error = run_scripted_worker(Vec::new(), WorkerExit::Err);
+        assert_eq!(
+            port_error.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        assert!(
+            port_error
+                .notices
+                .iter()
+                .any(|notice| notice.contains("returned an error"))
+        );
+
+        let panic_result = run_scripted_worker(Vec::new(), WorkerExit::Panic);
+        assert_eq!(
+            panic_result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        assert!(
+            panic_result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("panicked"))
+        );
+    }
+
+    #[test]
+    fn scripted_worker_run_keeps_started_failures_as_stream_failures() {
+        let result = run_scripted_worker(
+            vec![ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-started".to_string(),
+            }],
+            WorkerExit::Err,
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("returned an error"))
+        );
+    }
+
+    #[test]
+    fn scripted_worker_run_skips_official_completion_without_running_slot_lease() {
+        let result = run_scripted_worker(
+            vec![
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-lease-missing".to_string(),
+                },
+                ConversationStreamEvent::AgentMessageCompleted {
+                    item_id: "item-final".to_string(),
+                    phase: Some("final_answer".to_string()),
+                    text: "done".to_string(),
+                },
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-lease-missing".to_string(),
+                    changed_planning_file_paths: Vec::new(),
+                },
+            ],
+            WorkerExit::Ok,
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("could not reserve official refresh order")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
+    fn scripted_worker_run_reports_no_running_slot_for_git_workspace_without_lease() {
+        let workspace = std::env::current_dir()
+            .expect("test should have a current directory")
+            .display()
+            .to_string();
+        let mut request = worker_request_with_secret_bodies();
+        request.planning_workspace_directory = workspace.clone();
+        request.worktree_directory = workspace;
+
+        let result = run_scripted_worker_with_request(
+            request,
+            vec![
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-no-lease".to_string(),
+                },
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-no-lease".to_string(),
+                    changed_planning_file_paths: Vec::new(),
+                },
+            ],
+            WorkerExit::Ok,
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("no running slot lease was found")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
+    fn sync_worker_event_updates_reply_completion_and_failure_state() {
+        let turn_service = test_turn_service();
+        let request = worker_request_with_secret_bodies();
+        let mut stream_state = ParallelDispatchWorkerStreamState::default();
+
+        assert!(
+            sync_parallel_dispatch_worker_event(
+                &turn_service,
+                &request,
+                &ConversationStreamEvent::AgentMessageCompleted {
+                    item_id: "blank".to_string(),
+                    phase: None,
+                    text: "   ".to_string(),
+                },
+                &mut stream_state,
+            )
+            .is_empty()
+        );
+        assert_eq!(stream_state.latest_main_reply, None);
+
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::AgentMessageCompleted {
+                item_id: "final".to_string(),
+                phase: Some("final_answer".to_string()),
+                text: "  final reply  ".to_string(),
+            },
+            &mut stream_state,
+        );
+        assert_eq!(
+            stream_state.latest_main_reply.as_deref(),
+            Some("final reply")
+        );
+
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec!["docs/plan/result-output.md".to_string()],
+            },
+            &mut stream_state,
+        );
+        let turn_completed = stream_state
+            .turn_completed
+            .as_ref()
+            .expect("turn completed should be captured");
+        assert_eq!(turn_completed.turn_id, "turn-1");
+        assert_eq!(
+            turn_completed.changed_planning_file_paths,
+            vec!["docs/plan/result-output.md".to_string()]
+        );
+
+        let mut failed_before_start = ParallelDispatchWorkerStreamState::default();
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::Failed {
+                message: "startup failed".to_string(),
+            },
+            &mut failed_before_start,
+        );
+        assert!(failed_before_start.saw_failed_event);
+        assert!(failed_before_start.saw_failed_before_turn_started);
+
+        let mut failed_after_start = ParallelDispatchWorkerStreamState::default();
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-2".to_string(),
+            },
+            &mut failed_after_start,
+        );
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::Failed {
+                message: "runtime failed".to_string(),
+            },
+            &mut failed_after_start,
+        );
+        assert!(failed_after_start.saw_turn_started);
+        assert!(failed_after_start.saw_failed_event);
+        assert!(!failed_after_start.saw_failed_before_turn_started);
+    }
 
     #[test]
     fn parallel_worker_stream_starting_trace_payload_keeps_prompt_bodies_out_of_log() {
