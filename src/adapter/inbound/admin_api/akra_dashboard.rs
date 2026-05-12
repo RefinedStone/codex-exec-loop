@@ -558,10 +558,11 @@ fn map_event_feed(
 }
 
 fn event_feed_status_label(visible_event_count: usize, total_event_count: usize) -> String {
-    if total_event_count > visible_event_count {
-        format!("LIVE · 최근 {visible_event_count}개 · 총 {total_event_count}개")
+    let total = total_event_count.max(visible_event_count);
+    if total > visible_event_count {
+        format!("LIVE · 최근 {visible_event_count}개 · 총 {total}개")
     } else {
-        format!("LIVE · 총 {total_event_count}개")
+        format!("LIVE · 총 {total}개")
     }
 }
 
@@ -1834,5 +1835,6 @@ mod tests {
     fn event_feed_status_label_omits_visible_count_when_feed_is_not_capped() {
         assert_eq!(event_feed_status_label(0, 0), "LIVE · 총 0개");
         assert_eq!(event_feed_status_label(2, 2), "LIVE · 총 2개");
+        assert_eq!(event_feed_status_label(3, 1), "LIVE · 총 3개");
     }
 }

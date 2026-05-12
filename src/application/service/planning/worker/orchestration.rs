@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[path = "orchestration/logging.rs"]
@@ -804,23 +805,34 @@ fn is_delivery_only_follow_up_task(input: &PlanningTaskCreateInput) -> bool {
         input.priority_reason.as_deref(),
         input.direction_relation_note.as_deref(),
     ]);
+    let search_words = task_search_words(&search_text);
     (search_text.contains("delivery-only")
         || search_text.contains("delivery only")
-        || has_delivery_boundary_action(&search_text))
-        && !has_non_delivery_work_signal(&search_text)
+        || has_delivery_boundary_action(&search_text, &search_words))
+        && !has_non_delivery_work_signal(&search_text, &search_words)
 }
 
 fn normalize_task_search_text<'a>(parts: impl IntoIterator<Item = Option<&'a str>>) -> String {
-    parts
-        .into_iter()
-        .flatten()
-        .flat_map(|part| part.split_whitespace())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
+    let mut result = String::new();
+    for part in parts.into_iter().flatten() {
+        for word in part.split_whitespace() {
+            if !result.is_empty() {
+                result.push(' ');
+            }
+            result.push_str(word);
+        }
+    }
+    result.make_ascii_lowercase();
+    result
 }
 
-fn has_delivery_boundary_action(text: &str) -> bool {
+fn task_search_words(text: &str) -> HashSet<&str> {
+    text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+fn has_delivery_boundary_action(text: &str, words: &HashSet<&str>) -> bool {
     text.contains("pull request")
         || text.contains("open pr")
         || text.contains("create pr")
@@ -831,28 +843,28 @@ fn has_delivery_boundary_action(text: &str) -> bool {
         || text.contains("github delivery")
         || text.contains("worktree cleanup")
         || text.contains("cleanup merged worktree")
-        || (contains_word(text, "push") || contains_word(text, "pushed"))
-            && has_git_delivery_context(text)
-        || contains_word(text, "rebase")
-            && (contains_word(text, "prerelease") || text.contains("shared branch"))
-        || contains_word(text, "merge")
-            && (contains_word(text, "prerelease")
+        || (contains_word(words, "push") || contains_word(words, "pushed"))
+            && has_git_delivery_context(text, words)
+        || contains_word(words, "rebase")
+            && (contains_word(words, "prerelease") || text.contains("shared branch"))
+        || contains_word(words, "merge")
+            && (contains_word(words, "prerelease")
                 || text.contains("integration branch")
                 || text.contains("shared branch"))
 }
 
-fn has_git_delivery_context(text: &str) -> bool {
-    contains_word(text, "branch")
-        || contains_word(text, "origin")
-        || contains_word(text, "pr")
-        || contains_word(text, "prerelease")
-        || contains_word(text, "remote")
+fn has_git_delivery_context(text: &str, words: &HashSet<&str>) -> bool {
+    contains_word(words, "branch")
+        || contains_word(words, "origin")
+        || contains_word(words, "pr")
+        || contains_word(words, "prerelease")
+        || contains_word(words, "remote")
         || text.contains("delivery")
         || text.contains("pull request")
 }
 
-fn has_non_delivery_work_signal(text: &str) -> bool {
-    [
+fn has_non_delivery_work_signal(text: &str, words: &HashSet<&str>) -> bool {
+    const WORD_SIGNALS: &[&str] = &[
         "code",
         "coverage",
         "db",
@@ -871,16 +883,21 @@ fn has_non_delivery_work_signal(text: &str) -> bool {
         "sqlite",
         "test",
         "tui",
+    ];
+    const PHRASE_SIGNALS: &[&str] = &[
+        "planning behavior",
         "validate implementation",
         "validation gap",
-    ]
-    .iter()
-    .any(|signal| text.contains(signal))
+    ];
+
+    WORD_SIGNALS
+        .iter()
+        .any(|signal| contains_word(words, signal))
+        || PHRASE_SIGNALS.iter().any(|signal| text.contains(signal))
 }
 
-fn contains_word(text: &str, word: &str) -> bool {
-    text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        .any(|candidate| candidate == word)
+fn contains_word(words: &HashSet<&str>, word: &str) -> bool {
+    words.contains(word)
 }
 
 #[cfg(test)]
@@ -1367,12 +1384,19 @@ mod tests {
             "Add push notification support",
             "Implement product behavior for notification delivery.",
         );
+        let delivery_only_with_product_word = create_task_input(
+            "Push product branch and open PR",
+            "Delivery-only follow-up for product branch push and pull request creation.",
+        );
         let implementation_work = create_task_input(
             "Fix delivery-only follow-up classification",
             "Review and adjust the official completion command filter.",
         );
 
         assert!(is_delivery_only_follow_up_task(&delivery_only));
+        assert!(is_delivery_only_follow_up_task(
+            &delivery_only_with_product_word
+        ));
         assert!(!is_delivery_only_follow_up_task(&product_work));
         assert!(!is_delivery_only_follow_up_task(&implementation_work));
     }

@@ -155,7 +155,6 @@ impl CodexAppServerAdapter {
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
                 sandbox: Some(self.execution_policy.sandbox_mode),
-                model: model.map(str::to_string),
                 ..ThreadStartParams::default()
             })?;
             let thread_id = thread_response.thread.id.clone();
@@ -892,7 +891,7 @@ mod tests {
             .filter(|request| request["method"] == "turn/start")
             .collect::<Vec<_>>();
 
-        assert_eq!(thread_starts[0]["params"]["model"], "gpt-5.4");
+        assert!(thread_starts[0]["params"]["model"].is_null());
         assert_eq!(turn_starts[0]["params"]["model"], "gpt-5.4");
         assert_eq!(turn_starts[0]["params"]["effort"], "high");
         assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.4");

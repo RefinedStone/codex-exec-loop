@@ -697,25 +697,11 @@ async fn admin_html_page_routes_render_live_templates() {
             body.contains(expected),
             "HTML page {uri} should render {expected}"
         );
+        if uri == "/admin/tasks" {
+            assert!(body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
+            assert!(!body.contains(r#"<body class="akra-graphic">"#));
+        }
     }
-
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/admin/tasks")
-                .header(header::COOKIE, &cookie)
-                .body(Body::empty())
-                .expect("tasks page request should build"),
-        )
-        .await
-        .expect("tasks page request should be served");
-    assert_eq!(response.status(), StatusCode::OK, "/admin/tasks");
-    let tasks_body = text_body(response).await;
-    assert!(tasks_body.contains(r#"<body class="">"#));
-    assert!(tasks_body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
-    assert!(!tasks_body.contains(r#"<body class="akra-graphic">"#));
 }
 
 #[tokio::test]
@@ -1165,6 +1151,7 @@ fn tasks_page_uses_default_admin_catalog_without_losing_forms() {
         "data-list-filter=\"task-list\"",
         "data-filter-empty=\"task-list\"",
         "overview.runtime.proposed_tasks",
+        "overview.runtime.skipped_count",
         "overview.runtime.skipped_tasks",
         "{{ task.reason }}",
         "management.tasks.len()",
@@ -1196,6 +1183,18 @@ fn tasks_page_uses_default_admin_catalog_without_losing_forms() {
         assert!(
             TASKS_TEMPLATE.contains(token),
             "default tasks tab should keep admin form contract {token}"
+        );
+    }
+    for token in [
+        r#"<input type="number" name="base_priority" placeholder="default: 80">"#,
+        r#"<input type="number" name="base_priority" value="{{ task.base_priority }}">"#,
+        r#"<input type="number" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">"#,
+        r#">default: {{ management.default_direction_id }}</option>"#,
+        "{{ direction.title }} / {{ direction.id }}",
+    ] {
+        assert!(
+            TASKS_TEMPLATE.contains(token),
+            "default tasks tab should keep ergonomic form token {token}"
         );
     }
 

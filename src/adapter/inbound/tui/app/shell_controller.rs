@@ -179,8 +179,9 @@ impl NativeTuiApp {
             }
             Some(value) => match normalize_model_override_argument(value) {
                 Some(model) => {
-                    self.turn_options.model = Some(model.clone());
-                    format!("model override set to {model}")
+                    let status_text = format!("model override set to {model}");
+                    self.turn_options.model = Some(model);
+                    status_text
                 }
                 None => "model override unchanged; use :model <model|default>".to_string(),
             },
@@ -192,11 +193,12 @@ impl NativeTuiApp {
     fn handle_think_shell_command(&mut self, argument: Option<&str>) {
         let status_text = match argument {
             None => format!(
-                "think override unchanged / current: {} / use :think <none|minimal|low|medium|high|xhigh|default>",
+                "think override unchanged / current: {} / use :think <{}>",
                 self.turn_options
                     .reasoning_effort
                     .map(ConversationReasoningEffort::label)
-                    .unwrap_or("default")
+                    .unwrap_or("default"),
+                ConversationReasoningEffort::SUPPORTED_LABELS
             ),
             Some(value) if is_turn_option_clear_argument(value) => {
                 self.turn_options.reasoning_effort = None;
@@ -207,7 +209,10 @@ impl NativeTuiApp {
                     self.turn_options.reasoning_effort = Some(effort);
                     format!("think override set to {}", effort.label())
                 }
-                None => "think override unchanged; supported values: none, minimal, low, medium, high, xhigh, default".to_string(),
+                None => format!(
+                    "think override unchanged; supported values: {}",
+                    ConversationReasoningEffort::SUPPORTED_LABELS
+                ),
             },
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {

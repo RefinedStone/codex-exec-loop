@@ -34,7 +34,7 @@
         </label>
         <label class="field">
           <span>Base priority</span>
-          <input type="text" name="base_priority" placeholder="default: 80">
+          <input type="number" name="base_priority" placeholder="default: 80">
         </label>
       </div>
       <label class="field">
@@ -70,7 +70,7 @@
 <section class="metric-row">
   <div class="metric"><span>tasks</span><strong>{{ management.tasks.len() }}</strong></div>
   <div class="metric"><span>directions</span><strong>{{ management.directions.len() }}</strong></div>
-  <div class="metric"><span>skipped</span><strong>{{ overview.runtime.skipped_tasks.len() }}</strong></div>
+  <div class="metric"><span>skipped</span><strong>{{ overview.runtime.skipped_count }}</strong></div>
   <div class="metric"><span>default direction</span><strong class="mono">{{ management.default_direction_id }}</strong></div>
   {% if let Some(queue_head) = overview.runtime.queue_head %}
   <div class="metric"><span>queue head</span><strong>{{ queue_head.task_title }}</strong></div>
@@ -120,9 +120,9 @@
             <label class="field">
               <span>Direction</span>
               <select name="direction_id">
-                <option value="">default: {{ management.default_direction_id }}</option>
+                <option value="" {% if task.direction_id == "" %}selected{% endif %}>default: {{ management.default_direction_id }}</option>
                 {% for direction in management.directions %}
-                <option value="{{ direction.id }}" {% if task.direction_id == direction.id %}selected{% endif %}>{{ direction.id }}</option>
+                <option value="{{ direction.id }}" {% if task.direction_id == direction.id %}selected{% endif %}>{{ direction.title }} / {{ direction.id }}</option>
                 {% endfor %}
               </select>
             </label>
@@ -146,11 +146,11 @@
           <div class="form-grid">
             <label class="field">
               <span>Base priority</span>
-              <input type="text" name="base_priority" value="{{ task.base_priority }}">
+              <input type="number" name="base_priority" value="{{ task.base_priority }}">
             </label>
             <label class="field">
               <span>Dynamic delta</span>
-              <input type="text" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">
+              <input type="number" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">
             </label>
             <label class="field">
               <span>Priority reason</span>

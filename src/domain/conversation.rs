@@ -107,6 +107,8 @@ pub enum ConversationReasoningEffort {
 }
 
 impl ConversationReasoningEffort {
+    pub const SUPPORTED_LABELS: &'static str = "none, minimal, low, medium, high, xhigh, default";
+
     pub fn parse(value: &str) -> Option<Self> {
         match normalize_turn_option_value(value).as_deref() {
             Some("none") | Some("off") => Some(Self::None),

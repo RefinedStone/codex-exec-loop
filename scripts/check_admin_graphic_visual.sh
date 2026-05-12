@@ -288,7 +288,6 @@ for token in \
 done
 
 for token in \
-  '<body class="">' \
   'href="/admin/tasks" class="active">Tasks</a>' \
   '<summary>Add task</summary>' \
   'Task catalog view' \

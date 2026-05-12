@@ -66,7 +66,7 @@ const RESET_USAGE: &str =
 const MODEL_USAGE: &str = "Type `:model <model|default>` to choose the model override.";
 const THINK_USAGE: &str =
     "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
-const THINK_SUPPORTED_VALUES: &str = "none, minimal, low, medium, high, xhigh, default";
+const THINK_SUPPORTED_VALUES: &str = ConversationReasoningEffort::SUPPORTED_LABELS;
 
 const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
