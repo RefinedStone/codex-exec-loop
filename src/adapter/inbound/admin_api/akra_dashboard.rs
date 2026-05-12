@@ -173,6 +173,7 @@ pub(super) struct EventFeedView {
     pub limit: usize,
     pub total_event_count: usize,
     pub visible_event_count: usize,
+    pub status_label: String,
     pub newest_sequence: Option<i64>,
     pub empty_state: String,
     pub incremental: bool,
@@ -544,13 +545,23 @@ fn map_event_feed(
     requested_limit: usize,
     incremental: bool,
 ) -> EventFeedView {
+    let visible_event_count = events.visible_count();
     EventFeedView {
         limit: requested_limit,
         total_event_count: events.total_event_count,
-        visible_event_count: events.visible_count(),
+        visible_event_count,
+        status_label: event_feed_status_label(visible_event_count, events.total_event_count),
         newest_sequence: events.latest().map(|entry| entry.sequence),
         empty_state: events.empty_state.clone(),
         incremental,
+    }
+}
+
+fn event_feed_status_label(visible_event_count: usize, total_event_count: usize) -> String {
+    if total_event_count > visible_event_count {
+        format!("LIVE · 최근 {visible_event_count}개 · 총 {total_event_count}개")
+    } else {
+        format!("LIVE · 총 {total_event_count}개")
     }
 }
 
@@ -1432,6 +1443,7 @@ mod tests {
 
         assert_eq!(event_feed.total_event_count, 9);
         assert_eq!(event_feed.visible_event_count, 2);
+        assert_eq!(event_feed.status_label, "LIVE · 최근 2개 · 총 9개");
         assert_eq!(event_feed.newest_sequence, Some(12));
         assert_eq!(events[0].icon, "clean");
         assert_eq!(events[0].severity, "success");
@@ -1809,11 +1821,18 @@ mod tests {
         assert_eq!(feed.limit, 50);
         assert_eq!(feed.total_event_count, 50);
         assert_eq!(feed.visible_event_count, 1);
+        assert_eq!(feed.status_label, "LIVE · 최근 1개 · 총 50개");
         assert_eq!(feed.newest_sequence, Some(42));
         assert!(feed.incremental);
 
         let event = map_runtime_event(&snapshot.entries[0]);
         assert_eq!(event.icon, "event");
         assert_eq!(event.severity, "danger");
+    }
+
+    #[test]
+    fn event_feed_status_label_omits_visible_count_when_feed_is_not_capped() {
+        assert_eq!(event_feed_status_label(0, 0), "LIVE · 총 0개");
+        assert_eq!(event_feed_status_label(2, 2), "LIVE · 총 2개");
     }
 }

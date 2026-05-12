@@ -1399,7 +1399,7 @@
     </section>
 
     <section class="game-panel" id="events">
-      <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}</small></div>
+      <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>{{ dashboard.event_feed.status_label }}</small></div>
       {% if dashboard.events.is_empty() %}
       <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
       {% else %}
@@ -1488,6 +1488,12 @@
   const optionalText = (value, fallback = "-") => {
     const text = formatValue(value, fallback);
     return text.trim() === "" ? fallback : text;
+  };
+  const formatEventFeedStatus = (visible, total) => {
+    const visibleCount = Math.max(Number(visible) || 0, 0);
+    const totalCount = Math.max(Number(total) || visibleCount, visibleCount);
+    if (totalCount > visibleCount) return `LIVE · 최근 ${visibleCount}개 · 총 ${totalCount}개`;
+    return `LIVE · 총 ${totalCount}개`;
   };
   const agentAvatarClass = (classLabel) => {
     const normalized = optionalText(classLabel, "Runner").replace(/[^A-Za-z0-9_-]/g, "");
@@ -1621,7 +1627,7 @@
     if (!eventFeedStatus) return;
     const visible = root.querySelectorAll("[data-event-sequence]").length;
     const total = Number(root.dataset.eventTotalCount || visible);
-    eventFeedStatus.textContent = `LIVE · ${visible}/${Math.max(total, visible)}`;
+    eventFeedStatus.textContent = formatEventFeedStatus(visible, total);
   };
 
   const severityClass = (severity) => `severity-${severity || "normal"}`;
