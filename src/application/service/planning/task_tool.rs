@@ -378,7 +378,138 @@ fn response_from_mutation(
 }
 #[cfg(test)]
 mod tests {
-    use super::{PlanningTaskToolRequest, planning_task_tool_contract_json};
+    use super::{
+        PlanningTaskCreatePayload, PlanningTaskToolCreateRequest, PlanningTaskToolListRequest,
+        PlanningTaskToolRequest, PlanningTaskToolService, PlanningTaskToolUpdateRequest,
+        PlanningTaskUpdatePayload, planning_task_tool_contract_json,
+    };
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueService, PriorityQueueTask,
+        QueueIdleConfig, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
+        TaskStatus,
+    };
+    use std::sync::Arc;
+
+    fn workspace(label: &str) -> String {
+        format!(
+            "/tmp/akra-planning-task-tool-test-{label}-{}",
+            std::process::id()
+        )
+    }
+
+    fn repo() -> Arc<NoopPlanningTaskRepositoryPort> {
+        Arc::new(NoopPlanningTaskRepositoryPort)
+    }
+
+    fn service(repo: Arc<NoopPlanningTaskRepositoryPort>) -> PlanningTaskToolService {
+        PlanningTaskToolService::new(repo, PriorityQueueService::new())
+    }
+
+    fn directions() -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![
+                DirectionDefinition {
+                    id: "general-workstream".to_string(),
+                    title: "General".to_string(),
+                    summary: "General planning work.".to_string(),
+                    success_criteria: vec!["done".to_string()],
+                    scope_hints: Vec::new(),
+                    detail_doc_path: String::new(),
+                    state: DirectionState::Active,
+                },
+                DirectionDefinition {
+                    id: "support-workstream".to_string(),
+                    title: "Support".to_string(),
+                    summary: "Supporting planning work.".to_string(),
+                    success_criteria: vec!["supported".to_string()],
+                    scope_hints: Vec::new(),
+                    detail_doc_path: String::new(),
+                    state: DirectionState::Active,
+                },
+            ],
+        }
+    }
+
+    fn provenance() -> TaskMutationProvenance {
+        TaskMutationProvenance::new(OriginSessionKind::Planner)
+    }
+
+    fn task(id: &str, title: &str, status: TaskStatus, updated_at: &str) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_relation_note: "supports direction".to_string(),
+            title: title.to_string(),
+            description: title.to_string(),
+            status,
+            base_priority: 50,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: provenance(),
+            updated_at: updated_at.to_string(),
+        }
+    }
+
+    fn queue_task(task: &TaskDefinition, rank: usize) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank,
+            task_id: task.id.clone(),
+            direction_id: task.direction_id.clone(),
+            direction_title: "General".to_string(),
+            task_title: task.title.clone(),
+            status: task.status,
+            combined_priority: task.base_priority + task.dynamic_priority_delta,
+            updated_at: task.updated_at.clone(),
+            rank_reasons: vec!["fixture".to_string()],
+        }
+    }
+
+    fn seed(
+        repo: &NoopPlanningTaskRepositoryPort,
+        workspace: &str,
+        tasks: Vec<TaskDefinition>,
+        queue_head: Option<PriorityQueueTask>,
+    ) {
+        repo.clear_direction_authority_snapshot(workspace).unwrap();
+        repo.clear_task_authority_snapshot(workspace).unwrap();
+        repo.commit_direction_authority_snapshot(
+            workspace,
+            PlanningDirectionAuthorityCommit {
+                observed_planning_revision: None,
+                directions: &directions(),
+            },
+        )
+        .unwrap();
+        repo.commit_task_authority_snapshot(
+            workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &TaskAuthorityDocument {
+                    version: PLANNING_FORMAT_VERSION,
+                    tasks,
+                },
+                queue_projection: &PriorityQueueProjection {
+                    next_task: queue_head,
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: Vec::new(),
+                },
+            },
+        )
+        .unwrap();
+    }
     #[test]
     fn contract_is_compact_and_names_run_command() {
         // contract는 prompt에 들어갈 만큼 작아야 하지만, worker가 file edit나 payload.worktree_path
@@ -404,5 +535,360 @@ mod tests {
         .expect("flat create request should parse");
 
         assert!(matches!(request, PlanningTaskToolRequest::CreateTask(_)));
+    }
+
+    #[test]
+    fn list_tasks_filters_sorts_limits_and_returns_queue_head() {
+        let repo = repo();
+        let workspace = workspace("list");
+        let older_ready = task(
+            "ready-old",
+            "Older ready",
+            TaskStatus::Ready,
+            "2026-05-01T00:00:00Z",
+        );
+        let newer_ready = task(
+            "ready-new",
+            "Newer ready",
+            TaskStatus::Ready,
+            "2026-05-02T00:00:00Z",
+        );
+        let proposed = task(
+            "proposed",
+            "Proposal",
+            TaskStatus::Proposed,
+            "2026-05-03T00:00:00Z",
+        );
+        seed(
+            repo.as_ref(),
+            &workspace,
+            vec![older_ready.clone(), proposed, newer_ready.clone()],
+            Some(queue_task(&older_ready, 1)),
+        );
+        let response = service(repo)
+            .handle_request(
+                &workspace,
+                PlanningTaskToolRequest::ListTasks(PlanningTaskToolListRequest {
+                    version: 1,
+                    status: vec![TaskStatus::Ready],
+                    limit: Some(1),
+                }),
+            )
+            .unwrap();
+
+        assert!(response.ok);
+        assert_eq!(response.operation, "list_tasks");
+        assert!(!response.task_authority_changed);
+        assert_eq!(response.applied_command_count, 0);
+        assert_eq!(response.committed_planning_revision, Some(1));
+        assert_eq!(
+            response
+                .queue_head
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("ready-old")
+        );
+        assert_eq!(
+            response
+                .tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready-new"]
+        );
+        assert!(
+            response
+                .guidance
+                .iter()
+                .any(|line| line.contains("Use update_task"))
+        );
+    }
+
+    #[test]
+    fn list_tasks_reports_missing_authority_and_rejects_unknown_version() {
+        let repo = repo();
+        let missing = service(repo.clone())
+            .handle_request(
+                &workspace("missing"),
+                PlanningTaskToolRequest::ListTasks(PlanningTaskToolListRequest {
+                    version: 1,
+                    status: Vec::new(),
+                    limit: None,
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("planning task authority is unavailable")
+        );
+
+        let unsupported = service(repo)
+            .handle_request(
+                &workspace("unsupported-version"),
+                PlanningTaskToolRequest::ListTasks(PlanningTaskToolListRequest {
+                    version: 2,
+                    status: Vec::new(),
+                    limit: None,
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            unsupported
+                .to_string()
+                .contains("planning-tool request version 2 is not supported")
+        );
+    }
+
+    #[test]
+    fn create_task_requires_apply_then_commits_worker_provenance() {
+        let repo = repo();
+        let workspace = workspace("create");
+        seed(repo.as_ref(), &workspace, Vec::new(), None);
+        let tool = service(repo.clone());
+
+        let dry_run_error = tool
+            .handle_request(
+                &workspace,
+                PlanningTaskToolRequest::CreateTask(PlanningTaskToolCreateRequest {
+                    version: 1,
+                    apply: false,
+                    legacy_source_turn_id: None,
+                    origin_session_kind: None,
+                    thread_id: None,
+                    turn_id: None,
+                    parent_thread_id: None,
+                    parent_turn_id: None,
+                    input: PlanningTaskCreatePayload {
+                        direction_id: None,
+                        direction_relation_note: None,
+                        title: "Dry run should fail".to_string(),
+                        description: None,
+                        status: None,
+                        base_priority: None,
+                        dynamic_priority_delta: None,
+                        priority_reason: None,
+                        depends_on: Vec::new(),
+                        blocked_by: Vec::new(),
+                    },
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            dry_run_error
+                .to_string()
+                .contains("create_task requires apply=true")
+        );
+
+        let response = tool
+            .handle_request(
+                &workspace,
+                PlanningTaskToolRequest::CreateTask(PlanningTaskToolCreateRequest {
+                    version: 1,
+                    apply: true,
+                    legacy_source_turn_id: Some("legacy-turn".to_string()),
+                    origin_session_kind: Some(OriginSessionKind::Parallel),
+                    thread_id: Some("worker-thread".to_string()),
+                    turn_id: Some("worker-turn".to_string()),
+                    parent_thread_id: Some("parent-thread".to_string()),
+                    parent_turn_id: Some("parent-turn".to_string()),
+                    input: PlanningTaskCreatePayload {
+                        direction_id: Some("support-workstream".to_string()),
+                        direction_relation_note: Some("covers support".to_string()),
+                        title: "Create through tool".to_string(),
+                        description: Some("Worker-created tool task".to_string()),
+                        status: Some(TaskStatus::Ready),
+                        base_priority: Some(70),
+                        dynamic_priority_delta: Some(3),
+                        priority_reason: Some("operator priority".to_string()),
+                        depends_on: Vec::new(),
+                        blocked_by: Vec::new(),
+                    },
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(response.operation, "create_task");
+        assert!(response.task_authority_changed);
+        assert_eq!(response.applied_command_count, 1);
+        assert_eq!(response.committed_planning_revision, Some(2));
+        assert_eq!(response.tasks, Vec::new());
+        assert_eq!(
+            response
+                .queue_head
+                .as_ref()
+                .map(|task| task.task_title.as_str()),
+            Some("Create through tool")
+        );
+        assert!(
+            response
+                .guidance
+                .iter()
+                .any(|line| line.contains("committed_task_ids"))
+        );
+
+        let snapshot = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        let created = snapshot.task_authority.tasks.first().unwrap();
+        assert_eq!(created.direction_id, "support-workstream");
+        assert_eq!(created.direction_relation_note, "covers support");
+        assert_eq!(created.description, "Worker-created tool task");
+        assert_eq!(created.base_priority, 70);
+        assert_eq!(created.dynamic_priority_delta, 3);
+        assert_eq!(created.priority_reason, "operator priority");
+        assert_eq!(created.created_by, TaskActor::Worker);
+        assert_eq!(created.source_turn_id.as_deref(), Some("legacy-turn"));
+        assert_eq!(
+            created.provenance,
+            TaskMutationProvenance::new(OriginSessionKind::Parallel)
+                .with_thread_turn(
+                    Some("worker-thread".to_string()),
+                    Some("worker-turn".to_string())
+                )
+                .with_parent(
+                    Some("parent-thread".to_string()),
+                    Some("parent-turn".to_string())
+                )
+        );
+    }
+
+    #[test]
+    fn update_task_requires_apply_and_preserves_patch_semantics() {
+        let repo = repo();
+        let workspace = workspace("update");
+        let dependency = task(
+            "dependency",
+            "Dependency",
+            TaskStatus::Done,
+            "2026-05-01T00:00:00Z",
+        );
+        let blocker = task(
+            "blocker",
+            "Blocker",
+            TaskStatus::Ready,
+            "2026-05-02T00:00:00Z",
+        );
+        let target = task(
+            "target",
+            "Target",
+            TaskStatus::Ready,
+            "2026-05-03T00:00:00Z",
+        );
+        seed(
+            repo.as_ref(),
+            &workspace,
+            vec![dependency, blocker, target],
+            None,
+        );
+        let tool = service(repo.clone());
+
+        let dry_run_error = tool
+            .handle_request(
+                &workspace,
+                PlanningTaskToolRequest::UpdateTask(PlanningTaskToolUpdateRequest {
+                    version: 1,
+                    apply: false,
+                    legacy_source_turn_id: None,
+                    origin_session_kind: None,
+                    thread_id: None,
+                    turn_id: None,
+                    parent_thread_id: None,
+                    parent_turn_id: None,
+                    input: PlanningTaskUpdatePayload {
+                        task_id: "target".to_string(),
+                        direction_id: None,
+                        direction_relation_note: None,
+                        title: None,
+                        description: None,
+                        status: None,
+                        base_priority: None,
+                        dynamic_priority_delta: None,
+                        priority_reason: None,
+                        depends_on: None,
+                        blocked_by: None,
+                    },
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            dry_run_error
+                .to_string()
+                .contains("update_task requires apply=true")
+        );
+
+        let response = tool
+            .handle_request(
+                &workspace,
+                PlanningTaskToolRequest::UpdateTask(PlanningTaskToolUpdateRequest {
+                    version: 1,
+                    apply: true,
+                    legacy_source_turn_id: None,
+                    origin_session_kind: Some(OriginSessionKind::Main),
+                    thread_id: Some("main-thread".to_string()),
+                    turn_id: Some("main-turn".to_string()),
+                    parent_thread_id: None,
+                    parent_turn_id: None,
+                    input: PlanningTaskUpdatePayload {
+                        task_id: "target".to_string(),
+                        direction_id: Some("support-workstream".to_string()),
+                        direction_relation_note: Some("moved to support".to_string()),
+                        title: Some("Updated through tool".to_string()),
+                        description: Some(
+                            "Worker description must not replace existing".to_string(),
+                        ),
+                        status: Some(TaskStatus::Blocked),
+                        base_priority: Some(65),
+                        dynamic_priority_delta: Some(-5),
+                        priority_reason: Some("waiting on blocker".to_string()),
+                        depends_on: Some(vec!["dependency".to_string()]),
+                        blocked_by: Some(vec!["blocker".to_string()]),
+                    },
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(response.operation, "update_task");
+        assert!(response.task_authority_changed);
+        assert_eq!(response.applied_command_count, 1);
+        assert_eq!(response.committed_task_ids, vec!["target"]);
+        assert_eq!(response.committed_planning_revision, Some(2));
+        assert_eq!(
+            response
+                .queue_head
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("blocker")
+        );
+
+        let snapshot = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        let updated = snapshot
+            .task_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "target")
+            .unwrap();
+        assert_eq!(updated.direction_id, "support-workstream");
+        assert_eq!(updated.direction_relation_note, "moved to support");
+        assert_eq!(updated.title, "Updated through tool");
+        assert_eq!(updated.description, "Target");
+        assert_eq!(updated.status, TaskStatus::Blocked);
+        assert_eq!(updated.base_priority, 65);
+        assert_eq!(updated.dynamic_priority_delta, -5);
+        assert_eq!(updated.priority_reason, "waiting on blocker");
+        assert_eq!(updated.depends_on, vec!["dependency"]);
+        assert_eq!(updated.blocked_by, vec!["blocker"]);
+        assert_eq!(updated.last_updated_by, TaskActor::Worker);
+        assert_eq!(
+            updated.provenance,
+            TaskMutationProvenance::new(OriginSessionKind::Main).with_thread_turn(
+                Some("main-thread".to_string()),
+                Some("main-turn".to_string())
+            )
+        );
     }
 }
