@@ -485,13 +485,371 @@ impl NativeTuiApp {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::{ConversationState, NativeTuiParallelModeBinding};
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+    use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::application::port::outbound::startup_probe_port::{
+        AppServerStartupContext, StartupProbePort,
+    };
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::conversation_service::ConversationService;
+    use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
+    use crate::domain::conversation::ConversationSnapshot;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     const CONTROLLER_RS: &str = include_str!("controller.rs");
     const DIRECTIONS_OVERLAY_RS: &str = include_str!("controller/directions_overlay.rs");
     const EDITOR_RS: &str = include_str!("controller/editor.rs");
     const PLANNING_INIT_OVERLAY_RS: &str = include_str!("controller/planning_init_overlay.rs");
 
+    #[derive(Default)]
+    struct FakeAppServerPort;
+
+    impl StartupProbePort for FakeAppServerPort {
+        fn load_startup_context(&self) -> anyhow::Result<AppServerStartupContext> {
+            Ok(AppServerStartupContext {
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+                initialize_detail: "ok".to_string(),
+                account_detail: "ok".to_string(),
+                account_ok: true,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    impl SessionCatalogPort for FakeAppServerPort {
+        fn load_session_catalog(
+            &self,
+            _request: crate::domain::recent_sessions::SessionCatalogRequest,
+        ) -> anyhow::Result<SessionCatalog> {
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            }
+            .into())
+        }
+    }
+
+    impl InteractiveTurnRuntimePort for FakeAppServerPort {
+        fn runtime_control_truth(
+            &self,
+        ) -> crate::domain::conversation::ConversationRuntimeControlTruth {
+            crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server()
+        }
+
+        fn load_conversation_snapshot(
+            &self,
+            thread_id: &str,
+        ) -> anyhow::Result<ConversationSnapshot> {
+            Ok(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            })
+        }
+
+        fn request_stop_all_sessions(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_test_app(workspace: &TempPlanningWorkspace) -> NativeTuiApp {
+        let codex_port = Arc::new(FakeAppServerPort);
+        let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        );
+        let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
+            crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+            planning,
+            Arc::new(NoopParallelAgentWorkerPort),
+        );
+        let parallel_mode_binding =
+            NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
+        let mut app = NativeTuiApp::new(
+            StartupService::new(codex_port.clone()),
+            SessionService::new(codex_port.clone()),
+            ConversationService::new(codex_port),
+            parallel_mode_binding,
+        );
+        app.sync_draft_shell_workspace(workspace.path_str());
+        app
+    }
+
+    fn ready_status(app: &NativeTuiApp) -> &str {
+        match &app.conversation_state {
+            ConversationState::Ready(conversation) => conversation.status_text.as_str(),
+            other => panic!("conversation should be ready, got {other:?}"),
+        }
+    }
+
+    fn key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl_key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    struct TempPlanningWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp planning workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
     fn occurrence_count(source: &str, needle: &str) -> usize {
         source.match_indices(needle).count()
+    }
+
+    #[test]
+    fn planning_manual_editor_keymap_saves_and_blocks_invalid_promotion() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-editor-invalid");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+
+        app.open_planning_manual_editor();
+
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("planning editor buffer should open")
+                .active_path(),
+            crate::application::service::planning::RESULT_OUTPUT_FILE_PATH
+        );
+        assert!(ready_status(&app).starts_with("planning draft editor ready / draft: "));
+
+        app.handle_draft_editor_key(
+            key(KeyCode::Char('!')),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+
+        app.handle_draft_editor_key(
+            ctrl_key(KeyCode::Char('s')),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+
+        assert!(ready_status(&app).contains("planning draft saved / draft: "));
+        assert!(ready_status(&app).contains("validation: needs attention"));
+        assert!(!app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert!(
+            app.planning_draft_editor_ui_state
+                .has_invalid_staged_draft()
+        );
+
+        app.handle_draft_editor_key(
+            ctrl_key(KeyCode::Char('p')),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+
+        assert!(ready_status(&app).contains("planning draft promote blocked / draft: "));
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert!(app.planning_draft_editor_ui_state.draft_name().is_some());
+    }
+
+    #[test]
+    fn planning_manual_editor_successful_promotion_closes_planning_overlay() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-editor-promote");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        app.stage_simple_mode_planning_init_draft();
+        app.open_simple_mode_planning_editor();
+
+        app.promote_planning_manual_editor();
+
+        assert!(
+            ready_status(&app).contains("planning draft promoted / draft: "),
+            "status: {}",
+            ready_status(&app)
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(app.planning_draft_editor_ui_state.draft_name().is_none());
+        assert!(
+            workspace
+                .path()
+                .join(crate::application::service::planning::RESULT_OUTPUT_FILE_PATH)
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn planning_manual_editor_close_confirmation_can_cancel_and_confirm() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-editor-close");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        app.open_planning_manual_editor();
+        app.planning_draft_editor_ui_state.insert_character('!');
+
+        app.request_close_planning_manual_editor();
+
+        assert!(
+            app.planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        assert!(ready_status(&app).contains("planning draft editor close pending"));
+
+        assert!(app.handle_planning_manual_editor_close_confirmation_key(key(KeyCode::Char('N'))));
+        assert!(
+            !app.planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        assert_eq!(
+            ready_status(&app),
+            "planning draft editor close canceled; keep editing"
+        );
+
+        app.request_close_planning_manual_editor();
+        assert!(app.handle_planning_manual_editor_close_confirmation_key(key(KeyCode::Enter)));
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(ready_status(&app).contains("planning draft editor closed"));
+    }
+
+    #[test]
+    fn directions_detail_doc_editor_promotes_back_to_maintenance_overview() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-detail-promote");
+        let mut app = make_test_app(&workspace);
+        app.show_directions_maintenance_overlay();
+
+        app.open_directions_detail_doc_editor("general-workstream");
+
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("directions editor buffer should open")
+                .active_path(),
+            crate::application::service::planning::default_direction_detail_doc_path(
+                "general-workstream"
+            )
+        );
+        assert!(ready_status(&app).contains("directions detail doc editor ready / draft: "));
+
+        app.save_directions_manual_editor();
+
+        assert!(ready_status(&app).contains("directions draft saved / draft: "));
+        assert!(ready_status(&app).contains("validation: ok"));
+
+        app.promote_directions_manual_editor();
+
+        assert!(ready_status(&app).contains("directions draft promoted / draft: "));
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::Overview
+        );
+        assert!(app.planning_draft_editor_ui_state.draft_name().is_none());
+    }
+
+    #[test]
+    fn directions_manual_editor_close_confirmation_returns_to_overview() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-editor-close");
+        let mut app = make_test_app(&workspace);
+        app.show_directions_maintenance_overlay();
+        app.open_queue_idle_prompt_editor();
+
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("queue-idle editor buffer should open")
+                .active_path(),
+            crate::application::service::planning::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+        );
+
+        app.planning_draft_editor_ui_state.insert_character('!');
+        app.request_close_directions_manual_editor();
+
+        assert!(
+            app.planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        assert!(ready_status(&app).contains("directions editor close pending"));
+
+        assert!(
+            app.handle_directions_manual_editor_close_confirmation_key(key(KeyCode::Char('n')))
+        );
+        assert_eq!(
+            ready_status(&app),
+            "directions editor close canceled; keep editing"
+        );
+
+        app.request_close_directions_manual_editor();
+        assert!(app.handle_directions_manual_editor_close_confirmation_key(key(KeyCode::Enter)));
+
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::Overview
+        );
+        assert!(ready_status(&app).contains("directions editor closed"));
+        assert!(app.planning_draft_editor_ui_state.draft_name().is_none());
     }
 
     #[test]
