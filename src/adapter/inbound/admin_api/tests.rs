@@ -1325,6 +1325,17 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
 }
 
 #[test]
+fn akra_graphic_dashboard_event_rows_reset_native_button_chrome() {
+    assert!(
+        source_contains(
+            AKRA_DASHBOARD_TEMPLATE,
+            ".event-row {\n    appearance: none;\n    width: 100%;\n    color: inherit;\n    font: inherit;\n    text-align: left;\n    background: transparent;\n    border-top: 0;\n    border-right: 0;\n    border-left: 0;\n    border-radius: 0;",
+        ),
+        "runtime event rows are buttons, so they must reset native button background and borders"
+    );
+}
+
+#[test]
 fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     for token in [
         "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
