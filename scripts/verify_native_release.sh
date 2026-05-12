@@ -120,23 +120,8 @@ verify_checksum_file() {
 forbidden_release_path() {
   local relative_path="$1"
 
-  case "${relative_path}" in
-    assets/admin/game/node_modules|assets/admin/game/node_modules/*)
-      return 0
-      ;;
-    */assets/admin/game/node_modules|*/assets/admin/game/node_modules/*)
-      return 0
-      ;;
-    assets/admin/game/dist|assets/admin/game/dist/*)
-      return 0
-      ;;
-    */assets/admin/game/dist|*/assets/admin/game/dist/*)
-      return 0
-      ;;
-    assets/admin/game/.vite|assets/admin/game/.vite/*)
-      return 0
-      ;;
-    */assets/admin/game/.vite|*/assets/admin/game/.vite/*)
+  case "/${relative_path}" in
+    */node_modules|*/node_modules/*|*/dist|*/dist/*|*/.vite|*/.vite/*|*/assets/admin|*/assets/admin/*)
       return 0
       ;;
   esac
@@ -149,13 +134,13 @@ verify_no_forbidden_bundle_paths() {
   local artifact_path
   local relative_path
 
-  while IFS= read -r artifact_path; do
+  while IFS= read -r -d '' artifact_path; do
     relative_path="${artifact_path#${root_dir}/}"
     if forbidden_release_path "${relative_path}"; then
       echo "verify_native_release: forbidden build artifact found in bundle: ${relative_path}" >&2
       exit 1
     fi
-  done < <(find "${root_dir}" -print)
+  done < <(find "${root_dir}" -print0)
 }
 
 verify_no_forbidden_archive_paths() {
