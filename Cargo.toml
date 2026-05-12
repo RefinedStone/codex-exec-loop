@@ -1,6 +1,6 @@
 [package]
 name = "codex-exec-loop-native"
-version = "0.1.0"
+version = "1.3.2"
 edition = "2024"
 default-run = "codex-exec-loop-native"
 
