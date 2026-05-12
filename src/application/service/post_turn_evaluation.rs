@@ -933,17 +933,23 @@ mod tests {
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
     use crate::adapter::outbound::github::GithubAutomationAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
-    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_worker_port::{
         NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
     };
     use crate::application::service::parallel_mode::ParallelModeService;
     use crate::application::service::planning::{
+        OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
         PlanningRuntimeWorkspaceStatus,
     };
     use crate::domain::planning::{
-        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
+        PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
+        TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
     };
     use std::fs;
     use std::sync::Arc;
@@ -1536,6 +1542,81 @@ mod tests {
         );
     }
 
+    #[test]
+    fn official_completion_refresh_unresolved_repair_blocks_slot_finalization() {
+        let workspace = TempPlanningWorkspace::new("official-refresh-unresolved-repair");
+        let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+            invalid_task_command_worker_message(),
+        )));
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+        let contract = official_completion_contract();
+
+        let outcome = executor.run_official_completion_refresh(
+            &context,
+            &request,
+            &workspace.path,
+            &context.current_runtime_projection,
+            &contract,
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert_eq!(
+            executor.planning_worker_panel_state.last_summary.as_deref(),
+            Some(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
+        );
+        assert_eq!(
+            outcome.runtime_projection.auto_follow_pause_reason(),
+            Some(OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
+        );
+    }
+
+    #[test]
+    fn official_completion_refresh_repeated_queue_head_blocks_slot_finalization() {
+        let workspace = TempPlanningWorkspace::new("official-refresh-repeated-head");
+        seed_ready_queue_authority(&workspace.path);
+        let mut executor = test_executor();
+        let current_projection = executor
+            .planning_feature
+            .runtime
+            .load_runtime_projection_or_invalid(&workspace.path);
+        let mut context = test_context(current_projection);
+        context.previous_handoff_task = Some(queue_handoff());
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+        let contract = official_completion_contract();
+
+        let outcome = executor.run_official_completion_refresh(
+            &context,
+            &request,
+            &workspace.path,
+            &context.current_runtime_projection,
+            &contract,
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert!(
+            executor
+                .planning_worker_panel_state
+                .last_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("previously handed-off task unchanged"))
+        );
+        assert!(
+            outcome
+                .runtime_projection
+                .auto_follow_pause_reason()
+                .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
+        );
+    }
+
     fn test_executor() -> PostTurnEvaluationExecutor {
         test_executor_with_worker(Arc::new(NoopPlanningWorkerPort))
     }
@@ -1627,6 +1708,77 @@ mod tests {
         }
     }
 
+    fn queue_handoff() -> PlanningTaskHandoff {
+        PlanningTaskHandoff {
+            task_id: "task-1".to_string(),
+            task_title: "Queue head".to_string(),
+            direction_id: "general-workstream".to_string(),
+            combined_priority: 80,
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+            status_label: "ready".to_string(),
+        }
+    }
+
+    fn seed_ready_queue_authority(workspace_directory: &str) {
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: "general-workstream".to_string(),
+                title: "General".to_string(),
+                summary: "General workstream".to_string(),
+                success_criteria: vec!["Queue head is done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        };
+        let task_authority = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![TaskDefinition {
+                id: "task-1".to_string(),
+                direction_id: "general-workstream".to_string(),
+                direction_relation_note: "fits the general workstream".to_string(),
+                title: "Queue head".to_string(),
+                description: "Continue the queue head task".to_string(),
+                status: TaskStatus::Ready,
+                base_priority: 80,
+                dynamic_priority_delta: 0,
+                priority_reason: String::new(),
+                depends_on: Vec::new(),
+                blocked_by: Vec::new(),
+                created_by: TaskActor::User,
+                last_updated_by: TaskActor::User,
+                source_turn_id: None,
+                provenance: Default::default(),
+                updated_at: "2026-05-12T00:00:00Z".to_string(),
+            }],
+        };
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_authority)
+            .expect("seeded ready task should build queue projection");
+        let repository = NoopPlanningTaskRepositoryPort;
+        repository
+            .commit_direction_authority_snapshot(
+                workspace_directory,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: &directions,
+                },
+            )
+            .expect("direction authority should be seeded");
+        repository
+            .commit_task_authority_snapshot(
+                workspace_directory,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority: &task_authority,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("task authority should be seeded");
+    }
+
     fn official_completion_contract() -> PlanningOfficialCompletionRefreshContract {
         PlanningOfficialCompletionRefreshContract::new(
             "turn-1",
@@ -1656,6 +1808,41 @@ mod tests {
         ) -> anyhow::Result<PlanningWorkerResponse> {
             Err(anyhow::anyhow!("worker boom"))
         }
+    }
+
+    struct StaticPlanningWorkerPort {
+        final_agent_message: &'static str,
+    }
+
+    impl StaticPlanningWorkerPort {
+        fn new(final_agent_message: &'static str) -> Self {
+            Self {
+                final_agent_message,
+            }
+        }
+    }
+
+    impl PlanningWorkerPort for StaticPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                thread_id: Some("worker-thread-1".to_string()),
+                turn_id: Some("worker-turn-1".to_string()),
+                final_agent_message: Some(self.final_agent_message.to_string()),
+                changed_planning_file_paths: Vec::new(),
+            })
+        }
+    }
+
+    fn invalid_task_command_worker_message() -> &'static str {
+        r#"The worker tried to update planning.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Missing op"}}]}}
+```"#
     }
 
     struct TempPlanningWorkspace {
