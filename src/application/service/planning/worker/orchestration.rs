@@ -25,8 +25,9 @@ use crate::application::service::planning::runtime::facade::{
 use crate::application::service::planning::runtime::prompt::PlanningRuntimeProjection;
 use crate::application::service::planning::shared::prompt_sections::PlanningWorkerAuthorityPromptContext;
 use crate::application::service::planning::task_mutation::{
-    PlanningTaskCommandExtraction, PlanningTaskMutationRequest, PlanningTaskMutationService,
-    PlanningTaskMutationSource, extract_planning_task_commands,
+    PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskMutationCommand,
+    PlanningTaskMutationRequest, PlanningTaskMutationService, PlanningTaskMutationSource,
+    extract_planning_task_commands,
 };
 use crate::diagnostics::event_log;
 use crate::domain::planning::{
@@ -125,6 +126,19 @@ struct WorkerParentProvenance<'a> {
     turn_id: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WorkerRunContext<'a> {
+    previous_handoff: Option<&'a PlanningTaskHandoff>,
+    parent_provenance: WorkerParentProvenance<'a>,
+    command_policy: WorkerTaskCommandPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerTaskCommandPolicy {
+    ApplyAll,
+    IgnoreDeliveryOnlyFollowUps,
+}
+
 impl OfficialCompletionRefreshPermit {
     fn new(
         planning_authority: Arc<dyn PlanningAuthorityPort>,
@@ -186,10 +200,13 @@ impl PlanningWorkerOrchestrationService {
             &format!("planning-worker-refresh-{}", request.completed_turn_id),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
-            previous_handoff.as_ref(),
-            WorkerParentProvenance {
-                thread_id: request.parent_thread_id,
-                turn_id: Some(request.completed_turn_id),
+            WorkerRunContext {
+                previous_handoff: previous_handoff.as_ref(),
+                parent_provenance: WorkerParentProvenance {
+                    thread_id: request.parent_thread_id,
+                    turn_id: Some(request.completed_turn_id),
+                },
+                command_policy: WorkerTaskCommandPolicy::ApplyAll,
             },
         )
     }
@@ -222,10 +239,13 @@ impl PlanningWorkerOrchestrationService {
             ),
             PlanningWorkerOperation::RefreshQueue,
             prompt,
-            request.previous_handoff_task,
-            WorkerParentProvenance {
-                thread_id: request.parent_thread_id,
-                turn_id: Some(request.contract.completed_turn_id.as_str()),
+            WorkerRunContext {
+                previous_handoff: request.previous_handoff_task,
+                parent_provenance: WorkerParentProvenance {
+                    thread_id: request.parent_thread_id,
+                    turn_id: Some(request.contract.completed_turn_id.as_str()),
+                },
+                command_policy: WorkerTaskCommandPolicy::IgnoreDeliveryOnlyFollowUps,
             },
         )
     }
@@ -244,10 +264,13 @@ impl PlanningWorkerOrchestrationService {
             ),
             PlanningWorkerOperation::RepairTaskAuthority,
             prompt,
-            request.previous_handoff_task,
-            WorkerParentProvenance {
-                thread_id: request.parent_thread_id,
-                turn_id: Some(request.completed_turn_id),
+            WorkerRunContext {
+                previous_handoff: request.previous_handoff_task,
+                parent_provenance: WorkerParentProvenance {
+                    thread_id: request.parent_thread_id,
+                    turn_id: Some(request.completed_turn_id),
+                },
+                command_policy: WorkerTaskCommandPolicy::ApplyAll,
             },
         )
     }
@@ -352,8 +375,7 @@ impl PlanningWorkerOrchestrationService {
         orchestration_id: &str,
         operation: PlanningWorkerOperation,
         prompt: String,
-        _previous_handoff: Option<&PlanningTaskHandoff>,
-        parent_provenance: WorkerParentProvenance<'_>,
+        run_context: WorkerRunContext<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
         // worker execution 전에 execution snapshot을 capture한다. protected file reconciliation이 worker file change를
         // orchestration 시작 시점의 상태와 비교할 수 있게 하기 위해서다.
@@ -367,7 +389,10 @@ impl PlanningWorkerOrchestrationService {
                 None,
                 [
                     ("prompt_chars", json!(prompt.chars().count())),
-                    ("has_previous_handoff", json!(_previous_handoff.is_some())),
+                    (
+                        "has_previous_handoff",
+                        json!(run_context.previous_handoff.is_some()),
+                    ),
                 ],
             )
         });
@@ -423,8 +448,8 @@ impl PlanningWorkerOrchestrationService {
                 worker_response.turn_id.clone(),
             )
             .with_parent(
-                parent_provenance.thread_id.map(str::to_string),
-                parent_provenance.turn_id.map(str::to_string),
+                run_context.parent_provenance.thread_id.map(str::to_string),
+                run_context.parent_provenance.turn_id.map(str::to_string),
             );
         let mut authority_result = PlanningReconciliationResult::default();
         let mut task_authority_changed = false;
@@ -433,35 +458,58 @@ impl PlanningWorkerOrchestrationService {
             // PlanningTaskMutationService에 중앙화된다.
             match extract_planning_task_commands(final_message) {
                 PlanningTaskCommandExtraction::Commands(commands) => {
-                    match self
-                        .task_mutation_service
-                        .apply_commands(PlanningTaskMutationRequest {
-                            workspace_directory: workspace_directory.to_string(),
-                            source: PlanningTaskMutationSource::Worker,
-                            legacy_source_turn_id: worker_response.turn_id.clone(),
-                            provenance: task_provenance.clone(),
-                            commands,
-                        }) {
-                        Ok(mutation_result) => {
-                            task_authority_changed = mutation_result.task_authority_changed;
-                            if mutation_result.task_authority_changed {
-                                // mutation service가 projection을 이미 다시 만들었다. reconciliation result는 downstream notice를 위해 그 사실만 기록한다.
-                                authority_result.queue_projection_action =
-                                    Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
-                                authority_result.notices.push(format!(
-                                    "planning worker committed {} task command(s)",
-                                    mutation_result.applied_command_count
-                                ));
-                            }
-                        }
-                        Err(error) => {
-                            authority_result = self.build_rejected_command_result(
+                    let (commands, ignored_delivery_only_follow_up_count) =
+                        filter_worker_task_commands(commands, run_context.command_policy);
+                    if ignored_delivery_only_follow_up_count > 0 {
+                        authority_result.notices.push(format!(
+                            "planning worker ignored {ignored_delivery_only_follow_up_count} delivery-only follow-up task command(s) during official completion"
+                        ));
+                    }
+                    if commands.is_empty() && ignored_delivery_only_follow_up_count > 0 {
+                        event_log::emit_lazy("planning_worker_task_commands_ignored", || {
+                            orchestration_event_detail(
                                 workspace_directory,
-                                &format!(
-                                    "planning worker task commands failed validation: {error}"
-                                ),
+                                orchestration_id,
+                                operation,
+                                "task_commands_ignored",
+                                Some("delivery_only_follow_up"),
                                 None,
-                            )?;
+                                [(
+                                    "ignored_delivery_only_follow_up_count",
+                                    json!(ignored_delivery_only_follow_up_count),
+                                )],
+                            )
+                        });
+                    } else if !commands.is_empty() {
+                        match self.task_mutation_service.apply_commands(
+                            PlanningTaskMutationRequest {
+                                workspace_directory: workspace_directory.to_string(),
+                                source: PlanningTaskMutationSource::Worker,
+                                legacy_source_turn_id: worker_response.turn_id.clone(),
+                                provenance: task_provenance.clone(),
+                                commands,
+                            },
+                        ) {
+                            Ok(mutation_result) => {
+                                task_authority_changed = mutation_result.task_authority_changed;
+                                if mutation_result.task_authority_changed {
+                                    // mutation service가 projection을 이미 다시 만들었다. reconciliation result는 downstream notice를 위해 그 사실만 기록한다.
+                                    authority_result.queue_projection_action = Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
+                                    authority_result.notices.push(format!(
+                                        "planning worker committed {} task command(s)",
+                                        mutation_result.applied_command_count
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                authority_result = self.build_rejected_command_result(
+                                    workspace_directory,
+                                    &format!(
+                                        "planning worker task commands failed validation: {error}"
+                                    ),
+                                    None,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -726,6 +774,115 @@ fn merge_reconciliation_results(
     primary
 }
 
+fn filter_worker_task_commands(
+    commands: Vec<PlanningTaskMutationCommand>,
+    policy: WorkerTaskCommandPolicy,
+) -> (Vec<PlanningTaskMutationCommand>, usize) {
+    if policy == WorkerTaskCommandPolicy::ApplyAll {
+        return (commands, 0);
+    }
+
+    let mut accepted_commands = Vec::with_capacity(commands.len());
+    let mut ignored_delivery_only_follow_up_count = 0;
+    for command in commands {
+        match &command {
+            PlanningTaskMutationCommand::CreateTask(input)
+                if is_delivery_only_follow_up_task(input) =>
+            {
+                ignored_delivery_only_follow_up_count += 1;
+            }
+            _ => accepted_commands.push(command),
+        }
+    }
+    (accepted_commands, ignored_delivery_only_follow_up_count)
+}
+
+fn is_delivery_only_follow_up_task(input: &PlanningTaskCreateInput) -> bool {
+    let search_text = normalize_task_search_text([
+        Some(input.title.as_str()),
+        input.description.as_deref(),
+        input.priority_reason.as_deref(),
+        input.direction_relation_note.as_deref(),
+    ]);
+    (search_text.contains("delivery-only")
+        || search_text.contains("delivery only")
+        || has_delivery_boundary_action(&search_text))
+        && !has_non_delivery_work_signal(&search_text)
+}
+
+fn normalize_task_search_text<'a>(parts: impl IntoIterator<Item = Option<&'a str>>) -> String {
+    parts
+        .into_iter()
+        .flatten()
+        .flat_map(|part| part.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn has_delivery_boundary_action(text: &str) -> bool {
+    text.contains("pull request")
+        || text.contains("open pr")
+        || text.contains("create pr")
+        || text.contains("ensure pr")
+        || text.contains("gh pr")
+        || text.contains("pr automation")
+        || text.contains("distributor delivery")
+        || text.contains("github delivery")
+        || text.contains("worktree cleanup")
+        || text.contains("cleanup merged worktree")
+        || (contains_word(text, "push") || contains_word(text, "pushed"))
+            && has_git_delivery_context(text)
+        || contains_word(text, "rebase")
+            && (contains_word(text, "prerelease") || text.contains("shared branch"))
+        || contains_word(text, "merge")
+            && (contains_word(text, "prerelease")
+                || text.contains("integration branch")
+                || text.contains("shared branch"))
+}
+
+fn has_git_delivery_context(text: &str) -> bool {
+    contains_word(text, "branch")
+        || contains_word(text, "origin")
+        || contains_word(text, "pr")
+        || contains_word(text, "prerelease")
+        || contains_word(text, "remote")
+        || text.contains("delivery")
+        || text.contains("pull request")
+}
+
+fn has_non_delivery_work_signal(text: &str) -> bool {
+    [
+        "code",
+        "coverage",
+        "db",
+        "doc",
+        "fix",
+        "hardening",
+        "implement",
+        "investigate",
+        "parser",
+        "planning behavior",
+        "prompt",
+        "refactor",
+        "repair",
+        "review",
+        "runtime",
+        "sqlite",
+        "test",
+        "tui",
+        "validate implementation",
+        "validation gap",
+    ]
+    .iter()
+    .any(|signal| text.contains(signal))
+}
+
+fn contains_word(text: &str, word: &str) -> bool {
+    text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|candidate| candidate == word)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -755,8 +912,8 @@ mod tests {
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
-        PLANNING_FORMAT_VERSION, PriorityQueueProjection, QueueIdleConfig, TaskActor,
-        TaskAuthorityDocument,
+        PLANNING_FORMAT_VERSION, PlanningOfficialCompletionRefreshPayload, PriorityQueueProjection,
+        QueueIdleConfig, TaskActor, TaskAuthorityDocument,
     };
 
     static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1142,6 +1299,85 @@ mod tests {
     }
 
     #[test]
+    fn official_completion_ignores_delivery_only_follow_up_task_commands() {
+        let workspace = workspace("official-completion-delivery-follow-up");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker_message = r#"Recorded official completion.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Push branch, open PR, and merge prerelease","description":"Delivery-only follow-up for push, PR creation, and merge into prerelease.","direction_relation_note":"delivery handoff after the completed slot","status":"ready"}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-delivery".to_string()),
+            turn_id: Some("worker-turn-delivery".to_string()),
+            final_agent_message: Some(worker_message.to_string()),
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let service = orchestration_service(worker.clone(), workspace_port, repo.clone());
+        let contract = official_completion_contract();
+
+        let outcome = service
+            .refresh_queue_from_official_completion(PlanningOfficialCompletionRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-delivery"),
+                latest_user_message: Some("finish the queued task"),
+                latest_main_reply: "Implementation complete; distributor will handle delivery.",
+                previous_handoff_task: None,
+                contract: &contract,
+            })
+            .expect("official completion refresh should ignore delivery-only follow-up");
+
+        assert!(!outcome.task_authority_changed);
+        assert!(outcome.repair_request.is_none());
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice.contains("ignored 1 delivery-only follow-up"))
+        );
+        assert!(
+            repo.load_task_authority_snapshot(&workspace)
+                .expect("task snapshot should load")
+                .expect("task snapshot should exist")
+                .task_authority
+                .tasks
+                .is_empty()
+        );
+        let requests = worker.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .prompt
+                .contains("Akra distributor owns that after official completion")
+        );
+    }
+
+    #[test]
+    fn delivery_only_filter_does_not_treat_product_push_work_as_delivery() {
+        let delivery_only = create_task_input(
+            "Push branch and open PR",
+            "Delivery-only follow-up for branch push and pull request creation.",
+        );
+        let product_work = create_task_input(
+            "Add push notification support",
+            "Implement product behavior for notification delivery.",
+        );
+        let implementation_work = create_task_input(
+            "Fix delivery-only follow-up classification",
+            "Review and adjust the official completion command filter.",
+        );
+
+        assert!(is_delivery_only_follow_up_task(&delivery_only));
+        assert!(!is_delivery_only_follow_up_task(&product_work));
+        assert!(!is_delivery_only_follow_up_task(&implementation_work));
+    }
+
+    #[test]
     fn authority_status_and_reconciliation_merge_keep_operational_details() {
         assert_eq!(authority_load_status::<()>(Ok(Some(()))), "loaded");
         assert_eq!(authority_load_status::<()>(Ok(None)), "missing");
@@ -1266,6 +1502,41 @@ mod tests {
                 detail_doc_path: String::new(),
                 state: DirectionState::Active,
             }],
+        }
+    }
+
+    fn official_completion_contract() -> PlanningOfficialCompletionRefreshContract {
+        PlanningOfficialCompletionRefreshContract::new(
+            "parent-turn-delivery",
+            7,
+            PlanningOfficialCompletionRefreshPayload::new(
+                "agent-1",
+                "task-1",
+                "Implement queued behavior",
+                "akra-agent/slot-1/task-1",
+                "/tmp/parallel-worktree",
+                "abc123",
+                "validated",
+                "completed",
+                Some("completed".to_string()),
+                None,
+                "2026-04-29T00:00:00Z",
+            ),
+        )
+    }
+
+    fn create_task_input(title: &str, description: &str) -> PlanningTaskCreateInput {
+        PlanningTaskCreateInput {
+            direction_id: None,
+            direction_relation_note: Some("supports direction".to_string()),
+            title: title.to_string(),
+            description: Some(description.to_string()),
+            status: Some(crate::domain::planning::TaskStatus::Ready),
+            base_priority: None,
+            dynamic_priority_delta: None,
+            priority_reason: None,
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
         }
     }
 }

@@ -170,6 +170,8 @@ fn official_completion_policy_rules() -> Vec<String> {
             .to_string(),
         "`commit_sha`, `branch_name`, and `worktree_path` are provenance; reflect task meaning in the ledger."
             .to_string(),
+        "Do not create follow-up tasks whose only remaining work is delivery, push, PR creation, merge, rebase, or worktree cleanup; Akra distributor owns that after official completion."
+            .to_string(),
         "If validation failed or did not run, decide whether to create a blocked or remediation task."
             .to_string(),
     ]
@@ -342,5 +344,6 @@ mod tests {
         assert!(prompt.contains("do not use payload.worktree_path"));
         assert!(prompt.contains("/tmp/parallel-worktree"));
         assert!(prompt.contains("worktree_path` are provenance"));
+        assert!(prompt.contains("Akra distributor owns that after official completion"));
     }
 }
