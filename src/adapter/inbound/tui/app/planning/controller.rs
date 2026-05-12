@@ -497,9 +497,14 @@ mod tests {
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
+    use crate::application::service::planning::{
+        DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
+        DirectionsSupportingFileStatus,
+    };
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::ConversationSnapshot;
+    use crate::domain::planning::QueueIdlePolicy;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use std::fs;
@@ -656,6 +661,267 @@ mod tests {
 
     fn occurrence_count(source: &str, needle: &str) -> usize {
         source.match_indices(needle).count()
+    }
+
+    fn directions_summary(
+        detail_doc_status: DirectionsSupportingFileStatus,
+        parse_error: Option<&str>,
+    ) -> DirectionsMaintenanceSummary {
+        DirectionsMaintenanceSummary {
+            directions: vec![DirectionsMaintenanceDirectionSummary {
+                id: "general-workstream".to_string(),
+                title: "General workstream".to_string(),
+                detail_doc_path: Some(
+                    crate::application::service::planning::default_direction_detail_doc_path(
+                        "general-workstream",
+                    ),
+                ),
+                detail_doc_status,
+            }],
+            missing_detail_doc_count: usize::from(
+                detail_doc_status == DirectionsSupportingFileStatus::MissingMapping,
+            ),
+            broken_detail_doc_count: usize::from(
+                detail_doc_status == DirectionsSupportingFileStatus::BrokenMapping,
+            ),
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: Some(
+                crate::application::service::planning::DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH
+                    .to_string(),
+            ),
+            queue_idle_prompt_status: DirectionsSupportingFileStatus::Ready,
+            parse_error: parse_error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn planning_init_overlay_key_router_handles_detail_selection_and_manual_editor() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-init-detail-keys");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Char('b'))));
+        assert_eq!(
+            app.planning_init_overlay_ui_state.selected_mode(),
+            PlanningInitModeSelection::Detail
+        );
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::DetailSelection
+        );
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Down)));
+        assert_eq!(
+            app.planning_init_overlay_ui_state.selected_detail(),
+            PlanningInitDetailSelection::WorkerAssisted
+        );
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            ready_status(&app),
+            "planning worker-assisted detail mode is not supported yet"
+        );
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Char('a'))));
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+        assert!(ready_status(&app).starts_with("planning draft editor ready / draft: "));
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Char('!'))));
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert!(app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('s'))));
+
+        assert!(ready_status(&app).contains("planning draft saved / draft: "));
+        assert!(ready_status(&app).contains("validation: needs attention"));
+    }
+
+    #[test]
+    fn planning_init_overlay_key_router_handles_simple_review_and_existing_workspace() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-init-simple-keys");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        assert!(ready_status(&app).contains("planning simple review ready / staged draft: "));
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Char('D'))));
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::DetailSelection
+        );
+        assert_eq!(
+            ready_status(&app),
+            "planning detail authoring: choose how the advanced draft should open"
+        );
+
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Backspace)));
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        assert!(app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('l'))));
+        assert!(app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('e'))));
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+        assert!(ready_status(&app).contains("planning simple draft editor ready / draft: "));
+
+        app.close_shell_overlay();
+        app.show_planning_init_overlay();
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ExistingWorkspace
+        );
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Char('D'))));
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+
+        app.show_planning_init_overlay();
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ExistingWorkspace
+        );
+        assert!(app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+
+        let promote_workspace = TempPlanningWorkspace::new("tui-planning-init-promote-keys");
+        let mut promote_app = make_test_app(&promote_workspace);
+        promote_app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        assert!(promote_app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            promote_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        assert!(promote_app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('p'))));
+        assert_eq!(promote_app.shell_overlay, ShellOverlay::Hidden);
+        assert!(ready_status(&promote_app).contains("planning draft promoted / draft: "));
+    }
+
+    #[test]
+    fn directions_overlay_key_router_handles_detail_doc_confirmation_and_manual_editor() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-detail-keys");
+        let mut app = make_test_app(&workspace);
+        app.show_directions_maintenance_overlay();
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('d'))));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::DetailDocSelection
+        );
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Down)));
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Up)));
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::DetailDocConfirm
+        );
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .pending_detail_doc_creation()
+                .map(|pending| pending.direction_id()),
+            Some("general-workstream")
+        );
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('2'))));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .detail_doc_confirm_choice(),
+            DetailDocConfirmChoice::No
+        );
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::Overview
+        );
+        assert_eq!(
+            ready_status(&app),
+            "detail doc creation skipped; directions remain unchanged"
+        );
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('d'))));
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Enter)));
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('1'))));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .detail_doc_confirm_choice(),
+            DetailDocConfirmChoice::Yes
+        );
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
+        assert!(ready_status(&app).contains("directions detail doc editor ready / draft: "));
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('!'))));
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert!(app.handle_directions_overlay_key(ctrl_key(KeyCode::Char('s'))));
+        assert!(ready_status(&app).contains("directions draft saved / draft: "));
+        assert!(app.handle_directions_overlay_key(ctrl_key(KeyCode::Char('p'))));
+
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::Overview
+        );
+        assert!(ready_status(&app).contains("directions draft promoted / draft: "));
+    }
+
+    #[test]
+    fn directions_overlay_key_router_reports_overview_guards_and_reload() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-overview-keys");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
+        app.directions_maintenance_overlay_ui_state
+            .open_summary(directions_summary(
+                DirectionsSupportingFileStatus::MissingMapping,
+                Some("bad directions json"),
+            ));
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('d'))));
+        assert_eq!(
+            ready_status(&app),
+            "fix DB direction authority errors before generating detail docs"
+        );
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('p'))));
+        assert_eq!(
+            ready_status(&app),
+            "fix DB direction authority errors before editing queue-idle prompt"
+        );
+
+        app.directions_maintenance_overlay_ui_state
+            .open_summary(directions_summary(
+                DirectionsSupportingFileStatus::Ready,
+                None,
+            ));
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('d'))));
+        assert_eq!(
+            ready_status(&app),
+            "every direction already has a healthy detail doc mapping"
+        );
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Char('r'))));
+        assert_eq!(ready_status(&app), "reloaded directions maintenance");
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::Overview
+        );
+
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
+        assert!(ready_status(&app).contains("queue-idle prompt editor ready / draft: "));
     }
 
     #[test]
