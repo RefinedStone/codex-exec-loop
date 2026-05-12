@@ -1,9 +1,16 @@
 use super::pages::{extract_file_updates, nav_for_kind};
-use super::parse_reset_target;
+use super::{build_admin_state, build_router, parse_reset_target};
 use crate::application::service::planning::{
     PlanningAdminDraftKind, PlanningAdminFileKey, PlanningResetTarget,
 };
+use axum::Router;
+use axum::body::{Body, to_bytes};
+use axum::http::{Method, Request, StatusCode, header};
+use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tower::ServiceExt;
 
 /*
  * admin_api tests는 service 내부가 아니라 inbound HTML/form boundary를 보호한다.
@@ -41,6 +48,99 @@ const ADMIN_STATIC_ASSETS: &str = include_str!("static_assets.rs");
 
 fn source_contains(source: &str, needle: &str) -> bool {
     source.contains(needle) || source.replace("\r\n", "\n").contains(needle)
+}
+
+struct TempAdminWorkspace {
+    path: String,
+}
+
+impl TempAdminWorkspace {
+    fn new(prefix: &str) -> Self {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "akra-admin-api-{prefix}-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temp admin workspace should be created");
+        Self {
+            path: path.display().to_string(),
+        }
+    }
+}
+
+impl Drop for TempAdminWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn admin_test_router(workspace: &TempAdminWorkspace) -> Router {
+    build_router(build_admin_state(workspace.path.clone()))
+}
+
+async fn json_body(response: axum::response::Response) -> Value {
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body should be readable");
+    serde_json::from_slice(&body).expect("response body should be JSON")
+}
+
+async fn bootstrap_admin_json_session(router: &Router) -> (String, String) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .body(Body::empty())
+                .expect("summary request should build"),
+        )
+        .await
+        .expect("summary request should be served");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let set_cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("summary should set CSRF cookie")
+        .to_str()
+        .expect("set-cookie should be valid text")
+        .to_string();
+    assert!(set_cookie.contains("akra_admin_csrf="));
+
+    let body = json_body(response).await;
+    let csrf_token = body["csrf_token"]
+        .as_str()
+        .expect("summary should expose CSRF token")
+        .to_string();
+    assert_eq!(csrf_token.len(), 32);
+
+    (format!("akra_admin_csrf={csrf_token}"), csrf_token)
+}
+
+fn json_request(
+    method: Method,
+    uri: &str,
+    body: Value,
+    cookie: Option<&str>,
+    csrf_token: Option<&str>,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    if let Some(csrf_token) = csrf_token {
+        builder = builder.header("x-csrf-token", csrf_token);
+    }
+    builder
+        .body(Body::from(body.to_string()))
+        .expect("JSON request should build")
 }
 
 /*
@@ -96,6 +196,384 @@ fn reset_form_and_json_spelling_maps_to_shared_application_target() {
         assert_eq!(parse_reset_target(raw).unwrap(), expected);
     }
     assert!(parse_reset_target("tasks").is_err());
+}
+
+#[tokio::test]
+async fn admin_json_summary_and_runtime_bootstrap_csrf_session() {
+    let workspace = TempAdminWorkspace::new("summary-runtime");
+    let router = admin_test_router(&workspace);
+
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/runtime")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("runtime request should build"),
+        )
+        .await
+        .expect("runtime request should be served");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert!(
+        body["preview_status_label"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "runtime API should return the application projection"
+    );
+    assert_eq!(csrf_token.len(), 32);
+}
+
+#[tokio::test]
+async fn admin_json_mutations_require_header_csrf_and_share_reset_guard() {
+    let workspace = TempAdminWorkspace::new("reset-guard");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+
+    let forbidden = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/reset",
+            json!({ "target": "queue" }),
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("reset request should be served");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let bad_target = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/reset",
+            json!({ "target": "tasks" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("reset request should be served");
+    assert_eq!(bad_target.status(), StatusCode::BAD_REQUEST);
+
+    let accepted = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/reset",
+            json!({ "target": "queue" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("reset request should be served");
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let accepted_body = json_body(accepted).await;
+    assert_eq!(accepted_body["target"].as_str(), Some("queue"));
+    assert!(
+        accepted_body["rewritten_paths"].is_array(),
+        "reset response should expose facade outcome JSON"
+    );
+}
+
+#[tokio::test]
+async fn admin_json_draft_routes_round_trip_through_router() {
+    let workspace = TempAdminWorkspace::new("draft-routes");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+
+    let created = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/drafts",
+            json!({ "kind": "full_planning" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("draft create request should be served");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_body = json_body(created).await;
+    let draft_name = created_body["draft_name"]
+        .as_str()
+        .expect("create draft API should return draft name");
+    assert_eq!(created_body["kind"].as_str(), Some("full_planning"));
+
+    let load_uri = format!("/api/planning/drafts/{draft_name}?kind=full_planning");
+    let loaded = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(load_uri)
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("draft load request should build"),
+        )
+        .await
+        .expect("draft load request should be served");
+    assert_eq!(loaded.status(), StatusCode::OK);
+    let loaded_body = json_body(loaded).await;
+    assert_eq!(loaded_body["draft_name"].as_str(), Some(draft_name));
+    assert!(
+        loaded_body["files"]
+            .as_array()
+            .is_some_and(|files| !files.is_empty()),
+        "loaded draft should expose editable files"
+    );
+
+    let save_body = json!({
+        "kind": "full_planning",
+        "files": []
+    });
+    let save_uri = format!("/api/planning/drafts/{draft_name}");
+    let saved = router
+        .clone()
+        .oneshot(json_request(
+            Method::PUT,
+            &save_uri,
+            save_body.clone(),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("draft save request should be served");
+    assert_eq!(saved.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(saved).await["draft_name"].as_str(),
+        Some(draft_name)
+    );
+
+    let validate_uri = format!("/api/planning/drafts/{draft_name}/validate");
+    let validated = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &validate_uri,
+            save_body,
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("draft validate request should be served");
+    assert_eq!(validated.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(validated).await["draft_name"].as_str(),
+        Some(draft_name)
+    );
+
+    let promote_uri = format!("/api/planning/drafts/{draft_name}/promote");
+    let promoted = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &promote_uri,
+            json!({
+                "kind": "full_planning",
+                "files": []
+            }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("draft promote request should be served");
+    assert_eq!(promoted.status(), StatusCode::OK);
+    let promoted_body = json_body(promoted).await;
+    assert!(promoted_body["promoted_file_count"].is_number());
+    assert!(promoted_body["is_valid"].is_boolean());
+    assert_eq!(
+        promoted_body["session"]["draft_name"].as_str(),
+        Some(draft_name)
+    );
+}
+
+#[tokio::test]
+async fn admin_akra_events_api_rejects_unbounded_limits() {
+    let workspace = TempAdminWorkspace::new("events-limit");
+    let router = admin_test_router(&workspace);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/events?limit=201")
+                .body(Body::empty())
+                .expect("events request should build"),
+        )
+        .await
+        .expect("events request should be served");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["error"].as_str(), Some("event_limit_too_large"));
+    assert!(
+        body["operatorMessage"]
+            .as_str()
+            .is_some_and(|message| message.contains("200 or less"))
+    );
+}
+
+#[tokio::test]
+async fn admin_json_crud_and_file_sync_routes_round_trip_through_router() {
+    let workspace = TempAdminWorkspace::new("crud-file-sync");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+
+    let direction = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/directions",
+            json!({
+                "title": "Coverage Direction",
+                "summary": "Exercise JSON admin route wiring.",
+                "success_criteria_text": "Route returns facade outcome",
+                "scope_hints_text": "admin api",
+                "state": "active"
+            }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("direction upsert request should be served");
+    assert_eq!(direction.status(), StatusCode::OK);
+    let direction_body = json_body(direction).await;
+    let direction_id = direction_body["management"]["directions"]
+        .as_array()
+        .and_then(|directions| {
+            directions
+                .iter()
+                .find(|direction| direction["title"].as_str() == Some("Coverage Direction"))
+        })
+        .and_then(|direction| direction["id"].as_str())
+        .expect("direction create should return the created row")
+        .to_string();
+
+    let task = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/tasks",
+            json!({
+                "direction_id": direction_id,
+                "title": "Coverage Task",
+                "description": "Exercise task JSON route wiring.",
+                "status": "ready",
+                "base_priority": "30",
+                "dynamic_priority_delta": "0",
+                "priority_reason": "coverage",
+                "depends_on_text": "",
+                "blocked_by_text": ""
+            }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("task upsert request should be served");
+    assert_eq!(task.status(), StatusCode::OK);
+    let task_body = json_body(task).await;
+    let task_id = task_body["management"]["tasks"]
+        .as_array()
+        .and_then(|tasks| {
+            tasks
+                .iter()
+                .find(|task| task["title"].as_str() == Some("Coverage Task"))
+        })
+        .and_then(|task| task["id"].as_str())
+        .expect("task create should return the created row")
+        .to_string();
+
+    let deleted_task = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/tasks/delete",
+            json!({ "id": task_id }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("task delete request should be served");
+    assert_eq!(deleted_task.status(), StatusCode::OK);
+
+    let deleted_direction = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/directions/delete",
+            json!({ "id": direction_id }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("direction delete request should be served");
+    assert_eq!(deleted_direction.status(), StatusCode::OK);
+
+    let exported = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/files/export",
+            json!({}),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("file export request should be served");
+    assert_eq!(exported.status(), StatusCode::OK);
+    assert!(json_body(exported).await["paths"].is_array());
+
+    let applied = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/files/apply",
+            json!({}),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("file apply request should be served");
+    assert_eq!(applied.status(), StatusCode::OK);
+    assert!(json_body(applied).await["paths"].is_array());
+}
+
+#[tokio::test]
+async fn admin_akra_json_snapshot_routes_render_read_only_views() {
+    let workspace = TempAdminWorkspace::new("akra-snapshots");
+    let router = admin_test_router(&workspace);
+
+    for uri in [
+        "/api/admin/akra/dashboard",
+        "/api/admin/akra/pool",
+        "/api/admin/akra/agents",
+        "/api/admin/akra/distributor",
+        "/api/admin/akra/events?limit=1",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("Akra snapshot request should build"),
+            )
+            .await
+            .expect("Akra snapshot request should be served");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = json_body(response).await;
+        assert!(
+            body.is_object() || body.is_array(),
+            "Akra snapshot route should return structured JSON for {uri}"
+        );
+    }
 }
 
 #[test]
