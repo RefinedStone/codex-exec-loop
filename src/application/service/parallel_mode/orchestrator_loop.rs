@@ -1187,7 +1187,7 @@ fn parallel_worker_agent_message_completed_trace_payload(
 mod tests {
     use super::{
         ParallelDispatchTurnCompleted, ParallelDispatchWorkerRequest,
-        parallel_official_completion_started_trace_payload,
+        parallel_dispatch_validation_summary, parallel_official_completion_started_trace_payload,
         parallel_worker_agent_message_completed_trace_payload,
         parallel_worker_stream_starting_trace_payload,
     };
@@ -1243,6 +1243,21 @@ mod tests {
         assert_eq!(fields["latest_main_reply_chars"], 27);
         assert!(!fields.contains_key("latest_main_reply"));
         assert!(!json_payload_contains(&payload, "SECRET-REPLY"));
+    }
+
+    #[test]
+    fn validation_summary_distinguishes_empty_and_changed_planning_paths() {
+        assert_eq!(
+            parallel_dispatch_validation_summary(&[]),
+            "parallel worker completed without planning file changes"
+        );
+        assert_eq!(
+            parallel_dispatch_validation_summary(&[
+                "docs/plan/result-output.md".to_string(),
+                "schema/task-authority.json".to_string(),
+            ]),
+            "parallel worker completed with planning file changes: docs/plan/result-output.md, schema/task-authority.json"
+        );
     }
 
     fn worker_request_with_secret_bodies() -> ParallelDispatchWorkerRequest {
