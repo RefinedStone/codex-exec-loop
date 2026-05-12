@@ -39,9 +39,10 @@ impl GithubAutomationAdapter {
     /*
     push remote capability는 supersession/parallel lane이 remote branch를 publish할 수 있는지 알려준다.
 
-    GitHub HTTPS remote와 local/file remote를 모두 ready로 보는 이유는 local-only integration 테스트와
-    실제 GitHub push 흐름을 같은 port로 다루기 위해서다. remote가 아예 없을 때만 degraded로
-    내려, 상위 runtime이 PR 생성 대신 local inspection mode를 선택할 수 있게 한다.
+    remote 존재만으로는 사용자의 로컬 git 인증과 branch 권한을 예측하기 어렵다. 그래서 현재
+    worktree branch를 대상으로 `git push --dry-run`을 실행해 실제 push와 같은 credential/helper
+    경로를 미리 태운다. dry-run 대상 branch가 없을 때만 remote 존재를 ready로 남기고, 실제 push가
+    최종 guard 역할을 한다.
     */
     fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnapshot {
         let Some(push_url) = run_git_stdout(
@@ -59,6 +60,36 @@ impl GithubAutomationAdapter {
                 ),
             );
         };
+
+        if let Ok(current_branch) = run_git_stdout(repo_root, &["branch", "--show-current"])
+            && !current_branch.is_empty()
+        {
+            let refspec = format!("HEAD:refs/heads/{current_branch}");
+            if run_git(
+                repo_root,
+                &[
+                    "push",
+                    "--dry-run",
+                    DEFAULT_PUSH_REMOTE_NAME,
+                    refspec.as_str(),
+                ],
+            )
+            .is_ok()
+            {
+                return ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::PushRemote,
+                    ParallelModeCapabilityState::Ready,
+                    format!("push dry-run succeeded for `{current_branch}`"),
+                    None,
+                );
+            }
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Degraded,
+                format!("git push --dry-run failed for `{current_branch}` to `{push_url}`"),
+                Some("repair git push credentials or remote branch permissions".to_string()),
+            );
+        }
 
         ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
@@ -651,7 +682,7 @@ mod tests {
 
         assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
         assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
-        assert!(capability.detail.contains(path_str(&fixture.remote)));
+        assert!(capability.detail.contains("push dry-run succeeded"));
         assert!(capability.next_action.is_none());
 
         let repo_without_origin = unique_temp_dir("github-automation-no-origin");

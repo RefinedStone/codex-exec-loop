@@ -4,10 +4,7 @@ use super::*;
 mod github;
 mod integration;
 
-use self::github::{
-    distributor_check_pull_request_merge_readiness, distributor_ensure_pull_request,
-    distributor_push_source_branch,
-};
+use self::github::{distributor_prepare_pull_request_or_skip, distributor_push_source_branch};
 use self::integration::{
     collect_cherry_pick_conflict_files, commit_patch_equivalent_in_branch,
     commit_patch_equivalent_in_remote_integration_branch,
@@ -95,18 +92,7 @@ pub(super) fn process_distributor_queue_record(
             return Ok(notices);
         }
 
-        notices.push(distributor_ensure_pull_request(
-            planning_authority,
-            runtime,
-            &resolution,
-            record,
-            github_automation,
-        )?);
-        if record.queue_state == ParallelModeQueueItemState::Blocked {
-            return Ok(notices);
-        }
-
-        notices.push(distributor_check_pull_request_merge_readiness(
+        notices.extend(distributor_prepare_pull_request_or_skip(
             planning_authority,
             runtime,
             &resolution,
@@ -410,9 +396,7 @@ fn distributor_integrate_branch(
     }
 
     record.queue_state = ParallelModeQueueItemState::Cleaning;
-    record.integration_note = format!(
-        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin, and the slot is entering cleanup"
-    );
+    record.integration_note = delivery_completion_note(record.pull_request_number.is_some());
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
@@ -498,9 +482,7 @@ fn distributor_cleanup_integrated_slot(
         &resolution.lease,
     );
     record.queue_state = ParallelModeQueueItemState::Done;
-    record.integration_note = format!(
-        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, GitHub delivery completed, and the slot returned to idle"
-    );
+    record.integration_note = cleanup_completion_note(record.pull_request_number.is_some());
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
         planning_authority,
@@ -514,4 +496,26 @@ fn distributor_cleanup_integrated_slot(
         "distributor returned slot to idle / slot: {} / agent: {}",
         resolution.lease.slot_id, resolution.lease.agent_id
     ))
+}
+
+fn delivery_completion_note(used_pull_request: bool) -> String {
+    if used_pull_request {
+        return format!(
+            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin, PR delivery completed, and the slot is entering cleanup"
+        );
+    }
+    format!(
+        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin without PR automation, and the slot is entering cleanup"
+    )
+}
+
+fn cleanup_completion_note(used_pull_request: bool) -> String {
+    if used_pull_request {
+        return format!(
+            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, PR delivery completed, and the slot returned to idle"
+        );
+    }
+    format!(
+        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, direct delivery completed without PR automation, and the slot returned to idle"
+    )
 }
