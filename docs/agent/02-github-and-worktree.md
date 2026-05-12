@@ -2,22 +2,22 @@
 
 ## GitHub Identity
 
-All GitHub writes for this repo must authenticate as `RefinedStone`.
+GitHub writes use the local `gh` or git credential identity by default. Pin a specific GitHub login only when the task or repo policy requires one.
 
-- Set repo-local commit identity before the first commit in a worktree: `git config user.name RefinedStone` and `git config user.email chem.en.9273@gmail.com`.
-- Keep `origin` on `https://github.com/RefinedStone/codex-exec-loop.git`.
-- Prefer the repo-local `.git/refinedstone-credentials`; linked worktrees should read this through
-  `git rev-parse --git-common-dir`, not only their worktree-specific git dir.
-- Configure repo-local Git credentials to use that file for push-capable commands:
+- Set repo-local commit identity to the intended author before the first commit in a worktree.
+- Keep `origin` on the intended GitHub repository.
+- Prefer repo-local `.git/akra-github-credentials` or `.git/github-credentials`; linked worktrees should read this through
+  `git rev-parse --git-common-dir`, not only their worktree-specific git dir. The legacy `.git/refinedstone-credentials` name remains supported for existing checkouts.
+- Configure repo-local Git credentials to use the selected file for push-capable commands when needed:
   `git config credential.helper ""`,
-  `git config credential.username RefinedStone`, and
-  `git config --add credential.helper "store --file=$(git rev-parse --path-format=absolute --git-common-dir)/refinedstone-credentials"`.
+  `git config credential.username <github-login>`, and
+  `git config --add credential.helper "store --file=$(git rev-parse --path-format=absolute --git-common-dir)/akra-github-credentials"`.
 - If another `credential.helper` is inherited, override it in this repo's local `.git/config` only.
-- Before the first push in an environment, verify `git credential fill` for `https://github.com/RefinedStone/codex-exec-loop.git` resolves `username=RefinedStone`.
-- Use `bash scripts/gh-refinedstone.sh` for `pr create`, `pr view`, `pr edit`, and review replies.
-- Do not use GitHub MCP tools for PR or review-thread writes in this repo because they authenticate as `seungjoo-1ee`.
-- If a commit is created under another author or committer identity, rewrite the branch history to `RefinedStone <chem.en.9273@gmail.com>` before any push or further review activity.
-- If the RefinedStone identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment.
+- Before the first push in an environment, verify `gh api user --jq .login` or `git credential fill` for the current `origin` resolves the intended GitHub login.
+- Use `bash scripts/gh-akra.sh` for `pr create`, `pr view`, and review replies. Add `AKRA_GITHUB_LOGIN=<login>` or `--github-login <login>` when the operation must use a specific account.
+- Do not use GitHub MCP tools for PR or review-thread writes unless their authenticated identity has been verified for the intended account.
+- If a commit is created under the wrong author or committer identity, rewrite the branch history to the intended identity before any push or further review activity.
+- If the intended identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment.
 
 ## Delivery Default
 
@@ -38,7 +38,7 @@ All GitHub writes for this repo must authenticate as `RefinedStone`.
 - Apply feedback only when it is logically correct and aligned with the chosen architecture and product direction.
 - Fix correctness and low-cost maintainability issues that fit the current design.
 - If a comment is wrong, stale, or pushes in the wrong direction, reply with a concise rationale instead of changing code.
-- Reply on each review thread only when `bash scripts/gh-refinedstone.sh` can authenticate as `RefinedStone`.
+- Reply on each review thread only when `bash scripts/gh-akra.sh auth status` can authenticate as the intended account; set `AKRA_GITHUB_LOGIN=<login>` when the identity must be pinned.
 - Commit and push the review response separately from the original milestone commit when practical.
 - Rebase the feature branch onto the latest target base branch before merge.
 

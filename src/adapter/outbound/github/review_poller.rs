@@ -2,7 +2,7 @@
 GitHub review poller outbound adapter다.
 
 application service는 "현재 branch의 PR을 찾고, 해당 PR의 review 활동을 시간순 domain snapshot으로
-받는다"는 port 계약만 안다. 이 파일은 그 계약을 local git repository identity, RefinedStone credential,
+받는다"는 port 계약만 안다. 이 파일은 그 계약을 local git repository identity, local GitHub credential,
 GitHub REST endpoint, curl 실행, 응답 DTO mapping으로 풀어낸다. GitHub API JSON 구조는 private response
 타입에 가두고, 바깥에는 `GithubPullRequestActivitySnapshot`만 노출한다.
 */
@@ -16,9 +16,9 @@ use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const PER_PAGE: usize = 100;
@@ -54,7 +54,7 @@ pub struct GithubReviewPollerAdapter {
     curl_path: String,
     api_base_url: String,
     user_agent: String,
-    // RefinedStone credential에서 추출한 token이다. raw credential line은 이 adapter 밖으로 보존하지 않는다.
+    // local GitHub credential에서 추출한 token이다. raw credential line은 이 adapter 밖으로 보존하지 않는다.
     token: String,
 }
 
@@ -67,14 +67,13 @@ impl GithubReviewPollerAdapter {
             token: token.into(),
         }
     }
-    pub fn from_refinedstone_credentials(repo_root: &Path) -> Result<Self> {
+    pub fn from_local_github_credentials(repo_root: &Path) -> Result<Self> {
         /*
-        poller는 repository automation과 같은 RefinedStone credential contract에 의도적으로 묶인다.
-        repo-local credential이나 WSL fallback에서 찾은 credential line은 즉시 bearer token으로 변환한다.
-        이후 HTTP code는 token이 어느 파일에서 왔는지 모르고, raw credential URL도 보존하지 않는다.
+        poller는 repository automation과 같은 local GitHub credential contract를 쓴다.
+        gh auth token, git credential helper, repo-local credential file, WSL fallback에서 찾은 token은
+        즉시 bearer token으로 변환한다. 이후 HTTP code는 token source나 raw credential URL을 알지 못한다.
         */
-        let credential_line = Self::read_refinedstone_credential_line(repo_root)?;
-        Ok(Self::new(Self::parse_refinedstone_token(&credential_line)?))
+        Ok(Self::new(Self::read_local_github_token(repo_root)?))
     }
 
     /*
@@ -202,47 +201,147 @@ impl GithubReviewPollerAdapter {
         }
         Ok(repository)
     }
-    fn read_refinedstone_credential_line(repo_root: &Path) -> Result<String> {
-        /*
-        credential 탐색 순서는 worktree와 WSL 사용 방식을 모두 반영한다.
-
-        linked worktree에는 개별 git dir과 common git dir이 나뉠 수 있으므로 먼저 worktree-local credential을
-        확인하고, 없으면 common dir을 확인한다. 마지막 Windows fallback은 WSL에서 repo-local credential이
-        없더라도 Windows user home의 `.git-credentials`를 재사용하기 위한 경로다.
-        */
-        let credential_path = Self::resolve_git_dir(repo_root)?.join("refinedstone-credentials");
-        if credential_path.is_file() {
-            return Self::read_first_non_empty_line(&credential_path)
-                .with_context(|| format!("failed to read {}", credential_path.display()));
+    fn read_local_github_token(repo_root: &Path) -> Result<String> {
+        if let Some(token) = Self::read_token_from_environment() {
+            return Ok(token);
         }
-        let common_credential_path =
-            Self::resolve_git_common_dir(repo_root)?.join("refinedstone-credentials");
-        if common_credential_path != credential_path && common_credential_path.is_file() {
-            return Self::read_first_non_empty_line(&common_credential_path)
-                .with_context(|| format!("failed to read {}", common_credential_path.display()));
+        if let Some(token) = Self::read_gh_auth_token(repo_root)? {
+            return Ok(token);
         }
-        if let Some(credential_line) = Self::find_windows_refinedstone_credential_line()? {
-            return Ok(credential_line);
+        if let Some(token) = Self::read_git_credential_fill_token(repo_root)? {
+            return Ok(token);
         }
-        let missing_paths = if credential_path == common_credential_path {
-            credential_path.display().to_string()
-        } else {
-            format!(
-                "{} and {}",
-                credential_path.display(),
-                common_credential_path.display()
-            )
-        };
-
+        if let Some(token) = Self::read_named_github_credential_token(repo_root)? {
+            return Ok(token);
+        }
+        if let Some(credential_line) = Self::find_windows_github_credential_line()? {
+            return Self::parse_github_credential_token(&credential_line);
+        }
         bail!(
-            "missing {missing_paths} and no Windows RefinedStone credential was found in the current user's home directory"
+            "no GitHub token found in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth, git credential fill, or local git credential files"
         );
+    }
+
+    fn read_token_from_environment() -> Option<String> {
+        ["AKRA_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+            .into_iter()
+            .find_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+    }
+
+    fn read_gh_auth_token(repo_root: &Path) -> Result<Option<String>> {
+        let output = Command::new("gh")
+            .arg("auth")
+            .arg("token")
+            .current_dir(repo_root)
+            .stdin(Stdio::null())
+            .output();
+        let Ok(output) = output else {
+            return Ok(None);
+        };
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok((!token.is_empty()).then_some(token))
+    }
+
+    fn read_git_credential_fill_token(repo_root: &Path) -> Result<Option<String>> {
+        let repository = Self::resolve_repository_full_name(repo_root).ok();
+        for query in Self::git_credential_queries(repository.as_deref()) {
+            if let Some(token) = Self::run_git_credential_fill(repo_root, &query)? {
+                return Ok(Some(token));
+            }
+        }
+        Ok(None)
+    }
+
+    fn git_credential_queries(repository: Option<&str>) -> Vec<String> {
+        let mut queries = Vec::new();
+        if let Some(repository) = repository {
+            queries.push(format!(
+                "protocol=https\nhost=github.com\npath={repository}\n\n"
+            ));
+        }
+        queries.push("protocol=https\nhost=github.com\n\n".to_string());
+        queries
+    }
+
+    fn run_git_credential_fill(repo_root: &Path, query: &str) -> Result<Option<String>> {
+        let mut child = match Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .arg("credential")
+            .arg("fill")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => return Ok(None),
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(query.as_bytes())
+                .context("failed to write git credential query")?;
+        }
+        let output = child
+            .wait_with_output()
+            .context("failed to wait for git credential fill")?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let body = String::from_utf8_lossy(&output.stdout);
+        Ok(Self::parse_git_credential_password(&body))
+    }
+
+    fn parse_git_credential_password(body: &str) -> Option<String> {
+        body.lines().find_map(|line| {
+            line.strip_prefix("password=")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+    }
+
+    fn read_named_github_credential_token(repo_root: &Path) -> Result<Option<String>> {
+        /*
+        linked worktree에는 개별 git dir과 common git dir이 나뉠 수 있으므로 먼저 worktree-local credential을
+        확인하고, 없으면 common dir을 확인한다. `refinedstone-credentials`는 기존 checkout을 깨지 않기 위한
+        legacy fallback일 뿐 새 이름은 `akra-github-credentials`다.
+        */
+        let git_dir = Self::resolve_git_dir(repo_root)?;
+        let common_dir = Self::resolve_git_common_dir(repo_root)?;
+        for root in [git_dir.as_path(), common_dir.as_path()] {
+            for file_name in [
+                "akra-github-credentials",
+                "github-credentials",
+                "refinedstone-credentials",
+            ] {
+                let credential_path = root.join(file_name);
+                if !credential_path.is_file() {
+                    continue;
+                }
+                let line = Self::read_first_non_empty_line(&credential_path)
+                    .with_context(|| format!("failed to read {}", credential_path.display()))?;
+                if line.starts_with("https://") {
+                    return Ok(Some(Self::parse_github_credential_token(&line)?));
+                }
+                return Ok(Some(line));
+            }
+        }
+        Ok(None)
     }
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
         /*
         credential file은 이 adapter 밖의 git/helper script가 관리하므로 trailing newline이나 빈 줄이 있을 수 있다.
         poller는 첫 non-empty line만 credential로 인정한다.
-        RefinedStone credential contract는 lookup file 하나에 usable GitHub credential 한 줄만 둔다는 전제를 갖기 때문이다.
         */
         let contents = fs::read_to_string(path)?;
         contents
@@ -252,7 +351,7 @@ impl GithubReviewPollerAdapter {
             .map(ToString::to_string)
             .ok_or_else(|| anyhow!("missing token line in {}", path.display()))
     }
-    fn find_windows_refinedstone_credential_line() -> Result<Option<String>> {
+    fn find_windows_github_credential_line() -> Result<Option<String>> {
         let Some(credential_path) = Self::resolve_windows_credential_path_for_current_user()?
         else {
             return Ok(None);
@@ -272,10 +371,9 @@ impl GithubReviewPollerAdapter {
                     .with_context(|| format!("failed to read {}", credential_path.display()));
             }
         };
-        // Windows credential file에는 여러 host credential이 섞일 수 있으므로 RefinedStone/GitHub line만 선택한다.
+        // Windows credential file에는 여러 host credential이 섞일 수 있으므로 GitHub line만 선택한다.
         Ok(contents.lines().map(str::trim).find_map(|line| {
-            (line.starts_with("https://RefinedStone:") && line.contains("@github.com"))
-                .then(|| line.to_string())
+            (line.starts_with("https://") && line.contains("@github.com")).then(|| line.to_string())
         }))
     }
     fn resolve_windows_credential_path_for_current_user() -> Result<Option<PathBuf>> {
@@ -339,14 +437,22 @@ impl GithubReviewPollerAdapter {
         }
         Ok(None)
     }
-    fn parse_refinedstone_token(line: &str) -> Result<String> {
-        // credential line은 `https://RefinedStone:<token>@github.com` 형태다. bearer token으로 쓰는 값은 password slot뿐이다.
-        let token = line
-            .strip_prefix("https://RefinedStone:")
-            .and_then(|value| value.split_once("@github.com").map(|(token, _)| token))
-            .ok_or_else(|| anyhow!("failed to parse RefinedStone token"))?;
+    fn parse_github_credential_token(line: &str) -> Result<String> {
+        // credential line은 `https://<username>:<token>@github.com` 형태다. bearer token으로 쓰는 값은 password slot뿐이다.
+        let credential = line
+            .strip_prefix("https://")
+            .and_then(|value| {
+                value
+                    .split_once("@github.com")
+                    .map(|(credential, _)| credential)
+            })
+            .ok_or_else(|| anyhow!("failed to parse GitHub credential token"))?;
+        let token = credential
+            .split_once(':')
+            .map(|(_, token)| token)
+            .ok_or_else(|| anyhow!("failed to parse GitHub credential token"))?;
         if token.trim().is_empty() {
-            bail!("failed to parse RefinedStone token");
+            bail!("failed to parse GitHub credential token");
         }
         Ok(token.to_string())
     }

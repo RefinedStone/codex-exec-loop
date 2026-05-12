@@ -12,18 +12,18 @@ use crate::application::port::outbound::github_review_poller_port::GithubReviewP
 use crate::domain::github_review::{GithubPullRequestActivityKind, GithubPullRequestTarget};
 
 /*
-review poller adapter는 GitHub REST API, local git origin, RefinedStone credential 위치를 domain
+review poller adapter는 GitHub REST API, local git origin, local GitHub credential 위치를 domain
 snapshot으로 바꾸는 outbound boundary다. 이 테스트 파일은 네트워크를 실제로 치지 않고도 "입력
 문자열/JSON이 어떤 domain shape로 정규화되는가"를 고정한다.
 */
 
 #[test]
-fn parses_refinedstone_credential_lines() {
+fn parses_github_credential_lines() {
     // credential file에는 Git remote URL처럼 생긴 한 줄이 들어온다. adapter는 이 URL 전체를 저장하지 않고,
     // Basic-auth password 위치의 token만 curl bearer token으로 승격한다. 이 테스트는 credential format이 바뀌었을 때
     // token extraction boundary가 바로 실패하도록 고정한다.
-    let token = GithubReviewPollerAdapter::parse_refinedstone_token(
-        "https://RefinedStone:abc123@github.com",
+    let token = GithubReviewPollerAdapter::parse_github_credential_token(
+        "https://octo-user:abc123@github.com",
     )
     .expect("token should parse");
 
@@ -60,16 +60,15 @@ fn encodes_branch_head_filter_for_pull_request_lookup() {
     // GitHub PR search의 `head` query는 `owner:branch` 형태인데 agent branch에는 slash가 들어간다.
     // 이 값을 percent-encode하지 않으면 branch lookup이 다른 query로 해석된다. path segment가 아니라 query value만
     // encode한다는 경계를 테스트한다.
-    let encoded =
-        GithubReviewPollerAdapter::encode_query_value("RefinedStone:feature/native-shell");
+    let encoded = GithubReviewPollerAdapter::encode_query_value("acme:feature/native-shell");
 
-    assert_eq!(encoded, "RefinedStone%3Afeature%2Fnative-shell");
+    assert_eq!(encoded, "acme%3Afeature%2Fnative-shell");
 }
 
 #[test]
 fn resolves_windows_home_for_current_user_case_insensitively() {
     // WSL 환경에서는 Windows user directory casing이 login casing과 다를 수 있다. credential fallback이
-    // RefinedStone 토큰을 놓치지 않도록 user lookup을 case-insensitive로 유지한다.
+    // GitHub token을 놓치지 않도록 user lookup을 case-insensitive로 유지한다.
     let users_root = unique_temp_dir("users-root");
     fs::create_dir_all(users_root.join("Akra")).expect("user home should be created");
 
@@ -236,21 +235,21 @@ fn skips_pending_reviews_without_submitted_timestamp() {
 }
 
 #[test]
-fn from_refinedstone_credentials_reads_repo_local_token() {
+fn named_github_credentials_read_repo_local_token() {
     // poller credential discovery는 git worktree의 actual git-dir을 기준으로 repo-local credential을 찾는다.
     // raw credential URL은 adapter 안에 보존하지 않고 bearer token만 남겨야 한다.
     let repo_root = init_git_repo("review-poller-credential");
     fs::write(
-        repo_root.join(".git/refinedstone-credentials"),
-        "\n  https://RefinedStone:repo-token-123@github.com  \n",
+        repo_root.join(".git/akra-github-credentials"),
+        "\n  https://octo-user:repo-token-123@github.com  \n",
     )
     .expect("credential fixture should be written");
 
-    let adapter = GithubReviewPollerAdapter::from_refinedstone_credentials(&repo_root)
-        .expect("repo-local credential should initialize adapter");
+    let token = GithubReviewPollerAdapter::read_named_github_credential_token(&repo_root)
+        .expect("repo-local credential lookup should not fail")
+        .expect("repo-local credential should be found");
 
-    assert_eq!(adapter.token, "repo-token-123");
-    assert_eq!(adapter.curl_path, "curl");
+    assert_eq!(token, "repo-token-123");
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -260,17 +259,17 @@ fn read_first_non_empty_line_trims_blank_lines_and_rejects_empty_files() {
     // usable token line이 없으면 silent empty token으로 진행하지 않는다.
     let root = unique_temp_dir("review-poller-line");
     fs::create_dir_all(&root).expect("fixture root should be created");
-    let credential_path = root.join("refinedstone-credentials");
+    let credential_path = root.join("akra-github-credentials");
     fs::write(
         &credential_path,
-        "\n \n  https://RefinedStone:file-token@github.com  \n",
+        "\n \n  https://octo-user:file-token@github.com  \n",
     )
     .expect("credential fixture should be written");
 
     let line = GithubReviewPollerAdapter::read_first_non_empty_line(&credential_path)
         .expect("non-empty line should be found");
 
-    assert_eq!(line, "https://RefinedStone:file-token@github.com");
+    assert_eq!(line, "https://octo-user:file-token@github.com");
 
     let empty_path = root.join("empty-credentials");
     fs::write(&empty_path, "\n  \n").expect("empty fixture should be written");
@@ -300,12 +299,12 @@ fn parse_helpers_reject_malformed_repository_and_credentials() {
     assert!(malformed.to_string().contains("failed to parse repository"));
 
     let empty_token =
-        GithubReviewPollerAdapter::parse_refinedstone_token("https://RefinedStone:@github.com")
+        GithubReviewPollerAdapter::parse_github_credential_token("https://octo-user:@github.com")
             .expect_err("empty token should be rejected");
     assert!(
         empty_token
             .to_string()
-            .contains("failed to parse RefinedStone token")
+            .contains("failed to parse GitHub credential token")
     );
 }
 

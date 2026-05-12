@@ -1,95 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_name="gh-akra"
+
+usage_error() {
+  echo "${script_name}: $*" >&2
+  exit 1
+}
+
+desired_login="${AKRA_GITHUB_LOGIN:-}"
+while (($# > 0)); do
+  case "$1" in
+    --github-login)
+      desired_login="${2-}"
+      shift 2
+      ;;
+    --github-login=*)
+      desired_login="${1#--github-login=}"
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "${repo_root}" ]]; then
-  echo "gh-refinedstone: not inside a git repository" >&2
-  exit 1
+  usage_error "not inside a git repository"
 fi
 
 git_dir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
 if [[ -z "${git_dir}" ]]; then
-  echo "gh-refinedstone: failed to resolve git dir" >&2
-  exit 1
+  usage_error "failed to resolve git dir"
 fi
 
 git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 
-find_credential_file() {
-  local repo_credential_file
-  repo_credential_file="${git_dir}/refinedstone-credentials"
-  if [[ -f "${repo_credential_file}" ]]; then
-    printf '%s\n' "${repo_credential_file}"
-    return 0
-  fi
-
-  if [[ -n "${git_common_dir}" && "${git_common_dir}" != "${git_dir}" ]]; then
-    repo_credential_file="${git_common_dir}/refinedstone-credentials"
-    if [[ -f "${repo_credential_file}" ]]; then
-      printf '%s\n' "${repo_credential_file}"
-      return 0
-    fi
-  fi
-
-  while IFS= read -r windows_credential_file; do
-    if grep -q '^https://RefinedStone:.*@github\.com' "${windows_credential_file}"; then
-      printf '%s\n' "${windows_credential_file}"
-      return 0
-    fi
-  done < <(find /mnt/c/Users -maxdepth 2 -type f -name '.git-credentials' 2>/dev/null | sort)
-
-  echo "gh-refinedstone: missing ${repo_credential_file} and no Windows RefinedStone credential was found under /mnt/c/Users/*/.git-credentials" >&2
-  exit 1
-}
-
-read_credential_line() {
-  local credential_file
-  credential_file="$1"
-
-  if [[ "${credential_file}" == *.git-credentials ]]; then
-    grep -m1 '^https://RefinedStone:.*@github\.com' "${credential_file}" || true
-    return 0
-  fi
-
-  head -n 1 "${credential_file}"
-}
-
-parse_token() {
-  local credential_line
-  credential_line="$1"
-
-  local token
-  token="${credential_line#https://RefinedStone:}"
-  token="${token%@github.com/*}"
-  token="${token%@github.com}"
-
-  if [[ -z "${token}" || "${token}" == "${credential_line}" ]]; then
-    return 1
-  fi
-
-  printf '%s\n' "${token}"
-}
+if [[ -z "${desired_login}" ]]; then
+  desired_login="$(git -C "${repo_root}" config --get akra.githubLogin 2>/dev/null || true)"
+fi
 
 parse_repo_full_name() {
   local origin_url
-  origin_url="$(git remote get-url origin)"
+  origin_url="$(git -C "${repo_root}" remote get-url origin)"
 
   case "${origin_url}" in
     git@github.com:*)
       origin_url="${origin_url#git@github.com:}"
       ;;
-    https://github.com/*)
-      origin_url="${origin_url#https://github.com/}"
+    https://*github.com/*)
+      origin_url="${origin_url#https://}"
+      origin_url="${origin_url#*@github.com/}"
+      origin_url="${origin_url#github.com/}"
       ;;
     *)
-      echo "gh-refinedstone: unsupported origin URL ${origin_url}" >&2
-      exit 1
+      usage_error "unsupported origin URL ${origin_url}"
       ;;
   esac
 
   origin_url="${origin_url%.git}"
   printf '%s\n' "${origin_url}"
 }
+
+repo_full_name="$(parse_repo_full_name)"
 
 json_escape() {
   local value
@@ -136,6 +110,170 @@ print(urllib.parse.quote(sys.stdin.read(), safe=""))
 '
 }
 
+parse_token_from_credential_url() {
+  local credential_line
+  local credentials
+  local password
+  credential_line="$1"
+
+  [[ "${credential_line}" == https://*@github.com* ]] || return 1
+  credentials="${credential_line#https://}"
+  credentials="${credentials%@github.com*}"
+  [[ "${credentials}" == *:* ]] || return 1
+  password="${credentials#*:}"
+  [[ -n "${password}" ]] || return 1
+  printf '%s\n' "${password}"
+}
+
+credential_url_matches_desired_login() {
+  local credential_line
+  local credentials
+  local username
+  credential_line="$1"
+
+  [[ -n "${desired_login}" ]] || return 0
+  [[ "${credential_line}" == https://*@github.com* ]] || return 0
+  credentials="${credential_line#https://}"
+  credentials="${credentials%@github.com*}"
+  username="${credentials%%:*}"
+  [[ "${username}" == "${desired_login}" ]]
+}
+
+parse_git_credential_password() {
+  local credential_output
+  local token
+  credential_output="$1"
+
+  token="$(printf '%s\n' "${credential_output}" | awk -F= '$1 == "password" && $2 != "" {print substr($0, 10); exit}')"
+  [[ -n "${token}" ]] || return 1
+  printf '%s\n' "${token}"
+}
+
+token_from_git_credential_fill() {
+  local credential_output
+  local token
+  local repo_path
+  repo_path="${repo_full_name}"
+
+  credential_output="$(
+    printf 'protocol=https\nhost=github.com\npath=%s\n\n' "${repo_path}" |
+      GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
+  )"
+  token="$(parse_git_credential_password "${credential_output}")"
+  if [[ -n "${token}" ]]; then
+    printf '%s\n' "${token}"
+    return 0
+  fi
+
+  credential_output="$(
+    printf 'protocol=https\nhost=github.com\n\n' |
+      GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
+  )"
+  parse_git_credential_password "${credential_output}" || return 1
+}
+
+read_first_non_empty_line() {
+  local path
+  path="$1"
+  awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print; exit }' "${path}"
+}
+
+token_from_named_credential_files() {
+  local candidate
+  local line
+  local token
+
+  for candidate in \
+    "${git_dir}/akra-github-credentials" \
+    "${git_dir}/github-credentials" \
+    "${git_dir}/refinedstone-credentials" \
+    "${git_common_dir}/akra-github-credentials" \
+    "${git_common_dir}/github-credentials" \
+    "${git_common_dir}/refinedstone-credentials"; do
+    [[ -f "${candidate}" ]] || continue
+    line="$(read_first_non_empty_line "${candidate}")"
+    [[ -n "${line}" ]] || continue
+    if token="$(parse_token_from_credential_url "${line}" 2>/dev/null)" &&
+      credential_url_matches_desired_login "${line}"; then
+      printf '%s\n' "${token}"
+      return 0
+    fi
+    if [[ "${line}" != https://* ]]; then
+      printf '%s\n' "${line}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+credential_files_to_scan() {
+  if [[ -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/.git-credentials"
+  fi
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    printf '%s\n' "${USERPROFILE}/.git-credentials"
+  fi
+  find /mnt/c/Users -maxdepth 2 -type f -name '.git-credentials' 2>/dev/null | sort || true
+}
+
+token_from_git_credential_files() {
+  local file
+  local line
+  local token
+
+  while IFS= read -r file; do
+    [[ -f "${file}" ]] || continue
+    while IFS= read -r line; do
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ "${line}" == https://*@github.com* ]] || continue
+      credential_url_matches_desired_login "${line}" || continue
+      if token="$(parse_token_from_credential_url "${line}" 2>/dev/null)"; then
+        printf '%s\n' "${token}"
+        return 0
+      fi
+    done < "${file}"
+  done < <(credential_files_to_scan)
+  return 1
+}
+
+resolve_token() {
+  if [[ -n "${AKRA_GITHUB_TOKEN:-}" ]]; then
+    printf '%s\n' "${AKRA_GITHUB_TOKEN}"
+    return 0
+  fi
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    printf '%s\n' "${GH_TOKEN}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    printf '%s\n' "${GITHUB_TOKEN}"
+    return 0
+  fi
+
+  token_from_git_credential_fill ||
+    token_from_named_credential_files ||
+    token_from_git_credential_files ||
+    true
+}
+
+gh_api_login() {
+  if [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
+    GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
+  else
+    GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
+  fi
+}
+
+verify_gh_login_if_requested() {
+  local actual_login
+  [[ -n "${desired_login}" ]] || return 0
+  actual_login="$(gh_api_login)"
+  if [[ "${actual_login}" != "${desired_login}" ]]; then
+    usage_error "expected GitHub login ${desired_login}, but gh returned ${actual_login:-unknown}"
+  fi
+}
+
 api_request() {
   local method
   local endpoint
@@ -156,7 +294,7 @@ api_request() {
         -X "${method}" \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer ${token}" \
-        -H "User-Agent: gh-refinedstone.sh" \
+        -H "User-Agent: gh-akra.sh" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         -d "${payload}" \
         "https://api.github.com${endpoint}"
@@ -169,7 +307,7 @@ api_request() {
         -X "${method}" \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer ${token}" \
-        -H "User-Agent: gh-refinedstone.sh" \
+        -H "User-Agent: gh-akra.sh" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com${endpoint}"
     )"
@@ -185,28 +323,36 @@ api_request() {
   rm -f "${response_file}"
 }
 
+verify_api_login_if_requested() {
+  local response_body
+  local actual_login
+  [[ -n "${desired_login}" ]] || return 0
+  response_body="$(api_request GET "/user")"
+  actual_login="$(json_string_field "${response_body}" "login")"
+  if [[ "${actual_login}" != "${desired_login}" ]]; then
+    usage_error "expected GitHub login ${desired_login}, but token returned ${actual_login:-unknown}"
+  fi
+}
+
 auth_status_with_api() {
   local response_body
   local login
 
   response_body="$(api_request GET "/user")"
   login="$(json_string_field "${response_body}" "login")"
-  if [[ "${login}" != "RefinedStone" ]]; then
-    echo "gh-refinedstone: expected RefinedStone token but GitHub returned ${login:-unknown}" >&2
-    exit 1
+  if [[ -n "${desired_login}" && "${login}" != "${desired_login}" ]]; then
+    usage_error "expected GitHub login ${desired_login}, but token returned ${login:-unknown}"
   fi
 
-  printf 'Logged in to github.com as RefinedStone\n'
+  printf 'Logged in to github.com as %s\n' "${login:-unknown}"
 }
 
 list_prs_with_api() {
-  local repo_full_name
   local state
   local base_branch
   local head_branch
   local json_fields
 
-  repo_full_name="$(parse_repo_full_name)"
   state="open"
   base_branch=""
   head_branch=""
@@ -231,8 +377,7 @@ list_prs_with_api() {
         shift 2
         ;;
       *)
-        echo "gh-refinedstone: unsupported pr list option ${1} without gh installed" >&2
-        exit 1
+        usage_error "unsupported pr list option ${1} without gh installed"
         ;;
     esac
   done
@@ -292,7 +437,6 @@ print(json.dumps(result))
 }
 
 create_pr_with_api() {
-  local repo_full_name
   local base_branch
   local head_branch
   local title
@@ -300,7 +444,6 @@ create_pr_with_api() {
   local draft
   local error_log
 
-  repo_full_name="$(parse_repo_full_name)"
   base_branch=""
   head_branch=""
   title=""
@@ -334,15 +477,13 @@ create_pr_with_api() {
         shift
         ;;
       *)
-        echo "gh-refinedstone: unsupported pr create option ${1} without gh installed" >&2
-        exit 1
+        usage_error "unsupported pr create option ${1} without gh installed"
         ;;
     esac
   done
 
   if [[ -z "${base_branch}" || -z "${head_branch}" || -z "${title}" ]]; then
-    echo "gh-refinedstone: pr create requires --base, --head, and --title" >&2
-    exit 1
+    usage_error "pr create requires --base, --head, and --title"
   fi
 
   local payload
@@ -389,18 +530,15 @@ create_pr_with_api() {
 }
 
 view_pr_with_api() {
-  local repo_full_name
   local pr_number
   local json_fields
 
-  repo_full_name="$(parse_repo_full_name)"
   pr_number="${1-}"
   shift || true
   json_fields=""
 
   if [[ -z "${pr_number}" ]]; then
-    echo "gh-refinedstone: pr view requires a pull request number" >&2
-    exit 1
+    usage_error "pr view requires a pull request number"
   fi
 
   while (($# > 0)); do
@@ -410,8 +548,7 @@ view_pr_with_api() {
         shift 2
         ;;
       *)
-        echo "gh-refinedstone: unsupported pr view option ${1} without gh installed" >&2
-        exit 1
+        usage_error "unsupported pr view option ${1} without gh installed"
         ;;
     esac
   done
@@ -458,30 +595,20 @@ print(json.dumps(row))
 }
 
 close_pr_with_api() {
-  local repo_full_name
   local pr_number
   local response_body
 
-  repo_full_name="$(parse_repo_full_name)"
   pr_number="${1-}"
 
   if [[ -z "${pr_number}" ]]; then
-    echo "gh-refinedstone: pr close requires a pull request number" >&2
-    exit 1
+    usage_error "pr close requires a pull request number"
   fi
 
   response_body="$(api_request PATCH "/repos/${repo_full_name}/pulls/${pr_number}" '{"state":"closed"}')"
   printf '%s\n' "$(json_string_field "${response_body}" "html_url")"
 }
 
-reply_review_comment_with_api() {
-  local repo_full_name
-  local pr_number
-  local comment_id
-  local body
-  local payload
-
-  repo_full_name="$(parse_repo_full_name)"
+parse_review_reply_args() {
   pr_number=""
   comment_id=""
   body=""
@@ -505,38 +632,54 @@ reply_review_comment_with_api() {
         shift 2
         ;;
       *)
-        echo "gh-refinedstone: unsupported review-reply option ${1}" >&2
-        exit 1
+        usage_error "unsupported review-reply option ${1}"
         ;;
     esac
   done
 
   if [[ -z "${pr_number}" || -z "${comment_id}" || -z "${body}" ]]; then
-    echo "gh-refinedstone: review-reply requires --pr, --comment-id, and --body" >&2
-    exit 1
+    usage_error "review-reply requires --pr, --comment-id, and --body"
   fi
+}
 
+reply_review_comment_with_gh() {
+  parse_review_reply_args "$@"
+  if [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
+    GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api \
+      -X POST \
+      "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
+      -f "body=${body}" >/dev/null
+  else
+    GH_HOST=github.com gh api \
+      -X POST \
+      "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
+      -f "body=${body}" >/dev/null
+  fi
+}
+
+reply_review_comment_with_api() {
+  local payload
+  parse_review_reply_args "$@"
   payload=$(printf '{"body":"%s"}' "$(json_escape "${body}")")
   api_request POST "/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
-credential_file="$(find_credential_file)"
-credential_line="$(read_credential_line "${credential_file}")"
-token="$(parse_token "${credential_line}" || true)"
-
-if [[ -z "${token}" ]]; then
-  echo "gh-refinedstone: failed to parse RefinedStone token from ${credential_file}" >&2
-  exit 1
-fi
-
-if [[ "${1-}" == "review-reply" ]]; then
-  shift
-  reply_review_comment_with_api "$@"
-  exit 0
-fi
-
 if command -v gh >/dev/null 2>&1; then
-  GH_TOKEN="${token}" GH_HOST=github.com exec gh "$@"
+  verify_gh_login_if_requested
+  if [[ "${1-}" == "review-reply" ]]; then
+    shift
+    reply_review_comment_with_gh "$@"
+    exit 0
+  fi
+  if [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
+    GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com exec gh "$@"
+  fi
+  GH_HOST=github.com exec gh "$@"
+fi
+
+token="$(resolve_token)"
+if [[ -z "${token}" ]]; then
+  usage_error "gh is not installed and no GitHub token was found in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, git credential fill, or local git credential files"
 fi
 
 case "${1-}:${2-}" in
@@ -545,23 +688,31 @@ case "${1-}:${2-}" in
     auth_status_with_api "$@"
     ;;
   pr:create)
+    verify_api_login_if_requested
     shift 2
     create_pr_with_api "$@"
     ;;
   pr:list)
+    verify_api_login_if_requested
     shift 2
     list_prs_with_api "$@"
     ;;
   pr:view)
+    verify_api_login_if_requested
     shift 2
     view_pr_with_api "$@"
     ;;
   pr:close)
+    verify_api_login_if_requested
     shift 2
     close_pr_with_api "$@"
     ;;
+  review-reply:*)
+    verify_api_login_if_requested
+    shift
+    reply_review_comment_with_api "$@"
+    ;;
   *)
-    echo "gh-refinedstone: gh is not installed and direct fallback currently supports 'auth status', 'pr create', 'pr list', 'pr view', 'pr close', and 'review-reply'" >&2
-    exit 1
+    usage_error "gh is not installed and direct fallback supports 'auth status', 'pr create', 'pr list', 'pr view', 'pr close', and 'review-reply'"
     ;;
 esac

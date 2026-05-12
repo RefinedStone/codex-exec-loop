@@ -11,9 +11,9 @@ use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
 use crate::subprocess;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
+const GITHUB_SCRIPT_RELATIVE_PATH: &str = "scripts/gh-akra.sh";
 
 /*
 readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것이다. 병렬 모드는 git
@@ -236,8 +236,8 @@ pub(super) fn inspect_push_remote(
 }
 
 /*
-GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 repo-local
-`scripts/gh-refinedstone.sh` fallback을 허용한다. 이 capability는 실제 auth 여부가 아니라
+GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 Akra
+`scripts/gh-akra.sh` fallback을 허용한다. 이 capability는 실제 auth 여부가 아니라
 "GitHub 조작을 시도할 실행 경로가 있는가"를 확인한다. auth 여부는 다음 `inspect_gh_auth`가
 별도로 판단한다.
 */
@@ -256,19 +256,24 @@ pub(super) fn inspect_gh_binary(
             format!("gh found at {}", path.display()),
             None,
         ),
-        None if github_fallback_script_available(runtime) => ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::GhBinary,
-            ParallelModeCapabilityState::Ready,
-            format!(
-                "gh is not installed; RefinedStone API fallback is available at {GITHUB_SCRIPT_PATH}"
-            ),
-            None,
-        ),
+        None if github_fallback_script_path(runtime).is_some() => {
+            let script_path = github_fallback_script_path(runtime)
+                .expect("script path should exist after availability check");
+            ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhBinary,
+                ParallelModeCapabilityState::Ready,
+                format!(
+                    "gh is not installed; Akra GitHub API fallback is available at {}",
+                    script_path.display()
+                ),
+                None,
+            )
+        }
         None => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
             ParallelModeCapabilityState::Degraded,
-            "gh is not installed on PATH and the RefinedStone fallback script is missing",
-            Some("install GitHub CLI or restore scripts/gh-refinedstone.sh".to_string()),
+            "gh is not installed on PATH and the Akra GitHub fallback script is missing",
+            Some("install GitHub CLI or restore scripts/gh-akra.sh".to_string()),
         ),
     }
 }
@@ -300,12 +305,13 @@ pub(super) fn inspect_gh_auth(
         /*
         Prefer gh auth status when available because it is the user's familiar
         diagnostic surface. The fallback script path below is only for workspaces
-        where gh is absent but the repo-local RefinedStone API wrapper exists.
+        where gh is absent but the Akra GitHub API wrapper exists.
         */
         runtime.gh_auth_status(repo_root)
-    } else if github_fallback_script_available(runtime) {
+    } else if let Some(script_path) = github_fallback_script_path(runtime) {
+        let script_path = script_path.to_string_lossy().into_owned();
         runtime
-            .run_command("bash", &[GITHUB_SCRIPT_PATH, "auth", "status"], repo_root)
+            .run_command("bash", &[script_path.as_str(), "auth", "status"], repo_root)
             .is_some()
     } else {
         false
@@ -321,12 +327,26 @@ pub(super) fn inspect_gh_auth(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
             "GitHub automation is not authenticated for this workspace",
-            Some("verify gh auth or the repo-local RefinedStone credential".to_string()),
+            Some("verify gh auth or local git GitHub credentials".to_string()),
         ),
     }
 }
-fn github_fallback_script_available(runtime: &dyn ParallelModeRuntimePort) -> bool {
-    runtime.path_exists(Path::new(GITHUB_SCRIPT_PATH))
+fn github_fallback_script_path(runtime: &dyn ParallelModeRuntimePort) -> Option<PathBuf> {
+    github_fallback_script_candidates()
+        .into_iter()
+        .find(|path| runtime.path_exists(path))
+}
+
+fn github_fallback_script_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(installed) = std::env::current_exe().ok().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join(GITHUB_SCRIPT_RELATIVE_PATH))
+    }) {
+        candidates.push(installed);
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GITHUB_SCRIPT_RELATIVE_PATH));
+    candidates
 }
 
 /*

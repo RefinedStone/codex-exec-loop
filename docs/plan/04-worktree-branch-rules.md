@@ -33,7 +33,7 @@ Before opening a new lane:
 - run `git worktree list`
 - run `git branch -vv`
 - inspect open PRs when available
-- verify the repo still pushes as `RefinedStone` before the first push in an environment
+- verify the local GitHub/git credentials resolve the intended account before the first push in an environment
 - choose a disjoint lane or hotspot boundary when another unmerged branch already owns nearby files
 
 If overlap is intentional, record the expected collision files in the task note or PR body.

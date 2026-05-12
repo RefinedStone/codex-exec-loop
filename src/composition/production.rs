@@ -146,7 +146,7 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
 pub(crate) fn build_github_review_poller_service(
     repo_root: &Path,
 ) -> Result<GithubReviewPollerService> {
-    let adapter = GithubReviewPollerAdapter::from_refinedstone_credentials(repo_root)?;
+    let adapter = GithubReviewPollerAdapter::from_local_github_credentials(repo_root)?;
     let port: Arc<dyn GithubReviewPollerPort> = Arc::new(adapter);
     Ok(GithubReviewPollerService::new(port))
 }
@@ -155,7 +155,7 @@ pub(crate) fn discover_github_review_poller_service_for_current_branch(
     repo_root: &Path,
     base_branch: &str,
 ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>> {
-    let adapter = match GithubReviewPollerAdapter::from_refinedstone_credentials(repo_root) {
+    let adapter = match GithubReviewPollerAdapter::from_local_github_credentials(repo_root) {
         Ok(adapter) => adapter,
         Err(_) => return Ok(None),
     };

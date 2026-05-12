@@ -37,6 +37,7 @@ Bundle contents:
 
 - native binary
 - `assets/`
+- `scripts/gh-akra.sh`
 - `akra` launcher on macOS/Linux or `akra.cmd` on Windows
 - `README.md`
 - `OPERATOR.md`
@@ -115,6 +116,8 @@ Useful env vars:
 
 - `CODEX_EXEC_LOOP_GITHUB_PR=owner/repo#123`
 - `CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS=60`
+- `AKRA_GITHUB_LOGIN=<login>` to require a specific GitHub account for `gh-akra.sh`
+- `AKRA_GITHUB_TOKEN=<token>` for non-`gh` GitHub API fallback
 
 ## Smoke Checklist
 
@@ -196,7 +199,7 @@ npm publish notes:
 
 - publish platform packages before the main `@refinedstone/akra` package
 - npm versions are immutable, so a corrected republish needs a new tag version
-- the npm platform package ships the native binary and runtime `assets/` under `vendor/<target>/akra/`
+- the npm platform package ships the native binary plus runtime `assets/` and `scripts/` under `vendor/<target>/akra/`
 
 Typical release flow:
 

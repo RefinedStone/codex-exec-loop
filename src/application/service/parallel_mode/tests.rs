@@ -414,7 +414,7 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         self.fallback_script_available
             && path
                 .to_str()
-                .map(|value| value.ends_with("scripts/gh-refinedstone.sh"))
+                .map(|value| value.ends_with("scripts/gh-akra.sh"))
                 .unwrap_or(false)
     }
     fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
@@ -437,7 +437,7 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
     }
 }
 
-// gh binary가 없더라도 repo-local RefinedStone fallback이 있고 auth가 통과하면
+// gh binary가 없더라도 Akra GitHub fallback이 있고 auth가 통과하면
 // parallel mode는 GitHub 자동화 가능 상태로 떠야 한다. 이 테스트는 사용자가 gh를
 // 설치하지 않은 환경에서 startup gate가 과하게 막히지 않도록 한다.
 #[test]
@@ -449,7 +449,7 @@ fn readiness_accepts_repo_github_fallback_when_gh_is_missing() {
     };
     let gh_binary = inspect_gh_binary(&runtime);
     assert_eq!(gh_binary.state, ParallelModeCapabilityState::Ready);
-    assert!(gh_binary.detail.contains("RefinedStone API fallback"));
+    assert!(gh_binary.detail.contains("Akra GitHub API fallback"));
     let gh_auth = inspect_gh_auth(&runtime, &gh_binary, Some("/tmp/repo"));
     assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
     assert_eq!(gh_auth.detail, "GitHub automation authentication succeeded");

@@ -121,6 +121,10 @@ function stagePlatformPackage({
     if (!fs.existsSync(sourceAssetsPath)) {
       throw new Error(`Bundled runtime assets are missing: ${sourceAssetsPath}`);
     }
+    const sourceScriptsPath = path.join(bundleRoot, "scripts");
+    if (!fs.existsSync(sourceScriptsPath)) {
+      throw new Error(`Bundled runtime scripts are missing: ${sourceScriptsPath}`);
+    }
 
     const packageDir = path.join(outDir, config.packageAlias);
     const vendorDir = path.join(
@@ -139,6 +143,7 @@ function stagePlatformPackage({
       fs.chmodSync(destinationBinaryPath, 0o755);
     }
     copyDir(sourceAssetsPath, path.join(vendorDir, "assets"));
+    copyDir(sourceScriptsPath, path.join(vendorDir, "scripts"));
 
     writeJson(path.join(packageDir, "package.json"), {
       name: publishedPackageName,

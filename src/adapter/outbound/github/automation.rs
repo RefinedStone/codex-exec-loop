@@ -2,11 +2,11 @@
 GitHub automation outbound adapter다.
 
 parallel-mode orchestration은 branch push, PR 생성/조회, capability inspection을 application port로만
-바라본다. 이 파일은 그 port 호출을 repo-local git 명령과 `scripts/gh-refinedstone.sh` 실행으로 변환한다.
-GitHub CLI가 있으면 인증 상태 확인에 활용하고, 실제 PR 조작은 RefinedStone wrapper script를 우선해
-repo 규칙의 identity와 credential 경계를 한곳에 모은다.
+바라본다. 이 파일은 그 port 호출을 repo-local git 명령과 `gh`/`scripts/gh-akra.sh` 실행으로 변환한다.
+GitHub CLI가 있으면 로컬 인증을 그대로 활용하고, 없으면 wrapper script가 git credential 기반 REST
+fallback을 제공한다.
 */
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -21,7 +21,7 @@ use crate::domain::parallel_mode::{
 use crate::subprocess;
 
 const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
-const GITHUB_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-refinedstone.sh");
+const GITHUB_SCRIPT_RELATIVE_PATH: &str = "scripts/gh-akra.sh";
 
 pub struct GithubAutomationAdapter;
 
@@ -40,7 +40,7 @@ impl GithubAutomationAdapter {
     push remote capability는 supersession/parallel lane이 remote branch를 publish할 수 있는지 알려준다.
 
     GitHub HTTPS remote와 local/file remote를 모두 ready로 보는 이유는 local-only integration 테스트와
-    실제 RefinedStone GitHub push 흐름을 같은 port로 다루기 위해서다. remote가 아예 없을 때만 degraded로
+    실제 GitHub push 흐름을 같은 port로 다루기 위해서다. remote가 아예 없을 때만 degraded로
     내려, 상위 runtime이 PR 생성 대신 local inspection mode를 선택할 수 있게 한다.
     */
     fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnapshot {
@@ -71,7 +71,7 @@ impl GithubAutomationAdapter {
     /*
     GitHub command capability는 두 실행 경로를 함께 본다.
 
-    `gh`가 있으면 사람이 익숙한 GitHub CLI 상태를 보고하고, 없더라도 repo의 RefinedStone wrapper script가
+    `gh`가 있으면 사람이 익숙한 GitHub CLI 상태를 보고하고, 없더라도 Akra GitHub wrapper script가
     있으면 automation은 계속 가능하다. 둘 다 없을 때만 PR automation을 degraded로 표시한다.
     */
     fn inspect_gh_binary() -> ParallelModeCapabilitySnapshot {
@@ -82,22 +82,26 @@ impl GithubAutomationAdapter {
                 format!("gh found at {}", path.display()),
                 None,
             ),
-            Err(_) if Path::new(GITHUB_SCRIPT_PATH).exists() => {
+            Err(_) => {
+                let script_path = github_script_path();
+                if script_path.is_file() {
+                    return ParallelModeCapabilitySnapshot::new(
+                        ParallelModeCapabilityKey::GhBinary,
+                        ParallelModeCapabilityState::Ready,
+                        format!(
+                            "gh is not installed; Akra GitHub API fallback is available at {}",
+                            script_path.display()
+                        ),
+                        None,
+                    );
+                }
                 ParallelModeCapabilitySnapshot::new(
                     ParallelModeCapabilityKey::GhBinary,
-                    ParallelModeCapabilityState::Ready,
-                    format!(
-                        "gh is not installed; RefinedStone API fallback is available at {GITHUB_SCRIPT_PATH}"
-                    ),
-                    None,
+                    ParallelModeCapabilityState::Degraded,
+                    "gh is not installed on PATH and the Akra GitHub fallback script is missing",
+                    Some("install GitHub CLI or restore scripts/gh-akra.sh".to_string()),
                 )
             }
-            Err(_) => ParallelModeCapabilitySnapshot::new(
-                ParallelModeCapabilityKey::GhBinary,
-                ParallelModeCapabilityState::Degraded,
-                "gh is not installed on PATH and the RefinedStone fallback script is missing",
-                Some("install GitHub CLI or restore scripts/gh-refinedstone.sh".to_string()),
-            ),
         }
     }
 
@@ -105,7 +109,7 @@ impl GithubAutomationAdapter {
     authentication capability는 의도적으로 output을 버리는 status command만 실행한다.
 
     application port가 필요한 것은 ready/degraded 신호와 operator-facing hint이지 raw credential detail이 아니다.
-    그래서 adapter는 stdout/stderr를 숨기고, `gh auth status` 또는 RefinedStone script의 auth check 결과를
+    그래서 adapter는 stdout/stderr를 숨기고, `gh auth status` 또는 Akra script의 auth check 결과를
     ParallelModeCapabilitySnapshot으로만 접는다. credential 위치와 token 문자열은 이 outbound boundary 밖으로 새지 않는다.
     */
     fn inspect_gh_auth(
@@ -139,23 +143,22 @@ impl GithubAutomationAdapter {
             subprocess::command_output(&mut command, "gh auth status").map(|output| output.status)
         } else {
             /*
-            repo wrapper는 이 project의 supported fallback이다.
-            CI나 `gh`가 없는 local machine도 아래 write operation과 같은 RefinedStone credential path를 사용하게 한다.
+            Akra wrapper는 이 project의 supported fallback이다.
+            CI나 `gh`가 없는 local machine도 아래 write operation과 같은 local git credential path를 사용하게 한다.
             capability check와 실제 PR write가 같은 wrapper contract를 공유해야 "ready" 판단과 실행 경로가 어긋나지 않는다.
             */
+            let script_path = github_script_path();
+            let script_path = script_path.to_string_lossy().into_owned();
             let mut command = Command::new("bash");
             command
                 .current_dir(repo_root)
-                .args([GITHUB_SCRIPT_PATH, "auth", "status"])
+                .args([script_path.as_str(), "auth", "status"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .env("GIT_TERMINAL_PROMPT", "0");
-            subprocess::command_output(
-                &mut command,
-                &format!("bash {GITHUB_SCRIPT_PATH} auth status"),
-            )
-            .map(|output| output.status)
+            subprocess::command_output(&mut command, &format!("bash {script_path} auth status"))
+                .map(|output| output.status)
         };
 
         if auth_status.is_ok_and(|status| status.success()) {
@@ -171,7 +174,7 @@ impl GithubAutomationAdapter {
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
             "GitHub automation is not authenticated for this workspace",
-            Some("verify gh auth or the repo-local RefinedStone credential".to_string()),
+            Some("verify gh auth or local git GitHub credentials".to_string()),
         )
     }
 
@@ -188,10 +191,12 @@ impl GithubAutomationAdapter {
         base_branch: &str,
         head_branch: &str,
     ) -> Result<Option<GithubAutomationPullRequest>> {
+        let script_path = github_script_path();
+        let script_path = script_path.to_string_lossy().into_owned();
         let output = run_command(
             "bash",
             &[
-                GITHUB_SCRIPT_PATH,
+                script_path.as_str(),
                 "pr",
                 "list",
                 "--state",
@@ -281,10 +286,12 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         timeout이나 transient wrapper failure 뒤 caller가 재시도해도 같은 branch pair에 중복 review surface를 만들지 않고
         기존 PR record를 받아야 한다.
         */
+        let script_path = github_script_path();
+        let script_path = script_path.to_string_lossy().into_owned();
         let create_output = run_command(
             "bash",
             &[
-                GITHUB_SCRIPT_PATH,
+                script_path.as_str(),
                 "pr",
                 "create",
                 "--base",
@@ -329,10 +336,12 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         inspect는 creation fallback이나 이후 delivery check에서 쓰는 authoritative read path다.
         PR lookup과 같은 compact field set을 요청하므로, caller는 PR을 어떤 경로로 찾았는지와 무관하게 같은 port shape를 본다.
         */
+        let script_path = github_script_path();
+        let script_path = script_path.to_string_lossy().into_owned();
         let output = run_command(
             "bash",
             &[
-                GITHUB_SCRIPT_PATH,
+                script_path.as_str(),
                 "pr",
                 "view",
                 &pr_number.to_string(),
@@ -357,16 +366,33 @@ impl GithubAutomationPort for GithubAutomationAdapter {
 
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()> {
         /*
-        close는 raw `gh` 대신 RefinedStone wrapper에 위임한다.
+        close는 raw `gh` 대신 Akra wrapper에 위임한다.
         PR 생성/조회와 같은 script를 쓰면 write identity, token selection, repo-specific GitHub policy가 한 경계에 머문다.
         */
+        let script_path = github_script_path();
+        let script_path = script_path.to_string_lossy().into_owned();
         run_command(
             "bash",
-            &[GITHUB_SCRIPT_PATH, "pr", "close", &pr_number.to_string()],
+            &[script_path.as_str(), "pr", "close", &pr_number.to_string()],
             repo_root,
         )?;
         Ok(())
     }
+}
+
+fn github_script_path() -> PathBuf {
+    installed_github_script_path()
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GITHUB_SCRIPT_RELATIVE_PATH)
+        })
+}
+
+fn installed_github_script_path() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join(GITHUB_SCRIPT_RELATIVE_PATH))
+    })
 }
 
 /*
