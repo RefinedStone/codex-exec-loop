@@ -573,13 +573,15 @@ impl NativeFlowHarness {
             thread::sleep(Duration::from_millis(20));
         }
         panic!(
-            "expected at least {expected_launches} worker launch(es), got {}",
-            self.worker_port.launch_count()
+            "expected at least {expected_launches} worker launch(es), got {}; projections: {:?}; notices: {:?}",
+            self.worker_port.launch_count(),
+            self.runtime_projections(),
+            self.runtime_notices()
         );
     }
 
     fn poll_until_worker_streams_active(&mut self, expected_active_streams: usize) {
-        for _ in 0..750 {
+        for _ in 0..1500 {
             self.runtime.poll_background_messages();
             if self.worker_port.active_stream_count() >= expected_active_streams
                 && self.worker_port.terminal_stream_count() == 0

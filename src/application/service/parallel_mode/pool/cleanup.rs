@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, thread, time::Duration};
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -348,15 +348,7 @@ pub(in crate::application::service::parallel_mode) fn cleanup_slot(
         return false;
     }
     // reset 뒤 agent branch를 삭제해 같은 slot slug 재사용 때 stale branch collision을 줄인다.
-    let delete_branch = run_git_sequence(
-        "delete cleaned slot branch",
-        vec![GitCommandStep::new(
-            "delete agent branch",
-            ["-C", repo_root, "branch", "-D", branch_name],
-        )],
-    );
-    if !delete_branch.succeeded() {
-        let _failure_summary = delete_branch.failure_summary();
+    if !delete_cleaned_slot_branch(repo_root, branch_name) {
         return false;
     }
     if !remove_slot_lease(planning_authority, runtime, repo_root, pool_root, slot_id) {
@@ -365,6 +357,26 @@ pub(in crate::application::service::parallel_mode) fn cleanup_slot(
 
     // 마지막 git status 재검증은 metadata 제거 성공과 실제 worktree 재사용 가능 상태를 함께 확인한다.
     inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline)
+}
+
+fn delete_cleaned_slot_branch(repo_root: &str, branch_name: &str) -> bool {
+    for attempt in 0..3 {
+        let delete_branch = run_git_sequence(
+            "delete cleaned slot branch",
+            vec![GitCommandStep::new(
+                "delete agent branch",
+                ["-C", repo_root, "branch", "-D", branch_name],
+            )],
+        );
+        if delete_branch.succeeded() {
+            return true;
+        }
+        let _failure_summary = delete_branch.failure_summary();
+        if attempt < 2 {
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+    false
 }
 
 /*
