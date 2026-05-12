@@ -504,3 +504,647 @@ mod prompt_submit_diagnostics_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::test_helpers;
+    use crate::adapter::inbound::tui::app::{
+        AutoFollowSubmitContext, BackgroundMessage, ConversationInputEvent, ConversationState,
+        NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep, PlanningWorkerStatus,
+        PlanningWorkerVisibility, ShellOverlay, StartupState,
+    };
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+    use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::application::port::outbound::startup_probe_port::{
+        AppServerStartupContext, StartupProbePort,
+    };
+    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::conversation_service::ConversationService;
+    use crate::application::service::manual_prompt_preparation::{
+        ManualPlanningBootstrapReview, ManualPromptPreparationResult,
+    };
+    use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
+    use crate::application::service::planning::{
+        ManualPromptIntakeOutcome, ManualPromptMainSessionHandoff, PlanningRuntimeProjection,
+        PlanningTaskHandoff,
+    };
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
+    use crate::core::app::{CorePromptOrigin, StartupReadySnapshot};
+    use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+    use crate::domain::operator_alert::OperatorAlert;
+    use crate::domain::planning::PlanningValidationReport;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
+    use crate::domain::startup_diagnostics::StartupDiagnostics;
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+    use anyhow::Result;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Default)]
+    struct FakeAppServerPort;
+
+    impl StartupProbePort for FakeAppServerPort {
+        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+            Ok(AppServerStartupContext {
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+                initialize_detail: "ok".to_string(),
+                account_detail: "ok".to_string(),
+                account_ok: true,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    impl SessionCatalogPort for FakeAppServerPort {
+        fn load_session_catalog(&self, _request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            }
+            .into())
+        }
+    }
+
+    impl InteractiveTurnRuntimePort for FakeAppServerPort {
+        fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+            ConversationRuntimeControlTruth::codex_app_server()
+        }
+
+        fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
+            Ok(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            })
+        }
+
+        fn request_stop_all_sessions(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct TempWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("temp workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn make_test_app(workspace: &TempWorkspace) -> NativeTuiApp {
+        let codex_port = Arc::new(FakeAppServerPort);
+        let planning = test_helpers::test_planning_services(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        let parallel_mode_control_plane_composition =
+            test_helpers::test_parallel_mode_control_plane_composition_with_worker(
+                test_helpers::test_parallel_mode_service(),
+                planning,
+                Arc::new(NoopParallelAgentWorkerPort),
+            );
+        let parallel_mode_binding =
+            NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
+        let mut app = NativeTuiApp::new(
+            StartupService::new(codex_port.clone()),
+            SessionService::new(codex_port.clone()),
+            ConversationService::new(codex_port),
+            parallel_mode_binding,
+        );
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
+        app.sync_draft_shell_workspace(workspace.path_str());
+        app
+    }
+
+    fn startup_ready_snapshot(
+        workspace_path: &str,
+        can_continue: bool,
+    ) -> Box<StartupReadySnapshot> {
+        Box::new(StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
+            cwd: workspace_path.to_string(),
+            codex_binary_ok: true,
+            codex_binary_detail: "ok".to_string(),
+            workspace_ok: true,
+            workspace_path: workspace_path.to_string(),
+            workspace_detail: "ok".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+            initialize_ok: true,
+            initialize_detail: "ok".to_string(),
+            account_ok: can_continue,
+            account_detail: if can_continue {
+                "ok"
+            } else {
+                "missing account"
+            }
+            .to_string(),
+            warnings: Vec::new(),
+            schema_snapshot: "schema".to_string(),
+        }))
+    }
+
+    fn ready_conversation(app: &NativeTuiApp) -> &super::super::ConversationViewModel {
+        match &app.conversation_state {
+            ConversationState::Ready(conversation) => conversation,
+            other => panic!("conversation should be ready, got {other:?}"),
+        }
+    }
+
+    fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut super::super::ConversationViewModel {
+        match &mut app.conversation_state {
+            ConversationState::Ready(conversation) => conversation,
+            other => panic!("conversation should be ready, got {other:?}"),
+        }
+    }
+
+    fn set_input(app: &mut NativeTuiApp, input: &str) {
+        ready_conversation_mut(app).input_buffer = input.to_string();
+    }
+
+    fn runtime_projection() -> Box<PlanningRuntimeProjection> {
+        Box::new(PlanningRuntimeProjection::ready_with_details(
+            "Planning Context".to_string(),
+            "queue idle".to_string(),
+            None,
+            None,
+        ))
+    }
+
+    fn sample_handoff_task() -> PlanningTaskHandoff {
+        PlanningTaskHandoff {
+            task_id: "task-1".to_string(),
+            task_title: "Implement turn submission coverage".to_string(),
+            direction_id: "general-workstream".to_string(),
+            combined_priority: 10,
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+            status_label: "Ready".to_string(),
+        }
+    }
+
+    fn handoff(
+        prompt: &str,
+        transcript_text: &str,
+        task: Option<PlanningTaskHandoff>,
+    ) -> ManualPromptMainSessionHandoff {
+        ManualPromptMainSessionHandoff {
+            prompt: prompt.to_string(),
+            transcript_text: transcript_text.to_string(),
+            task,
+        }
+    }
+
+    fn auto_follow_origin() -> PromptOrigin {
+        PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            completed_turn_id: "turn-1".to_string(),
+            mode_label: "planning queue".to_string(),
+            transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+            debug_detail: None,
+            handoff_task: None,
+        }))
+    }
+
+    #[test]
+    fn submit_prompt_respects_startup_readiness_gates() {
+        let workspace = TempWorkspace::new("turn-submit-startup-gates");
+        let mut pending_app = make_test_app(&workspace);
+        pending_app.startup_state = StartupState::Loading;
+        set_input(&mut pending_app, "ship it");
+
+        assert!(!pending_app.submit_prompt_with_transcript(
+            "ship it".to_string(),
+            "ship it".to_string(),
+            PromptOrigin::Manual,
+        ));
+
+        let pending_conversation = ready_conversation(&pending_app);
+        assert!(pending_conversation.startup_submit_armed);
+        assert_eq!(
+            pending_conversation.status_text,
+            "prompt queued until startup checks finish"
+        );
+
+        let mut blocked_app = make_test_app(&workspace);
+        blocked_app.startup_state =
+            StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
+
+        assert!(!blocked_app.submit_prompt_with_transcript(
+            "continue queue".to_string(),
+            QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+            auto_follow_origin(),
+        ));
+
+        assert_eq!(
+            ready_conversation(&blocked_app).status_text,
+            "auto-follow paused because startup diagnostics need attention"
+        );
+    }
+
+    #[test]
+    fn resolve_startup_submit_queue_keeps_or_disarms_buffered_prompt() {
+        let workspace = TempWorkspace::new("turn-submit-startup-queue");
+        let mut pending_app = make_test_app(&workspace);
+        pending_app.startup_state = StartupState::Loading;
+        set_input(&mut pending_app, "queued prompt");
+        pending_app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+            status_text: "queued".to_string(),
+        });
+
+        pending_app.resolve_startup_submit_queue();
+
+        assert!(ready_conversation(&pending_app).startup_submit_armed);
+        assert_eq!(
+            ready_conversation(&pending_app).input_buffer,
+            "queued prompt"
+        );
+
+        let mut blocked_app = make_test_app(&workspace);
+        blocked_app.startup_state =
+            StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
+        set_input(&mut blocked_app, "queued prompt");
+        blocked_app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+            status_text: "queued".to_string(),
+        });
+
+        blocked_app.resolve_startup_submit_queue();
+
+        let blocked_conversation = ready_conversation(&blocked_app);
+        assert!(!blocked_conversation.startup_submit_armed);
+        assert_eq!(blocked_conversation.input_buffer, "queued prompt");
+        assert_eq!(
+            blocked_conversation.status_text,
+            "startup diagnostics need attention; open diagnostics with Ctrl+d; queued prompt kept in buffer"
+        );
+
+        let mut ready_empty_app = make_test_app(&workspace);
+        set_input(&mut ready_empty_app, "   ");
+        ready_empty_app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+            status_text: "queued".to_string(),
+        });
+
+        ready_empty_app.resolve_startup_submit_queue();
+
+        assert!(!ready_conversation(&ready_empty_app).startup_submit_armed);
+    }
+
+    #[test]
+    fn apply_manual_prompt_preparation_routes_bootstrap_review_and_failures() {
+        let workspace = TempWorkspace::new("turn-submit-bootstrap-review");
+        let mut review_app = make_test_app(&workspace);
+        set_input(&mut review_app, "create the planning workspace");
+
+        review_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::BootstrapReviewRequired {
+                transcript_text: "create the planning workspace".to_string(),
+                runtime_projection: runtime_projection(),
+                review: ManualPlanningBootstrapReview {
+                    draft_name: "simple-draft".to_string(),
+                    staged_file_count: 2,
+                    validation_report: PlanningValidationReport::default(),
+                },
+            },
+        );
+
+        assert_eq!(review_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            review_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        let review = review_app
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .expect("bootstrap review should be retained for the overlay");
+        assert_eq!(review.draft_name(), "simple-draft");
+        assert_eq!(review.staged_file_count(), 2);
+        assert_eq!(
+            ready_conversation(&review_app).status_text,
+            "planning bootstrap promote blocked / draft: simple-draft / validation needs attention"
+        );
+
+        for (kind, expected_status) in [
+            (
+                ManualPlanningBootstrapFailureKind::Stage,
+                "planning bootstrap failed: disk full",
+            ),
+            (
+                ManualPlanningBootstrapFailureKind::Promote,
+                "planning bootstrap promote failed: disk full",
+            ),
+        ] {
+            let mut failure_app = make_test_app(&workspace);
+            set_input(&mut failure_app, "create the planning workspace");
+
+            failure_app.apply_manual_prompt_preparation(
+                ManualPromptPreparationResult::BootstrapFailed {
+                    transcript_text: "create the planning workspace".to_string(),
+                    runtime_projection: runtime_projection(),
+                    kind,
+                    reason: "disk full".to_string(),
+                },
+            );
+
+            assert_eq!(
+                ready_conversation(&failure_app).status_text,
+                expected_status
+            );
+        }
+    }
+
+    #[test]
+    fn apply_manual_prompt_preparation_rejects_and_ignores_stale_results() {
+        let workspace = TempWorkspace::new("turn-submit-prep-rejected");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "ship it");
+
+        app.apply_manual_prompt_preparation(ManualPromptPreparationResult::Rejected {
+            transcript_text: "ship it".to_string(),
+            runtime_projection: runtime_projection(),
+            reason: "not actionable".to_string(),
+        });
+
+        let conversation = ready_conversation(&app);
+        assert_eq!(
+            conversation.status_text,
+            "turn preparation failed / not actionable"
+        );
+        assert_eq!(conversation.input_buffer, "");
+        assert_eq!(conversation.messages.last().unwrap().text, "ship it");
+
+        let mut stale_app = make_test_app(&workspace);
+        set_input(&mut stale_app, "newer text");
+        let previous_status = ready_conversation(&stale_app).status_text.clone();
+
+        stale_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::Rejected {
+            transcript_text: "older text".to_string(),
+            runtime_projection: runtime_projection(),
+            reason: "should not surface".to_string(),
+        });
+
+        assert_eq!(ready_conversation(&stale_app).status_text, previous_status);
+        assert!(ready_conversation(&stale_app).messages.is_empty());
+    }
+
+    #[test]
+    fn apply_manual_prompt_preparation_routes_manual_intake_outcomes() {
+        let workspace = TempWorkspace::new("turn-submit-manual-intake");
+        let mut no_task_app = make_test_app(&workspace);
+        set_input(&mut no_task_app, "answer directly");
+
+        no_task_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            transcript_text: "answer directly".to_string(),
+            runtime_projection: runtime_projection(),
+            intake: Box::new(ManualPromptIntakeOutcome::NoTaskNeeded(handoff(
+                "wrapped answer",
+                "answer directly",
+                None,
+            ))),
+        });
+
+        let no_task_conversation = ready_conversation(&no_task_app);
+        assert_eq!(no_task_conversation.status_text, "starting turn");
+        assert_eq!(no_task_conversation.input_buffer, "");
+        assert_eq!(
+            no_task_conversation.messages.last().unwrap().text,
+            "answer directly"
+        );
+        assert!(no_task_conversation.last_planning_task_handoff().is_none());
+
+        let task = sample_handoff_task();
+        let mut committed_app = make_test_app(&workspace);
+        set_input(&mut committed_app, "turn this into a task");
+
+        committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            transcript_text: "turn this into a task".to_string(),
+            runtime_projection: runtime_projection(),
+            intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
+                committed_task_id: task.task_id.clone(),
+                committed_planning_revision: 7,
+                handoff: handoff(
+                    "wrapped task prompt",
+                    "turn this into a task",
+                    Some(task.clone()),
+                ),
+            }),
+        });
+
+        assert_eq!(
+            ready_conversation(&committed_app).last_planning_task_handoff(),
+            Some(&task)
+        );
+        assert_eq!(
+            ready_conversation(&committed_app).status_text,
+            "starting turn"
+        );
+
+        for outcome in [
+            ManualPromptIntakeOutcome::Rejected {
+                reason: "too small".to_string(),
+            },
+            ManualPromptIntakeOutcome::Failed {
+                reason: "intake crashed".to_string(),
+            },
+        ] {
+            let mut failure_app = make_test_app(&workspace);
+            set_input(&mut failure_app, "make task");
+            let expected_reason = match &outcome {
+                ManualPromptIntakeOutcome::Rejected { reason }
+                | ManualPromptIntakeOutcome::Failed { reason } => reason.clone(),
+                _ => unreachable!("test only uses failure outcomes"),
+            };
+
+            failure_app.apply_manual_prompt_preparation(
+                ManualPromptPreparationResult::PromptReady {
+                    transcript_text: "make task".to_string(),
+                    runtime_projection: runtime_projection(),
+                    intake: Box::new(outcome),
+                },
+            );
+
+            assert_eq!(
+                ready_conversation(&failure_app).status_text,
+                format!("turn preparation failed / {expected_reason}")
+            );
+            assert_eq!(
+                ready_conversation(&failure_app)
+                    .messages
+                    .last()
+                    .unwrap()
+                    .text,
+                "make task"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_auto_prompt_records_debug_detail_and_handoff() {
+        let workspace = TempWorkspace::new("turn-submit-auto-debug");
+        let mut app = make_test_app(&workspace);
+        app.planning_worker_visibility = PlanningWorkerVisibility::Debug;
+        app.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
+        app.planning_worker_panel_state.last_operation_label = Some("refresh queue".to_string());
+        app.planning_worker_panel_state.last_summary = Some("accepted task".to_string());
+        app.planning_worker_panel_state.last_prompt = Some("worker prompt".to_string());
+        app.planning_worker_panel_state.last_response = Some("worker response".to_string());
+        let handoff_task = sample_handoff_task();
+
+        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+            prompt: "continue task".to_string(),
+            completed_turn_id: "turn-completed".to_string(),
+            mode_label: "planning queue".to_string(),
+            transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+            handoff_task: Some(handoff_task.clone()),
+        });
+
+        let conversation = ready_conversation(&app);
+        assert!(
+            conversation
+                .status_text
+                .starts_with("auto-follow submitted / turn")
+        );
+        assert_eq!(
+            conversation.last_planning_task_handoff(),
+            Some(&handoff_task)
+        );
+        let transcript_message = conversation.messages.last().unwrap();
+        assert_eq!(
+            transcript_message.display_label.as_deref(),
+            Some("Auto Follow-up")
+        );
+        let debug_detail = transcript_message
+            .debug_detail
+            .as_deref()
+            .expect("debug visibility should attach worker detail");
+        assert!(
+            debug_detail.contains("planning worker temporary session: refresh queue / refresh ok")
+        );
+        assert!(debug_detail.contains("planning worker summary: accepted task"));
+        assert!(debug_detail.contains("worker prompt"));
+        assert!(debug_detail.contains("worker response"));
+    }
+
+    #[test]
+    fn build_turn_submission_request_maps_origin_and_parallel_slot_handoff() {
+        let workspace = TempWorkspace::new("turn-submit-request");
+        let mut app = make_test_app(&workspace);
+        let task = sample_handoff_task();
+        ready_conversation_mut(&mut app).record_manual_intake_handoff(Some(&task));
+        app.set_parallel_mode_enabled_for_test(true);
+
+        let request = app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            Some("thread-1".to_string()),
+            "wrapped task prompt".to_string(),
+            &PromptOrigin::ManualIntake(Box::new(super::super::ManualIntakeSubmitContext {
+                transcript_text: "operator text".to_string(),
+                handoff_task: Some(task.clone()),
+            })),
+        );
+
+        assert_eq!(request.workspace_directory, workspace.path_str());
+        assert_eq!(request.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(request.prompt, "wrapped task prompt");
+        assert_eq!(request.prompt_origin, CorePromptOrigin::ManualIntake);
+        assert_eq!(
+            request.slot_lease_handoff,
+            Some(ParallelTurnSlotLeaseHandoff::new(
+                task.task_id.clone(),
+                task.task_title.clone(),
+            ))
+        );
+
+        app.set_parallel_mode_enabled_for_test(false);
+        let manual_request = app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            None,
+            "manual prompt".to_string(),
+            &PromptOrigin::Manual,
+        );
+
+        assert_eq!(manual_request.prompt_origin, CorePromptOrigin::Manual);
+        assert_eq!(manual_request.slot_lease_handoff, None);
+    }
+
+    #[test]
+    fn sync_active_turn_workspace_directory_updates_ready_conversation_only() {
+        let workspace = TempWorkspace::new("turn-submit-active-workspace");
+        let mut app = make_test_app(&workspace);
+
+        app.sync_active_turn_workspace_directory("/tmp/active-turn");
+
+        assert_eq!(
+            ready_conversation(&app)
+                .active_turn_workspace_directory
+                .as_deref(),
+            Some("/tmp/active-turn")
+        );
+
+        app.conversation_state = ConversationState::Loading;
+        app.sync_active_turn_workspace_directory("/tmp/ignored");
+        assert!(matches!(app.conversation_state, ConversationState::Loading));
+    }
+
+    #[test]
+    fn dispatch_operator_alert_effect_sends_background_message() {
+        let workspace = TempWorkspace::new("turn-submit-operator-alert");
+        let mut app = make_test_app(&workspace);
+        let alert = OperatorAlert::planning_queue_drained();
+
+        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::DispatchOperatorAlert {
+            alert: alert.clone(),
+        });
+
+        let message = app
+            .rx
+            .try_recv()
+            .expect("operator alert should be queued for the runtime");
+        assert!(matches!(
+            message,
+            BackgroundMessage::OperatorAlert(queued_alert) if queued_alert == alert
+        ));
+    }
+}
