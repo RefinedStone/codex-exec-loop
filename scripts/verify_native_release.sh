@@ -140,7 +140,7 @@ verify_no_forbidden_bundle_paths() {
       echo "verify_native_release: forbidden build artifact found in bundle: ${relative_path}" >&2
       exit 1
     fi
-  done < <(find "${root_dir}" -print0)
+  done < <(find "${root_dir}" -mindepth 1 -print0)
 }
 
 verify_no_forbidden_archive_paths() {

@@ -131,50 +131,47 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
     let repo_root = resolution.context.repo_root.clone();
     let mode = resolve_pull_request_delivery_mode(runtime, &repo_root);
 
-    match mode {
-        PullRequestDeliveryMode::Disabled => {
-            return Ok(vec![distributor_skip_pull_request_workflow(
+    if mode == PullRequestDeliveryMode::Disabled {
+        return Ok(vec![distributor_skip_pull_request_workflow(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            mode,
+            "disabled by PR delivery mode".to_string(),
+        )?]);
+    }
+
+    let capabilities = recorded_or_inspected_capabilities(record, &repo_root, github_automation);
+    if !capabilities.pull_request_workflow_ready() {
+        return match mode {
+            PullRequestDeliveryMode::Auto => Ok(vec![distributor_skip_pull_request_workflow(
                 planning_authority,
                 runtime,
                 resolution,
                 record,
-                "disabled by PR delivery mode".to_string(),
-            )?]);
-        }
-        PullRequestDeliveryMode::Auto => {
-            let capabilities = github_automation.inspect_capabilities(&repo_root);
-            record.github_capabilities = Some(capabilities.clone());
-            if !capabilities.pull_request_workflow_ready() {
-                return Ok(vec![distributor_skip_pull_request_workflow(
-                    planning_authority,
-                    runtime,
-                    resolution,
-                    record,
-                    format!(
-                        "unavailable in auto mode: {}",
-                        pull_request_workflow_unavailable_summary(&capabilities)
-                    ),
-                )?]);
+                mode,
+                format!(
+                    "unavailable in auto mode: {}",
+                    pull_request_workflow_unavailable_summary(&capabilities)
+                ),
+            )?]),
+            PullRequestDeliveryMode::Required => Ok(vec![block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                format!(
+                    "pull request workflow is required but unavailable: {}",
+                    pull_request_workflow_unavailable_summary(&capabilities)
+                ),
+            )?]),
+            PullRequestDeliveryMode::Disabled => {
+                unreachable!("disabled mode returns before capability inspection")
             }
-        }
-        PullRequestDeliveryMode::Required => {
-            let capabilities = github_automation.inspect_capabilities(&repo_root);
-            record.github_capabilities = Some(capabilities.clone());
-            if !capabilities.pull_request_workflow_ready() {
-                return Ok(vec![block_distributor_queue_record(
-                    planning_authority,
-                    runtime,
-                    &resolution.context.repo_root,
-                    &resolution.context.pool_root,
-                    Some(&resolution.lease),
-                    record,
-                    format!(
-                        "pull request workflow is required but unavailable: {}",
-                        pull_request_workflow_unavailable_summary(&capabilities)
-                    ),
-                )?]);
-            }
-        }
+        };
     }
 
     let mut notices = Vec::new();
@@ -215,10 +212,9 @@ pub(super) fn distributor_ensure_pull_request(
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
 ) -> Result<String, String> {
-    // PR 조작은 push와 다른 capability라 여기서 gh binary/auth 상태를 다시 읽고 기록한다.
+    // PR 조작은 push와 다른 capability지만, 직전 push 단계에서 갱신한 snapshot이 있으면 재사용한다.
     let repo_root = resolution.context.repo_root.clone();
-    let capabilities = github_automation.inspect_capabilities(&repo_root);
-    record.github_capabilities = Some(capabilities.clone());
+    let capabilities = recorded_or_inspected_capabilities(record, &repo_root, github_automation);
     if !capabilities.pull_request_workflow_ready() {
         // binary 부재와 auth 부재 중 더 직접적인 원인을 골라 block note를 짧고 실행 가능하게 만든다.
         return block_distributor_queue_record(
@@ -515,9 +511,24 @@ fn pull_request_workflow_unavailable_summary(
     if capabilities.gh_binary.state
         != crate::domain::parallel_mode::ParallelModeCapabilityState::Ready
     {
-        return capabilities.gh_binary.summary();
+        capabilities.gh_binary.summary()
+    } else {
+        capabilities.gh_auth.summary()
     }
-    capabilities.gh_auth.summary()
+}
+
+fn recorded_or_inspected_capabilities(
+    record: &mut ParallelModeDistributorQueueRecord,
+    repo_root: &str,
+    github_automation: &dyn GithubAutomationPort,
+) -> GithubAutomationCapabilities {
+    if let Some(capabilities) = record.github_capabilities.clone() {
+        capabilities
+    } else {
+        let capabilities = github_automation.inspect_capabilities(repo_root);
+        record.github_capabilities = Some(capabilities.clone());
+        capabilities
+    }
 }
 
 fn distributor_skip_pull_request_workflow(
@@ -525,10 +536,9 @@ fn distributor_skip_pull_request_workflow(
     runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
+    mode: PullRequestDeliveryMode,
     reason: String,
 ) -> Result<String, String> {
-    record.pull_request_number = None;
-    record.pull_request_url = None;
     record.queue_state = ParallelModeQueueItemState::MergePending;
     record.integration_note = format!(
         "pull request workflow skipped ({reason}); queued branch will be integrated directly into `{DISTRIBUTOR_INTEGRATION_BRANCH}`"
@@ -552,7 +562,7 @@ fn distributor_skip_pull_request_workflow(
 
     Ok(format!(
         "distributor skipped pull request workflow / mode: {} / agent: {} / branch: {}",
-        resolve_pull_request_delivery_mode(runtime, &resolution.context.repo_root).label(),
+        mode.label(),
         record.agent_id,
         record.branch_name
     ))

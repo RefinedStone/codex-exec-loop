@@ -500,22 +500,24 @@ fn distributor_cleanup_integrated_slot(
 
 fn delivery_completion_note(used_pull_request: bool) -> String {
     if used_pull_request {
-        return format!(
+        format!(
             "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin, PR delivery completed, and the slot is entering cleanup"
-        );
+        )
+    } else {
+        format!(
+            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin without PR automation, and the slot is entering cleanup"
+        )
     }
-    format!(
-        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin without PR automation, and the slot is entering cleanup"
-    )
 }
 
 fn cleanup_completion_note(used_pull_request: bool) -> String {
     if used_pull_request {
-        return format!(
+        format!(
             "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, PR delivery completed, and the slot returned to idle"
-        );
+        )
+    } else {
+        format!(
+            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, direct delivery completed without PR automation, and the slot returned to idle"
+        )
     }
-    format!(
-        "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, direct delivery completed without PR automation, and the slot returned to idle"
-    )
 }
