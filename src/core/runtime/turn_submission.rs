@@ -141,6 +141,7 @@ fn resolve_stream_launch_request(
         thread_id,
         prompt,
         prompt_origin,
+        turn_options,
         slot_lease_handoff,
     } = request;
     let outcome =
@@ -156,6 +157,7 @@ fn resolve_stream_launch_request(
             thread_id: outcome.request.thread_id,
             prompt: outcome.request.prompt,
             prompt_origin,
+            turn_options,
             slot_lease_handoff: outcome.request.slot_lease_handoff,
         },
         outcome.launch_notice,
@@ -196,10 +198,20 @@ fn run_stream_request(
 ) -> Result<(), String> {
     match request.thread_id.as_deref() {
         Some(thread_id) => conversation_service
-            .run_turn_stream(thread_id, &request.prompt, event_sender)
+            .run_turn_stream(
+                thread_id,
+                &request.prompt,
+                request.turn_options.clone(),
+                event_sender,
+            )
             .map_err(|error| error.to_string()),
         None => conversation_service
-            .run_new_thread_stream(&request.workspace_directory, &request.prompt, event_sender)
+            .run_new_thread_stream(
+                &request.workspace_directory,
+                &request.prompt,
+                request.turn_options.clone(),
+                event_sender,
+            )
             .map_err(|error| error.to_string()),
     }
 }
@@ -298,6 +310,7 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            turn_options: Default::default(),
             slot_lease_handoff: None,
         }
     }

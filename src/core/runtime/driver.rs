@@ -135,6 +135,7 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             prompt: "ship it".to_string(),
             prompt_origin: CorePromptOrigin::Manual,
+            turn_options: Default::default(),
             slot_lease_handoff: None,
         };
 

@@ -8,7 +8,8 @@ use crate::application::service::parallel_mode::control_plane::ParallelModeContr
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
 use crate::domain::conversation::{
-    ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
+    ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
+    ConversationRuntimeControlTruth, ConversationTurnOptions,
 };
 use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{self, KeyCode, KeyModifiers};
@@ -172,7 +173,10 @@ use directions_maintenance_ui::{
 };
 use github_polling::GithubReviewPollingState;
 use history_insertion::HistoryInsertionMode;
-use inline_shell_commands::{InlineShellCommand, InlineShellCommandInput};
+use inline_shell_commands::{
+    InlineShellCommand, InlineShellCommandInput, is_turn_option_clear_argument,
+    normalize_model_override_argument,
+};
 use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
 };
@@ -284,6 +288,7 @@ struct NativeTuiApp {
     application: NativeTuiApplicationHandle,
     core_runtime: CoreRuntime<CoreEffectRunner>,
     turn_control_truth: ConversationRuntimeControlTruth,
+    turn_options: ConversationTurnOptions,
     planning_worker_panel_state: PlanningWorkerPanelState,
     planning_worker_visibility: PlanningWorkerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,

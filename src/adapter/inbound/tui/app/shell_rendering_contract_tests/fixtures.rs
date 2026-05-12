@@ -99,6 +99,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         &self,
         _cwd: &str,
         _prompt: &str,
+        _options: crate::domain::conversation::ConversationTurnOptions,
         _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         // Streaming events are injected directly into app state by tests that need transcript output.
@@ -109,6 +110,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         &self,
         _thread_id: &str,
         _prompt: &str,
+        _options: crate::domain::conversation::ConversationTurnOptions,
         _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         // Existing-thread turns use the same no-op boundary; rendering tests should not spawn workers.

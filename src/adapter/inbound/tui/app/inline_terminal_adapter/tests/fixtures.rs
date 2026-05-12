@@ -86,6 +86,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         &self,
         _cwd: &str,
         _prompt: &str,
+        _options: crate::domain::conversation::ConversationTurnOptions,
         _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         Ok(())
@@ -96,6 +97,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         &self,
         _thread_id: &str,
         _prompt: &str,
+        _options: crate::domain::conversation::ConversationTurnOptions,
         _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         Ok(())

@@ -124,6 +124,7 @@ impl NativeTuiApp {
             thread_id,
             prompt,
             prompt_origin: core_prompt_origin(prompt_origin),
+            turn_options: self.turn_options.clone(),
             slot_lease_handoff: self.build_parallel_mode_slot_lease_handoff(),
         }
     }
@@ -534,7 +535,9 @@ mod tests {
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::core::app::{CorePromptOrigin, StartupReadySnapshot};
-    use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+    use crate::domain::conversation::{
+        ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationSnapshot,
+    };
     use crate::domain::operator_alert::OperatorAlert;
     use crate::domain::planning::PlanningValidationReport;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
@@ -596,6 +599,7 @@ mod tests {
             &self,
             _cwd: &str,
             _prompt: &str,
+            _options: crate::domain::conversation::ConversationTurnOptions,
             _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
         ) -> Result<()> {
             Ok(())
@@ -605,6 +609,7 @@ mod tests {
             &self,
             _thread_id: &str,
             _prompt: &str,
+            _options: crate::domain::conversation::ConversationTurnOptions,
             _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
         ) -> Result<()> {
             Ok(())
@@ -1074,6 +1079,8 @@ mod tests {
         let task = sample_handoff_task();
         ready_conversation_mut(&mut app).record_manual_intake_handoff(Some(&task));
         app.set_parallel_mode_enabled_for_test(true);
+        app.turn_options.model = Some("gpt-5.4".to_string());
+        app.turn_options.reasoning_effort = Some(ConversationReasoningEffort::High);
 
         let request = app.build_turn_submission_request(
             workspace.path_str().to_string(),
@@ -1089,6 +1096,7 @@ mod tests {
         assert_eq!(request.thread_id.as_deref(), Some("thread-1"));
         assert_eq!(request.prompt, "wrapped task prompt");
         assert_eq!(request.prompt_origin, CorePromptOrigin::ManualIntake);
+        assert_eq!(request.turn_options, app.turn_options);
         assert_eq!(
             request.slot_lease_handoff,
             Some(ParallelTurnSlotLeaseHandoff::new(
@@ -1107,6 +1115,36 @@ mod tests {
 
         assert_eq!(manual_request.prompt_origin, CorePromptOrigin::Manual);
         assert_eq!(manual_request.slot_lease_handoff, None);
+    }
+
+    #[test]
+    fn inline_model_and_think_commands_update_turn_options() {
+        let workspace = TempWorkspace::new("turn-options-command");
+        let mut app = make_test_app(&workspace);
+
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":model gpt-5.4").expect("model command should parse"),
+        );
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":think high").expect("think command should parse"),
+        );
+
+        assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            app.turn_options.reasoning_effort,
+            Some(ConversationReasoningEffort::High)
+        );
+
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":model default")
+                .expect("model clear command should parse"),
+        );
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":think default")
+                .expect("think clear command should parse"),
+        );
+
+        assert!(app.turn_options.is_default());
     }
 
     #[test]

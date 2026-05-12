@@ -94,6 +94,77 @@ pub enum ConversationMessageKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// ConversationReasoningEffort is the UI-neutral turn option that Akra carries
+// from operator selection to the outbound runtime. The app-server adapter maps
+// this onto its wire enum at the boundary.
+pub enum ConversationReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ConversationReasoningEffort {
+    pub fn parse(value: &str) -> Option<Self> {
+        match normalize_turn_option_value(value).as_deref() {
+            Some("none") | Some("off") => Some(Self::None),
+            Some("minimal") => Some(Self::Minimal),
+            Some("low") => Some(Self::Low),
+            Some("medium") => Some(Self::Medium),
+            Some("high") => Some(Self::High),
+            Some("xhigh") | Some("extra-high") | Some("x-high") => Some(Self::XHigh),
+            _ => None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+// ConversationTurnOptions is the per-turn override bundle for interactive user
+// sessions. None means "let app-server use its current/default setting".
+pub struct ConversationTurnOptions {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ConversationReasoningEffort>,
+}
+
+impl ConversationTurnOptions {
+    pub fn is_default(&self) -> bool {
+        self.model.is_none() && self.reasoning_effort.is_none()
+    }
+
+    pub fn summary_label(&self) -> String {
+        format!(
+            "model: {}  |  think: {}",
+            self.model.as_deref().unwrap_or("default"),
+            self.reasoning_effort
+                .map(ConversationReasoningEffort::label)
+                .unwrap_or("default")
+        )
+    }
+}
+
+fn normalize_turn_option_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.to_ascii_lowercase().replace(['_', ' '], "-"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // ConversationToolActivityKind는 live tail/working line이 tool activity를 사람이 읽는
 // 범주로 묶을 때 쓰는 도메인 분류이다.
 pub enum ConversationToolActivityKind {

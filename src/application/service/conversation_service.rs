@@ -19,7 +19,9 @@ use crate::application::port::outbound::interactive_turn_runtime_port::Interacti
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 // snapshot은 저장된 대화 상태를 읽는 결과이고, control truth는 "중단/실행 제어를 누가 담당하는가"를
 // 나타내는 도메인 값이다. 둘 다 TUI가 런타임 구현 세부사항 없이 화면 상태를 구성하는 데 쓰인다.
-use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationSnapshot};
+use crate::domain::conversation::{
+    ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+};
 
 #[derive(Clone)]
 // `ConversationService`는 TUI inbound adapter와 outbound interactive runtime port 사이의
@@ -77,13 +79,15 @@ impl ConversationService {
         cwd: &str,
         // prompt는 사용자 입력 원문이다. service는 prompt를 변형하지 않아 adapter가 Codex 프로토콜로 매핑한다.
         prompt: &str,
+        // operator가 선택한 model/think override이다. 비어 있으면 app-server 기본값을 유지한다.
+        options: ConversationTurnOptions,
         // event_sender는 호출자가 만든 수신 루프와 짝을 이룬다. 소유권을 넘기는 이유는
         // runtime worker가 thread 종료까지 이 sender를 들고 스트림 이벤트를 계속 보낼 수 있어야 하기 때문이다.
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         self.interactive_turn_runtime_port
             // 새 thread 생성, app-server launch/reattach, protocol notification 해석은 모두 outbound 구현 책임이다.
-            .run_new_thread_stream(cwd, prompt, event_sender)
+            .run_new_thread_stream(cwd, prompt, options, event_sender)
     }
 
     // 이미 준비된 thread에 후속 prompt를 실행하는 스트리밍 진입점이다.
@@ -95,12 +99,14 @@ impl ConversationService {
         thread_id: &str,
         // 후속 turn의 사용자 입력이다. service는 validation/prompt rewrite를 하지 않는 얇은 경계이다.
         prompt: &str,
+        // operator가 선택한 model/think override이다. 비어 있으면 app-server 기본값을 유지한다.
+        options: ConversationTurnOptions,
         // 같은 `ConversationStreamEvent` 채널을 사용해 delta, 도구 활동, 승인 상태, 완료/실패를 돌려받는다.
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
         self.interactive_turn_runtime_port
             // 기존 thread에서의 turn 실행도 service가 직접 구현하지 않는다.
             // port 경계를 통과시켜 app-server adapter가 프로토콜과 세션 저장 책임을 계속 소유하게 한다.
-            .run_turn_stream(thread_id, prompt, event_sender)
+            .run_turn_stream(thread_id, prompt, options, event_sender)
     }
 }

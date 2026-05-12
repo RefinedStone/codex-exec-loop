@@ -7,7 +7,7 @@ use self::turn_notifications::to_conversation_message;
 pub(super) use self::turn_notifications::{
     AppServerNotification, TurnNotificationHandling, handle_turn_notification,
 };
-use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::conversation::{ConversationReasoningEffort, ConversationSnapshot};
 use crate::domain::session_summary::SessionSummary;
 
 /*
@@ -287,8 +287,31 @@ pub(super) enum SandboxPolicyValue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(super) enum ReasoningEffortValue {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "minimal")]
+    Minimal,
+    #[serde(rename = "low")]
+    Low,
     #[serde(rename = "medium")]
     Medium,
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+}
+
+impl From<ConversationReasoningEffort> for ReasoningEffortValue {
+    fn from(effort: ConversationReasoningEffort) -> Self {
+        match effort {
+            ConversationReasoningEffort::None => Self::None,
+            ConversationReasoningEffort::Minimal => Self::Minimal,
+            ConversationReasoningEffort::Low => Self::Low,
+            ConversationReasoningEffort::Medium => Self::Medium,
+            ConversationReasoningEffort::High => Self::High,
+            ConversationReasoningEffort::XHigh => Self::XHigh,
+        }
+    }
 }
 
 // ThreadStartParams creates new app-server threads, including hidden planning/parallel worker threads.

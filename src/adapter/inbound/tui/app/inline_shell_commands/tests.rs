@@ -48,6 +48,18 @@ fn parse_recognizes_supported_aliases() {
         ),
         (":turns", Some((InlineShellCommand::Turns, None))),
         (":stop", Some((InlineShellCommand::Stop, None))),
+        (
+            ":model gpt-5.4",
+            Some((InlineShellCommand::Model, Some("gpt-5.4"))),
+        ),
+        (
+            ":think high",
+            Some((InlineShellCommand::Think, Some("high"))),
+        ),
+        (
+            ":think xhigh",
+            Some((InlineShellCommand::Think, Some("xhigh"))),
+        ),
         (":auto", None),
         (":automation", None),
         (":doctor", Some((InlineShellCommand::Doctor, None))),
@@ -101,6 +113,8 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Directions,
             InlineShellCommand::Turns,
             InlineShellCommand::Stop,
+            InlineShellCommand::Model,
+            InlineShellCommand::Think,
             InlineShellCommand::Doctor,
             InlineShellCommand::PlanningInit,
             InlineShellCommand::Reset,
@@ -147,11 +161,19 @@ fn suggestions_filter_by_prefix() {
     );
     assert_eq!(
         InlineShellCommand::suggestions(":t"),
-        vec![InlineShellCommand::Turns]
+        vec![InlineShellCommand::Turns, InlineShellCommand::Think]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":tu"),
         vec![InlineShellCommand::Turns]
+    );
+    assert_eq!(
+        InlineShellCommand::suggestions(":th"),
+        vec![InlineShellCommand::Think]
+    );
+    assert_eq!(
+        InlineShellCommand::suggestions(":mo"),
+        vec![InlineShellCommand::Model]
     );
 }
 
@@ -182,7 +204,7 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(8));
+    assert!(state.move_selection(10));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -212,6 +234,8 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
+    assert_eq!(InlineShellCommand::Model.completion_text(), ":model ");
+    assert_eq!(InlineShellCommand::Think.completion_text(), ":think ");
     assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
 }
 
@@ -243,6 +267,10 @@ fn help_entries_use_renderable_command_forms() {
     assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
     assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
     assert!(rendered.contains(":stop - stop active sessions"));
+    assert!(rendered.contains(":model <model|default> - model override"));
+    assert!(
+        rendered.contains(":think <none|minimal|low|medium|high|xhigh|default> - reasoning effort")
+    );
     assert!(!rendered.contains(":auto"));
     assert!(rendered.contains(":help - command help"));
     assert!(!rendered.contains(InlineShellCommand::command_list_line()));
@@ -343,6 +371,61 @@ fn parallel_command_hint_is_argument_aware() {
 }
 
 #[test]
+fn model_and_think_command_hints_are_argument_aware() {
+    let model_plain = InlineShellCommandInput::parse(":model").expect("command should parse");
+    let model_set = InlineShellCommandInput::parse(":model gpt-5.4").expect("command should parse");
+    let model_clear =
+        InlineShellCommandInput::parse(":model default").expect("command should parse");
+    let model_invalid =
+        InlineShellCommandInput::parse(":model gpt 5").expect("command should parse");
+    let think_plain = InlineShellCommandInput::parse(":think").expect("command should parse");
+    let think_high = InlineShellCommandInput::parse(":think high").expect("command should parse");
+    let think_xhigh =
+        InlineShellCommandInput::parse(":think x_high").expect("command should parse");
+    let think_clear =
+        InlineShellCommandInput::parse(":think default").expect("command should parse");
+    let think_invalid =
+        InlineShellCommandInput::parse(":think fast").expect("command should parse");
+
+    assert_eq!(
+        model_plain.buffered_hint(),
+        "Type `:model <model|default>` to choose the model override."
+    );
+    assert_eq!(
+        model_set.buffered_hint(),
+        "Press Enter to set model to `gpt-5.4`."
+    );
+    assert_eq!(
+        model_clear.buffered_hint(),
+        "Press Enter to clear the model override."
+    );
+    assert_eq!(
+        model_invalid.buffered_hint(),
+        "Press Enter to apply `:model gpt 5`. Supported form: :model <model|default>."
+    );
+    assert_eq!(
+        think_plain.buffered_hint(),
+        "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort."
+    );
+    assert_eq!(
+        think_high.buffered_hint(),
+        "Press Enter to set think to `high`."
+    );
+    assert_eq!(
+        think_xhigh.buffered_hint(),
+        "Press Enter to set think to `xhigh`."
+    );
+    assert_eq!(
+        think_clear.buffered_hint(),
+        "Press Enter to clear the think override."
+    );
+    assert_eq!(
+        think_invalid.buffered_hint(),
+        "Press Enter to apply `:think fast`. Supported values: none, minimal, low, medium, high, xhigh, default."
+    );
+}
+
+#[test]
 fn doctor_command_hint_uses_lifecycle_language() {
     /*
     Doctor touches planning setup, but its hint must stay inspection-oriented.
@@ -407,6 +490,8 @@ fn execution_status_stays_alias_neutral() {
         (":planning", None),
         (":turns 5", None),
         (":stop", None),
+        (":model gpt-5.4", None),
+        (":think high", None),
         (":reset queue", None),
     ];
     for (input, expected) in cases {

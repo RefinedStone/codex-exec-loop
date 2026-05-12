@@ -258,6 +258,7 @@ impl NativeTuiApp {
             application,
             core_runtime,
             turn_control_truth,
+            turn_options: Default::default(),
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,
