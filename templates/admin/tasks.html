@@ -1,643 +1,204 @@
 {% extends "admin/base.html" %}
 {% block content %}
-<style>
-  .akra-task-console {
-    --task-panel: rgba(12, 24, 41, 0.94);
-    --task-panel-strong: rgba(15, 30, 52, 0.98);
-    --task-line: rgba(130, 155, 193, 0.24);
-    --task-line-strong: rgba(154, 180, 220, 0.36);
-    --task-ink: #f2f7ff;
-    --task-muted: #98abc4;
-    --task-green: #35d07f;
-    --task-blue: #5da9ff;
-    --task-yellow: #f5c84b;
-    --task-red: #ff6b6b;
-    --task-violet: #9d7cff;
-    display: grid;
-    gap: 12px;
-    min-height: calc(100vh - 44px);
-    color: var(--task-ink);
-  }
-  .akra-task-console * {
-    min-width: 0;
-  }
-  .task-command-deck,
-  .task-stat,
-  .task-panel,
-  .task-ticket {
-    border: 2px solid var(--task-line);
-    border-radius: 0;
-    background: linear-gradient(180deg, var(--task-panel-strong), rgba(8, 18, 32, 0.98));
-    box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.6);
-  }
-  .task-command-deck {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 16px;
-    align-items: end;
-    padding: 16px;
-  }
-  .task-title-block {
-    display: grid;
-    gap: 10px;
-  }
-  .task-title-block h1 {
-    margin: 0;
-    font-size: 44px;
-    line-height: 1;
-    letter-spacing: 0;
-  }
-  .task-badge {
-    width: fit-content;
-    padding: 5px 8px;
-    border: 2px solid rgba(93, 169, 255, 0.42);
-    color: var(--task-blue);
-    background: rgba(93, 169, 255, 0.1);
-    font-size: 12px;
-    font-weight: 900;
-  }
-  .task-tab-strip,
-  .task-command-actions,
-  .task-form-actions,
-  .task-ticket-meta,
-  .proposal-head {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  .task-tab-strip a,
-  .task-command-actions button,
-  .task-form-actions button,
-  .task-chip,
-  .status-pill,
-  .proposal-priority {
-    min-height: 34px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 7px 9px;
-    border: 2px solid rgba(255,255,255,0.14);
-    border-radius: 0;
-    color: var(--task-ink);
-    background: rgba(255,255,255,0.06);
-    text-decoration: none;
-    font-size: 12px;
-    font-weight: 900;
-    white-space: nowrap;
-  }
-  .task-tab-strip a.active,
-  .task-command-actions button:hover,
-  .task-form-actions button:hover {
-    border-color: rgba(53, 208, 127, 0.52);
-    color: var(--task-green);
-    background: rgba(53, 208, 127, 0.12);
-  }
-  .task-command-actions {
-    justify-content: end;
-  }
-  .task-command-actions button,
-  .task-form-actions button {
-    cursor: pointer;
-    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.28), inset 2px 2px 0 rgba(255,255,255,0.08);
-  }
-  .task-command-actions button.warn,
-  .task-form-actions button.error {
-    border-color: rgba(255, 107, 107, 0.54);
-    color: #fff;
-    background: rgba(255, 107, 107, 0.24);
-  }
-  .task-command-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .task-stat {
-    min-height: 96px;
-    display: grid;
-    align-content: space-between;
-    gap: 8px;
-    padding: 14px;
-  }
-  .task-stat span {
-    color: var(--task-muted);
-    font-size: 12px;
-    font-weight: 900;
-  }
-  .task-stat strong {
-    display: block;
-    overflow: hidden;
-    font-size: 24px;
-    line-height: 1.1;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .task-ops-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
-    gap: 12px;
-    align-items: start;
-  }
-  .task-panel {
-    padding: 14px;
-  }
-  .task-panel h2,
-  .task-panel h3,
-  .task-panel p {
-    margin: 0;
-  }
-  .task-panel p,
-  .task-panel small {
-    color: var(--task-muted);
-  }
-  .task-panel-head,
-  .task-board-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 12px;
-  }
-  .task-create-panel summary {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: center;
-    cursor: pointer;
-    font-size: 16px;
-    font-weight: 900;
-    list-style: none;
-  }
-  .task-create-panel summary::-webkit-details-marker {
-    display: none;
-  }
-  .task-create-panel summary::after {
-    content: "OPEN";
-    padding: 4px 7px;
-    border: 2px solid rgba(93, 169, 255, 0.34);
-    color: var(--task-blue);
-    background: rgba(93, 169, 255, 0.1);
-    font-size: 11px;
-  }
-  .task-create-panel[open] summary::after {
-    content: "READY";
-    border-color: rgba(53, 208, 127, 0.44);
-    color: var(--task-green);
-    background: rgba(53, 208, 127, 0.1);
-  }
-  .task-create-panel form {
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 2px solid rgba(255,255,255,0.08);
-  }
-  .akra-task-console .stack,
-  .proposal-list,
-  .task-ticket-list,
-  .task-ticket-main {
-    display: grid;
-    gap: 10px;
-  }
-  .akra-task-console .form-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-    gap: 10px;
-  }
-  .akra-task-console .field {
-    display: grid;
-    gap: 6px;
-  }
-  .akra-task-console .field span {
-    color: var(--task-muted);
-    font-size: 12px;
-    font-weight: 900;
-  }
-  .akra-task-console input[type="text"],
-  .akra-task-console input[type="search"],
-  .akra-task-console select,
-  .akra-task-console textarea {
-    width: 100%;
-    border: 2px solid rgba(130, 155, 193, 0.26);
-    border-radius: 0;
-    padding: 9px 10px;
-    color: var(--task-ink);
-    background: rgba(3, 9, 18, 0.54);
-    font: inherit;
-    box-shadow: inset 2px 2px 0 rgba(0,0,0,0.28);
-  }
-  .akra-task-console input[type="text"]:focus,
-  .akra-task-console input[type="search"]:focus,
-  .akra-task-console select:focus,
-  .akra-task-console textarea:focus {
-    outline: 3px solid rgba(93, 169, 255, 0.46);
-    outline-offset: 2px;
-    border-color: rgba(93, 169, 255, 0.64);
-  }
-  .akra-task-console textarea {
-    min-height: 7rem;
-    resize: vertical;
-  }
-  .akra-task-console .short-textarea {
-    min-height: 5rem;
-  }
-  .task-proposal-panel {
-    display: grid;
-    gap: 12px;
-  }
-  .proposal-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
-    align-items: center;
-    padding: 10px;
-    border: 2px solid rgba(255,255,255,0.12);
-    background: rgba(255,255,255,0.05);
-  }
-  .proposal-row strong,
-  .proposal-row small {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .proposal-priority {
-    border-color: rgba(245, 200, 75, 0.44);
-    color: var(--task-yellow);
-    background: rgba(245, 200, 75, 0.1);
-  }
-  .task-board-panel {
-    display: grid;
-    gap: 12px;
-  }
-  .task-list-filter {
-    width: min(26rem, 100%);
-  }
-  .task-ticket {
-    overflow: hidden;
-    background: rgba(255,255,255,0.045);
-    box-shadow: none;
-  }
-  .task-ticket summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
-    align-items: center;
-    padding: 12px;
-    cursor: pointer;
-    list-style: none;
-  }
-  .task-ticket summary::-webkit-details-marker {
-    display: none;
-  }
-  .task-ticket[open] summary {
-    border-bottom: 2px solid rgba(255,255,255,0.08);
-    background: rgba(93, 169, 255, 0.08);
-  }
-  .task-ticket-title,
-  .task-ticket-id {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .task-ticket-title {
-    font-size: 15px;
-    font-weight: 900;
-  }
-  .task-ticket-id {
-    color: var(--task-muted);
-    font-size: 12px;
-  }
-  .task-ticket-detail {
-    display: grid;
-    gap: 12px;
-    padding: 14px;
-    background: rgba(3, 9, 18, 0.22);
-  }
-  .status-pill.ready,
-  .status-pill.in_progress {
-    border-color: rgba(53, 208, 127, 0.68);
-    color: #b9ffd6;
-    background: rgba(53, 208, 127, 0.18);
-  }
-  .status-pill.blocked,
-  .status-pill.awaiting_user,
-  .status-pill.proposed {
-    border-color: rgba(245, 200, 75, 0.44);
-    color: var(--task-yellow);
-    background: rgba(245, 200, 75, 0.1);
-  }
-  .status-pill.done,
-  .status-pill.cancelled {
-    border-color: rgba(152, 171, 196, 0.32);
-    color: #b4c0ce;
-    background: rgba(152, 171, 196, 0.1);
-  }
-  .task-ticket.status-blocked,
-  .task-ticket.status-awaiting_user {
-    border-color: rgba(245, 200, 75, 0.42);
-  }
-  .task-ticket.status-in_progress {
-    border-color: rgba(93, 169, 255, 0.46);
-  }
-  .task-ticket.status-ready {
-    border-color: rgba(53, 208, 127, 0.82);
-    background:
-      linear-gradient(90deg, rgba(53, 208, 127, 0.22), rgba(53, 208, 127, 0.1) 40%, rgba(255,255,255,0.045)),
-      linear-gradient(180deg, rgba(12, 38, 28, 0.96), rgba(7, 20, 17, 0.98));
-    box-shadow: inset 0 0 0 2px rgba(53, 208, 127, 0.16), 0 0 0 1px rgba(53, 208, 127, 0.22), 4px 4px 0 rgba(0,0,0,0.68);
-  }
-  .task-ticket.status-ready summary {
-    background: rgba(53, 208, 127, 0.12);
-  }
-  .task-ticket.status-ready .task-ticket-title {
-    color: #f7fff9;
-  }
-  .task-ticket.status-done {
-    border-color: rgba(152, 171, 196, 0.26);
-    background:
-      linear-gradient(90deg, rgba(152, 171, 196, 0.09), rgba(152, 171, 196, 0.04) 42%, rgba(255,255,255,0.035)),
-      linear-gradient(180deg, rgba(19, 27, 38, 0.92), rgba(9, 16, 26, 0.96));
-  }
-  .task-ticket.status-done .task-ticket-title {
-    color: #d4dde8;
-  }
-  .task-ticket.status-done .task-ticket-id,
-  .task-ticket.status-done .task-chip {
-    color: #9daaba;
-  }
-  .danger-zone {
-    padding-top: 12px;
-    border-top: 2px solid rgba(255,255,255,0.08);
-  }
-  .empty-state {
-    padding: 12px;
-    border: 2px solid rgba(255,255,255,0.1);
-    color: var(--task-muted);
-    background: rgba(255,255,255,0.04);
-  }
-  .filter-empty {
-    display: none;
-  }
-  .filter-empty.is-visible {
-    display: block;
-  }
-  @media (max-width: 1080px) {
-    .task-command-deck,
-    .task-ops-grid {
-      grid-template-columns: 1fr;
-    }
-    .task-command-actions {
-      justify-content: start;
-    }
-    .task-command-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .task-ticket summary {
-      grid-template-columns: 1fr;
-    }
-    .task-ticket-meta {
-      justify-content: start;
-    }
-  }
-  @media (max-width: 640px) {
-    .task-title-block h1 {
-      font-size: 32px;
-    }
-    .task-command-grid {
-      grid-template-columns: 1fr;
-    }
-    .task-board-header,
-    .task-panel-head {
-      align-items: stretch;
-      flex-direction: column;
-    }
-    .task-list-filter {
-      width: 100%;
-    }
-  }
-</style>
-
-<section class="akra-task-console" aria-label="게임발전국 작업 관리">
-  <header class="task-command-deck">
-    <div class="task-title-block">
-      <span class="task-badge">TASK CONTROL</span>
-      <h1>작업 관리</h1>
-      <nav class="task-tab-strip" aria-label="작업 관리 탭">
-        <a href="/admin/akra">대시보드</a>
-        <a href="/admin/directions">작전 방향</a>
-        <a href="/admin/tasks" class="active" aria-current="page">작업 관리</a>
-        <a href="/admin/akra/metrics#metrics">메트릭스</a>
-      </nav>
-    </div>
-    <div class="task-command-actions">
-      <form method="post" action="/admin/files/export">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="secondary">파일 내보내기</button>
-      </form>
-      <form method="post" action="/admin/files/apply">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="warn" data-confirm="Apply edited planning files to the active workspace?">파일 적용</button>
-      </form>
-    </div>
-  </header>
-
-  <section class="task-command-grid" aria-label="작업 지표">
-    <div class="task-stat"><span>작업 수</span><strong>{{ management.tasks.len() }}</strong></div>
-    <div class="task-stat"><span>작전 방향</span><strong>{{ management.directions.len() }}</strong></div>
-    <div class="task-stat"><span>기본 방향</span><strong class="mono">{{ management.default_direction_id }}</strong></div>
-    {% if let Some(queue_head) = overview.runtime.queue_head %}
-    <div class="task-stat"><span>선두 작업</span><strong>{{ queue_head.task_title }}</strong></div>
-    {% else %}
-    <div class="task-stat"><span>선두 작업</span><strong>none</strong></div>
-    {% endif %}
-  </section>
-
-  <section class="task-ops-grid">
-    <details class="task-panel task-create-panel" open>
-      <summary>신규 작업 등록</summary>
-      <form method="post" action="/admin/tasks/upsert" class="stack">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-grid">
-          <label class="field">
-            <span>제목</span>
-            <input type="text" name="title" placeholder="Ship admin import flow" required>
-          </label>
-          <label class="field">
-            <span>방향</span>
-            <select name="direction_id">
-              <option value="">default: {{ management.default_direction_id }}</option>
-              {% for direction in management.directions %}
-              <option value="{{ direction.id }}">{{ direction.title }} / {{ direction.id }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label class="field">
-            <span>상태</span>
-            <select name="status">
-              <option value="">default: ready</option>
-              <option value="ready">ready</option>
-              <option value="blocked">blocked</option>
-              <option value="in_progress">in_progress</option>
-              <option value="done">done</option>
-              <option value="cancelled">cancelled</option>
-              <option value="awaiting_user">awaiting_user</option>
-              <option value="proposed">proposed</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>기본 우선순위</span>
-            <input type="text" name="base_priority" placeholder="default: 80">
-          </label>
-        </div>
+<section class="toolbar">
+  <details class="create-panel">
+    <summary>Add task</summary>
+    <form method="post" action="/admin/tasks/upsert" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
         <label class="field">
-          <span>설명</span>
-          <textarea name="description" class="short-textarea"></textarea>
+          <span>Title</span>
+          <input type="text" name="title" placeholder="Ship admin import flow" required>
         </label>
-        <div class="form-grid">
-          <label class="field">
-            <span>선행 작업</span>
-            <textarea name="depends_on_text" class="short-textarea"></textarea>
-          </label>
-          <label class="field">
-            <span>차단 사유</span>
-            <textarea name="blocked_by_text" class="short-textarea"></textarea>
-          </label>
-        </div>
-        <div class="task-form-actions">
-          <button type="submit">작업 생성</button>
-        </div>
-      </form>
-    </details>
-
-    <aside class="task-panel task-proposal-panel">
-      <div class="task-panel-head">
-        <h2>제안 큐</h2>
-        <span class="task-chip">{{ overview.runtime.proposed_tasks.len() }}</span>
+        <label class="field">
+          <span>Direction</span>
+          <select name="direction_id">
+            <option value="">default: {{ management.default_direction_id }}</option>
+            {% for direction in management.directions %}
+            <option value="{{ direction.id }}">{{ direction.title }} / {{ direction.id }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field">
+          <span>Status</span>
+          <select name="status">
+            <option value="">default: ready</option>
+            <option value="ready">ready</option>
+            <option value="blocked">blocked</option>
+            <option value="in_progress">in_progress</option>
+            <option value="done">done</option>
+            <option value="cancelled">cancelled</option>
+            <option value="awaiting_user">awaiting_user</option>
+            <option value="proposed">proposed</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Base priority</span>
+          <input type="text" name="base_priority" placeholder="default: 80">
+        </label>
       </div>
-      {% if overview.runtime.proposed_tasks.is_empty() %}
-      <p class="empty-state">promotable proposal 없음</p>
-      {% else %}
-      <div class="proposal-list">
-        {% for task in overview.runtime.proposed_tasks %}
-        <div class="proposal-row">
-          <span class="proposal-head">
-            <span>
-              <strong>{{ task.task_title }}</strong>
-              <small class="mono">{{ task.task_id }}</small>
-            </span>
-          </span>
-          <span class="proposal-priority">{{ task.combined_priority }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </aside>
-  </section>
-
-  <section class="task-panel task-board-panel">
-    <div class="task-board-header">
-      <div>
-        <h2>작업 목록</h2>
-        <small>priority order</small>
-      </div>
-      <label class="field task-list-filter">
-        <span>검색</span>
-        <input type="search" data-list-filter="task-list" placeholder="title, id, direction, status">
+      <label class="field">
+        <span>Description</span>
+        <textarea name="description" class="short-textarea"></textarea>
       </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Depends on</span>
+          <textarea name="depends_on_text" class="short-textarea"></textarea>
+        </label>
+        <label class="field">
+          <span>Blocked by</span>
+          <textarea name="blocked_by_text" class="short-textarea"></textarea>
+        </label>
+      </div>
+      <button type="submit">Create task</button>
+    </form>
+  </details>
+
+  <div class="actions">
+    <form method="post" action="/admin/files/export">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="secondary">Export files</button>
+    </form>
+    <form method="post" action="/admin/files/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="warn" data-confirm="Apply edited planning files to the active workspace?">Apply files</button>
+    </form>
+  </div>
+</section>
+
+<section class="metric-row">
+  <div class="metric"><span>tasks</span><strong>{{ management.tasks.len() }}</strong></div>
+  <div class="metric"><span>directions</span><strong>{{ management.directions.len() }}</strong></div>
+  <div class="metric"><span>default direction</span><strong class="mono">{{ management.default_direction_id }}</strong></div>
+  {% if let Some(queue_head) = overview.runtime.queue_head %}
+  <div class="metric"><span>queue head</span><strong>{{ queue_head.task_title }}</strong></div>
+  {% else %}
+  <div class="metric"><span>queue head</span><strong>none</strong></div>
+  {% endif %}
+</section>
+
+<section class="list-panel">
+  <div class="list-header">
+    <div>
+      <h2>Tasks</h2>
+      <p>Task catalog view. Open a row to edit details; queue order is derived from priority.</p>
     </div>
-    {% if management.tasks.is_empty() %}
-    <p class="empty-state">저장된 작업 없음</p>
-    {% else %}
-    <p class="empty-state filter-empty" data-filter-empty="task-list">검색 결과 없음</p>
-    <div class="task-ticket-list" id="task-list">
-      {% for task in management.tasks %}
-      <details class="task-ticket status-{{ task.status }}" data-filter-text="{{ task.title }} {{ task.id }} {{ task.direction_id }} {{ task.status }}">
-        <summary>
-          <span class="task-ticket-main">
-            <strong class="task-ticket-title">{{ task.title }}</strong>
-            <span class="mono task-ticket-id">{{ task.id }}</span>
-          </span>
-          <span class="task-ticket-meta">
-            <span class="status-pill {{ task.status }}">{{ task.status }}</span>
-            <span class="task-chip mono">{{ task.direction_id }}</span>
-            <span class="task-chip">priority {{ task.base_priority }} / {{ task.dynamic_priority_delta }}</span>
-          </span>
-        </summary>
-        <div class="task-ticket-detail">
-          <form method="post" action="/admin/tasks/upsert" class="stack">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="id" value="{{ task.id }}">
-            <div class="form-grid">
-              <label class="field">
-                <span>제목</span>
-                <input type="text" name="title" value="{{ task.title }}" required>
-              </label>
-              <label class="field">
-                <span>방향</span>
-                <select name="direction_id">
-                  <option value="">default: {{ management.default_direction_id }}</option>
-                  {% for direction in management.directions %}
-                  <option value="{{ direction.id }}" {% if task.direction_id == direction.id %}selected{% endif %}>{{ direction.id }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-              <label class="field">
-                <span>상태</span>
-                <select name="status">
-                  <option value="ready" {% if task.status == "ready" %}selected{% endif %}>ready</option>
-                  <option value="blocked" {% if task.status == "blocked" %}selected{% endif %}>blocked</option>
-                  <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>in_progress</option>
-                  <option value="done" {% if task.status == "done" %}selected{% endif %}>done</option>
-                  <option value="cancelled" {% if task.status == "cancelled" %}selected{% endif %}>cancelled</option>
-                  <option value="awaiting_user" {% if task.status == "awaiting_user" %}selected{% endif %}>awaiting_user</option>
-                  <option value="proposed" {% if task.status == "proposed" %}selected{% endif %}>proposed</option>
-                </select>
-              </label>
-            </div>
+    <label class="field list-filter">
+      <span>Search tasks</span>
+      <input type="search" data-list-filter="task-list" placeholder="title, id, direction, status">
+    </label>
+  </div>
+  {% if management.tasks.is_empty() %}
+  <p class="empty-state">No tasks are stored in the ledger.</p>
+  {% else %}
+  <p class="empty-state filter-empty" data-filter-empty="task-list">No tasks match the current search.</p>
+  <div class="entity-list" id="task-list">
+    {% for task in management.tasks %}
+    <details class="entity-row" data-filter-text="{{ task.title }} {{ task.id }} {{ task.direction_id }} {{ task.status }}">
+      <summary>
+        <span class="entity-main">
+          <strong>{{ task.title }}</strong>
+          <span class="mono">{{ task.id }}</span>
+        </span>
+        <span class="entity-meta">
+          <span class="status-pill {{ task.status }}">{{ task.status }}</span>
+          <span class="mono">{{ task.direction_id }}</span>
+          <span>priority {{ task.base_priority }} / {{ task.dynamic_priority_delta }}</span>
+        </span>
+      </summary>
+      <div class="entity-detail">
+        <form method="post" action="/admin/tasks/upsert" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="id" value="{{ task.id }}">
+          <div class="form-grid">
             <label class="field">
-              <span>설명</span>
-              <textarea name="description" class="short-textarea">{{ task.description }}</textarea>
+              <span>Title</span>
+              <input type="text" name="title" value="{{ task.title }}" required>
             </label>
-            <div class="form-grid">
-              <label class="field">
-                <span>기본 우선순위</span>
-                <input type="text" name="base_priority" value="{{ task.base_priority }}">
-              </label>
-              <label class="field">
-                <span>동적 변동</span>
-                <input type="text" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">
-              </label>
-              <label class="field">
-                <span>우선순위 사유</span>
-                <input type="text" name="priority_reason" value="{{ task.priority_reason }}">
-              </label>
-            </div>
-            <div class="form-grid">
-              <label class="field">
-                <span>선행 작업</span>
-                <textarea name="depends_on_text" class="short-textarea">{{ task.depends_on_text }}</textarea>
-              </label>
-              <label class="field">
-                <span>차단 사유</span>
-                <textarea name="blocked_by_text" class="short-textarea">{{ task.blocked_by_text }}</textarea>
-              </label>
-            </div>
-            <div class="task-form-actions">
-              <button type="submit">작업 저장</button>
-            </div>
-          </form>
-          <form method="post" action="/admin/tasks/delete" class="danger-zone">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="id" value="{{ task.id }}">
-            <div class="task-form-actions">
-              <button type="submit" class="error" data-confirm="Delete this task from the planning ledger?">작업 삭제</button>
-            </div>
-          </form>
-        </div>
-      </details>
-      {% endfor %}
-    </div>
+            <label class="field">
+              <span>Direction</span>
+              <select name="direction_id">
+                <option value="">default: {{ management.default_direction_id }}</option>
+                {% for direction in management.directions %}
+                <option value="{{ direction.id }}" {% if task.direction_id == direction.id %}selected{% endif %}>{{ direction.id }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="field">
+              <span>Status</span>
+              <select name="status">
+                <option value="ready" {% if task.status == "ready" %}selected{% endif %}>ready</option>
+                <option value="blocked" {% if task.status == "blocked" %}selected{% endif %}>blocked</option>
+                <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>in_progress</option>
+                <option value="done" {% if task.status == "done" %}selected{% endif %}>done</option>
+                <option value="cancelled" {% if task.status == "cancelled" %}selected{% endif %}>cancelled</option>
+                <option value="awaiting_user" {% if task.status == "awaiting_user" %}selected{% endif %}>awaiting_user</option>
+                <option value="proposed" {% if task.status == "proposed" %}selected{% endif %}>proposed</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Description</span>
+            <textarea name="description" class="short-textarea">{{ task.description }}</textarea>
+          </label>
+          <div class="form-grid">
+            <label class="field">
+              <span>Base priority</span>
+              <input type="text" name="base_priority" value="{{ task.base_priority }}">
+            </label>
+            <label class="field">
+              <span>Dynamic delta</span>
+              <input type="text" name="dynamic_priority_delta" value="{{ task.dynamic_priority_delta }}">
+            </label>
+            <label class="field">
+              <span>Priority reason</span>
+              <input type="text" name="priority_reason" value="{{ task.priority_reason }}">
+            </label>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>Depends on</span>
+              <textarea name="depends_on_text" class="short-textarea">{{ task.depends_on_text }}</textarea>
+            </label>
+            <label class="field">
+              <span>Blocked by</span>
+              <textarea name="blocked_by_text" class="short-textarea">{{ task.blocked_by_text }}</textarea>
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button type="submit">Save task</button>
+          </div>
+        </form>
+        <form method="post" action="/admin/tasks/delete" class="danger-zone">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="id" value="{{ task.id }}">
+          <button type="submit" class="error" data-confirm="Delete this task from the planning ledger?">Delete task</button>
+        </form>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="grid">
+  <article class="card span-6">
+    <h2>Proposals</h2>
+    {% if overview.runtime.proposed_tasks.is_empty() %}
+    <p>No promotable proposals are currently visible.</p>
+    {% else %}
+    <table>
+      <tbody>
+        {% for task in overview.runtime.proposed_tasks %}
+        <tr>
+          <td data-label="Proposal"><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
+          <td data-label="Priority">{{ task.combined_priority }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
     {% endif %}
-  </section>
+  </article>
 </section>
 {% endblock %}

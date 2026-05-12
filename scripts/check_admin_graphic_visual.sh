@@ -290,31 +290,27 @@ done
 for token in \
   '<body class="">' \
   'href="/admin/tasks" class="active">Tasks</a>' \
-  'aria-label="게임발전국 작업 관리"' \
-  'aria-label="작업 관리 탭"' \
-  'href="/admin/directions"' \
-  '작전 방향' \
-  'class="task-command-deck"' \
-  'class="task-command-grid"' \
-  'class="task-panel task-create-panel"' \
-  'class="task-panel task-proposal-panel"' \
-  'class="task-panel task-board-panel"' \
+  '<summary>Add task</summary>' \
+  'Task catalog view' \
+  'class="toolbar"' \
+  'class="create-panel"' \
+  'class="metric-row"' \
+  'class="list-panel"' \
+  'class="entity-list" id="task-list"' \
+  'Search tasks' \
   'id="task-list"' \
   'data-list-filter="task-list"' \
-  '.task-ticket.status-ready summary' \
-  'rgba(53, 208, 127, 0.82)' \
-  '.task-ticket.status-done' \
-  'rgba(152, 171, 196, 0.09)' \
   '/admin/tasks/upsert' \
   '/admin/tasks/delete' \
   '/admin/files/export' \
   '/admin/files/apply' \
-  '작업 관리'; do
+  'Tasks'; do
   require_contains "${tasks_html}" "${token}"
 done
 
 require_not_contains "${tasks_html}" '<body class="akra-graphic">'
-require_not_contains "${tasks_html}" 'Task catalog view'
+require_not_contains "${tasks_html}" 'aria-label="게임발전국 작업 관리"'
+require_not_contains "${tasks_html}" 'class="akra-task-console"'
 
 for token in \
   '"workspace"' \

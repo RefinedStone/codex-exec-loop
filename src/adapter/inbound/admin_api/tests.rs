@@ -664,7 +664,7 @@ async fn admin_html_page_routes_render_live_templates() {
     for (uri, expected) in [
         ("/admin?notice=hello", "hello"),
         ("/admin/directions", "Directions"),
-        ("/admin/tasks", "게임발전국 작업 관리"),
+        ("/admin/tasks", "Task catalog view"),
         ("/admin/controls", "Controls"),
         ("/admin/akra", "data-admin-graphic"),
         ("/admin/akra/metrics", "AKRA detached metrics"),
@@ -1149,35 +1149,26 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
 }
 
 #[test]
-fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
+fn tasks_page_uses_default_admin_catalog_without_losing_forms() {
     for token in [
-        "class=\"akra-task-console\" aria-label=\"게임발전국 작업 관리\"",
-        "class=\"task-command-deck\"",
-        "class=\"task-tab-strip\" aria-label=\"작업 관리 탭\"",
-        "href=\"/admin/directions\">작전 방향</a>",
-        "href=\"/admin/tasks\" class=\"active\" aria-current=\"page\"",
-        "class=\"task-command-grid\"",
-        "class=\"task-panel task-create-panel\"",
-        "class=\"task-panel task-proposal-panel\"",
-        "class=\"task-panel task-board-panel\"",
-        "class=\"task-ticket-list\" id=\"task-list\"",
-        "class=\"task-ticket status-{{ task.status }}\"",
+        "class=\"toolbar\"",
+        "class=\"create-panel\"",
+        "<summary>Add task</summary>",
+        "class=\"actions\"",
+        "class=\"metric-row\"",
+        "class=\"list-panel\"",
+        "Task catalog view. Open a row to edit details; queue order is derived from priority.",
+        "class=\"entity-list\" id=\"task-list\"",
+        "class=\"entity-row\"",
         "data-list-filter=\"task-list\"",
         "data-filter-empty=\"task-list\"",
         "overview.runtime.proposed_tasks",
         "management.tasks.len()",
         "management.directions.len()",
-        ".task-ticket.status-ready summary",
-        "rgba(53, 208, 127, 0.82)",
-        "rgba(53, 208, 127, 0.22)",
-        "color: #f7fff9",
-        ".task-ticket.status-done",
-        "rgba(152, 171, 196, 0.09)",
-        "color: #d4dde8",
     ] {
         assert!(
             TASKS_TEMPLATE.contains(token),
-            "tasks game tab should expose {token}"
+            "default tasks tab should expose {token}"
         );
     }
 
@@ -1200,7 +1191,7 @@ fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
     ] {
         assert!(
             TASKS_TEMPLATE.contains(token),
-            "tasks game tab should keep admin form contract {token}"
+            "default tasks tab should keep admin form contract {token}"
         );
     }
 
@@ -1216,8 +1207,9 @@ fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
             .count(),
         1
     );
-    assert!(!TASKS_TEMPLATE.contains("Task catalog view"));
-    assert!(ADMIN_PAGES.contains("page_title: \"작업 관리\".to_string()"));
+    assert!(!TASKS_TEMPLATE.contains("akra-task-console"));
+    assert!(!TASKS_TEMPLATE.contains("게임발전국 작업 관리"));
+    assert!(ADMIN_PAGES.contains("page_title: \"Tasks\".to_string()"));
 }
 
 #[test]
@@ -1614,8 +1606,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "id=\"campaign\"",
         "id=\"attempts\"",
         "id=\"intel\"",
-        "aria-label=\"게임발전국 작업 관리\"",
-        "class=\"task-command-grid\"",
+        "Task catalog view",
+        "class=\"entity-list\" id=\"task-list\"",
         "data-list-filter=\"task-list\"",
         "\"campaign\"",
         "\"laneCards\"",
