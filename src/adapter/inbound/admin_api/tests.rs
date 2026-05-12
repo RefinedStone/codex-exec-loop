@@ -88,6 +88,13 @@ async fn json_body(response: axum::response::Response) -> Value {
     serde_json::from_slice(&body).expect("response body should be JSON")
 }
 
+async fn text_body(response: axum::response::Response) -> String {
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body should be readable");
+    String::from_utf8(body.to_vec()).expect("response body should be UTF-8")
+}
+
 async fn bootstrap_admin_json_session(router: &Router) -> (String, String) {
     let response = router
         .clone()
@@ -121,6 +128,43 @@ async fn bootstrap_admin_json_session(router: &Router) -> (String, String) {
     (format!("akra_admin_csrf={csrf_token}"), csrf_token)
 }
 
+async fn bootstrap_admin_html_session(router: &Router) -> (String, String, String) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin")
+                .body(Body::empty())
+                .expect("admin page request should build"),
+        )
+        .await
+        .expect("admin page request should be served");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let set_cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("admin page should set CSRF cookie")
+        .to_str()
+        .expect("set-cookie should be valid text")
+        .to_string();
+    let csrf_token = csrf_token_from_set_cookie(&set_cookie);
+    let body = text_body(response).await;
+    assert!(body.contains(&format!("value=\"{csrf_token}\"")));
+
+    (format!("akra_admin_csrf={csrf_token}"), csrf_token, body)
+}
+
+fn csrf_token_from_set_cookie(set_cookie: &str) -> String {
+    set_cookie
+        .split("akra_admin_csrf=")
+        .nth(1)
+        .and_then(|value| value.split(';').next())
+        .expect("set-cookie should include CSRF value")
+        .to_string()
+}
+
 fn json_request(
     method: Method,
     uri: &str,
@@ -141,6 +185,36 @@ fn json_request(
     builder
         .body(Body::from(body.to_string()))
         .expect("JSON request should build")
+}
+
+fn encoded_form(fields: &[(&str, &str)]) -> String {
+    fields
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                percent_encoding::utf8_percent_encode(key, percent_encoding::NON_ALPHANUMERIC),
+                percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn html_form_request(uri: &str, body: String, cookie: Option<&str>, htmx: bool) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    if htmx {
+        builder = builder.header("HX-Request", "true");
+    }
+    builder
+        .body(Body::from(body))
+        .expect("HTML form request should build")
 }
 
 /*
@@ -574,6 +648,334 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
             "Akra snapshot route should return structured JSON for {uri}"
         );
     }
+}
+
+#[tokio::test]
+async fn admin_html_page_routes_render_live_templates() {
+    let workspace = TempAdminWorkspace::new("html-pages");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token, dashboard_body) = bootstrap_admin_html_session(&router).await;
+
+    assert!(dashboard_body.contains("Planning Admin"));
+    assert!(dashboard_body.contains("Open Full Planning Draft"));
+    assert!(dashboard_body.contains("name=\"csrf_token\""));
+    assert_eq!(csrf_token.len(), 32);
+
+    for (uri, expected) in [
+        ("/admin?notice=hello", "hello"),
+        ("/admin/directions", "Directions"),
+        ("/admin/tasks", "게임발전국 작업 관리"),
+        ("/admin/controls", "Controls"),
+        ("/admin/akra", "data-admin-graphic"),
+        ("/admin/akra/metrics", "AKRA detached metrics"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .expect("HTML page request should build"),
+            )
+            .await
+            .expect("HTML page request should be served");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let body = text_body(response).await;
+        assert!(
+            content_type.starts_with("text/html"),
+            "HTML page should use text/html for {uri}: {content_type}"
+        );
+        assert!(
+            body.contains(expected),
+            "HTML page {uri} should render {expected}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn admin_html_form_routes_redirect_through_shared_facade() {
+    let workspace = TempAdminWorkspace::new("html-forms");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
+
+    let forbidden = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/controls/reset",
+            encoded_form(&[("csrf_token", csrf_token.as_str()), ("target", "queue")]),
+            None,
+            false,
+        ))
+        .await
+        .expect("CSRF failure should be served");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let direction_upsert = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/directions/upsert",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", "html-direction"),
+                ("title", "HTML Direction"),
+                ("summary", "Rendered through HTML form"),
+                ("success_criteria_text", "direction is editable"),
+                ("scope_hints_text", "admin"),
+                ("detail_doc_path", "docs/html-direction.md"),
+                ("state", "active"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("direction upsert should be served");
+    assert_eq!(direction_upsert.status(), StatusCode::SEE_OTHER);
+    assert!(
+        direction_upsert
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|location| location.starts_with("/admin/directions?notice="))
+    );
+
+    let task_upsert = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/tasks/upsert",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", ""),
+                ("direction_id", "html-direction"),
+                ("title", "HTML Task"),
+                ("description", "Created through the browser adapter"),
+                ("status", "ready"),
+                ("base_priority", "60"),
+                ("dynamic_priority_delta", "0"),
+                ("priority_reason", ""),
+                ("depends_on_text", ""),
+                ("blocked_by_text", ""),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("task upsert should be served");
+    assert_eq!(task_upsert.status(), StatusCode::SEE_OTHER);
+    let task_location = task_upsert
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .expect("task create should redirect with generated task id");
+    let task_notice = percent_encoding::percent_decode_str(task_location)
+        .decode_utf8_lossy()
+        .to_string();
+    let task_id = task_notice
+        .split('`')
+        .nth(1)
+        .expect("task create notice should include generated task id")
+        .to_string();
+
+    for (uri, body, location_prefix) in [
+        (
+            "/admin/files/export",
+            encoded_form(&[("csrf_token", csrf_token.as_str())]),
+            "/admin/controls?notice=",
+        ),
+        (
+            "/admin/files/apply",
+            encoded_form(&[("csrf_token", csrf_token.as_str())]),
+            "/admin/controls?notice=",
+        ),
+        (
+            "/admin/tasks/delete",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", task_id.as_str()),
+            ]),
+            "/admin/tasks?notice=",
+        ),
+        (
+            "/admin/directions/delete",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", "html-direction"),
+            ]),
+            "/admin/directions?notice=",
+        ),
+        (
+            "/admin/controls/reset",
+            encoded_form(&[("csrf_token", csrf_token.as_str()), ("target", "queue")]),
+            "/admin/controls?notice=planning%20workspace%20reset",
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(html_form_request(uri, body, Some(&cookie), false))
+            .await
+            .expect("HTML mutation should be served");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER, "{uri}");
+        assert!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|location| location.starts_with(location_prefix)),
+            "{uri} should redirect to {location_prefix}"
+        );
+    }
+
+    let invalid_profiles = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/controls/agent-profiles",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("profiles_json", "{not json"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("invalid agent profile form should be served");
+    assert_eq!(invalid_profiles.status(), StatusCode::BAD_REQUEST);
+
+    let valid_profiles = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/controls/agent-profiles",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                (
+                    "profiles_json",
+                    r#"{"profiles":[{"agent_id":"agent-html","display_name":"HTML Agent","role":"reviewer","persona_prompt":"Check admin pages","avatar_class":"Scribe","capabilities":["admin"],"enabled":true}]}"#,
+                ),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("valid agent profile form should be served");
+    assert_eq!(valid_profiles.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        valid_profiles
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("/admin/controls?notice=parallel%20agent%20profiles%20saved")
+    );
+}
+
+#[tokio::test]
+async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
+    let workspace = TempAdminWorkspace::new("html-drafts");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
+
+    let created = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/drafts",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "full_planning"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("draft create should be served");
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    let editor_location = created
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .expect("draft create should redirect to editor")
+        .to_string();
+    let editor_path = editor_location
+        .split('?')
+        .next()
+        .expect("editor location should include path");
+    assert!(editor_path.starts_with("/admin/drafts/"));
+
+    let loaded = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(editor_location.as_str())
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("editor page request should build"),
+        )
+        .await
+        .expect("editor page request should be served");
+    assert_eq!(loaded.status(), StatusCode::OK);
+    let loaded_body = text_body(loaded).await;
+    assert!(loaded_body.contains("file_result_output"));
+    assert!(loaded_body.contains("action=\"/admin/drafts/"));
+
+    let draft_body = "# Planning\n\n## Result\n\nHTML draft round trip\n";
+    let save_uri = format!("{editor_path}/save");
+    let saved = router
+        .clone()
+        .oneshot(html_form_request(
+            &save_uri,
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "full_planning"),
+                ("file_result_output", draft_body),
+            ]),
+            Some(&cookie),
+            true,
+        ))
+        .await
+        .expect("HTMX draft save should be served");
+    assert_eq!(saved.status(), StatusCode::OK);
+    assert!(text_body(saved).await.contains("draft saved"));
+
+    let validate_uri = format!("{editor_path}/validate");
+    let validated = router
+        .clone()
+        .oneshot(html_form_request(
+            &validate_uri,
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "full_planning"),
+                ("file_result_output", draft_body),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("draft validate should be served");
+    assert_eq!(validated.status(), StatusCode::OK);
+    assert!(text_body(validated).await.contains("draft validated"));
+
+    let promote_uri = format!("{editor_path}/promote");
+    let promoted = router
+        .clone()
+        .oneshot(html_form_request(
+            &promote_uri,
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "full_planning"),
+                ("file_result_output", draft_body),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("draft promote should be served");
+    assert_eq!(promoted.status(), StatusCode::OK);
+    assert!(text_body(promoted).await.contains("file_result_output"));
 }
 
 #[test]
