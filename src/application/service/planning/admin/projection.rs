@@ -4,12 +4,12 @@ use super::{
     PlanningAdminDirectionManagementView, PlanningAdminDirectionSummaryView,
     PlanningAdminDirectionTaskView, PlanningAdminDirectionsSummaryView, PlanningAdminDoctorSummary,
     PlanningAdminManagementView, PlanningAdminQueueHeadView, PlanningAdminQueuePreview,
-    PlanningAdminQueueTaskView, PlanningAdminRuntimeSummary, PlanningAdminTaskManagementView,
-    PlanningAdminValidationIssueView, PlanningAdminValidationView,
+    PlanningAdminQueueTaskView, PlanningAdminRuntimeSummary, PlanningAdminSkippedTaskView,
+    PlanningAdminTaskManagementView, PlanningAdminValidationIssueView, PlanningAdminValidationView,
 };
 use crate::application::service::planning::{
     DirectionsMaintenanceSummary, PlanningApplicationProjection, PlanningApplicationQueueTask,
-    PlanningDoctorReport,
+    PlanningApplicationSkippedTask, PlanningDoctorReport,
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionState, PlanningFileKind, PlanningValidationReport,
@@ -144,6 +144,12 @@ pub(super) fn map_application_projection(
             .take(5)
             .map(map_application_queue_task)
             .collect(),
+        skipped_tasks: projection
+            .skipped_tasks
+            .into_iter()
+            .take(5)
+            .map(map_application_skipped_task)
+            .collect(),
     }
 }
 
@@ -264,6 +270,18 @@ pub(super) fn map_queue_preview(snapshot: &PriorityQueueProjection) -> PlanningA
                 updated_at: task.updated_at,
             })
             .collect(),
+        skipped_tasks: snapshot
+            .skipped_tasks
+            .iter()
+            .take(5)
+            .map(|task| PlanningAdminSkippedTaskView {
+                task_id: task.task_id.clone(),
+                task_title: task.task_title.clone(),
+                direction_id: task.direction_id.clone(),
+                status: task.status.label().to_string(),
+                reason: task.reason.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -287,6 +305,18 @@ fn map_application_queue_task(task: PlanningApplicationQueueTask) -> PlanningAdm
         status: task.status_label,
         combined_priority: task.combined_priority,
         updated_at: task.updated_at,
+    }
+}
+
+fn map_application_skipped_task(
+    task: PlanningApplicationSkippedTask,
+) -> PlanningAdminSkippedTaskView {
+    PlanningAdminSkippedTaskView {
+        task_id: task.task_id,
+        task_title: task.task_title,
+        direction_id: task.direction_id,
+        status: task.status_label,
+        reason: task.reason,
     }
 }
 
@@ -479,6 +509,7 @@ mod tests {
         assert!(preview.queue_head.is_none());
         assert!(preview.visible_tasks.is_empty());
         assert!(preview.proposed_tasks.is_empty());
+        assert_eq!(preview.skipped_tasks[0].reason, "blocked by another task");
     }
 
     #[test]
@@ -500,7 +531,7 @@ mod tests {
                     "Candidate task",
                     TaskStatus::Proposed,
                 )],
-                skipped_tasks: Vec::new(),
+                skipped_tasks: vec![skipped_task("skipped-1", "Skipped", TaskStatus::Blocked)],
             },
         )
         .with_test_signatures(Some(42), Some(7));
@@ -527,6 +558,7 @@ mod tests {
             vec!["task-1", "task-2"]
         );
         assert_eq!(summary.proposed_tasks[0].status, "proposed");
+        assert_eq!(summary.skipped_tasks[0].reason, "blocked by another task");
     }
 
     #[test]
@@ -558,7 +590,15 @@ mod tests {
                         )
                     })
                     .collect(),
-                skipped_tasks: Vec::new(),
+                skipped_tasks: (1..=6)
+                    .map(|rank| {
+                        skipped_task(
+                            &format!("skipped-{rank}"),
+                            &format!("Skipped {rank}"),
+                            TaskStatus::Blocked,
+                        )
+                    })
+                    .collect(),
             },
         );
 
@@ -568,8 +608,10 @@ mod tests {
 
         assert_eq!(summary.visible_tasks.len(), 5);
         assert_eq!(summary.proposed_tasks.len(), 5);
+        assert_eq!(summary.skipped_tasks.len(), 5);
         assert_eq!(summary.visible_tasks[4].task_id, "task-5");
         assert_eq!(summary.proposed_tasks[4].task_id, "proposal-5");
+        assert_eq!(summary.skipped_tasks[4].task_id, "skipped-5");
     }
 
     #[test]

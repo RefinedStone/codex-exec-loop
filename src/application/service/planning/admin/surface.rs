@@ -164,6 +164,15 @@ pub struct PlanningAdminQueueTaskView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PlanningAdminSkippedTaskView {
+    pub task_id: String,
+    pub task_title: String,
+    pub direction_id: String,
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanningAdminQueueHeadView {
     pub task_id: String,
     pub task_title: String,
@@ -181,6 +190,7 @@ pub struct PlanningAdminQueuePreview {
     pub queue_head: Option<PlanningAdminQueueHeadView>,
     pub visible_tasks: Vec<PlanningAdminQueueTaskView>,
     pub proposed_tasks: Vec<PlanningAdminQueueTaskView>,
+    pub skipped_tasks: Vec<PlanningAdminSkippedTaskView>,
 }
 
 /*
@@ -382,6 +392,7 @@ pub struct PlanningAdminRuntimeSummary {
     pub queue_head: Option<PlanningAdminQueueHeadView>,
     pub visible_tasks: Vec<PlanningAdminQueueTaskView>,
     pub proposed_tasks: Vec<PlanningAdminQueueTaskView>,
+    pub skipped_tasks: Vec<PlanningAdminSkippedTaskView>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -70,6 +70,7 @@
 <section class="metric-row">
   <div class="metric"><span>tasks</span><strong>{{ management.tasks.len() }}</strong></div>
   <div class="metric"><span>directions</span><strong>{{ management.directions.len() }}</strong></div>
+  <div class="metric"><span>skipped</span><strong>{{ overview.runtime.skipped_tasks.len() }}</strong></div>
   <div class="metric"><span>default direction</span><strong class="mono">{{ management.default_direction_id }}</strong></div>
   {% if let Some(queue_head) = overview.runtime.queue_head %}
   <div class="metric"><span>queue head</span><strong>{{ queue_head.task_title }}</strong></div>
@@ -194,6 +195,24 @@
         <tr>
           <td data-label="Proposal"><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
           <td data-label="Priority">{{ task.combined_priority }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </article>
+  <article class="card span-6">
+    <h2>Skipped tasks</h2>
+    {% if overview.runtime.skipped_tasks.is_empty() %}
+    <p>No skipped tasks are currently visible.</p>
+    {% else %}
+    <table>
+      <tbody>
+        {% for task in overview.runtime.skipped_tasks %}
+        <tr>
+          <td data-label="Task"><strong>{{ task.task_title }}</strong><br><small class="mono">{{ task.task_id }}</small></td>
+          <td data-label="Status">{{ task.status }}</td>
+          <td data-label="Reason">{{ task.reason }}</td>
         </tr>
         {% endfor %}
       </tbody>
