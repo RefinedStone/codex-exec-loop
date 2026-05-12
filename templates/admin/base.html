@@ -845,10 +845,10 @@
       }
     </script>
   </head>
-  <body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks" %}akra-graphic{% endif %}">
+  <body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" %}akra-graphic{% endif %}">
     <div class="admin-layout">
       <aside class="sidebar">
-        {% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks" %}
+        {% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" %}
         <div class="graphic-brand">
           <span class="graphic-building" aria-hidden="true"></span>
           <div>
