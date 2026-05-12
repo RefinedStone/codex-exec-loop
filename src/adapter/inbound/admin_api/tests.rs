@@ -1376,6 +1376,24 @@ fn akra_graphic_dashboard_event_rows_reset_native_button_chrome() {
 }
 
 #[test]
+fn akra_graphic_dashboard_event_status_uses_readable_counts() {
+    assert!(
+        AKRA_DASHBOARD_TEMPLATE.contains("{{ dashboard.event_feed.status_label }}"),
+        "event feed status should use the server-formatted readable label on initial render"
+    );
+    assert!(
+        AKRA_DASHBOARD_TEMPLATE.contains("formatEventFeedStatus"),
+        "event feed polling should preserve the readable count label"
+    );
+    assert!(
+        !AKRA_DASHBOARD_TEMPLATE.contains(
+            "LIVE · {{ dashboard.event_feed.visible_event_count }}/{{ dashboard.event_feed.total_event_count }}"
+        ),
+        "event feed status should not render the capped feed as an ambiguous fraction"
+    );
+}
+
+#[test]
 fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     for token in [
         "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
