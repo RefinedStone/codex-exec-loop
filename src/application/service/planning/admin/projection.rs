@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use super::{
     PlanningAdminDirectionManagementView, PlanningAdminDirectionSummaryView,
-    PlanningAdminDirectionsSummaryView, PlanningAdminDoctorSummary, PlanningAdminManagementView,
-    PlanningAdminQueueHeadView, PlanningAdminQueuePreview, PlanningAdminQueueTaskView,
-    PlanningAdminRuntimeSummary, PlanningAdminTaskManagementView, PlanningAdminValidationIssueView,
-    PlanningAdminValidationView,
+    PlanningAdminDirectionTaskView, PlanningAdminDirectionsSummaryView, PlanningAdminDoctorSummary,
+    PlanningAdminManagementView, PlanningAdminQueueHeadView, PlanningAdminQueuePreview,
+    PlanningAdminQueueTaskView, PlanningAdminRuntimeSummary, PlanningAdminTaskManagementView,
+    PlanningAdminValidationIssueView, PlanningAdminValidationView,
 };
 use crate::application::service::planning::{
     DirectionsMaintenanceSummary, PlanningApplicationProjection, PlanningApplicationQueueTask,
@@ -30,10 +30,18 @@ pub(super) fn map_management_view(
     // task count는 direction id를 trim한 값으로 합산한다. queue resolution도 공백을 제거한 id로 연결을
     // 판단하므로, admin 화면의 "이 direction에 몇 개 task가 붙었는가"가 runtime 판단과 어긋나지 않는다.
     // 다만 editable row에는 원문 id를 유지해 operator가 실제 문서에 들어 있는 값을 그대로 볼 수 있게 한다.
-    let mut task_counts = BTreeMap::<&str, usize>::new();
+    let mut tasks_by_direction = BTreeMap::<String, Vec<PlanningAdminDirectionTaskView>>::new();
     for task in &task_authority.tasks {
-        *task_counts.entry(task.direction_id.trim()).or_default() += 1;
+        tasks_by_direction
+            .entry(task.direction_id.trim().to_string())
+            .or_default()
+            .push(map_direction_task_view(task));
     }
+    let task_views = task_authority
+        .tasks
+        .iter()
+        .map(map_task_management_view)
+        .collect::<Vec<_>>();
 
     PlanningAdminManagementView {
         default_direction_id: default_direction_id.to_string(),
@@ -44,6 +52,10 @@ pub(super) fn map_management_view(
             .directions
             .iter()
             .map(|direction| PlanningAdminDirectionManagementView {
+                tasks: tasks_by_direction
+                    .get(direction.id.trim())
+                    .cloned()
+                    .unwrap_or_default(),
                 id: direction.id.clone(),
                 title: direction.title.clone(),
                 summary: direction.summary.clone(),
@@ -51,31 +63,46 @@ pub(super) fn map_management_view(
                 scope_hints_text: direction.scope_hints.join("\n"),
                 detail_doc_path: direction.detail_doc_path.clone(),
                 state: direction_state_label(direction.state).to_string(),
-                task_count: task_counts
+                task_count: tasks_by_direction
                     .get(direction.id.trim())
-                    .copied()
+                    .map(Vec::len)
                     .unwrap_or_default(),
             })
             .collect(),
         // task dependency/blocker 목록도 같은 newline 표현을 쓴다. 순서가 유지되는 text block으로 내보내야
         // operator가 dependency를 재정렬하거나 삭제한 뒤 submit했을 때 mutation parser가 같은 순서를 복원한다.
-        tasks: task_authority
-            .tasks
-            .iter()
-            .map(|task| PlanningAdminTaskManagementView {
-                id: task.id.clone(),
-                direction_id: task.direction_id.clone(),
-                title: task.title.clone(),
-                description: task.description.clone(),
-                status: task.status.label().to_string(),
-                base_priority: task.base_priority,
-                dynamic_priority_delta: task.dynamic_priority_delta,
-                priority_reason: task.priority_reason.clone(),
-                depends_on_text: task.depends_on.join("\n"),
-                blocked_by_text: task.blocked_by.join("\n"),
-                updated_at: task.updated_at.clone(),
-            })
-            .collect(),
+        tasks: task_views,
+    }
+}
+
+fn map_direction_task_view(
+    task: &crate::domain::planning::TaskDefinition,
+) -> PlanningAdminDirectionTaskView {
+    PlanningAdminDirectionTaskView {
+        id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.label().to_string(),
+        base_priority: task.base_priority,
+        dynamic_priority_delta: task.dynamic_priority_delta,
+        updated_at: task.updated_at.clone(),
+    }
+}
+
+fn map_task_management_view(
+    task: &crate::domain::planning::TaskDefinition,
+) -> PlanningAdminTaskManagementView {
+    PlanningAdminTaskManagementView {
+        id: task.id.clone(),
+        direction_id: task.direction_id.clone(),
+        title: task.title.clone(),
+        description: task.description.clone(),
+        status: task.status.label().to_string(),
+        base_priority: task.base_priority,
+        dynamic_priority_delta: task.dynamic_priority_delta,
+        priority_reason: task.priority_reason.clone(),
+        depends_on_text: task.depends_on.join("\n"),
+        blocked_by_text: task.blocked_by.join("\n"),
+        updated_at: task.updated_at.clone(),
     }
 }
 
@@ -307,12 +334,15 @@ mod tests {
         };
         let task_authority = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task(
-                "task-1",
-                " dir-active ",
-                vec!["task-a", "task-b"],
-                vec!["task-c"],
-            )],
+            tasks: vec![
+                task(
+                    "task-1",
+                    " dir-active ",
+                    vec!["task-a", "task-b"],
+                    vec!["task-c"],
+                ),
+                task("task-2", "dir-paused", Vec::new(), Vec::new()),
+            ],
         };
 
         let view = map_management_view(&directions, &task_authority, "dir-active");
@@ -329,9 +359,25 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("dir-active", "active", 1),
-                ("dir-paused", "paused", 0),
+                ("dir-paused", "paused", 1),
                 ("dir-done", "done", 0)
             ]
+        );
+        assert_eq!(
+            view.directions[0]
+                .tasks
+                .iter()
+                .map(|task| (task.id.as_str(), task.status.as_str(), task.base_priority))
+                .collect::<Vec<_>>(),
+            vec![("task-1", "ready", 10)]
+        );
+        assert_eq!(
+            view.directions[1]
+                .tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-2"]
         );
         assert_eq!(view.directions[0].success_criteria_text, "done\nverified");
         assert_eq!(view.directions[0].scope_hints_text, "scope-a\nscope-b");

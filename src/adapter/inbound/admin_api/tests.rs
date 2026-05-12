@@ -1221,6 +1221,28 @@ fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
 }
 
 #[test]
+fn directions_page_lists_tasks_for_each_direction_row() {
+    for token in [
+        "class=\"direction-task-list\" aria-label=\"Tasks for {{ direction.title }}\"",
+        "class=\"direction-task-rows\"",
+        "{% for task in direction.tasks %}",
+        "class=\"direction-task-row status-{{ task.status }}\"",
+        "linked task count: {{ direction.task_count }}",
+        "No tasks reference this direction.",
+        "{{ task.title }}",
+        "{{ task.id }}",
+        "{{ task.base_priority }}",
+        "{{ task.dynamic_priority_delta }}",
+        "{{ task.updated_at }}",
+    ] {
+        assert!(
+            DIRECTIONS_TEMPLATE.contains(token),
+            "directions page should expose direction-scoped task list token {token}"
+        );
+    }
+}
+
+#[test]
 fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     for copy in [
         "게임발전국",
