@@ -21,6 +21,9 @@ const TASK_TOOL_CONTRACT_JSON: &str = concat!(
     r#"{"tool":"akra planning-tool","version":1,"#,
     r#""commands":["akra planning-tool contract","akra planning-tool run . < request.json"],"#,
     r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","provenance":"application-controlled","fields":"flat"},"#,
+    r#""examples":{"list_tasks":{"version":1,"op":"list_tasks","status":["ready","blocked"],"limit":20},"#,
+    r#""create_task":{"version":1,"op":"create_task","apply":true,"title":"Review queue handoff","status":"ready","depends_on":[],"blocked_by":[]},"#,
+    r#""update_task":{"version":1,"op":"update_task","apply":true,"task_id":"task-123","status":"blocked","priority_reason":"waiting for operator"}},"#,
     r#""rules":["Use before final planning_task_commands.","#,
     r#""Do not edit files, SQL, or JSON authority.","#,
     r#""Run against `.`; in completion prompts do not use payload.worktree_path.","#,
@@ -523,8 +526,49 @@ mod tests {
         assert!(!contract.contains("optional provenance"));
         assert!(!contract.contains("source_turn_id/thread_id"));
         assert!(contract.contains("existing descriptions are preserved"));
-        assert!(contract.len() < 1550);
+        assert!(contract.contains(r#""status":["ready","blocked"]"#));
+        assert!(!contract.contains("statuses"));
+        assert!(contract.len() < 2100);
     }
+
+    #[test]
+    fn contract_examples_parse_as_tool_requests() {
+        // contract에 넣은 예제가 schema drift를 만들면 worker가 그대로 따라 하다 실패한다.
+        let contract =
+            serde_json::from_str::<serde_json::Value>(planning_task_tool_contract_json())
+                .expect("contract should be valid json");
+        let examples = contract
+            .get("examples")
+            .and_then(|value| value.as_object())
+            .expect("contract should include request examples");
+
+        let list_example = examples
+            .get("list_tasks")
+            .expect("list_tasks example should exist");
+        let create_example = examples
+            .get("create_task")
+            .expect("create_task example should exist");
+        let update_example = examples
+            .get("update_task")
+            .expect("update_task example should exist");
+
+        assert!(matches!(
+            serde_json::from_value::<PlanningTaskToolRequest>(list_example.clone())
+                .expect("list_tasks example should parse"),
+            PlanningTaskToolRequest::ListTasks(_)
+        ));
+        assert!(matches!(
+            serde_json::from_value::<PlanningTaskToolRequest>(create_example.clone())
+                .expect("create_task example should parse"),
+            PlanningTaskToolRequest::CreateTask(_)
+        ));
+        assert!(matches!(
+            serde_json::from_value::<PlanningTaskToolRequest>(update_example.clone())
+                .expect("update_task example should parse"),
+            PlanningTaskToolRequest::UpdateTask(_)
+        ));
+    }
+
     #[test]
     fn create_task_request_is_flat_for_worker_use() {
         // flat JSON은 model-facing ergonomics의 일부다. nested task object를 요구하기 시작하면
