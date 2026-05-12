@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec-loop-native"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "anyhow",
  "askama",
