@@ -181,7 +181,10 @@ for token in \
   '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
   'akraHashTabRoutes' \
+  'directions: "/admin/directions"' \
   'tasks: "/admin/tasks"' \
+  'href="/admin/directions"' \
+  '작전 방향' \
   'hashchange' \
   'MISSION FLOW' \
   'stage-refresh-btn' \
@@ -288,6 +291,8 @@ for token in \
   '<body class="akra-graphic">' \
   'aria-label="게임발전국 작업 관리"' \
   'aria-label="작업 관리 탭"' \
+  'href="/admin/directions"' \
+  '작전 방향' \
   'class="task-command-deck"' \
   'class="task-command-grid"' \
   'class="task-panel task-create-panel"' \

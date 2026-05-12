@@ -1099,8 +1099,10 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     ));
     assert!(BASE_TEMPLATE.contains("akraHashTabRoutes"));
     assert!(BASE_TEMPLATE.contains("window.location.pathname !== \"/admin/akra\""));
+    assert!(BASE_TEMPLATE.contains("directions: \"/admin/directions\""));
     assert!(BASE_TEMPLATE.contains("tasks: \"/admin/tasks\""));
     assert!(BASE_TEMPLATE.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)"));
+    assert!(BASE_TEMPLATE.contains(r#"href="/admin/directions" class="{% if current_nav == "directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
     assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
@@ -1129,6 +1131,7 @@ fn tasks_page_uses_game_bureau_tab_without_losing_admin_forms() {
         "class=\"akra-task-console\" aria-label=\"게임발전국 작업 관리\"",
         "class=\"task-command-deck\"",
         "class=\"task-tab-strip\" aria-label=\"작업 관리 탭\"",
+        "href=\"/admin/directions\">작전 방향</a>",
         "href=\"/admin/tasks\" class=\"active\" aria-current=\"page\"",
         "class=\"task-command-grid\"",
         "class=\"task-panel task-create-panel\"",
