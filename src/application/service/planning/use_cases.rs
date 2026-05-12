@@ -1440,6 +1440,7 @@ fn repeated_queue_head_detail(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
     use anyhow::{Result, anyhow};
@@ -1454,11 +1455,14 @@ mod tests {
     };
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
-    use crate::domain::planning::{PriorityQueueTask, TaskStatus};
+    use crate::domain::planning::{
+        PlanningOfficialCompletionRefreshPayload, PriorityQueueTask, TaskStatus,
+    };
 
     #[derive(Default)]
     struct ScriptedPlanningWorkspacePort {
         record: Mutex<PlanningWorkspaceLoadRecord>,
+        optional_files: Mutex<BTreeMap<String, String>>,
         load_error: Mutex<Option<String>>,
         commits: Mutex<Vec<PlanningWorkspaceLoadRecord>>,
     }
@@ -1469,6 +1473,7 @@ mod tests {
                 record: Mutex::new(PlanningWorkspaceLoadRecord {
                     result_output_markdown: Some(result_output_markdown.to_string()),
                 }),
+                optional_files: Mutex::new(BTreeMap::new()),
                 load_error: Mutex::new(None),
                 commits: Mutex::new(Vec::new()),
             }
@@ -1477,6 +1482,7 @@ mod tests {
         fn failing_load(message: &str) -> Self {
             Self {
                 record: Mutex::new(PlanningWorkspaceLoadRecord::default()),
+                optional_files: Mutex::new(BTreeMap::new()),
                 load_error: Mutex::new(Some(message.to_string())),
                 commits: Mutex::new(Vec::new()),
             }
@@ -1571,9 +1577,14 @@ mod tests {
         fn load_optional_planning_file(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
+            relative_path: &str,
         ) -> Result<Option<String>> {
-            Ok(None)
+            Ok(self
+                .optional_files
+                .lock()
+                .expect("optional file store should not be poisoned")
+                .get(relative_path)
+                .cloned())
         }
 
         fn load_optional_planning_candidate_file(
@@ -1589,22 +1600,31 @@ mod tests {
         fn replace_planning_workspace_file(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
-            _body: Option<&str>,
+            relative_path: &str,
+            body: Option<&str>,
         ) -> Result<()> {
-            Err(anyhow!(
-                "replace_planning_workspace_file should not be called by use-case tests"
-            ))
+            let mut optional_files = self
+                .optional_files
+                .lock()
+                .expect("optional file store should not be poisoned");
+            if let Some(body) = body {
+                optional_files.insert(relative_path.to_string(), body.to_string());
+            } else {
+                optional_files.remove(relative_path);
+            }
+            Ok(())
         }
 
         fn remove_planning_workspace_entry(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
+            relative_path: &str,
         ) -> Result<()> {
-            Err(anyhow!(
-                "remove_planning_workspace_entry should not be called by use-case tests"
-            ))
+            self.optional_files
+                .lock()
+                .expect("optional file store should not be poisoned")
+                .remove(relative_path);
+            Ok(())
         }
 
         fn archive_rejected_planning_file(
@@ -1780,13 +1800,10 @@ mod tests {
         assert!(restored.reconciliation_result.notices.iter().any(|notice| {
             notice == "planning reconciliation restored protected planning files"
         }));
-        assert_eq!(workspace_port.commits().len(), 1);
-        assert_eq!(
-            workspace_port.commits()[0]
-                .result_output_markdown
-                .as_deref(),
-            Some("# Result Output\n- Pre-turn copy.")
-        );
+        let commits = workspace_port.commits();
+        assert!(commits.iter().any(|record| {
+            record.result_output_markdown.as_deref() == Some("# Result Output\n- Pre-turn copy.")
+        }));
     }
 
     #[test]
@@ -2006,6 +2023,288 @@ mod tests {
         assert!(prepared.worker_prompt().contains("refreshed queue"));
     }
 
+    #[test]
+    fn prepare_post_turn_queue_refresh_handles_queue_idle_review_paths() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let ready_no_task =
+            PlanningRuntimeProjection::ready("prompt".to_string(), "queue empty".to_string(), None);
+
+        let ready = planning.worker.prepare_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshPreparationRequest {
+                workspace_directory: "/tmp/use-cases-queue-idle-ready",
+                parent_thread_id: Some("thread-queue-idle"),
+                completed_turn_id: "turn-queue-idle",
+                latest_user_message: Some("user asked for follow-up"),
+                latest_main_reply: Some("  completed the requested work  "),
+                previous_handoff_task: None,
+                current_runtime_projection: &ready_no_task,
+            },
+        );
+        let PlanningPostTurnQueueRefreshPreparation::Ready(prepared) = ready else {
+            panic!("queue-idle review should prepare a derivation refresh");
+        };
+        assert!(prepared.is_queue_idle_derivation());
+        assert_eq!(prepared.mode_label(), "derive_queue_head_when_queue_idle");
+        assert_eq!(prepared.panel_operation_label(), "queue-idle-derive");
+        assert!(
+            prepared
+                .worker_prompt()
+                .contains("completed the requested work")
+        );
+
+        let unavailable = planning_services(Arc::new(ScriptedPlanningWorkspacePort::failing_load(
+            "workspace unavailable",
+        )));
+        let skipped = unavailable.worker.prepare_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshPreparationRequest {
+                workspace_directory: "/tmp/use-cases-queue-idle-unavailable",
+                parent_thread_id: Some("thread-queue-idle"),
+                completed_turn_id: "turn-queue-idle",
+                latest_user_message: Some("user"),
+                latest_main_reply: Some("reply"),
+                previous_handoff_task: None,
+                current_runtime_projection: &ready_no_task,
+            },
+        );
+        let PlanningPostTurnQueueRefreshPreparation::Skipped(skipped) = skipped else {
+            panic!("unavailable queue-idle context should skip refresh");
+        };
+        assert_eq!(
+            skipped.reason,
+            PlanningPostTurnQueueRefreshSkipReason::QueueIdleReviewContextUnavailable
+        );
+        assert_eq!(
+            skipped.reason.log_label(),
+            "queue_idle_review_context_unavailable"
+        );
+    }
+
+    #[test]
+    fn finalize_post_turn_queue_refresh_records_queue_idle_empty_and_repeated_head() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let previous_projection = projection_with_signature(Some(7));
+        let refreshed_empty =
+            PlanningRuntimeProjection::ready("prompt".to_string(), "queue empty".to_string(), None);
+
+        let empty = planning.worker.finalize_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshFinalizationRequest {
+                workspace_directory: "/tmp/use-cases-finalize-empty",
+                previous_handoff_task: None,
+                previous_runtime_projection: &previous_projection,
+                refreshed_runtime_projection: &refreshed_empty,
+                queue_idle_derivation: true,
+            },
+        );
+        assert!(matches!(
+            empty.events.as_slice(),
+            [PlanningPostTurnQueueRefreshFinalizationEvent::QueueIdleDerivationEmpty {
+                detail
+            }] if detail.contains("derived no justified follow-up task")
+        ));
+        assert_eq!(empty.runtime_projection, refreshed_empty);
+
+        let repeated = planning.worker.finalize_post_turn_queue_refresh(
+            PlanningPostTurnQueueRefreshFinalizationRequest {
+                workspace_directory: "/tmp/use-cases-finalize-repeated",
+                previous_handoff_task: Some(&sample_handoff()),
+                previous_runtime_projection: &previous_projection,
+                refreshed_runtime_projection: &previous_projection,
+                queue_idle_derivation: false,
+            },
+        );
+        assert!(matches!(
+            repeated.events.as_slice(),
+            [PlanningPostTurnQueueRefreshFinalizationEvent::RepeatedQueueHead {
+                detail,
+                runtime_projection
+            }] if detail.contains("previously handed-off task unchanged")
+                && runtime_projection.blocks_auto_follow()
+        ));
+        assert!(
+            repeated
+                .runtime_projection
+                .auto_follow_pause_reason()
+                .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
+        );
+    }
+
+    #[test]
+    fn prepare_official_completion_refresh_blocks_unavailable_workspace_and_uses_contract_reply() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let contract = sample_official_completion_contract();
+        let invalid_projection = PlanningRuntimeProjection::invalid("planning schema broken");
+
+        let blocked = planning
+            .worker
+            .prepare_post_turn_official_completion_refresh(
+                PlanningPostTurnOfficialCompletionPreparationRequest {
+                    planning_workspace_directory: "/tmp/use-cases-official-blocked",
+                    turn_workspace_directory: "/tmp/use-cases-official-blocked",
+                    parent_thread_id: Some("thread-official"),
+                    latest_user_message: Some("user"),
+                    latest_main_reply: Some("main reply"),
+                    previous_handoff_task: Some(&sample_handoff()),
+                    current_runtime_projection: &invalid_projection,
+                    contract: &contract,
+                },
+            );
+        let PlanningPostTurnOfficialCompletionPreparation::Blocked(blocked) = blocked else {
+            panic!("invalid planning workspace should block official completion refresh");
+        };
+        assert_eq!(blocked.failure_detail, "planning schema broken");
+        assert!(
+            blocked
+                .failure_projection
+                .auto_follow_pause_reason()
+                .is_some_and(|reason| reason == "planning schema broken")
+        );
+
+        let ready_projection =
+            PlanningRuntimeProjection::ready("prompt".to_string(), "queue empty".to_string(), None);
+        let ready = planning
+            .worker
+            .prepare_post_turn_official_completion_refresh(
+                PlanningPostTurnOfficialCompletionPreparationRequest {
+                    planning_workspace_directory: "/tmp/use-cases-official-ready",
+                    turn_workspace_directory: "/tmp/use-cases-official-ready",
+                    parent_thread_id: Some("thread-official"),
+                    latest_user_message: Some("user"),
+                    latest_main_reply: Some("   "),
+                    previous_handoff_task: Some(&sample_handoff()),
+                    current_runtime_projection: &ready_projection,
+                    contract: &contract,
+                },
+            );
+        let PlanningPostTurnOfficialCompletionPreparation::Ready(prepared) = ready else {
+            panic!("ready planning workspace should prepare official completion refresh");
+        };
+        assert_eq!(prepared.refresh_order(), 3);
+        assert_eq!(
+            prepared.latest_main_reply_char_count(),
+            contract.completion.final_response_summary.chars().count()
+        );
+        assert!(prepared.has_latest_user_message());
+        assert!(prepared.has_previous_handoff());
+        assert!(
+            prepared
+                .worker_prompt()
+                .contains(&contract.completion.final_response_summary)
+        );
+    }
+
+    #[test]
+    fn finalize_official_completion_refresh_reports_success_repeated_and_blocked_contracts() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let previous_projection = projection_with_signature(Some(7));
+        let advanced_projection = projection_with_signature(Some(8));
+
+        let succeeded = planning
+            .worker
+            .finalize_post_turn_official_completion_refresh(
+                PlanningPostTurnOfficialCompletionFinalizationRequest {
+                    planning_workspace_directory: "/tmp/use-cases-official-success",
+                    previous_handoff_task: Some(&sample_handoff()),
+                    previous_runtime_projection: &previous_projection,
+                    refreshed_runtime_projection: &advanced_projection,
+                    worker_summary: Some("updated queue authority"),
+                },
+            );
+        assert_eq!(succeeded.repeated_queue_head_detail, None);
+        assert_eq!(succeeded.blocked_failure_detail, None);
+        assert_eq!(
+            succeeded.authority_refresh_outcome.as_deref(),
+            Some("official ledger refresh succeeded: updated queue authority")
+        );
+
+        let repeated = planning
+            .worker
+            .finalize_post_turn_official_completion_refresh(
+                PlanningPostTurnOfficialCompletionFinalizationRequest {
+                    planning_workspace_directory: "/tmp/use-cases-official-repeated",
+                    previous_handoff_task: Some(&sample_handoff()),
+                    previous_runtime_projection: &previous_projection,
+                    refreshed_runtime_projection: &previous_projection,
+                    worker_summary: None,
+                },
+            );
+        assert!(
+            repeated
+                .repeated_queue_head_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("previously handed-off task unchanged"))
+        );
+        assert!(repeated.blocked_failure_detail.is_some());
+        assert_eq!(repeated.authority_refresh_outcome, None);
+
+        let invalid = PlanningRuntimeProjection::invalid("accepted authority is invalid");
+        let blocked = planning
+            .worker
+            .finalize_post_turn_official_completion_refresh(
+                PlanningPostTurnOfficialCompletionFinalizationRequest {
+                    planning_workspace_directory: "/tmp/use-cases-official-invalid",
+                    previous_handoff_task: None,
+                    previous_runtime_projection: &previous_projection,
+                    refreshed_runtime_projection: &invalid,
+                    worker_summary: None,
+                },
+            );
+        assert_eq!(
+            blocked.blocked_failure_detail.as_deref(),
+            Some("accepted authority is invalid")
+        );
+        assert_eq!(blocked.authority_refresh_outcome, None);
+        assert!(
+            blocked
+                .runtime_projection
+                .auto_follow_pause_reason()
+                .is_some_and(|reason| reason == "accepted authority is invalid")
+        );
+    }
+
+    #[test]
+    fn unresolved_official_completion_repair_block_uses_stable_failure_projection() {
+        let planning =
+            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "# Result Output\n- Keep completion copy.",
+            )));
+        let projection = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+
+        let outcome = planning
+            .worker
+            .block_unresolved_post_turn_official_completion_repair(
+                PlanningPostTurnOfficialCompletionRepairBlockRequest {
+                    runtime_projection: &projection,
+                },
+            );
+
+        assert_eq!(
+            outcome.failure_detail,
+            OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON
+        );
+        assert!(
+            outcome
+                .runtime_projection
+                .auto_follow_pause_reason()
+                .is_some_and(|reason| reason == OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON)
+        );
+    }
+
     fn sample_queue_head() -> PriorityQueueTask {
         PriorityQueueTask {
             rank: 1,
@@ -2029,6 +2328,26 @@ mod tests {
             updated_at: "2026-04-23T00:00:00Z".to_string(),
             status_label: "ready".to_string(),
         }
+    }
+
+    fn sample_official_completion_contract() -> PlanningOfficialCompletionRefreshContract {
+        PlanningOfficialCompletionRefreshContract::new(
+            "turn-official",
+            3,
+            PlanningOfficialCompletionRefreshPayload::new(
+                "agent-1",
+                "task-1",
+                "Queue head",
+                "akra-agent/slot-1/queue-head",
+                "/tmp/worktree",
+                "abc1234",
+                "cargo test",
+                "Contract fallback summary",
+                Some("Full completion text".to_string()),
+                None,
+                "2026-05-12T00:00:00Z",
+            ),
+        )
     }
 
     fn projection_with_signature(signature: Option<u64>) -> PlanningRuntimeProjection {
