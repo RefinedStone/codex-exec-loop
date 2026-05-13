@@ -390,7 +390,7 @@ fn delete_cleaned_slot_branch(repo_root: &str, branch_name: &str) -> bool {
         }
         let _failure_summary = delete_branch.failure_summary();
         if attempt < 2 {
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(100));
         }
     }
     false

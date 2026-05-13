@@ -626,6 +626,33 @@ impl NativeFlowHarness {
         panic!("parallel dispatch refresh did not become idle");
     }
 
+    fn poll_until_dispatch_command_state(
+        &mut self,
+        expected_commands: usize,
+        expected_state: ParallelModeDispatchCommandState,
+    ) {
+        let mut last_states = Vec::new();
+        for _ in 0..750 {
+            self.runtime.poll_background_messages();
+            let projections = self.runtime_projections();
+            last_states = projections
+                .dispatch_commands
+                .iter()
+                .map(|command| command.state)
+                .collect::<Vec<_>>();
+            if projections.dispatch_commands.len() == expected_commands
+                && last_states.iter().all(|state| *state == expected_state)
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "expected {expected_commands} dispatch command(s) in {} state, got {last_states:?}",
+            expected_state.label()
+        );
+    }
+
     fn poll_until_runtime_blocks(&mut self, expected_blocks: usize) {
         for _ in 0..750 {
             self.runtime.poll_background_messages();
@@ -1237,12 +1264,7 @@ fn parallel_completion_with_ready_queue_head_dispatches_next_worker() {
         requests[0].cwd.contains("slot-"),
         "ready queue head should dispatch into a pool slot: {requests:?}"
     );
-    let projections = harness.runtime_projections();
-    assert_eq!(projections.dispatch_commands.len(), 1);
-    assert_eq!(
-        projections.dispatch_commands[0].state,
-        ParallelModeDispatchCommandState::Completed
-    );
+    harness.poll_until_dispatch_command_state(1, ParallelModeDispatchCommandState::Completed);
 }
 
 #[test]

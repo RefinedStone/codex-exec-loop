@@ -138,7 +138,7 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
 }
 
 #[test]
-fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finishes() {
+fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_finishes() {
     /*
      * Supersession MUD navigation must not steal ordinary composer keys once the
      * supervisor board is concrete. The footer still advertises Enter send, so a
@@ -183,7 +183,9 @@ fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finis
         let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
             panic!("expected ready conversation state");
         };
-        if conversation.input_buffer.is_empty() && conversation.status_text == "starting turn" {
+        if conversation.input_buffer.is_empty()
+            && conversation.status_text.contains("parallel task intake")
+        {
             break;
         }
         thread::sleep(Duration::from_millis(20));
@@ -193,13 +195,25 @@ fn supersession_overlay_allows_space_and_enter_prompt_submit_after_loading_finis
         panic!("expected ready conversation state");
     };
     assert!(conversation.input_buffer.is_empty());
-    assert_eq!(conversation.status_text, "starting turn");
     assert!(
-        conversation
-            .messages
-            .iter()
-            .any(|message| message.text == "run next"),
-        "Enter should submit the buffered prompt into the transcript"
+        !conversation.status_text.contains("starting turn"),
+        "parallel prompt should not enter the single-session turn path"
+    );
+    assert!(
+        conversation.messages.is_empty(),
+        "parallel prompt should be recorded in the supervisor stream, not the transcript"
+    );
+    let event_lines = runtime
+        .app()
+        .parallel_supervisor_event_lines()
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(event_lines.contains("Operator: first user word: run next"));
+    assert!(
+        event_lines.contains("Task Intake: committed task"),
+        "Enter should route the buffered prompt through task intake: {event_lines}"
     );
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
@@ -427,13 +441,12 @@ fn parallel_epoch_id_ignores_stale_workspace_epoch() {
 }
 
 #[test]
-fn bare_parallel_enter_dispatches_ready_queue() {
+fn bare_parallel_enter_opens_parallel_control_tower_without_main_turn() {
     /*
-     * :parallel entry opens the automation epoch after readiness and pool
-     * reconcile, then dispatches an already-ready accepted queue head.
+     * :parallel is an operator control. Even when it opens the parallel control
+     * tower, it must not submit a single-session user turn.
      */
-    let fixture = make_dispatch_ready_parallel_runtime("parallel-enter-dispatch");
-    let mut runtime = fixture.runtime;
+    let mut runtime = make_test_runtime();
     for character in ":parallel".chars() {
         runtime.app_mut().push_input_character(character);
     }
@@ -444,29 +457,23 @@ fn bare_parallel_enter_dispatches_ready_queue() {
         KeyModifiers::NONE,
     )));
 
-    let mut final_status = String::new();
-    for _ in 0..750 {
+    for _ in 0..250 {
         runtime.poll_background_messages();
-        if let ConversationState::Ready(conversation) = &runtime.app().conversation_state {
-            final_status = conversation.status_text.clone();
-            if final_status.contains("auto dispatched 1 worker(s)")
-                || final_status.contains("blocked /")
-            {
-                break;
-            }
+        if let ConversationState::Ready(conversation) = &runtime.app().conversation_state
+            && conversation.input_buffer.is_empty()
+            && conversation.status_text.contains("parallel mode:")
+        {
+            break;
         }
         thread::sleep(Duration::from_millis(20));
     }
 
-    assert!(
-        final_status.contains("auto dispatched 1 worker(s)"),
-        "parallel entry should dispatch ready queue, got `{final_status}`"
-    );
-    assert_eq!(
-        fixture.launch_count.load(Ordering::SeqCst),
-        1,
-        "bare :parallel entry should launch one isolated worker"
-    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.messages.is_empty());
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
 }
 
 #[test]

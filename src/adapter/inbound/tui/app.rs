@@ -94,6 +94,8 @@ mod parallel_peek;
 mod parallel_peek_overlay_ui;
 #[path = "app/parallel_mode/presentation_bridge.rs"]
 mod parallel_presentation_bridge;
+#[path = "app/parallel_supervisor_events.rs"]
+mod parallel_supervisor_events;
 #[path = "app/planning/mod.rs"]
 mod planning;
 #[path = "app/planning_draft_editor_ui.rs"]
@@ -192,6 +194,7 @@ use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
 };
 use parallel_peek_overlay_ui::{ParallelPeekOverlayStep, ParallelPeekOverlayUiState};
+use parallel_supervisor_events::ParallelSupervisorEventLog;
 use planning::{PlanningWorkerPanelState, PlanningWorkerStatus, PlanningWorkerVisibility};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
@@ -291,6 +294,7 @@ struct NativeTuiApp {
     session_state: SessionState,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
+    parallel_supervisor_event_log: ParallelSupervisorEventLog,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,

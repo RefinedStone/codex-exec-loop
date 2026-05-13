@@ -16,7 +16,7 @@ mod inline_layout;
 
 #[cfg(test)]
 use super::shell_presentation::build_planning_draft_editor_overlay_view;
-use inline_inspection::draw_inline_shell_inspection;
+use inline_inspection::{draw_inline_parallel_mode_inspection, draw_inline_shell_inspection};
 use inline_layout::centered_rect;
 use inline_layout::{
     build_inline_terminal_flow_layout, inline_body_render_area, render_inline_body,
@@ -66,6 +66,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     // inline inspection은 base shell 뒤에 그려 overlay가 고정된 prompt/status tail은 두고 상단 body만 대체하게 한다.
     if app.shell_overlay != ShellOverlay::Hidden {
         draw_inline_shell_inspection(frame, app, layout[0]);
+    } else if app.parallel_mode_enabled() {
+        draw_inline_parallel_mode_inspection(frame, layout[0], app);
     }
     // exit confirmation은 모든 shell/overlay state 위의 modal이므로 마지막 draw operation이어야 한다.
     if app.is_exit_confirmation_visible() {
@@ -104,6 +106,14 @@ fn draw_inline_conversation_shell(
     // hidden-overlay path는 일반 conversation shell이다.
     // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
+        if app.parallel_mode_enabled() {
+            let tail_area = inline_body_render_area(layout[1], &tail_view.lines);
+            render_inline_body(frame, tail_area, tail_view.lines, false);
+            if !app.parallel_mode_prompt_input_locked() {
+                set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
+            }
+            return;
+        }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
             render_inline_body(frame, frame_area, tail_view.lines, false);
