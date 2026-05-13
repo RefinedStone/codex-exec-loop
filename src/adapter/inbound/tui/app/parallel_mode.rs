@@ -269,7 +269,7 @@ impl NativeTuiApp {
         );
     }
 
-    fn inspect_parallel_mode_supervisor(
+    pub(super) fn inspect_parallel_mode_supervisor(
         &mut self,
         reconcile_pool: bool,
         show_status: bool,

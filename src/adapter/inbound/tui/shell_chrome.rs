@@ -15,6 +15,7 @@ pub enum ShellOverlay {
     ModelSelection,
     ViewSelection,
     Supersession,
+    ParallelPeek,
     Help,
     Queue,
     DirectionsMaintenance,
@@ -104,6 +105,7 @@ pub enum ShellChromeEvent {
     ModelSelectionOverlayShown,
     ViewSelectionOverlayShown,
     SupersessionOverlayShown,
+    ParallelPeekOverlayShown,
     HelpOverlayShown,
     QueueOverlayShown,
     DirectionsMaintenanceOverlayShown,
@@ -207,6 +209,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::SupersessionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Supersession;
+        }
+        ShellChromeEvent::ParallelPeekOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::ParallelPeek;
         }
         ShellChromeEvent::HelpOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -545,6 +551,20 @@ mod tests {
             ExitConfirmationState::Hidden
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::ViewSelection);
+        assert!(reduced.effects.is_empty());
+    }
+    #[test]
+    fn showing_parallel_peek_overlay_hides_exit_confirmation() {
+        // parallel peek도 active agent 대화를 엿보는 shell focus owner이므로 exit prompt와 겹치지 않는다.
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::ParallelPeekOverlayShown);
+
+        assert_eq!(
+            reduced.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::ParallelPeek);
         assert!(reduced.effects.is_empty());
     }
     #[test]

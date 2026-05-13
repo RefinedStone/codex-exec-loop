@@ -3,7 +3,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
-use crate::adapter::inbound::tui::supersession_mud::build_supersession_mud_view;
 use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
@@ -27,8 +26,6 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
     let readiness_snapshot_ref = readiness_snapshot.as_ref();
     let activity_frame = supersession_activity_frame();
-    let mud_lines =
-        build_supersession_mud_view(&supervisor_snapshot, &app.supersession_mud_ui_state);
     /*
     The core app projection remains the first source for live readiness and
     supervisor snapshots. This adapter only chooses popup grouping and copy, so service-layer
@@ -41,25 +38,14 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         readiness_snapshot_ref,
         &supervisor_snapshot,
         activity_frame,
-        &mud_lines.summary_lines,
     );
-    let capability_lines =
-        build_capability_lines(readiness_snapshot_ref, &supervisor_snapshot, activity_frame);
-    let pool_lines = build_pool_lines_with_mud(
-        &supervisor_snapshot.pool,
-        activity_frame,
-        &mud_lines.pool_lines,
-    );
-    let roster_lines = build_roster_lines_with_mud(
-        &supervisor_snapshot,
-        activity_frame,
-        &mud_lines.roster_lines,
-    );
-    let detail_lines = build_detail_lines_with_mud(&supervisor_snapshot, &mud_lines.detail_lines);
-    let distributor_lines = build_distributor_lines_with_mud(
-        &supervisor_snapshot.distributor,
-        &mud_lines.distributor_lines,
-    );
+    let capability_lines = build_distributor_lines_with_mud(&supervisor_snapshot.distributor, &[]);
+    let pool_lines = build_pool_lines_with_mud(&supervisor_snapshot.pool, activity_frame, &[]);
+    let roster_lines = build_orchestrator_lines(&supervisor_snapshot.distributor);
+    let detail_lines = build_parallel_event_stream_lines(&supervisor_snapshot);
+    let mut distributor_lines =
+        build_roster_lines_with_mud(&supervisor_snapshot, activity_frame, &[]);
+    distributor_lines.extend(build_detail_lines_with_mud(&supervisor_snapshot, &[]));
     let mut key_lines = vec![AkraTheme::key_line("Ctrl+R: rerun readiness")];
 
     if app.parallel_mode_enabled() {
@@ -72,12 +58,12 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         ));
     }
     key_lines.push(AkraTheme::key_line(
-        "Tab/arrows: move | Enter/Space: inspect | Ctrl+O or Esc/Ctrl+C: close",
+        ":peek: inspect active agent conversations | Ctrl+O or Esc/Ctrl+C: close",
     ));
 
     SupersessionOverlayView {
         header_lines: vec![
-            AkraTheme::title_line("Supersession Control Tower", " / supervisor board"),
+            AkraTheme::title_line("Parallel Mode", " / activity stream"),
             Line::from(format!(
                 "activity {activity_frame} / {}",
                 if app.parallel_mode_prompt_input_locked() {
@@ -103,33 +89,33 @@ fn build_summary_lines(
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     activity_frame: &'static str,
-    mud_summary_lines: &[String],
 ) -> Vec<Line<'static>> {
     /*
     Summary lines are the popup's triage header: readiness tells whether parallel
     mode can be enabled, pool and roster summaries show dispatch capacity, and the
     distributor compact summary shows whether completed work is stuck downstream.
     */
-    let mut lines = mud_summary_lines
-        .iter()
-        .map(|line| Line::from(line.clone()))
-        .collect::<Vec<_>>();
+    let mut lines = Vec::new();
     lines.extend([
         Line::from(format!(
-            "activity: {}  |  prompt: locked  |  workers: {}",
+            "mode: {mode_label}  |  board: {}  |  activity: {}",
+            supervisor_snapshot.state_label(),
             activity_frame,
+        )),
+        Line::from(format!(
+            "workers: {}  |  prompt: {}",
             if supervisor_snapshot.roster.active_count() > 0 {
                 "running"
             } else if is_pending_pool_board(&supervisor_snapshot.pool) {
                 "loading"
             } else {
                 "idle"
+            },
+            if supervisor_snapshot.roster.active_count() > 0 {
+                "parallel context active"
+            } else {
+                "available"
             }
-        )),
-        Line::from(format!("mode: {mode_label}")),
-        Line::from(format!(
-            "board state: {}",
-            supervisor_snapshot.state_label()
         )),
         Line::from(format!(
             "readiness: {}",
@@ -142,11 +128,8 @@ fn build_summary_lines(
             truncate_timeline_text(&supervisor_snapshot.workspace_path, 96)
         )),
         Line::from(format!(
-            "pool: {}",
-            pool_summary_label(&supervisor_snapshot.pool)
-        )),
-        Line::from(format!(
-            "agents: {}  |  queue: {}",
+            "pool: {}  |  agents: {}  |  queue: {}",
+            pool_summary_label(&supervisor_snapshot.pool),
             roster_summary_label(supervisor_snapshot),
             distributor_summary_label(&supervisor_snapshot.distributor)
         )),
@@ -167,34 +150,6 @@ fn build_summary_lines(
     }
 
     lines
-}
-
-fn build_capability_lines(
-    readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
-    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
-    activity_frame: &'static str,
-) -> Vec<Line<'static>> {
-    if let Some(snapshot) = readiness_snapshot {
-        return snapshot
-            .capabilities
-            .iter()
-            .map(|capability| Line::from(capability.summary()))
-            .collect::<Vec<_>>();
-    }
-
-    vec![
-        Line::from(format!("loading pipeline {activity_frame}")),
-        Line::from(format!("readiness: running {activity_frame}")),
-        Line::from("pool reconcile: next"),
-        Line::from("board refresh: next"),
-        Line::from(format!(
-            "stage: {}",
-            supervisor_snapshot
-                .top_notice
-                .as_deref()
-                .unwrap_or("parallel preparation is starting")
-        )),
-    ]
 }
 
 fn pool_summary_label(pool: &ParallelModePoolBoardSnapshot) -> String {
@@ -471,6 +426,205 @@ fn build_detail_lines_with_mud(
         ))
     }));
     lines
+}
+
+fn build_parallel_event_stream_lines(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+) -> Vec<Line<'static>> {
+    let mut events = Vec::new();
+
+    if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
+        events.push(parallel_stream_line(
+            "--:--:--",
+            "Supervisor",
+            format!(
+                "parallel board 상태를 갱신했습니다. {}",
+                truncate_timeline_text(notice, 96)
+            ),
+        ));
+    }
+
+    for slot in &supervisor_snapshot.pool.slots {
+        if !matches!(
+            slot.state,
+            ParallelModePoolSlotState::Idle | ParallelModePoolSlotState::Missing
+        ) {
+            events.push(parallel_stream_line(
+                "--:--:--",
+                "Pool",
+                format!(
+                    "{} 상태는 {}이며 owner는 {}입니다.",
+                    slot.slot_id,
+                    slot.state.label(),
+                    truncate_timeline_text(&slot.owner_label, 56)
+                ),
+            ));
+        }
+    }
+
+    for entry in &supervisor_snapshot.roster.entries {
+        events.push(parallel_stream_line(
+            "--:--:--",
+            format!("Agent {}", entry.agent_id),
+            format!(
+                "{} 작업이 {}에서 {} 상태입니다. {}",
+                truncate_timeline_text(&entry.task_title, 52),
+                entry.slot_id,
+                display_supersession_state_label(&entry.state_label),
+                truncate_timeline_text(&entry.latest_summary, 72)
+            ),
+        ));
+    }
+
+    if let Some(detail) = supervisor_snapshot.detail.session.as_ref() {
+        for history in &detail.history {
+            events.push(parallel_stream_line(
+                compact_stream_timestamp_label(&history.timestamp),
+                parallel_history_actor(&history.state_label, &detail.agent_id),
+                parallel_history_summary(detail, &history.state_label, &history.summary),
+            ));
+        }
+
+        let current_already_recorded = detail.history.last().is_some_and(|history| {
+            history.state_label == detail.state_label && history.timestamp == detail.updated_at
+        });
+        if !current_already_recorded {
+            events.push(parallel_stream_line(
+                compact_stream_timestamp_label(&detail.updated_at),
+                parallel_history_actor(&detail.state_label, &detail.agent_id),
+                parallel_history_summary(detail, &detail.state_label, &detail.latest_summary),
+            ));
+        }
+    }
+
+    for item in &supervisor_snapshot.distributor.queue_items {
+        events.push(parallel_stream_line(
+            "--:--:--",
+            "Distributor",
+            format!(
+                "{} 결과가 {} 상태로 대기 중입니다. branch {} / {}",
+                truncate_timeline_text(&item.task_title, 52),
+                item.queue_state.label(),
+                truncate_timeline_text(&item.branch_name, 40),
+                truncate_timeline_text(&item.integration_note, 72)
+            ),
+        ));
+    }
+
+    for entry in &supervisor_snapshot.distributor.completion_feed {
+        events.push(parallel_stream_line(
+            "--:--:--",
+            "Ledger",
+            format!(
+                "{} 단계 기록: {}",
+                display_runtime_event_label(&entry.stage_label),
+                truncate_timeline_text(&entry.summary, 88)
+            ),
+        ));
+    }
+
+    let orchestrator = &supervisor_snapshot.distributor.orchestrator_status;
+    if let Some(reason) = orchestrator.blocked_reason.as_deref() {
+        events.push(parallel_stream_line(
+            "--:--:--",
+            "Orchestrator",
+            format!(
+                "integration이 차단되었습니다. {}",
+                truncate_timeline_text(reason, 88)
+            ),
+        ));
+    }
+    if let Some(reason) = orchestrator.slot_return_wait_reason.as_deref() {
+        events.push(parallel_stream_line(
+            "--:--:--",
+            "Orchestrator",
+            format!(
+                "slot 반환을 보류했습니다. {}",
+                truncate_timeline_text(reason, 88)
+            ),
+        ));
+    }
+
+    for entry in &supervisor_snapshot.distributor.runtime_event_feed {
+        events.push(parallel_stream_line(
+            compact_stream_timestamp_label(&entry.recorded_at),
+            "Supervisor",
+            format!(
+                "{}:{} {} / rev {} / {}",
+                display_runtime_event_label(&entry.projection_kind),
+                entry.projection_key,
+                display_runtime_event_label(&entry.event_kind),
+                entry.observed_planning_revision,
+                truncate_timeline_text(&entry.summary, 76)
+            ),
+        ));
+    }
+
+    if events.is_empty() {
+        return vec![Line::from(
+            "[--:--:--] Supervisor: 아직 parallel 이벤트가 없습니다.",
+        )];
+    }
+
+    const MAX_STREAM_EVENTS: usize = 96;
+    let drain_count = events.len().saturating_sub(MAX_STREAM_EVENTS);
+    if drain_count > 0 {
+        events.drain(0..drain_count);
+    }
+
+    events
+}
+
+fn parallel_stream_line(
+    timestamp: impl Into<String>,
+    actor: impl Into<String>,
+    body: impl Into<String>,
+) -> Line<'static> {
+    Line::from(format!(
+        "[{}] {}: {}",
+        timestamp.into(),
+        actor.into(),
+        body.into()
+    ))
+}
+
+fn parallel_history_actor(state_label: &str, agent_id: &str) -> String {
+    match state_label {
+        "assigned" | "starting" | "merge_queued" | "pushing" | "pr_pending" | "merge_pending"
+        | "integrating" | "merged" | "cleanup_pending" | "cleaned" => "Distributor".to_string(),
+        "ledger_refreshing" | "commit_ready" => "Ledger".to_string(),
+        "failed" | "official_refresh_recovery_needed" => "Supervisor".to_string(),
+        _ => format!("Agent {agent_id}"),
+    }
+}
+
+fn parallel_history_summary(
+    detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
+    state_label: &str,
+    fallback_summary: &str,
+) -> String {
+    let task_title = truncate_timeline_text(&detail.task_title, 52);
+    match state_label {
+        "assigned" | "starting" => {
+            format!(
+                "{}이 {}에게 대여되었습니다.",
+                detail.slot_id, detail.agent_id
+            )
+        }
+        "running" => format!("{task_title} 작업을 시작했습니다."),
+        "reported_complete" => format!("{task_title} 완료를 보고했습니다."),
+        "ledger_refreshing" => format!("{task_title} official completion을 확인하고 있습니다."),
+        "commit_ready" => format!("{task_title} 결과를 official completion으로 승인했습니다."),
+        "merge_queued" => format!("{task_title} 결과가 distributor queue에 등록되었습니다."),
+        "pushing" | "pr_pending" | "merge_pending" | "integrating" => format!(
+            "{task_title} delivery 단계가 {}입니다.",
+            display_supersession_state_label(state_label)
+        ),
+        "merged" => format!("{task_title}가 prerelease에 병합되었습니다."),
+        "cleanup_pending" => format!("{}이 idle 반환을 준비하고 있습니다.", detail.slot_id),
+        "cleaned" => format!("{}이 idle 상태로 반환되었습니다.", detail.slot_id),
+        _ => truncate_timeline_text(fallback_summary, 96),
+    }
 }
 
 fn build_timeline_lines(
@@ -877,6 +1031,35 @@ fn compact_timestamp_label(timestamp: &str) -> String {
         return trimmed.to_string();
     };
     format!("{hour}:{minute}")
+}
+
+fn compact_stream_timestamp_label(timestamp: &str) -> String {
+    let trimmed = timestamp.trim();
+    if trimmed.is_empty() {
+        return "--:--:--".to_string();
+    }
+
+    let time_part = trimmed
+        .split_once('T')
+        .map(|(_, time)| time)
+        .unwrap_or(trimmed)
+        .trim_end_matches('Z');
+
+    let mut parts = time_part.split(':');
+    let Some(hour) = parts.next() else {
+        return "--:--:--".to_string();
+    };
+    let Some(minute) = parts.next() else {
+        return "--:--:--".to_string();
+    };
+    let Some(second) = parts.next() else {
+        return format!("{hour}:{minute}:00");
+    };
+    let second = second
+        .split_once('.')
+        .map(|(head, _)| head)
+        .unwrap_or(second);
+    format!("{hour}:{minute}:{second}")
 }
 
 fn truncate_timeline_text(text: &str, max_chars: usize) -> String {

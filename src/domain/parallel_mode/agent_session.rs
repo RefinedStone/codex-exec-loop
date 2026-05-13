@@ -14,6 +14,8 @@ use super::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
 pub struct ParallelModeAgentRosterEntry {
     // roster row에서 agent를 식별하는 display id다.
     pub agent_id: String,
+    // app-server thread id가 잡힌 active agent는 `:peek`에서 대화 snapshot을 바로 읽을 수 있다.
+    pub thread_id: Option<String>,
     // agent가 맡은 planning task title이다.
     pub task_title: String,
     // pool slot id다. 같은 agent/task라도 slot handoff를 구분한다.
@@ -41,6 +43,7 @@ impl ParallelModeAgentRosterEntry {
     ) -> Self {
         Self {
             agent_id: agent_id.into(),
+            thread_id: None,
             task_title: task_title.into(),
             slot_id: slot_id.into(),
             branch_name: branch_name.into(),
@@ -48,6 +51,11 @@ impl ParallelModeAgentRosterEntry {
             duration_label: duration_label.into(),
             latest_summary: latest_summary.into(),
         }
+    }
+
+    pub fn with_thread_id(mut self, thread_id: Option<String>) -> Self {
+        self.thread_id = thread_id;
+        self
     }
 
     pub fn counts_as_active(&self) -> bool {
@@ -473,6 +481,7 @@ fn project_agent_roster_entry(
         roster_duration_label(lease, detail, running_duration_labels),
         roster_latest_summary(lease, detail),
     )
+    .with_thread_id(detail.and_then(|detail| detail.thread_id.clone()))
 }
 
 // state priority는 roster sorting과 default selection이 공유하는 lease lifecycle ordering이다.

@@ -254,7 +254,7 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     assert!(rendered.contains("> :"));
     assert!(rendered.contains("command: palette"));
     assert!(rendered.contains(":diag"));
-    assert!(rendered.contains(":queue"));
+    assert!(rendered.contains(":peek"));
 }
 #[test]
 fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
@@ -509,16 +509,16 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
         .expect("inline supersession inspection render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Supersession / inline inspection"));
-    assert!(rendered.contains("supervisor: supervise"));
-    assert!(rendered.contains("Capabilities"));
-    assert!(rendered.contains("Pool Board"));
-    assert!(rendered.contains("Agent Roster"));
-    assert!(rendered.contains("Distributor Queue"));
+    assert!(rendered.contains("Parallel Mode / inline inspection"));
+    assert!(rendered.contains("board: supervise"));
+    assert!(rendered.contains("Basic Info"));
+    assert!(rendered.contains("Distributor"));
+    assert!(rendered.contains("Pool"));
+    assert!(rendered.contains("Orchestrator"));
+    assert!(rendered.contains("Parallel Event Stream"));
     assert!(rendered.contains("loading pool board"));
-    assert!(rendered.contains("loading agent roster"));
     assert!(rendered.contains("loading distributor board"));
-    assert!(rendered.contains("row shape: agent / task / slot"));
+    assert!(rendered.contains(":peek: inspect active agent conversations"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }
@@ -570,9 +570,8 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
 #[test]
 fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     /*
-     * The timeline is the first MUD-style read-only slice: slot/agent topology
-     * stays in pool and roster panels, while the selected session lifecycle must
-     * remain visible in a narrow inline inspection without adding new controls.
+     * Parallel Mode keeps the selected session lifecycle in the bottom event
+     * stream while pool/distributor/orchestrator state stays in the mid panels.
      */
     let mut terminal = Terminal::new(TestBackend::new(72, 32)).expect("test terminal");
     let mut app = make_test_app();
@@ -655,12 +654,11 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
         .expect("inline supersession timeline render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("timeline: slot-1 /"));
-    assert!(rendered.contains("events: 00:00 assigned"));
-    assert!(rendered.contains("00:02 official"));
-    assert!(rendered.contains("last event: 00:02 official"));
-    assert!(rendered.contains("pool board: >[slot-1:RUN]<"));
-    assert!(rendered.contains("distributor queue: head idle"));
+    assert!(rendered.contains("Parallel Event Stream"));
+    assert!(rendered.contains("Distributor: slot-1"));
+    assert!(rendered.contains("Agent agent-1: Timeline UI"));
+    assert!(rendered.contains("Ledger: Timeline UI"));
+    assert!(rendered.contains("head: idle"));
     assert!(!rendered.contains("commit_ready"));
 }
 

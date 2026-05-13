@@ -14,6 +14,7 @@ use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnO
 pub(crate) enum InlineShellCommand {
     Diagnostics,
     Parallel,
+    Peek,
     Sessions,
     Queue,
     Directions,
@@ -62,7 +63,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model  :view [simple|medium|detail]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model  :view [simple|medium|detail]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level.";
@@ -87,6 +88,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":pa", ":parallel"],
         suggestion_detail: "parallel mode",
         buffered_hint: "Press Enter to enter parallel mode.",
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Peek,
+        primary_name: ":peek",
+        aliases: &[":peek"],
+        suggestion_detail: "parallel agent peek",
+        buffered_hint: "Press Enter to inspect active parallel agents.",
         execution_status: None,
         requires_argument: false,
     },
@@ -381,6 +391,7 @@ impl InlineShellCommand {
             InlineShellCommand::Think => ":think ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
+            | InlineShellCommand::Peek
             | InlineShellCommand::Sessions
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
@@ -403,6 +414,7 @@ impl InlineShellCommand {
     fn help_usage(self) -> &'static str {
         match self {
             InlineShellCommand::Parallel => ":parallel [off]",
+            InlineShellCommand::Peek => ":peek",
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Turns => ":turns <number|infinite>",

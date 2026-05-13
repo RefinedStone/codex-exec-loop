@@ -25,7 +25,6 @@ use crate::core::app::{
     CoreInput, SessionCatalogSnapshot, StartupSnapshot,
 };
 use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
-#[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
@@ -126,6 +125,13 @@ impl NativeTuiApplicationHandle {
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.conversations.request_stop_all_sessions()
     }
+
+    pub(super) fn load_conversation_snapshot(
+        &self,
+        thread_id: &str,
+    ) -> Result<ConversationSnapshot, String> {
+        self.conversations.load_snapshot(thread_id)
+    }
 }
 
 #[derive(Clone)]
@@ -145,6 +151,12 @@ impl NativeTuiConversationHandle {
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.service
             .request_stop_all_sessions()
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn load_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot, String> {
+        self.service
+            .load_snapshot(thread_id)
             .map_err(|error| error.to_string())
     }
 }
@@ -245,6 +257,7 @@ impl NativeTuiApp {
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
+            parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
             parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,

@@ -101,6 +101,24 @@ pub(crate) struct SupersessionOverlayView {
 }
 
 /*
+ * Parallel peek is a read-only drill-in over active parallel agents. It is kept
+ * separate from the supervisor board because it temporarily shows a worker
+ * conversation without switching the main shell thread.
+ */
+pub(crate) struct ParallelPeekOverlayView {
+    // Picker or detail title plus current mode copy.
+    pub(crate) header_lines: Vec<Line<'static>>,
+    // Active agent rows, with selection style already encoded as text.
+    pub(crate) agent_lines: Vec<Line<'static>>,
+    // Read-only conversation preview for the selected agent.
+    pub(crate) conversation_lines: Vec<Line<'static>>,
+    // Loading, empty, and snapshot status lines.
+    pub(crate) status_lines: Vec<Line<'static>>,
+    // Navigation and close hints for the current step.
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
+/*
  * Queue overlay projects the planning application read model into renderer sections.
  * Accepted queue rows, proposal candidates, and explanatory notes are intentionally
  * separate so the UI never blends committed work with suggested next work.

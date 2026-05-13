@@ -23,6 +23,7 @@ fn parse_recognizes_supported_aliases() {
         ),
         (":parallel", Some((InlineShellCommand::Parallel, None))),
         (":pa", Some((InlineShellCommand::Parallel, None))),
+        (":peek", Some((InlineShellCommand::Peek, None))),
         (
             ":parallel off",
             Some((InlineShellCommand::Parallel, Some("off"))),
@@ -118,6 +119,7 @@ fn suggestions_show_all_commands_for_colon_only() {
         vec![
             InlineShellCommand::Diagnostics,
             InlineShellCommand::Parallel,
+            InlineShellCommand::Peek,
             InlineShellCommand::Sessions,
             InlineShellCommand::Queue,
             InlineShellCommand::Directions,
@@ -146,6 +148,7 @@ fn suggestions_filter_by_prefix() {
         InlineShellCommand::suggestions(":p"),
         vec![
             InlineShellCommand::Parallel,
+            InlineShellCommand::Peek,
             InlineShellCommand::PlanningInit
         ]
     );
@@ -219,7 +222,7 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(11));
+    assert!(state.move_selection(12));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -246,6 +249,7 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
         ":planning"
     );
     assert_eq!(InlineShellCommand::Parallel.completion_text(), ":parallel");
+    assert_eq!(InlineShellCommand::Peek.completion_text(), ":peek");
     assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
@@ -280,6 +284,7 @@ fn help_entries_use_renderable_command_forms() {
 
     assert!(rendered.contains(":diag - diagnostics"));
     assert!(rendered.contains(":parallel [off] - parallel mode"));
+    assert!(rendered.contains(":peek - parallel agent peek"));
     assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
     assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
     assert!(rendered.contains(":stop - stop active sessions"));

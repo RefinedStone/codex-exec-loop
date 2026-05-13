@@ -470,6 +470,104 @@ fn bare_parallel_enter_dispatches_ready_queue() {
 }
 
 #[test]
+fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
+    /*
+     * `:peek` is the parallel-mode drill-in: it does not require a slot argument,
+     * opens the active-agent picker, and Enter loads the selected agent's
+     * app-server conversation snapshot without switching the main shell thread.
+     */
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(
+                3,
+                "/tmp/pool",
+                "idle",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Running,
+                    "akra-agent/slot-1/peek",
+                    "akra-pool/slot-1",
+                    "agent-1 / task-1",
+                )],
+            ),
+            ParallelModeAgentRosterSnapshot::new(
+                vec![
+                    ParallelModeAgentRosterEntry::new(
+                        "agent-1",
+                        "Peek UI",
+                        "slot-1",
+                        "akra-agent/slot-1/peek",
+                        "running",
+                        "active",
+                        "agent session is active",
+                    )
+                    .with_thread_id(Some("thread-1".to_string())),
+                ],
+                "empty",
+            ),
+            ParallelModeSupervisorDetailSnapshot::new(None, "empty"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        )));
+    for character in ":peek".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::ParallelPeek);
+    assert_eq!(runtime.app().active_parallel_peek_entries().len(), 1);
+    assert!(
+        runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .preview()
+            .is_none()
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let preview = runtime
+        .app()
+        .parallel_peek_overlay_ui_state
+        .preview()
+        .expect("selected active agent should open a preview");
+    assert_eq!(preview.agent_id, "agent-1");
+    assert_eq!(preview.thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(
+        preview
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.title.as_str()),
+        Some("Loaded thread")
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+
+    assert_eq!(runtime.app().shell_overlay, ShellOverlay::ParallelPeek);
+    assert!(
+        runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .preview()
+            .is_none()
+    );
+}
+
+#[test]
 fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     /*
      * The main-session post-turn policy is the first legal parallel automation

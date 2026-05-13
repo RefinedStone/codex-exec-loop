@@ -114,6 +114,9 @@ impl NativeTuiApp {
             ShellOverlay::ViewSelection => {
                 self.view_selection_overlay_ui_state = ViewSelectionOverlayUiState::default();
             }
+            ShellOverlay::ParallelPeek => {
+                self.parallel_peek_overlay_ui_state.reset();
+            }
             _ => {}
         }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
@@ -132,6 +135,7 @@ impl NativeTuiApp {
             InlineShellCommand::Parallel => {
                 self.handle_parallel_shell_command(command_input.argument())
             }
+            InlineShellCommand::Peek => self.open_parallel_peek_overlay(command_input.argument()),
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Queue => self.handle_queue_shell_command(command_input.argument()),
             InlineShellCommand::Directions => {
@@ -367,6 +371,9 @@ impl NativeTuiApp {
             return true;
         }
         if self.handle_session_search_query_editor_key(key) {
+            return true;
+        }
+        if self.handle_parallel_peek_overlay_key(key) {
             return true;
         }
         if key.code == KeyCode::Esc

@@ -1,11 +1,12 @@
 use super::super::shell_presentation::{
     DirectionsMaintenanceOverlayView, HelpOverlayView, ModelSelectionOverlayView, OverlayListView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
-    build_directions_maintenance_overlay_view, build_help_overlay_view,
-    build_model_selection_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
+    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
+    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
+    ViewSelectionOverlayView, build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_model_selection_overlay_view, build_parallel_peek_overlay_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view, build_view_selection_overlay_view,
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep,
@@ -47,6 +48,9 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::Supersession => {
             draw_inline_supersession_inspection(frame, inspection_area, app)
         }
+        ShellOverlay::ParallelPeek => {
+            draw_inline_parallel_peek_inspection(frame, inspection_area, app)
+        }
         ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area),
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
         ShellOverlay::DirectionsMaintenance => {
@@ -56,6 +60,52 @@ pub(super) fn draw_inline_shell_inspection(
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
     }
+}
+
+fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_parallel_peek_overlay_view(app);
+    let ParallelPeekOverlayView {
+        header_lines,
+        agent_lines,
+        conversation_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&agent_lines, 9)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&status_lines, 4)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        inline_overlay_title("Parallel Peek"),
+        body_lines,
+        true,
+    );
+    render_inline_scrolled_section(
+        frame,
+        layout[1],
+        Line::from("Active Agents"),
+        agent_lines,
+        0,
+    );
+    render_inline_scrolled_section(
+        frame,
+        layout[2],
+        Line::from("Conversation Preview"),
+        conversation_lines,
+        0,
+    );
+    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
     let HelpOverlayView {
@@ -316,7 +366,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         pool_lines,
         roster_lines,
         detail_lines,
-        distributor_lines,
+        distributor_lines: _distributor_lines,
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
@@ -324,8 +374,9 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 8)),
-            Constraint::Min(12),
+            Constraint::Length(inline_section_height(&summary_lines, 7)),
+            Constraint::Length(10),
+            Constraint::Min(8),
             Constraint::Length(inline_section_height(&key_lines, 4)),
         ])
         .split(area);
@@ -333,71 +384,62 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_section(
         frame,
         layout[0],
-        inline_overlay_title("Supersession"),
+        inline_overlay_title("Parallel Mode"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    // Supersession is the densest inspection surface, so capabilities/pool/roster
-    // sit left of selected detail and distributor queue state.
-    let content_layout = Layout::default()
+    render_inline_section(
+        frame,
+        layout[1],
+        Line::from("Basic Info"),
+        summary_lines,
+        true,
+    );
+    let status_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(layout[2]);
-    let left_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inline_section_height(&capability_lines, 8)),
-            Constraint::Length(inline_section_height(&pool_lines, 8)),
-            Constraint::Min(6),
-        ])
-        .split(content_layout[0]);
-    let right_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inline_section_height(&detail_lines, 9)),
-            Constraint::Min(7),
-        ])
-        .split(content_layout[1]);
 
     render_inline_section(
         frame,
-        left_layout[0],
-        Line::from("Capabilities"),
+        status_layout[0],
+        Line::from("Distributor"),
         capability_lines,
         false,
     );
     render_inline_section(
         frame,
-        left_layout[1],
-        Line::from("Pool Board"),
+        status_layout[1],
+        Line::from("Pool"),
         pool_lines,
         false,
     );
     render_inline_section(
         frame,
-        left_layout[2],
-        Line::from("Agent Roster"),
+        status_layout[2],
+        Line::from("Orchestrator"),
         roster_lines,
         false,
     );
-    render_inline_section(
-        frame,
-        right_layout[0],
-        Line::from("Session Detail"),
-        detail_lines,
-        false,
-    );
-    render_inline_section(
-        frame,
-        right_layout[1],
-        Line::from("Distributor Queue"),
-        distributor_lines,
-        false,
-    );
-    render_inline_section(
+    let stream_visible_rows = layout[3].height.saturating_sub(1) as usize;
+    let stream_scroll_offset = detail_lines
+        .len()
+        .saturating_sub(stream_visible_rows)
+        .min(u16::MAX as usize) as u16;
+    render_inline_scrolled_section(
         frame,
         layout[3],
+        Line::from("Parallel Event Stream"),
+        detail_lines,
+        stream_scroll_offset,
+    );
+    render_inline_section(
+        frame,
+        layout[4],
         Line::from("Command Hints"),
         key_lines,
         true,
