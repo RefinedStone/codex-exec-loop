@@ -952,6 +952,7 @@ mod tests {
         TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
     };
     use std::fs;
+    use std::process::Command;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1195,10 +1196,8 @@ mod tests {
     fn service_evaluate_paused_request_skips_worker_refresh_and_preserves_panel_state() {
         let service = test_service();
         let mut context = test_context(ready_projection(Some(queue_task())));
-        let workspace_directory = std::env::current_dir()
-            .expect("test should run inside a git workspace")
-            .display()
-            .to_string();
+        let workspace = TempPlanningWorkspace::new_git("post-turn-paused");
+        let workspace_directory = workspace.path.clone();
         context.planning_workspace_directory = workspace_directory.clone();
         context.continuation_paused = true;
         let mut request = test_request(context.clone());
@@ -1888,12 +1887,43 @@ mod tests {
                 path: path.display().to_string(),
             }
         }
+
+        fn new_git(prefix: &str) -> Self {
+            let workspace = Self::new(prefix);
+            run_git(&workspace.path, &["init", "-q"]);
+            run_git(&workspace.path, &["config", "user.name", "RefinedStone"]);
+            run_git(
+                &workspace.path,
+                &["config", "user.email", "chem.en.9273@gmail.com"],
+            );
+            fs::write(format!("{}/README.md", workspace.path), "seed\n")
+                .expect("seed file should write");
+            run_git(&workspace.path, &["add", "README.md"]);
+            run_git(&workspace.path, &["commit", "-qm", "init"]);
+            workspace
+        }
     }
 
     impl Drop for TempPlanningWorkspace {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    fn run_git(workspace_dir: &str, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(workspace_dir)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git command should spawn");
+        assert!(
+            output.status.success(),
+            "git command should succeed: git {:?}\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     struct TempPlanningWorkspaceBlocker {

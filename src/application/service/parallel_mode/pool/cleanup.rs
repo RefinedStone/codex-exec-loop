@@ -351,7 +351,14 @@ pub(in crate::application::service::parallel_mode) fn cleanup_slot(
     branch_name: &str,
 ) -> bool {
     // worktree reset을 branch deletion보다 먼저 수행해 checkout 중인 branch를 안전하게 지울 수 있게 한다.
-    let reset_report = reset_slot_worktree_to_akra(slot_path);
+    let mut reset_report = reset_slot_worktree_to_akra(slot_path);
+    for _ in 0..4 {
+        if reset_report.succeeded() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+        reset_report = reset_slot_worktree_to_akra(slot_path);
+    }
     if !reset_report.succeeded() {
         // failure summary는 디버깅용으로 계산하지만, 이 helper의 공개 계약은 성공 여부 bool이다.
         let _failure_summary = reset_report.failure_summary();

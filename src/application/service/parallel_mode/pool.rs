@@ -885,12 +885,36 @@ pub(super) fn resolve_workspace_slot_lease(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Result<Option<WorkspaceSlotLeaseResolution>, String> {
-    let context = match load_pool_runtime_context(planning_authority, workspace_dir) {
-        Ok(context) => context,
-        Err((_, "pool baseline is unavailable during inspection")) => return Ok(None),
-        Err((_, detail)) => return Err(detail.to_string()),
+    let Some(repo_root) = detect_git_repo_root(workspace_dir) else {
+        return Err("repository inspection failed".to_string());
     };
-    let workspace_path = canonicalize_best_effort(Path::new(&context.repo_root));
+    let Some(canonical_repo_root) = detect_canonical_repo_root(planning_authority, workspace_dir)
+    else {
+        return Err("canonical root inspection failed".to_string());
+    };
+    let workspace_path = canonicalize_best_effort(Path::new(&repo_root));
+    let runtime_projection = load_runtime_projection_snapshot(
+        planning_authority,
+        canonical_repo_root.to_str().unwrap_or(repo_root.as_str()),
+    );
+    let matching_lease_count = runtime_projection
+        .slot_leases
+        .values()
+        .filter(|lease| worktree_paths_match(&workspace_path, Path::new(&lease.worktree_path)))
+        .count();
+    if matching_lease_count == 0 {
+        return Ok(None);
+    }
+    if matching_lease_count > 1 {
+        return Err(format!(
+            "workspace `{}` matched multiple slot leases",
+            workspace_path.display()
+        ));
+    }
+
+    let context =
+        load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
+            .map_err(str::to_string)?;
     let Some(current_branch) = current_branch_name(&workspace_path) else {
         return Err(format!(
             "workspace `{}` does not currently resolve to a branch",

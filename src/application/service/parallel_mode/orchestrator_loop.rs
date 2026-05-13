@@ -1216,7 +1216,11 @@ mod tests {
     };
     use crate::test_utils::json_payload_contains;
     use anyhow::{Result, anyhow};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct NoopGithubAutomationPort;
 
@@ -1307,6 +1311,62 @@ mod tests {
             authority,
             Arc::new(NoopPlanningWorkerPort),
         )
+    }
+
+    struct TempGitWorkspace {
+        root: PathBuf,
+        workspace: String,
+    }
+
+    impl TempGitWorkspace {
+        fn new(prefix: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+            let repo_root = root.join("repo");
+            fs::create_dir_all(&repo_root).expect("temp git repo should be created");
+            run_git(&repo_root, &["init", "-q"]);
+            run_git(&repo_root, &["config", "user.name", "RefinedStone"]);
+            run_git(
+                &repo_root,
+                &["config", "user.email", "chem.en.9273@gmail.com"],
+            );
+            fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
+            run_git(&repo_root, &["add", "README.md"]);
+            run_git(&repo_root, &["commit", "-qm", "init"]);
+            Self {
+                root,
+                workspace: repo_root.display().to_string(),
+            }
+        }
+
+        fn path(&self) -> &str {
+            self.workspace.as_str()
+        }
+    }
+
+    impl Drop for TempGitWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn run_git(repo_root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(repo_root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git command should spawn");
+        assert!(
+            output.status.success(),
+            "git command should succeed: git {:?}\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1530,13 +1590,10 @@ mod tests {
 
     #[test]
     fn scripted_worker_run_reports_no_running_slot_for_git_workspace_without_lease() {
-        let workspace = std::env::current_dir()
-            .expect("test should have a current directory")
-            .display()
-            .to_string();
+        let workspace = TempGitWorkspace::new("parallel-no-running-slot");
         let mut request = worker_request_with_secret_bodies();
-        request.planning_workspace_directory = workspace.clone();
-        request.worktree_directory = workspace;
+        request.planning_workspace_directory = workspace.path().to_string();
+        request.worktree_directory = workspace.path().to_string();
 
         let result = run_scripted_worker_with_request(
             request,
