@@ -580,6 +580,38 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
 }
 
 #[test]
+fn inline_parallel_home_suppresses_startup_banner_on_empty_draft() {
+    let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = true;
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    )));
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline parallel empty draft render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Parallel Mode / inline inspection"));
+    assert!(rendered.contains("Parallel Event Stream"));
+    assert!(rendered.contains("parallel: ready  |  mode: parallel"));
+    assert!(!rendered.contains("█████"));
+    assert!(!rendered.contains("╚═╝"));
+}
+
+#[test]
 fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
     /*
      * Supersession replaces the transcript with a dense inspection board while

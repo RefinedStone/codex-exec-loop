@@ -492,6 +492,23 @@ fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
     assert!(rendered.contains("╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝"));
     assert!(!rendered.contains("No messages in this thread yet."));
 }
+
+#[test]
+fn inline_history_does_not_flush_startup_banner_while_parallel_home_is_active() {
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = true;
+    app.set_parallel_mode_enabled_for_test(true);
+
+    let rendered = current_inline_history_lines(&app)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains(" █████╗ ██╗  ██╗██████╗  █████╗"));
+    assert!(!rendered.contains("╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝"));
+    assert!(rendered.contains("No messages in this thread yet."));
+}
 #[test]
 fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() {
     let mut app = make_test_app();

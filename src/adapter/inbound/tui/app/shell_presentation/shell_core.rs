@@ -40,6 +40,8 @@ pub(super) struct ShellCorePresentationContext<'a> {
     pub(super) recent_session_status_label: String,
     // GitHub review polling state projected to display copy before entering footer builders.
     pub(super) github_review_polling_status_label: String,
+    // Parallel mode replaces the empty draft startup screen with the supervisor board.
+    pub(super) parallel_mode_enabled: bool,
     // Loading/failed/ready conversation projection used consistently by shell copy and transcript/status helpers.
     pub(super) conversation_state: ShellConversationState<'a>,
 }
@@ -63,6 +65,7 @@ impl<'a> ShellCorePresentationContext<'a> {
             recent_session_status_label: recent_session_status_label(app),
             // GitHub polling adapters remain outside presentation; this context carries their display label.
             github_review_polling_status_label: app.github_review_polling_status_label(),
+            parallel_mode_enabled: app.parallel_mode_enabled(),
             /*
              * Ready borrows the view model because downstream presentation
              * code reads cached lines, input state, live activity, and planning
@@ -97,6 +100,9 @@ impl<'a> ShellCorePresentationContext<'a> {
          * have their own placeholders and must not be treated as startup just
          * because they also lack transcript lines.
          */
+        if self.parallel_mode_enabled {
+            return false;
+        }
         let Some(conversation) = self.ready_conversation() else {
             return false;
         };
