@@ -12,7 +12,8 @@ same application services instead of carrying separate planning logic.
 
 - TUI: Ratatui/Crossterm inline main-buffer shell with host-terminal scrollback as the durable
   transcript surface.
-- Runtime: `codex app-server` process/runtime adapter plus protocol fixtures under `schema/`.
+- Runtime: headless `src/core` app coordination over the `codex app-server` process/runtime adapter
+  and protocol fixtures under `schema/`.
 - Planning: SQLite-backed authority store, filesystem planning workspace mirrors, staged draft
   promotion, queue inspection, reset, repair, and planning-worker refresh.
 - Supersession: parallel-mode supervisor board, fixed local worktree pool, agent session detail,
@@ -27,6 +28,8 @@ same application services instead of carrying separate planning logic.
 - `src/adapter/inbound/tui/`: inline shell, overlays, command palette, model/think controls, session
   browser, diagnostics, planning/directions/queue views, follow-up flow, parallel-mode board, theme,
   and rendering tests.
+- `src/core/`: headless app runtime boundary for startup, session/conversation flow, turn
+  submission, stream reduction, effects, completions, and app snapshots.
 - `src/adapter/inbound/cli.rs`: `doctor`, `status`, `queue`, `reset`, `planning-tool`,
   `parallel-tick`, `admin`, and `telegram` dispatch.
 - `src/adapter/inbound/admin_api/`: planning/admin web UI and JSON API. Templates live in
@@ -206,4 +209,5 @@ Use `bash scripts/check_native_pr.sh` for the full native PR gate.
 - [docs/design/01-current-product-state.md](docs/design/01-current-product-state.md)
 - [docs/design/02-tui-shell-flow.md](docs/design/02-tui-shell-flow.md)
 - [docs/design/04-hexagonal-runtime-architecture.md](docs/design/04-hexagonal-runtime-architecture.md)
+- [docs/design/05-parallel-control-plane-architecture.md](docs/design/05-parallel-control-plane-architecture.md)
 - [docs/design/06-planning-runtime-and-draft-editor.md](docs/design/06-planning-runtime-and-draft-editor.md)

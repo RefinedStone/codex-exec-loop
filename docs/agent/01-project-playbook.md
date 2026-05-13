@@ -11,9 +11,10 @@
 - `src/domain/`: pure models such as session summaries and startup diagnostics
 - `src/domain/planning/`: planning workspace, direction, task, queue, and validation models
 - `src/domain/parallel_mode/`: supervisor, pool, distributor, runtime event, and readiness models
+- `src/core/`: headless app runtime for app commands, effects, completions, events, projections, and snapshots
 - `src/application/service/`: use-case orchestration such as `StartupService`, `SessionService`, `ConversationService`, prompt assembly, GitHub review polling, planning, and parallel mode
 - `src/application/service/planning/`: planning facade plus `admin`, `authoring`, `composition`, `control`, `repair`, `runtime`, `shared`, `task_mutation`, `task_tool`, and `worker` sub-boundaries
-- `src/application/service/parallel_mode/`: supervisor, pool, distributor, session-detail, turn, and orchestration boundaries
+- `src/application/service/parallel_mode/`: control-plane, supervisor, pool, distributor, session-detail, turn, and orchestration boundaries
 - `src/application/port/outbound/`: interfaces owned by application services, including app-server, startup probes, session catalog, planning workspace, planning authority, task repository, planning worker, interactive turn runtime, GitHub automation/review polling, parallel runtime, parallel agent worker, and Telegram bot ports
 - `src/adapter/inbound/tui/`: Ratatui/Crossterm inline shell, controller/runtime/presentation split, planning overlays, session browser, follow-up overlay, parallel-mode overlay, theme, and terminal testkit
 - `src/adapter/inbound/cli.rs`: non-TUI commands for `doctor`, `reset`, `planning-tool`, `parallel-tick`, `admin`, and `telegram`
@@ -35,15 +36,20 @@ Keep mapping logic in adapters, not domain models.
 
 ## Architecture
 
-- Dependency flow points inward: `adapter -> application -> domain`.
-- Inbound adapters translate user events into service calls.
+- Dependency flow points inward: `adapter/inbound -> core or application -> domain`.
+- `src/core` coordinates app-level command/effect/completion/snapshot flow; it does not replace domain or application services.
+- Inbound adapters translate user events into core commands or application service calls.
 - Application services orchestrate use cases and depend on ports defined in `src/application/port/`.
 - Planning changes should enter through `src/application/service/planning/` and the inbound surface that owns the workflow: TUI planning overlays, CLI reports/tools, admin API/forms, or Telegram messages.
 - Outbound adapters implement those ports and own process, stdio, JSON, and filesystem details.
 - `domain/` stays free of TUI types, transport formats, and external I/O.
+- `application/` stays free of `core`, TUI, HTTP route, Telegram, and concrete outbound adapter types.
+- `core/` stays free of Ratatui/Crossterm, HTTP route, Telegram, DB, git, filesystem, and other concrete adapter types.
 - Add a port before a new outbound capability when it improves a real boundary.
 - The SQLite authority store is the runtime source for planning, queue, parallel-mode leases, session detail, and distributor event history; filesystem planning files remain the operator-editable mirror and scaffold.
-- Parallel mode routes from accepted planning tasks through pool allocation, agent session detail, official completion refresh, GitHub delivery, rebase merge into `prerelease`, and slot cleanup.
+- Parallel mode routes from accepted planning tasks through the application control-plane handle,
+  pool allocation, agent session detail, official completion refresh, GitHub delivery, rebase merge
+  into `prerelease`, and slot cleanup.
 
 ## Commands
 

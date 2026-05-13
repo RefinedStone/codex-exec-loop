@@ -1,58 +1,122 @@
-# Hexagonal Runtime Architecture
+# Runtime Boundary Architecture
 
-The stable dependency direction is still `adapter -> application -> domain`.
+This is the stable architecture reference for the native-first client.
 
-This repo also treats small-context readability as a design requirement. The target is not just clean
-ownership, but a layout where one operator-visible flow can usually be understood without opening
-every adapter and every helper file in the repo.
+The short rule is:
+
+```text
+adapter/inbound/* -> core or application -> domain
+core -> application -> domain
+application -> outbound ports -> adapter/outbound/*
+composition -> concrete wiring
+```
+
+`src/core` is a headless app runtime boundary. It is not a replacement for the
+domain model, application services, or outbound adapters. Its job is to keep the
+interactive app flow deterministic across TUI, app-server, and future inbound
+surfaces.
 
 ## Layer Ownership
 
-- `src/adapter/inbound/tui`: operator input, reducer state, overlay state, and rendering
-- `src/application/service`: use-case orchestration and outbound-port ownership
-- `src/application/service/parallel_mode`: supersession, pool, distributor, and turn boundaries
-- `src/application/service/planning`: planning feature facade with `authoring`, `runtime`, `repair`, `worker`, and `shared` sub-boundaries
-- `src/application/port/outbound`: boundaries for app-server, filesystem, and worker execution
-- `src/adapter/outbound`: concrete adapters grouped by infrastructure boundary such as app-server, DB, filesystem, and GitHub
-- `src/domain`: UI-neutral models and invariants, including recent-session browser projection,
-  planning semantic validation, planning queue projection summaries, and parallel-mode readiness,
-  supervisor, roster, live-detail, pool-slot, and cleanup decisions
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| `adapter/inbound/*` | Input parsing, rendering, local presentation state, route or bot command mapping | Domain policy, dispatch policy, durable task truth |
+| `core` | App-level command/event/effect flow, runtime state, background completions, projections, snapshot production | Ratatui/Crossterm types, HTTP route types, Telegram types, concrete DB/git/filesystem adapters |
+| `application/service` | Use-case orchestration, ordering gates, service transactions, port calls, planning and parallel control-plane handles | UI widgets, terminal events, transport-specific request types |
+| `application/port` | Outbound contracts required by application services | Concrete adapter implementation details |
+| `domain` | Pure decisions, invariants, validation, state transitions | Runtime, async, filesystem, database, git, UI, logging side effects |
+| `adapter/outbound/*` | Concrete integrations for app-server, DB, filesystem, git, GitHub, Telegram | Application policy or domain invariants |
+| Composition | Dependency construction and concrete wiring | Business decisions |
 
-## Small-Context Rules
+Mapping logic stays in adapters. Policy stays in domain or application services.
+`core` coordinates when app-level work happens and how results are projected
+back to inbound adapters.
 
-- A feature change should usually start from one façade or entrypoint, not from a flat directory full of unrelated adapters.
-- Infrastructure adapters should be skippable when tracing operator-visible behavior; they are implementation detail, not the main narrative.
-- Files approaching roughly 800 LOC, or files mixing storage, recovery, rendering, and policy concerns, should be split by boundary in the same refactor campaign.
-- Composition roots may wire concrete adapters together, but feature logic should depend on ports or feature façades instead of leaf adapter modules.
-- If a rule can be tested with only domain inputs, move it to `src/domain` before growing the adapter or service that discovered it.
+## Core Runtime Boundary
 
-## Current Domain Extraction Checkpoint
+`src/core` should speak in explicit app contracts:
 
-- Planning domain owns semantic validation, priority queue ranking, queue visibility limits, and
-  queue/proposal summary projection on `PriorityQueueProjection`.
-- Parallel-mode domain owns readiness derivation, supervisor state derivation, pool slot state
-  projection from leases, cleanup-ready judgment, live session detail enrichment, selected-detail
-  selection, and active agent roster projection.
-- Application services still own orchestration, port calls, process execution, Git/DB/filesystem
-  decisions, and prompt or UI copy assembly.
-- Adapters still own transport, terminal rendering, filesystem shape mapping, DB row mapping, and
-  app-server protocol mapping.
+- `AppCommand`: user or adapter intent.
+- `CoreInput`: a command, background completion, tick, or lifecycle input.
+- `Effect`: work requested by core but executed outside core.
+- `Completion`: side-effect result that re-enters core through the same input
+  queue.
+- `AppEvent`: externally useful app transition.
+- `AppSnapshot` or projection: read model for adapters.
+
+The TUI may convert key events into `AppCommand` values and render
+`AppSnapshot` values. It should not duplicate lifecycle orchestration that core
+already owns.
+
+Current migrated responsibilities include startup/session loading, conversation
+selection, turn submission, stream reduction, manual prompt submission, and
+post-turn evaluation. Parallel-mode mutation still goes through the application
+control-plane handle described in
+[`05-parallel-control-plane-architecture.md`](./05-parallel-control-plane-architecture.md).
+
+Some legacy raw service access remains intentionally tracked by
+`tests/architecture_boundaries.rs`. Treat those entries as temporary debt, not
+as new precedent.
+
+## State Ownership
+
+| State kind | Owner |
+| --- | --- |
+| Cursor, modal, overlay, local editor buffer, selected row | Inbound adapter |
+| Session/conversation app lifecycle, in-flight app effects, stream reduction state | `core` |
+| Parallel wake coalescing, effect ordering, runtime loop state | Application control-plane |
+| Task authority, dispatch commands, leases, session records, distributor queue | Durable repository/store |
+| Eligibility, capacity, retry, stale-event, and validation decisions | Domain aggregate or domain service |
+
+If state affects a domain invariant or must survive a restart, it does not
+belong in TUI state. If state only affects rendering or focus, it should not be
+promoted into domain or application services.
 
 ## Planning Boundary
 
-- TUI code should depend on `PlanningFeature` only.
-- External adapters should import planning contract constants and value types from `crate::application::service::planning`, not from planning's internal `authoring`, `runtime`, `repair`, `worker`, or `shared` modules.
-- `PlanningFeature` is split into `workspace`, `runtime`, and `worker` use cases.
-- Planning internals such as validation, prompt assembly, reconciliation, and proposal promotion stay behind those facades.
-- Planning-specific TUI flow lives under `src/adapter/inbound/tui/app/planning`.
-- Pure planning queue facts should be exposed by `crate::domain::planning`; prompt text and shell
-  status copy stay in application/TUI boundaries.
+Planning data follows the same rule:
 
-## Invariants
+```text
+adapter/inbound/tui -> application/service/planning -> application/port -> adapter/outbound/{db,filesystem}
+```
 
-- Mapping from protocol or filesystem shapes stays in adapters.
-- Domain types stay free of TUI, transport, and filesystem concerns.
-- Application services own orchestration and port calls, not pure collection projection or ranking rules.
-- New outbound capabilities still require ports owned by the application layer.
-- If a TUI change needs planning internals directly, the planning facade is missing an operation and should be extended instead of bypassed.
-- Outbound directory layout should make the storage boundary obvious at a glance, for example `outbound/db`, `outbound/github`, `outbound/filesystem`, and `outbound/app_server`.
+The durable planning authority is the SQLite-backed store. Filesystem plan
+artifacts are projections/workspace files. The TUI can hold temporary form state
+and selected IDs, but it must not decide durable planning truth.
+
+## Forbidden Directions
+
+- `domain` importing `application`, `core`, `adapter`, async runtime, or IO
+  crates.
+- `application` importing `core`, TUI, HTTP, Telegram, Ratatui, Crossterm, or
+  concrete outbound adapter modules.
+- `core` importing inbound adapter UI/transport types or concrete outbound
+  adapters.
+- TUI calling raw planning or parallel services when a core command or
+  application control-plane handle exists.
+- Outbound adapters encoding policy that belongs in application or domain.
+
+## Small-Context Rules
+
+- Keep DTOs and mappings close to the boundary that needs them.
+- Add a port only when a real outbound boundary exists.
+- Prefer small request/response structs over generic maps.
+- Keep command/effect/completion names explicit and boring.
+- Write architecture tests when a boundary is easy to regress.
+
+## Verification
+
+Use these gates for boundary-sensitive work:
+
+```bash
+source "$HOME/.cargo/env"
+cargo test --test architecture_boundaries
+cargo test
+cargo fmt --check
+```
+
+For broad native/TUI changes also run:
+
+```bash
+bash scripts/check_native_pr.sh
+```

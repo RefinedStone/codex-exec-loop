@@ -25,8 +25,12 @@ The canonical current contract for supersession, planning, and directions lives 
 ## Runtime Shape
 
 - Startup establishes whether the shell can submit, browse sessions, and enter planning-driven work.
+- `src/core` coordinates app-level startup, session/conversation, turn stream, completion, and
+  snapshot flow before inbound adapters render the result.
 - The operator moves between blank drafts, resumed threads, inspection overlays, and authoring
   flows without leaving the same terminal session.
+- Parallel-mode mutation is serialized through the application control-plane handle, with the TUI
+  rendering projections instead of deciding dispatch policy.
 - Accepted planning remains operator-owned through staged drafts and explicit promotion.
 - Invalid planning writes are restored, archived, and surfaced back to the operator instead of
   being silently accepted.
@@ -43,8 +47,10 @@ The canonical current contract for supersession, planning, and directions lives 
 
 ## Code Entry
 
+- Core app runtime: `src/core/`
 - Shell runtime entrypoint: `src/adapter/inbound/tui/app.rs`
 - Supersession shell entrypoint: `src/adapter/inbound/tui/app/parallel_mode.rs`
+- Supersession control-plane boundary: `src/application/service/parallel_mode/control_plane/`
 - Supersession application services: `src/application/service/parallel_mode/`
 - Session browser domain rules: `src/domain/session_browser.rs`
 - Session catalog application service: `src/application/service/session_service.rs`

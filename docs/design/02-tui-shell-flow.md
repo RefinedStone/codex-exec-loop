@@ -9,6 +9,8 @@ interaction flow and surface roles.
 ## Primary Loop
 
 - The shell starts in a startup-aware conversation surface.
+- The shell renders core app snapshots and sends user intent back as app commands where the core
+  runtime owns the lifecycle.
 - The operator can type before startup diagnostics finish.
 - Once diagnostics allow submission, the active prompt is submitted and live stream output stays attached to the bottom of the shell.
 - Completed assistant output moves into scrollback history while the live tail keeps the active prompt, transient stream text, and compact notices together.
@@ -38,10 +40,11 @@ interaction flow and surface roles.
 
 1. The operator types in the main composer or enters a `:` command.
 2. `Enter` submits when startup and runtime state allow it.
-3. Live stream output stays in the inline tail until turn completion.
-4. Tool activity, runtime notices, approval-review state, and warnings update the same shell surface.
-5. When the turn completes, assistant output is committed into normal scrollback history.
-6. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
+3. Core submits the turn effect and reduces stream completions into app state.
+4. Live stream output stays in the inline tail until turn completion.
+5. Tool activity, runtime notices, approval-review state, and warnings update the same shell surface.
+6. When the turn completes, assistant output is committed into normal scrollback history.
+7. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
 
 ## Planning And Continuation Flow
 
@@ -69,5 +72,6 @@ interaction flow and surface roles.
 
 ## Code Entry
 
+- Headless app runtime contracts live under `src/core`.
 - Generic shell state reducers live under `src/adapter/inbound/tui/app`.
 - Planning-specific TUI flow lives under `src/adapter/inbound/tui/app/planning`.
