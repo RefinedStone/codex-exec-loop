@@ -537,6 +537,7 @@ mod tests {
     use crate::core::app::{CorePromptOrigin, StartupReadySnapshot};
     use crate::domain::conversation::{
         ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationSnapshot,
+        ConversationTurnOptions,
     };
     use crate::domain::operator_alert::OperatorAlert;
     use crate::domain::planning::PlanningValidationReport;
@@ -1125,7 +1126,10 @@ mod tests {
         app.execute_inline_shell_command_input(
             InlineShellCommandInput::parse(":model gpt-5.4").expect("model command should parse"),
         );
-        assert_eq!(app.turn_options.model, None);
+        assert_eq!(
+            app.turn_options.model.as_deref(),
+            Some(ConversationTurnOptions::DEFAULT_MODEL)
+        );
         assert_eq!(app.shell_overlay, ShellOverlay::ModelSelection);
         assert!(
             ready_conversation(&app)
@@ -1160,7 +1164,10 @@ mod tests {
         );
 
         assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
-        assert_eq!(app.turn_options.reasoning_effort, None);
+        assert_eq!(
+            app.turn_options.reasoning_effort,
+            Some(ConversationTurnOptions::DEFAULT_REASONING_EFFORT)
+        );
     }
 
     #[test]

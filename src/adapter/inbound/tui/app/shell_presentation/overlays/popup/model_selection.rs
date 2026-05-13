@@ -1,6 +1,6 @@
 use super::super::super::{
-    AkraTheme, Line, MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS,
-    ModelSelectionStep, NativeTuiApp,
+    AkraTheme, ConversationTurnOptions, Line, MODEL_SELECTION_EFFORT_OPTIONS,
+    MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionStep, NativeTuiApp,
 };
 use super::super::option_lines::overlay_option_line;
 use super::ModelSelectionOverlayView;
@@ -87,14 +87,17 @@ fn build_model_selection_key_lines(step: ModelSelectionStep) -> Vec<Line<'static
 }
 
 fn current_model_label(app: &NativeTuiApp) -> &str {
-    app.turn_options.model.as_deref().unwrap_or("gpt-5.5")
+    app.turn_options
+        .model
+        .as_deref()
+        .unwrap_or(ConversationTurnOptions::DEFAULT_MODEL)
 }
 
 fn current_effort_label(app: &NativeTuiApp) -> &str {
     app.turn_options
         .reasoning_effort
-        .map(|effort| effort.label())
-        .unwrap_or("medium")
+        .unwrap_or(ConversationTurnOptions::DEFAULT_REASONING_EFFORT)
+        .label()
 }
 
 fn with_current_suffix(detail: &str, current: bool) -> String {

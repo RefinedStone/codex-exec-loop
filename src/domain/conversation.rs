@@ -133,17 +133,31 @@ impl ConversationReasoningEffort {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 // ConversationTurnOptions is the per-turn override bundle for interactive user
-// sessions. None means "let app-server use its current/default setting".
+// sessions. The default is Akra's project-level model policy, not the provider
+// fallback. None still means "let app-server use its current/default setting"
+// when a caller explicitly needs that boundary behavior.
 pub struct ConversationTurnOptions {
     pub model: Option<String>,
     pub reasoning_effort: Option<ConversationReasoningEffort>,
 }
 
 impl ConversationTurnOptions {
+    pub const DEFAULT_MODEL: &'static str = "gpt-5.5";
+    pub const DEFAULT_REASONING_EFFORT: ConversationReasoningEffort =
+        ConversationReasoningEffort::High;
+
+    pub fn app_server_default() -> Self {
+        Self {
+            model: None,
+            reasoning_effort: None,
+        }
+    }
+
     pub fn is_default(&self) -> bool {
-        self.model.is_none() && self.reasoning_effort.is_none()
+        self.model.as_deref() == Some(Self::DEFAULT_MODEL)
+            && self.reasoning_effort == Some(Self::DEFAULT_REASONING_EFFORT)
     }
 
     pub fn summary_label(&self) -> String {
@@ -154,6 +168,15 @@ impl ConversationTurnOptions {
                 .map(ConversationReasoningEffort::label)
                 .unwrap_or("default")
         )
+    }
+}
+
+impl Default for ConversationTurnOptions {
+    fn default() -> Self {
+        Self {
+            model: Some(Self::DEFAULT_MODEL.to_string()),
+            reasoning_effort: Some(Self::DEFAULT_REASONING_EFFORT),
+        }
     }
 }
 
@@ -272,5 +295,31 @@ impl Default for ConversationRuntimeControlTruth {
          * truth instead of silently inheriting unsupported control affordances.
          */
         Self::codex_app_server()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_options_default_to_akra_project_model_policy() {
+        let options = ConversationTurnOptions::default();
+
+        assert_eq!(options.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(
+            options.reasoning_effort,
+            Some(ConversationReasoningEffort::High)
+        );
+        assert!(options.is_default());
+    }
+
+    #[test]
+    fn app_server_default_is_explicit_and_not_project_default() {
+        let options = ConversationTurnOptions::app_server_default();
+
+        assert_eq!(options.model, None);
+        assert_eq!(options.reasoning_effort, None);
+        assert!(!options.is_default());
     }
 }

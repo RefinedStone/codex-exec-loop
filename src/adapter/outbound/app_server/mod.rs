@@ -851,6 +851,15 @@ mod tests {
                 "turn/start"
             ]
         );
+        let turn_starts = fake_codex
+            .logged_requests()
+            .into_iter()
+            .filter(|request| request["method"] == "turn/start")
+            .collect::<Vec<_>>();
+        assert_eq!(turn_starts[0]["params"]["model"], "gpt-5.5");
+        assert_eq!(turn_starts[0]["params"]["effort"], "high");
+        assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.5");
+        assert_eq!(turn_starts[1]["params"]["effort"], "high");
     }
 
     #[test]
