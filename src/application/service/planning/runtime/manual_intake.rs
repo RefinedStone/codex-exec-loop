@@ -32,7 +32,6 @@ pub struct ManualPromptMainSessionHandoff {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // manual intake outcome은 task authority 변경 여부를 명시한다. Failed도 값으로 내려 TUI가 main turn 시작을 막을 수 있다.
 pub enum ManualPromptIntakeOutcome {
-    NoTaskNeeded(ManualPromptMainSessionHandoff),
     TaskCommitted {
         committed_task_id: String,
         committed_planning_revision: i64,
@@ -54,7 +53,8 @@ pub enum ManualPromptIntakeOutcome {
 #[derive(Clone)]
 /*
  * ManualPromptIntakeService는 수동 prompt와 main-session 사이의 hidden preflight다.
- * task 생성/queue 선택은 여기서 끝내고, main-session에는 작은 handoff 또는 즉답 prompt만 전달한다.
+ * 비어 있지 않은 operator prompt는 의미를 임의 분류하지 않고 task authority로 보낸 뒤
+ * main-session에는 작은 handoff만 전달한다.
  */
 pub struct ManualPromptIntakeService {
     task_intake: PlanningTaskIntakeService,
@@ -90,27 +90,6 @@ impl ManualPromptIntakeService {
                 "prompt_chars": transcript_text.chars().count(),
             })
         });
-
-        if prompt_can_use_direct_response(&transcript_text) {
-            return match self.runtime_facade.build_manual_prompt(&transcript_text) {
-                Some(prompt) => {
-                    event_log::emit_lazy("manual_intake_no_task_needed", || {
-                        json!({
-                            "workspace_directory": &request.workspace_directory,
-                            "prompt_chars": transcript_text.chars().count(),
-                        })
-                    });
-                    ManualPromptIntakeOutcome::NoTaskNeeded(ManualPromptMainSessionHandoff {
-                        prompt,
-                        transcript_text,
-                        task: None,
-                    })
-                }
-                None => ManualPromptIntakeOutcome::Rejected {
-                    reason: "manual prompt is empty".to_string(),
-                },
-            };
-        }
 
         let outcome = self.commit_prompt_as_task(&request, &transcript_text);
         match &outcome {
@@ -191,77 +170,6 @@ impl ManualPromptIntakeService {
     }
 }
 
-fn prompt_can_use_direct_response(prompt: &str) -> bool {
-    let normalized = prompt.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return true;
-    }
-    let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    let has_action_intent = [
-        "implement",
-        "fix",
-        "add",
-        "change",
-        "create",
-        "update",
-        "delete",
-        "write",
-        "build",
-        "test",
-        "refactor",
-        "review",
-        "구현",
-        "수정",
-        "추가",
-        "변경",
-        "삭제",
-        "작성",
-        "테스트",
-        "리뷰",
-    ]
-    .iter()
-    .any(|keyword| compact.contains(keyword));
-    if has_action_intent {
-        return false;
-    }
-    if matches!(
-        compact.as_str(),
-        "hi" | "hello"
-            | "hey"
-            | "안녕"
-            | "안녕하세요"
-            | "thanks"
-            | "thank you"
-            | "고마워"
-            | "감사합니다"
-    ) {
-        return true;
-    }
-    let question_prefix = [
-        "what ",
-        "how ",
-        "why ",
-        "when ",
-        "where ",
-        "who ",
-        "is ",
-        "are ",
-        "can ",
-        "does ",
-        "do ",
-        "뭐",
-        "무엇",
-        "어떻게",
-        "왜",
-        "언제",
-        "어디",
-        "누구",
-    ]
-    .iter()
-    .any(|prefix| compact.starts_with(prefix));
-    question_prefix || compact.ends_with('?')
-}
-
 pub(super) fn manual_intake_handoff_from_task(
     task: &TaskDefinition,
     _direction_title: &str,
@@ -325,15 +233,115 @@ pub(super) fn manual_intake_task_prompt(
 
 #[cfg(test)]
 mod tests {
-    use super::prompt_can_use_direct_response;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::Arc;
+
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::service::planning::{
+        ManualPromptIntakeOutcome, ManualPromptIntakeRequest, PlanningServices,
+    };
 
     #[test]
-    fn direct_response_classifier_keeps_greetings_and_questions_out_of_task_authority() {
-        assert!(prompt_can_use_direct_response("안녕하세요"));
-        assert!(prompt_can_use_direct_response("How does the queue work?"));
-        assert!(!prompt_can_use_direct_response(
-            "fix the manual prompt boundary"
-        ));
-        assert!(!prompt_can_use_direct_response("hidden intake를 구현해줘"));
+    fn manual_prompt_intake_commits_greetings_and_questions_as_tasks() {
+        let workspace_dir = create_temp_git_repo("manual-intake-no-heuristic");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = PlanningServices::from_ports(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            authority.clone(),
+            authority,
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        bootstrap_planning_workspace(&planning, &workspace_dir);
+
+        for (prompt, expected_title) in [
+            ("안녕하세요 ?", "안녕하세요"),
+            ("How does the queue work?", "How does the queue work"),
+        ] {
+            let outcome =
+                planning
+                    .runtime
+                    .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                        workspace_directory: workspace_dir.clone(),
+                        raw_prompt: prompt.to_string(),
+                        legacy_source_turn_id: None,
+                        parent_thread_id: None,
+                        parent_turn_id: None,
+                    });
+
+            let ManualPromptIntakeOutcome::TaskCommitted { handoff, .. } = outcome else {
+                panic!("manual prompt should be committed as a task: {outcome:?}");
+            };
+            let task = handoff
+                .task
+                .expect("committed manual intake should carry a task handoff");
+            assert_eq!(task.task_title, expected_title);
+            assert_eq!(handoff.transcript_text, prompt);
+        }
+    }
+
+    fn bootstrap_planning_workspace(planning: &PlanningServices, workspace_dir: &str) {
+        let stage_result = planning
+            .workspace
+            .stage_simple_mode_draft(workspace_dir)
+            .expect("planning workspace should stage");
+        let promote_result = planning
+            .workspace
+            .promote_staged_draft(workspace_dir, &stage_result.draft_name)
+            .expect("planning workspace should promote");
+        assert!(
+            promote_result.promoted_file_count > 0,
+            "bootstrap planning workspace should become ready"
+        );
+    }
+
+    fn create_temp_git_repo(prefix: &str) -> String {
+        let root = PathBuf::from(create_temp_workspace(prefix)).join("repo");
+        std::fs::create_dir_all(&root).expect("temp git repo should be created");
+
+        run_git(&root, &["init", "-q"]);
+        run_git(&root, &["config", "user.name", "RefinedStone"]);
+        run_git(&root, &["config", "user.email", "chem.en.9273@gmail.com"]);
+        std::fs::write(root.join("README.md"), "seed\n").expect("seed file should write");
+        run_git(&root, &["add", "README.md"]);
+        run_git(&root, &["commit", "-qm", "init"]);
+        run_git(&root, &["branch", "prerelease"]);
+        run_git(
+            &root,
+            &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
+        );
+
+        std::fs::canonicalize(&root)
+            .expect("temp git repo should canonicalize")
+            .display()
+            .to_string()
+    }
+
+    fn create_temp_workspace(prefix: &str) -> String {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"));
+        std::fs::create_dir_all(&path).expect("temp workspace should be created");
+        path.display().to_string()
+    }
+
+    fn run_git(repo_root: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(repo_root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git command should spawn");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 }

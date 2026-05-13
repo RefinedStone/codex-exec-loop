@@ -210,7 +210,7 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(event_lines.contains("Operator: first user word: run next"));
+    assert!(event_lines.contains("You: run next"));
     assert!(
         event_lines.contains("Task Intake: committed task"),
         "Enter should route the buffered prompt through task intake: {event_lines}"
