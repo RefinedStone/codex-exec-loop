@@ -62,6 +62,14 @@ pub(super) fn draw_inline_shell_inspection(
     }
 }
 
+pub(super) fn draw_inline_parallel_mode_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+) {
+    draw_inline_supersession_inspection(frame, area, app);
+}
+
 fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_parallel_peek_overlay_view(app);
     let ParallelPeekOverlayView {

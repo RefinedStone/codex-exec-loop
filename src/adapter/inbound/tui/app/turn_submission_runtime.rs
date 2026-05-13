@@ -15,6 +15,7 @@ use crate::application::service::planning::{
     ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
 use crate::core::app::{AppCommand, CorePromptOrigin, TurnSubmissionRequest};
+use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use post_turn_execution::PostTurnEvaluationRequest;
 
 use super::planning_worker_debug_preview::build_debug_preview_lines;
@@ -196,6 +197,23 @@ impl NativeTuiApp {
         if transcript_text.is_empty() {
             return;
         }
+        if self.parallel_mode_enabled() {
+            self.show_supersession_overlay();
+            self.record_parallel_supervisor_event(
+                "Operator",
+                format!(
+                    "first user word: {}",
+                    truncate_parallel_prompt_event_text(&transcript_text, 96)
+                ),
+            );
+            self.record_parallel_supervisor_event(
+                "Task Intake",
+                "task generation started from the operator prompt.",
+            );
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "parallel task intake: preparing operator prompt".to_string(),
+            });
+        }
 
         let workspace_directory = self.planning_workspace_directory();
         let (parent_thread_id, parent_turn_id) = match &self.conversation_state {
@@ -301,6 +319,11 @@ impl NativeTuiApp {
         outcome: ManualPromptIntakeOutcome,
         transcript_text: String,
     ) {
+        if self.parallel_mode_enabled() {
+            self.apply_parallel_manual_prompt_intake_outcome(outcome, transcript_text);
+            return;
+        }
+
         match outcome {
             ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
                 if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
@@ -336,6 +359,116 @@ impl NativeTuiApp {
                 );
             }
         }
+    }
+
+    fn apply_parallel_manual_prompt_intake_outcome(
+        &mut self,
+        outcome: ManualPromptIntakeOutcome,
+        transcript_text: String,
+    ) {
+        match outcome {
+            ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
+                if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
+                    return;
+                }
+                self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+                self.record_parallel_supervisor_event(
+                    "Task Intake",
+                    "no parallel task was committed; waiting for an actionable operator prompt.",
+                );
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: "parallel task intake: no task committed".to_string(),
+                });
+            }
+            ManualPromptIntakeOutcome::TaskCommitted {
+                committed_task_id,
+                committed_planning_revision,
+                handoff,
+            } => {
+                self.apply_parallel_task_handoff(
+                    "committed",
+                    committed_task_id,
+                    committed_planning_revision,
+                    handoff,
+                );
+            }
+            ManualPromptIntakeOutcome::TaskUpdated {
+                updated_task_id,
+                committed_planning_revision,
+                handoff,
+            } => {
+                self.apply_parallel_task_handoff(
+                    "updated",
+                    updated_task_id,
+                    committed_planning_revision,
+                    handoff,
+                );
+            }
+            ManualPromptIntakeOutcome::Rejected { reason }
+            | ManualPromptIntakeOutcome::Failed { reason } => {
+                self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+                self.record_parallel_supervisor_event(
+                    "Task Intake",
+                    format!(
+                        "task generation failed for `{}` / {}",
+                        truncate_parallel_prompt_event_text(&transcript_text, 56),
+                        reason
+                    ),
+                );
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("parallel task intake failed / {reason}"),
+                });
+            }
+        }
+    }
+
+    fn apply_parallel_task_handoff(
+        &mut self,
+        verb: &str,
+        task_id: String,
+        committed_planning_revision: i64,
+        handoff: crate::application::service::planning::ManualPromptMainSessionHandoff,
+    ) {
+        if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
+            return;
+        }
+        if let Some(conversation) = self.take_ready_conversation_state() {
+            let mut conversation = conversation;
+            conversation.record_manual_intake_handoff(handoff.task.as_ref());
+            self.conversation_state = ConversationState::ready(conversation);
+        }
+        self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+
+        let task_title = handoff
+            .task
+            .as_ref()
+            .map(|task| task.task_title.as_str())
+            .unwrap_or("untitled task");
+        self.record_parallel_supervisor_event(
+            "Task Intake",
+            format!(
+                "{} task {} / rev {} / {}",
+                verb,
+                task_id,
+                committed_planning_revision,
+                truncate_parallel_prompt_event_text(task_title, 72)
+            ),
+        );
+        self.record_parallel_supervisor_event(
+            "Orchestrator",
+            "task intake dispatch requested for the parallel pool.",
+        );
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: format!("parallel task intake: {verb} {task_id} / dispatch requested"),
+        });
+
+        let workspace_directory = self.planning_workspace_directory();
+        self.open_parallel_mode_automation_epoch(workspace_directory.clone());
+        self.request_parallel_mode_dispatch(
+            workspace_directory,
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            None,
+        );
     }
 
     fn manual_prompt_preparation_still_matches_input(&self, transcript_text: &str) -> bool {
@@ -454,6 +587,18 @@ fn prompt_origin_label(prompt_origin: &PromptOrigin) -> &'static str {
         PromptOrigin::ManualIntake(_) => "ManualIntake",
         PromptOrigin::AutoFollow(_) => "AutoFollow",
     }
+}
+
+fn truncate_parallel_prompt_event_text(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut truncated = trimmed.chars().take(keep).collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 fn core_prompt_origin(prompt_origin: &PromptOrigin) -> CorePromptOrigin {
@@ -1024,6 +1169,76 @@ mod tests {
                 "make task"
             );
         }
+    }
+
+    #[test]
+    fn parallel_manual_intake_stays_on_supervisor_layer_without_main_turn() {
+        let workspace = TempWorkspace::new("turn-submit-parallel-manual-intake");
+        let mut no_task_app = make_test_app(&workspace);
+        no_task_app.set_parallel_mode_enabled_for_test(true);
+        set_input(&mut no_task_app, "안녕하세요");
+
+        no_task_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            transcript_text: "안녕하세요".to_string(),
+            runtime_projection: runtime_projection(),
+            intake: Box::new(ManualPromptIntakeOutcome::NoTaskNeeded(handoff(
+                "wrapped answer",
+                "안녕하세요",
+                None,
+            ))),
+        });
+
+        let no_task_conversation = ready_conversation(&no_task_app);
+        assert!(no_task_conversation.messages.is_empty());
+        assert_eq!(no_task_conversation.input_buffer, "");
+        assert_eq!(
+            no_task_conversation.status_text,
+            "parallel task intake: no task committed"
+        );
+        assert!(
+            no_task_app
+                .parallel_supervisor_event_lines()
+                .iter()
+                .any(|line| line
+                    .to_string()
+                    .contains("Task Intake: no parallel task was committed"))
+        );
+
+        let task = sample_handoff_task();
+        let mut committed_app = make_test_app(&workspace);
+        committed_app.set_parallel_mode_enabled_for_test(true);
+        set_input(&mut committed_app, "turn this into a task");
+
+        committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            transcript_text: "turn this into a task".to_string(),
+            runtime_projection: runtime_projection(),
+            intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
+                committed_task_id: task.task_id.clone(),
+                committed_planning_revision: 7,
+                handoff: handoff(
+                    "wrapped task prompt",
+                    "turn this into a task",
+                    Some(task.clone()),
+                ),
+            }),
+        });
+
+        let committed_conversation = ready_conversation(&committed_app);
+        assert!(committed_conversation.messages.is_empty());
+        assert_eq!(committed_conversation.input_buffer, "");
+        assert_eq!(
+            committed_conversation.last_planning_task_handoff(),
+            Some(&task)
+        );
+        assert_ne!(committed_conversation.status_text, "starting turn");
+        let event_lines = committed_app
+            .parallel_supervisor_event_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(event_lines.contains("Task Intake: committed task task-1"));
+        assert!(event_lines.contains("Orchestrator: task intake dispatch requested"));
     }
 
     #[test]
