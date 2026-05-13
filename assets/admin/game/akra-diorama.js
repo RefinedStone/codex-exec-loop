@@ -82,84 +82,76 @@
 	};
 	var STRUCTURE_SPECS = [
 		{
-			key: "whiteboard",
-			x: 530,
-			y: 190,
-			scale: .2,
-			anchorX: .5,
-			anchorY: 1
-		},
-		{
-			key: "desk",
-			x: 480,
+			key: "fdDesk1",
+			x: 470,
 			y: 405,
-			scale: .24
+			scale: .62
 		},
 		{
-			key: "desk",
-			x: 670,
+			key: "fdDesk2",
+			x: 660,
 			y: 330,
-			scale: .24
+			scale: .62
 		},
 		{
-			key: "desk",
-			x: 515,
+			key: "fdDesk3",
+			x: 505,
 			y: 600,
-			scale: .24
+			scale: .62
 		},
 		{
-			key: "desk",
-			x: 790,
-			y: 550,
-			scale: .24
+			key: "fdDesk4",
+			x: 785,
+			y: 548,
+			scale: .6
 		},
 		{
-			key: "desk",
-			x: 1055,
+			key: "fdDesk5",
+			x: 1048,
 			y: 555,
-			scale: .24
+			scale: .58
 		},
 		{
-			key: "desk",
-			x: 845,
-			y: 245,
-			scale: .3
+			key: "fdBossDesk",
+			x: 840,
+			y: 260,
+			scale: .58
 		},
 		{
-			key: "desk",
-			x: 1050,
-			y: 295,
-			scale: .25
+			key: "fdDistributorDesk",
+			x: 1075,
+			y: 315,
+			scale: .62
 		},
 		{
-			key: "server",
-			x: 1325,
-			y: 430,
-			scale: .34
+			key: "fdEventLogTower",
+			x: 1332,
+			y: 520,
+			scale: .82
 		},
 		{
-			key: "sofa",
-			x: 780,
+			key: "fdSofa",
+			x: 805,
 			y: 760,
-			scale: .28
+			scale: .62
 		},
 		{
-			key: "plant",
+			key: "fdPlant",
 			x: 615,
 			y: 505,
-			scale: .1
+			scale: .7
 		},
 		{
-			key: "plant",
+			key: "fdPlant",
 			x: 925,
 			y: 485,
-			scale: .1
+			scale: .7
 		},
 		{
-			key: "plant",
+			key: "fdPlant",
 			x: 1185,
 			y: 620,
-			scale: .1
+			scale: .7
 		}
 	];
 	(() => {
@@ -186,12 +178,16 @@
 			PIXI.BaseTexture.defaultOptions.scaleMode = PIXI.SCALE_MODES.NEAREST;
 			const basePath = "/admin/assets/graphics/";
 			const assets = {
-				floor: basePath + "sprite_floor_tile.png",
-				desk: basePath + "sprite_desk_workstation.png",
-				server: basePath + "sprite_server_rack.png",
-				whiteboard: basePath + "sprite_whiteboard.png",
-				sofa: basePath + "sprite_sofa.png",
-				plant: basePath + "sprite_potted_plant.png",
+				fdDesk1: basePath + "sprite_fd_desk_1.png",
+				fdDesk2: basePath + "sprite_fd_desk_2.png",
+				fdDesk3: basePath + "sprite_fd_desk_3.png",
+				fdDesk4: basePath + "sprite_fd_desk_4.png",
+				fdDesk5: basePath + "sprite_fd_desk_5.png",
+				fdBossDesk: basePath + "sprite_fd_boss_desk.png",
+				fdDistributorDesk: basePath + "sprite_fd_distributor_desk.png",
+				fdEventLogTower: basePath + "sprite_fd_event_log_tower.png",
+				fdSofa: basePath + "sprite_fd_sofa.png",
+				fdPlant: basePath + "sprite_fd_potted_plant.png",
 				agentAtlas: basePath + "gamebaljeonguk_atlas_128x192.png"
 			};
 			const root = boardEl.closest("[data-admin-graphic]");
