@@ -486,6 +486,9 @@ impl NativeTuiApp {
         &mut self,
         snapshot: Option<ParallelModeSupervisorSnapshot>,
     ) {
+        if let Some(snapshot) = snapshot.as_ref() {
+            self.record_parallel_supervisor_runtime_feed_for_scrollback(snapshot);
+        }
         self.dispatch_core_input(CoreInput::ParallelModeSupervisorProjectionChanged(
             snapshot.map(Box::new),
         ));
