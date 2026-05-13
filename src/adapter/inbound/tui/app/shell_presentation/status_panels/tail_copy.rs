@@ -18,9 +18,6 @@ use super::super::{
     ShellOverlay, StartupState, auto_follow_prompt_status_line, build_working_line,
     compact_inline_detail, inline_input_state_label, turn_status_label,
 };
-use super::plan_indicator::{
-    PlanModeIndicatorView, current_plan_mode_indicator, plan_mode_prefixed_spans,
-};
 use super::tail_shared::{
     build_operator_notice_line, compact_auto_follow_status_summary, compact_inline_summary_label,
     inline_thread_label, parallel_mode_alert_line, parallel_mode_summary_line,
@@ -40,8 +37,6 @@ pub(super) fn build_inline_tail_lines_with_context(
     context: &ShellCorePresentationContext<'_>,
     github_review_recent_changes_summary: Option<String>,
 ) -> Vec<Line<'static>> {
-    let plan_mode_indicator = current_plan_mode_indicator(app);
-
     /*
     Planning projection is computed before state branching because both the ready
     tail and prompt affordance lines need the same compact limits. Keeping this
@@ -87,13 +82,10 @@ pub(super) fn build_inline_tail_lines_with_context(
             terminal layout needs stable prompt/status rows even before a thread
             snapshot exists. These branches avoid conversation-only helpers.
             */
-            lines.push(Line::from(plan_mode_prefixed_spans(
-                format!(
-                    "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
-                    context.shell_action_availability.status_text(),
-                    context.recent_session_status_label.as_str(),
-                ),
-                plan_mode_indicator,
+            lines.push(Line::from(format!(
+                "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
+                context.shell_action_availability.status_text(),
+                context.recent_session_status_label.as_str(),
             )));
             lines.push(Line::from(format!(
                 "runtime: loading thread history  |  gh: {}  |  flow: terminal main buffer",
@@ -105,13 +97,10 @@ pub(super) fn build_inline_tail_lines_with_context(
             )));
         }
         ShellConversationState::Failed(message) => {
-            lines.push(Line::from(plan_mode_prefixed_spans(
-                format!(
-                    "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
-                    context.shell_action_availability.status_text(),
-                    context.recent_session_status_label.as_str(),
-                ),
-                plan_mode_indicator,
+            lines.push(Line::from(format!(
+                "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
+                context.shell_action_availability.status_text(),
+                context.recent_session_status_label.as_str(),
             )));
             lines.push(Line::from(format!(
                 "runtime: unavailable  |  gh: {}  |  flow: terminal main buffer",
@@ -138,31 +127,27 @@ pub(super) fn build_inline_tail_lines_with_context(
             expensive detail expansion and reserve later rows for planning, worker,
             transcript, and notice detail that may appear only in specific states.
             */
-            lines.push(build_ready_status_ribbon_line(
-                conversation,
-                plan_mode_indicator,
-            ));
-            lines.push(Line::from(format!(
-                "status: {}  |  startup: {}  |  gh: {}",
-                compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT),
-                context.shell_action_availability.status_text(),
-                context.github_review_polling_status_label.as_str(),
-            )));
+            lines.push(build_ready_status_ribbon_line(conversation));
+            lines.push(build_ready_status_detail_line(conversation, context));
             if let Some(completion_line) = build_completion_alert_line(conversation) {
                 lines.push(completion_line);
             }
-            lines.push(Line::from(format!(
-                "runtime: {}  |  {}",
-                runtime_notice_summary.as_deref().unwrap_or("clear"),
-                warning_summary,
-            )));
+            if runtime_notice_summary.is_some() || warning_summary_has_signal(&warning_summary) {
+                lines.push(Line::from(format!(
+                    "runtime: {}  |  {}",
+                    runtime_notice_summary.as_deref().unwrap_or("clear"),
+                    warning_summary,
+                )));
+            }
             if !app.turn_options.is_default() {
                 lines.push(Line::from(format!(
                     "turn options: {}",
                     app.turn_options.summary_label()
                 )));
             }
-            lines.push(Line::from(parallel_mode_summary_line(app)));
+            if let Some(parallel_summary_line) = parallel_mode_summary_line(app) {
+                lines.push(Line::from(parallel_summary_line));
+            }
 
             if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(app) {
                 /*
@@ -221,27 +206,67 @@ pub(super) fn build_inline_tail_lines_with_context(
     ));
     lines
 }
-fn build_ready_status_ribbon_line(
-    conversation: &ConversationViewModel,
-    plan_mode_indicator: PlanModeIndicatorView,
-) -> Line<'static> {
+fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<'static> {
     /*
     The ribbon is the single-line state index for the ready shell. It carries
-    thread identity, turn lifecycle, input readiness, auto-follow policy, and
-    completion progress so downstream lines can focus on details instead of
-    repeating the same labels.
+    thread identity, turn lifecycle, and input readiness. Auto-follow details are
+    only added while an automatic chain has useful state to report.
     */
-    Line::from(plan_mode_prefixed_spans(
+    let mut parts = vec![
+        "Akra".to_string(),
+        format!("thread: {}", inline_thread_label(conversation)),
+        format!("turn: {}", turn_status_label(conversation)),
         format!(
-            "Akra  |  thread: {}  |  turn: {}  |  input: {}  |  auto: {}  |  done: {}",
-            inline_thread_label(conversation),
-            turn_status_label(conversation),
-            inline_input_state_label(conversation.input_state),
-            compact_auto_follow_status_summary(conversation, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,),
-            conversation.auto_follow_state.progress_label(),
+            "input: {}",
+            inline_input_state_label(conversation.input_state)
         ),
-        plan_mode_indicator,
-    ))
+    ];
+    if should_show_auto_follow_status(conversation) {
+        parts.push(format!(
+            "auto: {}",
+            compact_auto_follow_status_summary(conversation, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,)
+        ));
+        parts.push(format!(
+            "done: {}",
+            conversation.auto_follow_state.progress_label()
+        ));
+    }
+
+    Line::from(parts.join("  |  "))
+}
+
+fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool {
+    conversation.auto_follow_state.has_live_activity()
+        || conversation
+            .auto_follow_state
+            .post_turn_continuation_paused()
+        || conversation.auto_follow_state.completed_auto_turns > 0
+}
+
+fn build_ready_status_detail_line(
+    conversation: &ConversationViewModel,
+    context: &ShellCorePresentationContext<'_>,
+) -> Line<'static> {
+    let mut parts = vec![format!(
+        "status: {}",
+        compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT)
+    )];
+    if context.shell_action_availability != ShellActionAvailability::Ready {
+        parts.push(format!(
+            "startup: {}",
+            context.shell_action_availability.status_text()
+        ));
+    }
+    let github_status = context.github_review_polling_status_label.as_str();
+    if github_status != "off" {
+        parts.push(format!("gh: {github_status}"));
+    }
+
+    Line::from(parts.join("  |  "))
+}
+
+fn warning_summary_has_signal(warning_summary: &str) -> bool {
+    !matches!(warning_summary.trim(), "warn: none" | "none")
 }
 
 fn build_completion_alert_line(conversation: &ConversationViewModel) -> Option<Line<'static>> {

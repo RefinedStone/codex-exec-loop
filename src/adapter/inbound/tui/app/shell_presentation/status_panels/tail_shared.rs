@@ -23,7 +23,7 @@ pub(super) fn current_live_agent_lines(
     Some(format_conversation_lines(std::slice::from_ref(message)))
 }
 
-pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
+pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> Option<String> {
     /*
      * parallel mode summary는 readiness, mode toggle, pool, roster, distributor queue를 한 줄로 압축한다.
      * supersession overlay와 footer가 모두 이 문장을 읽으므로, app-wide snapshot 조합을 이곳에 둔다.
@@ -31,7 +31,7 @@ pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
     match app.parallel_mode_readiness_snapshot() {
         Some(snapshot) => {
             let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
-            format!(
+            Some(format!(
                 "parallel: {}  |  mode: {}  |  pool: {}  |  agents: {}  |  queue: {}",
                 snapshot.readiness_label(),
                 if app.parallel_mode_enabled() {
@@ -42,22 +42,22 @@ pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> String {
                 supervisor_snapshot.pool.compact_summary(),
                 supervisor_snapshot.roster.compact_summary(),
                 supervisor_snapshot.distributor.compact_summary(),
-            )
+            ))
         }
         /*
          * mode는 켜졌지만 readiness snapshot이 아직 없으면 background reconcile 전이다.
          * 이 상태를 "off"로 보이면 사용자가 toggle이 먹지 않았다고 오해하므로 preparing copy를 별도로 둔다.
          */
         None if app.parallel_mode_enabled() => {
-            "parallel: preparing  |  mode: parallel  |  pool: pending reconcile  |  agents: 0 active  |  queue: pending".to_string()
+            Some(
+                "parallel: preparing  |  mode: parallel  |  pool: pending reconcile  |  agents: 0 active  |  queue: pending".to_string(),
+            )
         }
         /*
          * snapshot도 없고 mode도 꺼져 있으면 parallel subsystem은 의도적으로 inactive다.
-         * pool/agents/queue를 모두 inactive로 맞춰 readiness failure와 구분한다.
+         * 이 상태는 operator가 조치할 정보가 없으므로 inline tail에서는 숨긴다.
          */
-        None => {
-            "parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |  queue: inactive".to_string()
-        }
+        None => None,
     }
 }
 

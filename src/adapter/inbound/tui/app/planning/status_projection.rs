@@ -370,16 +370,24 @@ fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> Stri
 }
 
 fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'static>> {
-    vec![
-        Line::from(format!(
+    let mut lines = Vec::new();
+    if detail_has_signal(&details.now_detail) || detail_has_signal(&details.next_detail) {
+        lines.push(Line::from(format!(
             "now: {}{STATUS_SEGMENT_SEPARATOR}next: {}",
             details.now_detail, details.next_detail
-        )),
-        Line::from(format!(
+        )));
+    }
+    if detail_has_signal(&details.proposed_detail) || detail_has_signal(&details.blocked_detail) {
+        lines.push(Line::from(format!(
             "proposed: {}{STATUS_SEGMENT_SEPARATOR}blocked: {}",
             details.proposed_detail, details.blocked_detail
-        )),
-    ]
+        )));
+    }
+    lines
+}
+
+fn detail_has_signal(detail: &str) -> bool {
+    detail.trim() != "none"
 }
 
 fn queue_framing_summary_from_details(details: &QueueFramingDetails) -> String {
@@ -405,8 +413,8 @@ fn queue_framing_summary_from_parts(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_queue_framing_summary_from_projection, build_resumed_session_status_text,
-        compact_queue_framing_summary,
+        build_queue_framing_lines_from_projection, build_queue_framing_summary_from_projection,
+        build_resumed_session_status_text, compact_queue_framing_summary,
     };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::domain::planning::{
@@ -509,6 +517,36 @@ mod tests {
         assert_eq!(
             compact_queue_framing_summary("now: Review overlays", 96),
             "now: Review overlays  |  next: none  |  proposed: none  |  blocked: none"
+        );
+    }
+
+    #[test]
+    fn queue_framing_lines_hide_empty_none_only_rows() {
+        let idle_projection = PlanningRuntimeProjection::ready_with_details(
+            "Planning Context".to_string(),
+            "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+            None,
+            None,
+        )
+        .with_workspace_present(true);
+        let idle_lines = build_queue_framing_lines_from_projection(&idle_projection, 96);
+        assert!(idle_lines.is_empty());
+
+        let blocked_projection = PlanningRuntimeProjection::ready_with_details(
+            "Planning Context".to_string(),
+            "now: none  |  next: none  |  proposed: none  |  blocked: Follow blocked review"
+                .to_string(),
+            None,
+            None,
+        )
+        .with_workspace_present(true);
+        let blocked_lines = build_queue_framing_lines_from_projection(&blocked_projection, 96)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            blocked_lines,
+            vec!["proposed: none  |  blocked: Follow blocked review"]
         );
     }
     fn queue_task(task_id: &str, title: &str, rank: usize) -> PriorityQueueTask {

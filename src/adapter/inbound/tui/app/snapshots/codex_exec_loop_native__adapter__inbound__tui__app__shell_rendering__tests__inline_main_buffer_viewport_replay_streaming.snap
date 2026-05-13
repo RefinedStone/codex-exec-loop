@@ -2,14 +2,14 @@
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: rendered
 ---
+"                                                                                "
+"                                                                                "
+"                                                                                "
 "Codex:                                                                          "
 "  streaming reply still visible                                                 "
-"Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto:     "
-"queue/idle  |  done: 0/20  |  Plan ready / ready                                "
-"status: turn started  |  startup: startup ready  |  gh: off                     "
-"runtime: clear  |  warn: none                                                   "
-"parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |       "
-"queue: inactive                                                                 "
+"                                                                                "
+"Akra  |  thread: new draft  |  turn: working  |  input: streaming               "
+"status: turn started                                                            "
 "◦ Working (0s • turn running / interrupt unsupported)                           "
 "planning: stale  |  queue: queue head: rank 1 / terminal-bri...                 "
 "now: Implement shell planning status  |  next: Trim legacy shell code           "

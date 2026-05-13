@@ -10,7 +10,7 @@ use super::NativeTuiApp;
 // Width-aware inline tail layout owns cursor placement and top-anchored startup behavior.
 #[path = "status_panels/live_status_layout.rs"]
 mod live_status_layout;
-// Planning indicator vocabulary is centralized here so footer and workspace popup copy do not diverge.
+// Planning substate vocabulary is centralized here so workspace popup copy stays consistent.
 #[path = "status_panels/plan_indicator.rs"]
 mod plan_indicator;
 // Tail copy builds the textual ribbon; live_status_layout decides how that ribbon occupies terminal rows.

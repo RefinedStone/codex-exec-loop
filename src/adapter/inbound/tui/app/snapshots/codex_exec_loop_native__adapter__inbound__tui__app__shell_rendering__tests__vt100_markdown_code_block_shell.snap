@@ -5,16 +5,16 @@ expression: rendered
 
 
 
+
+
+
 Codex:
   ```rust
   let ok = true;
   ```
 
-Akra  |  thread: new draft  |  turn: working  |  input: streaming  |  auto: queue/idle  |  done:
-0/20  |  Plan setup / idle
-status: new thread draft  |  startup: startup ready  |  gh: off
-runtime: clear  |  warn: none
-parallel: off  |  mode: normal  |  pool: inactive  |  agents: inactive  |  queue: inactive
+Akra  |  thread: new draft  |  turn: working  |  input: streaming
+status: new thread draft
 ◦ Working (0s • turn running / interrupt unsupported)
 >
 prompt: turn running  |  type now, Enter when idle

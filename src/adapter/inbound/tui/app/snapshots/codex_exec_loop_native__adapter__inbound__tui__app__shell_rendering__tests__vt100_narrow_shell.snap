@@ -2,13 +2,13 @@
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: rendered
 ---
+Codex:
+  narrow resize keeps the live tail visible
 Akra  |  thread: new draft  |  turn: working  |
-input: streaming  |  auto: queue/idle  |  done:
-0/20  |  Plan setup / idle
-status: new thread draft  |  startup: startup
-ready  |  gh: off
-runtime: clear  |  warn: none
-parallel: off  |  mode: normal  |  pool:
-inactive  |  agents: inactive  |  queue:
-inactive
+input: streaming
+status: new thread draft
 ◦ Working (0s • turn running / interrupt
+unsupported)
+>
+prompt: turn running  |  type now, Enter when
+idle
