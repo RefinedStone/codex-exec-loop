@@ -1220,6 +1220,63 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     }));
 }
 
+// Linked worktree git metadata can retain a stale index.lock after an interrupted
+// reset. Pool reconcile must clear that stale lock before resetting a disposable
+// detached baseline slot, otherwise `:parallel` remains blocked with lost capacity.
+#[test]
+fn reconcile_resets_detached_slot_after_stale_worktree_index_lock() {
+    let repo = TempGitRepo::new("reset-stale-index-lock");
+    let slot_path = repo.create_detached_slot(1);
+    fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
+    let git_dir = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "--git-dir",
+        ],
+        None,
+    )
+    .expect("slot git dir should resolve");
+    let index_lock_path = Path::new(git_dir.trim()).join("index.lock");
+    fs::write(&index_lock_path, "").expect("stale index.lock should be written");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.blocked_slots, 0);
+    assert!(!index_lock_path.exists());
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                slot_path.to_str().expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("slot head should resolve"),
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "rev-parse",
+                POOL_BASELINE_BRANCH,
+            ],
+            None,
+        )
+        .expect("prerelease should resolve")
+    );
+}
+
 // agent slot worktree에서 reconcile을 호출해도 canonical 표준 branch는 agent
 // branch HEAD로 갱신되면 안 된다. root detection이 slot workspace를 원본 repo로
 // 되돌려 계산하는지 확인하는 회귀 테스트다.
