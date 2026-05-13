@@ -8,13 +8,15 @@ pub(super) enum ModelSelectionStep {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ModelSelectionModelOption {
-    pub(super) model: &'static str,
+    pub(super) label: &'static str,
+    pub(super) model: Option<&'static str>,
     pub(super) detail: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ModelSelectionEffortOption {
-    pub(super) effort: ConversationReasoningEffort,
+    pub(super) label: &'static str,
+    pub(super) effort: Option<ConversationReasoningEffort>,
     pub(super) detail: &'static str,
 }
 
@@ -28,55 +30,77 @@ pub(super) struct ModelSelectionOverlayUiState {
 
 pub(super) const MODEL_SELECTION_MODEL_OPTIONS: &[ModelSelectionModelOption] = &[
     ModelSelectionModelOption {
-        model: "gpt-5.5",
+        label: "gpt-5.5",
+        model: Some("gpt-5.5"),
         detail: "Frontier model for complex coding, research, and real-world work.",
     },
     ModelSelectionModelOption {
-        model: "gpt-5.4",
+        label: "gpt-5.4",
+        model: Some("gpt-5.4"),
         detail: "Strong model for everyday coding.",
     },
     ModelSelectionModelOption {
-        model: "gpt-5.4-mini",
+        label: "gpt-5.4-mini",
+        model: Some("gpt-5.4-mini"),
         detail: "Small, fast, and cost-efficient model for simpler coding tasks.",
     },
     ModelSelectionModelOption {
-        model: "gpt-5.3-codex",
+        label: "gpt-5.3-codex",
+        model: Some("gpt-5.3-codex"),
         detail: "Coding-optimized model.",
     },
     ModelSelectionModelOption {
-        model: "gpt-5.3-codex-spark",
+        label: "gpt-5.3-codex-spark",
+        model: Some("gpt-5.3-codex-spark"),
         detail: "Ultra-fast coding model.",
     },
     ModelSelectionModelOption {
-        model: "gpt-5.2",
+        label: "gpt-5.2",
+        model: Some("gpt-5.2"),
         detail: "Optimized for professional work and long-running agents.",
+    },
+    ModelSelectionModelOption {
+        label: "default",
+        model: None,
+        detail: "Use the app-server default model.",
     },
 ];
 
 pub(super) const MODEL_SELECTION_EFFORT_OPTIONS: &[ModelSelectionEffortOption] = &[
     ModelSelectionEffortOption {
-        effort: ConversationReasoningEffort::Low,
+        label: "low",
+        effort: Some(ConversationReasoningEffort::Low),
         detail: "Fast responses with lighter reasoning.",
     },
     ModelSelectionEffortOption {
-        effort: ConversationReasoningEffort::Medium,
+        label: "medium",
+        effort: Some(ConversationReasoningEffort::Medium),
         detail: "Balances speed and reasoning depth.",
     },
     ModelSelectionEffortOption {
-        effort: ConversationReasoningEffort::High,
+        label: "high",
+        effort: Some(ConversationReasoningEffort::High),
         detail: "Greater reasoning depth for complex problems.",
     },
     ModelSelectionEffortOption {
-        effort: ConversationReasoningEffort::XHigh,
+        label: "xhigh",
+        effort: Some(ConversationReasoningEffort::XHigh),
         detail: "Extra high reasoning for complex problems.",
     },
     ModelSelectionEffortOption {
-        effort: ConversationReasoningEffort::Minimal,
+        label: "minimal",
+        effort: Some(ConversationReasoningEffort::Minimal),
         detail: "Minimal reasoning for very direct work.",
     },
     ModelSelectionEffortOption {
-        effort: ConversationReasoningEffort::None,
-        detail: "No explicit reasoning override.",
+        label: "none",
+        effort: Some(ConversationReasoningEffort::None),
+        detail: "Disable reasoning when supported.",
+    },
+    ModelSelectionEffortOption {
+        label: "default",
+        effort: None,
+        detail: "Use the app-server default think level.",
     },
 ];
 
@@ -84,9 +108,9 @@ impl Default for ModelSelectionOverlayUiState {
     fn default() -> Self {
         Self {
             step: ModelSelectionStep::Model,
-            selected_model_index: 0,
+            selected_model_index: project_default_model_index(),
             selected_effort_index: default_effort_index(),
-            staged_model_index: 0,
+            staged_model_index: project_default_model_index(),
         }
     }
 }
@@ -98,12 +122,12 @@ impl ModelSelectionOverlayUiState {
             .model
             .as_deref()
             .and_then(model_option_index)
-            .unwrap_or(0);
+            .unwrap_or_else(default_model_index);
         self.staged_model_index = self.selected_model_index;
         self.selected_effort_index = turn_options
             .reasoning_effort
             .and_then(effort_option_index)
-            .unwrap_or_else(default_effort_index);
+            .unwrap_or_else(default_effort_option_index);
     }
 
     pub(super) fn step(&self) -> ModelSelectionStep {
@@ -183,17 +207,35 @@ impl ModelSelectionOverlayUiState {
 fn model_option_index(model: &str) -> Option<usize> {
     MODEL_SELECTION_MODEL_OPTIONS
         .iter()
-        .position(|option| option.model == model)
+        .position(|option| option.model == Some(model))
 }
 
 fn effort_option_index(effort: ConversationReasoningEffort) -> Option<usize> {
     MODEL_SELECTION_EFFORT_OPTIONS
         .iter()
-        .position(|option| option.effort == effort)
+        .position(|option| option.effort == Some(effort))
+}
+
+fn default_model_index() -> usize {
+    MODEL_SELECTION_MODEL_OPTIONS
+        .iter()
+        .position(|option| option.model.is_none())
+        .unwrap_or(0)
+}
+
+fn project_default_model_index() -> usize {
+    model_option_index(ConversationTurnOptions::DEFAULT_MODEL).unwrap_or(0)
 }
 
 fn default_effort_index() -> usize {
     effort_option_index(ConversationTurnOptions::DEFAULT_REASONING_EFFORT).unwrap_or(0)
+}
+
+fn default_effort_option_index() -> usize {
+    MODEL_SELECTION_EFFORT_OPTIONS
+        .iter()
+        .position(|option| option.effort.is_none())
+        .unwrap_or_else(default_effort_index)
 }
 
 #[cfg(test)]
@@ -211,11 +253,37 @@ mod tests {
         assert_eq!(state.step(), ModelSelectionStep::Model);
         assert_eq!(
             MODEL_SELECTION_MODEL_OPTIONS[state.selected_model_index()].model,
-            "gpt-5.4-mini"
+            Some("gpt-5.4-mini")
         );
         assert_eq!(
             state.selected_effort().effort,
-            ConversationReasoningEffort::High
+            Some(ConversationReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn reset_selects_app_server_defaults_when_turn_options_are_unset() {
+        let mut state = ModelSelectionOverlayUiState::default();
+        state.reset_from_turn_options(&ConversationTurnOptions::app_server_default());
+
+        assert_eq!(
+            MODEL_SELECTION_MODEL_OPTIONS[state.selected_model_index()].model,
+            None
+        );
+        assert_eq!(state.selected_effort().effort, None);
+    }
+
+    #[test]
+    fn default_state_selects_project_defaults() {
+        let state = ModelSelectionOverlayUiState::default();
+
+        assert_eq!(
+            MODEL_SELECTION_MODEL_OPTIONS[state.selected_model_index()].model,
+            Some(ConversationTurnOptions::DEFAULT_MODEL)
+        );
+        assert_eq!(
+            state.selected_effort().effort,
+            Some(ConversationTurnOptions::DEFAULT_REASONING_EFFORT)
         );
     }
 
@@ -227,7 +295,7 @@ mod tests {
         state.advance_from_model_selection();
 
         assert_eq!(state.step(), ModelSelectionStep::Effort);
-        assert_eq!(state.staged_model().model, "gpt-5.4-mini");
+        assert_eq!(state.staged_model().model, Some("gpt-5.4-mini"));
     }
 
     #[test]

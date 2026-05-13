@@ -133,12 +133,12 @@ pub(super) fn build_inline_tail_lines_with_context(
             if let Some(completion_line) = build_completion_alert_line(conversation) {
                 lines.push(completion_line);
             }
-            if runtime_notice_summary.is_some() || warning_summary_has_signal(&warning_summary) {
+            if let Some(runtime_notice_summary) = runtime_notice_summary {
                 lines.push(Line::from(format!(
-                    "runtime: {}  |  {}",
-                    runtime_notice_summary.as_deref().unwrap_or("clear"),
-                    warning_summary,
+                    "runtime: {runtime_notice_summary}  |  {warning_summary}",
                 )));
+            } else if warning_summary_has_signal(&warning_summary) {
+                lines.push(Line::from(warning_summary));
             }
             if !app.turn_options.is_default() {
                 lines.push(Line::from(format!(

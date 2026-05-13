@@ -248,6 +248,18 @@ impl AppServerConnection {
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
+    pub(super) fn archive_thread(&mut self, thread_id: &str) -> Result<()> {
+        self.ensure_initialized()?;
+        let _: Value = self.send_request(
+            "thread/archive",
+            json!({
+                "threadId": thread_id,
+            }),
+        )?;
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn start_turn(&mut self, params: TurnStartParams) -> Result<TurnStartResponse> {
         self.ensure_initialized()?;
         self.send_request("turn/start", serde_json::to_value(params)?)
@@ -801,6 +813,7 @@ mod tests {
             approvals_reviewer: None,
             sandbox: None,
         }));
+        assert_not_initialized(harness.connection.archive_thread("thread-1"));
         assert_not_initialized(harness.connection.start_turn(TurnStartParams {
             thread_id: "thread-1".to_string(),
             input: vec![TurnInputItem::text("prompt")],
@@ -860,6 +873,10 @@ mod tests {
         }));
         harness.send_stdout(json!({
             "id": 6,
+            "result": {}
+        }));
+        harness.send_stdout(json!({
+            "id": 7,
             "result": {
                 "turn": {
                     "id": "turn-started"
@@ -867,7 +884,7 @@ mod tests {
             }
         }));
         harness.send_stdout(json!({
-            "id": 7,
+            "id": 8,
             "result": {}
         }));
 
@@ -909,6 +926,10 @@ mod tests {
                 sandbox: None,
             })
             .expect("thread/resume should deserialize");
+        harness
+            .connection
+            .archive_thread("thread-resumed")
+            .expect("thread/archive should deserialize");
         let started_turn = harness
             .connection
             .start_turn(TurnStartParams {
@@ -940,7 +961,7 @@ mod tests {
         assert_eq!(resumed_thread._thread.id, "thread-resumed");
         assert_eq!(started_turn.turn.id, "turn-started");
 
-        let logged = harness.logged_json_lines(7);
+        let logged = harness.logged_json_lines(8);
         assert_eq!(logged[0]["method"], "account/read");
         assert_eq!(logged[1]["method"], "thread/list");
         assert_eq!(logged[1]["params"]["limit"], 25);
@@ -955,12 +976,14 @@ mod tests {
         assert_eq!(logged[3]["params"]["ephemeral"], true);
         assert_eq!(logged[4]["method"], "thread/resume");
         assert_eq!(logged[4]["params"]["threadId"], "thread-resumed");
-        assert_eq!(logged[5]["method"], "turn/start");
-        assert_eq!(logged[5]["params"]["input"][0]["type"], "skill");
-        assert_eq!(logged[5]["params"]["input"][1]["type"], "text");
-        assert_eq!(logged[5]["params"]["effort"], "medium");
-        assert_eq!(logged[6]["method"], "turn/interrupt");
-        assert_eq!(logged[6]["params"]["turnId"], "turn-started");
+        assert_eq!(logged[5]["method"], "thread/archive");
+        assert_eq!(logged[5]["params"]["threadId"], "thread-resumed");
+        assert_eq!(logged[6]["method"], "turn/start");
+        assert_eq!(logged[6]["params"]["input"][0]["type"], "skill");
+        assert_eq!(logged[6]["params"]["input"][1]["type"], "text");
+        assert_eq!(logged[6]["params"]["effort"], "medium");
+        assert_eq!(logged[7]["method"], "turn/interrupt");
+        assert_eq!(logged[7]["params"]["turnId"], "turn-started");
     }
 
     #[test]

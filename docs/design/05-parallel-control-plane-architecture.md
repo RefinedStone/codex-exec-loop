@@ -8,6 +8,7 @@ The short rule is:
 ```text
 TUI intent
   -> application control-plane handle
+  -> core runtime projection bridge
   -> domain aggregate decision
   -> durable store / effect runner
   -> projection
@@ -15,8 +16,9 @@ TUI intent
 ```
 
 The TUI sends intent. The application control-plane serializes mutation and
-effect ordering. The domain decides policy. The repository/store is the durable
-source of truth.
+effect ordering, and the core runtime projection bridge keeps the headless app
+runtime aligned with the control-plane read model. The domain decides policy.
+The repository/store is the durable source of truth.
 
 ## R6 Runtime Decision
 

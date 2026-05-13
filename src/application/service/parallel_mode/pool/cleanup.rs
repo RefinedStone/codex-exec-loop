@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-    thread,
-    time::{Duration, SystemTime},
-};
+use std::{fs, path::Path, thread, time::Duration};
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -445,13 +440,13 @@ fn remove_stale_slot_index_lock(slot_path: &Path) {
         return;
     };
     let index_lock_path = git_dir.join("index.lock");
-    let Ok(metadata) = fs::metadata(&index_lock_path) else {
+    let Ok(metadata) = fs::symlink_metadata(&index_lock_path) else {
         return;
     };
     let Ok(modified_at) = metadata.modified() else {
         return;
     };
-    let Ok(lock_age) = SystemTime::now().duration_since(modified_at) else {
+    let Ok(lock_age) = modified_at.elapsed() else {
         return;
     };
     if lock_age < STALE_INDEX_LOCK_RELEASE_AFTER {

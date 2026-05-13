@@ -8,7 +8,7 @@ use super::planning_reset_shell_command::{
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
 use super::view_selection_overlay_ui::ConversationViewMode;
 use crate::application::service::planning::PlanningResetTarget;
-use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
+use crate::domain::conversation::ConversationReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
@@ -63,10 +63,10 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model  :view [simple|medium|detail]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model [default]  :view [simple|medium|detail]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
-const MODEL_USAGE: &str = "Type `:model` to choose the model and think level.";
+const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
 const VIEW_USAGE: &str = "Type `:view` to choose transcript visibility for tool/status rows.";
 const THINK_USAGE: &str =
     "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
@@ -492,8 +492,11 @@ pub(super) fn is_turn_option_clear_argument(argument: &str) -> bool {
 fn model_argument_hint(argument: Option<&str>) -> String {
     match argument {
         None => MODEL_USAGE.to_string(),
+        Some(value) if is_turn_option_clear_argument(value) => {
+            "Press Enter to reset model to the app-server default.".to_string()
+        }
         Some(_) => {
-            "`:model` does not accept arguments; press Enter to open model selection.".to_string()
+            "`:model` ignores typed model names; press Enter to open model selection.".to_string()
         }
     }
 }
@@ -518,10 +521,7 @@ fn think_argument_hint(argument: Option<&str>) -> String {
         return THINK_USAGE.to_string();
     };
     if is_turn_option_clear_argument(argument) {
-        return format!(
-            "Press Enter to reset think to project default (`{}`).",
-            ConversationTurnOptions::DEFAULT_REASONING_EFFORT.label()
-        );
+        return "Press Enter to reset think to the app-server default.".to_string();
     }
     match ConversationReasoningEffort::parse(argument) {
         Some(effort) => format!("Press Enter to set think to `{}`.", effort.label()),

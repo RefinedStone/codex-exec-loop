@@ -687,14 +687,24 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 cwd: thread_response.thread.cwd.clone(),
             });
 
-            self.start_turn_and_wait_for_stream(
+            let stream_result = self.start_turn_and_wait_for_stream(
                 connection,
                 &thread_id,
                 vec![TurnInputItem::text(request.prompt)],
                 None,
                 None,
                 &event_sender,
-            )
+            );
+            if stream_result.is_ok()
+                && let Err(error) = connection.archive_thread(&thread_id)
+            {
+                tracing::warn!(
+                    %thread_id,
+                    %error,
+                    "failed to archive completed parallel worker thread"
+                );
+            }
+            stream_result
         });
 
         finish_stream_result(result, &event_sender)
@@ -964,6 +974,12 @@ mod tests {
             thread_starts[1]["params"]["developerInstructions"],
             "You are an isolated worker."
         );
+        let thread_archives = requests
+            .iter()
+            .filter(|request| request["method"] == "thread/archive")
+            .collect::<Vec<_>>();
+        assert_eq!(thread_archives.len(), 1);
+        assert_eq!(thread_archives[0]["params"]["threadId"], "started-thread");
     }
 
     #[test]

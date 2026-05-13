@@ -189,16 +189,20 @@ impl NativeTuiApp {
         });
     }
     fn handle_model_shell_command(&mut self, argument: Option<&str>) {
-        if argument.is_none() {
-            self.show_model_selection_overlay();
+        if argument.is_some_and(is_turn_option_clear_argument) {
+            self.turn_options.model = None;
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "model reset to app-server default".to_string(),
+            });
             return;
         }
-
         self.show_model_selection_overlay();
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: "`:model` ignored the typed argument; choose from the picker instead"
-                .to_string(),
-        });
+        if argument.is_some() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "`:model` ignored the typed argument; choose from the picker instead"
+                    .to_string(),
+            });
+        }
     }
     fn handle_view_shell_command(&mut self, argument: Option<&str>) {
         let Some(argument) = argument else {
@@ -230,12 +234,8 @@ impl NativeTuiApp {
                 ConversationReasoningEffort::SUPPORTED_LABELS
             ),
             Some(value) if is_turn_option_clear_argument(value) => {
-                self.turn_options.reasoning_effort =
-                    Some(ConversationTurnOptions::DEFAULT_REASONING_EFFORT);
-                format!(
-                    "think reset to project default ({})",
-                    ConversationTurnOptions::DEFAULT_REASONING_EFFORT.label()
-                )
+                self.turn_options.reasoning_effort = None;
+                "think reset to app-server default".to_string()
             }
             Some(value) => match ConversationReasoningEffort::parse(value) {
                 Some(effort) => {
@@ -542,16 +542,16 @@ impl NativeTuiApp {
     }
 
     fn apply_model_selection_overlay(&mut self) {
-        let model = self.model_selection_overlay_ui_state.staged_model().model;
-        let effort = self
-            .model_selection_overlay_ui_state
-            .selected_effort()
-            .effort;
-        self.turn_options.model = Some(model.to_string());
-        self.turn_options.reasoning_effort = Some(effort);
+        let model_option = self.model_selection_overlay_ui_state.staged_model();
+        let effort_option = self.model_selection_overlay_ui_state.selected_effort();
+        self.turn_options.model = model_option.model.map(str::to_string);
+        self.turn_options.reasoning_effort = effort_option.effort;
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: format!("model set to {model}; think set to {}", effort.label()),
+            status_text: format!(
+                "model set to {}; think set to {}",
+                model_option.label, effort_option.label
+            ),
         });
     }
 

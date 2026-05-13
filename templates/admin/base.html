@@ -846,10 +846,11 @@
       }
     </script>
   </head>
-  <body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}akra-graphic{% endif %}">
+  {% set is_akra = current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}
+  <body class="{% if is_akra %}akra-graphic{% endif %}">
     <div class="admin-layout">
       <aside class="sidebar">
-        {% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}
+        {% if is_akra %}
         <div class="graphic-brand">
           <span class="graphic-building" aria-hidden="true"></span>
           <div>
