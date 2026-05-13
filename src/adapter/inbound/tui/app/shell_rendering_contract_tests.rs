@@ -468,9 +468,10 @@ fn inline_model_selection_inspection_renders_model_and_effort_picker() {
     assert!(rendered.contains("Select Model and Effort / inline inspection"));
     assert!(rendered.contains("Models"));
     assert!(rendered.contains("gpt-5.5"));
+    assert!(rendered.contains("default"));
     assert!(rendered.contains("Think Level"));
     assert!(rendered.contains("high"));
-    assert!(rendered.contains("Enter/1-6: choose model"));
+    assert!(rendered.contains("Enter/1-7: choose model"));
     assert!(!rendered.contains(":model <"));
     assert!(!rendered.contains("┌"));
 }

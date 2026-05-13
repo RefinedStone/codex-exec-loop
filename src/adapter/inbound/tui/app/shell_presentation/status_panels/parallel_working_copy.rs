@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::{Line, Span};
@@ -77,8 +78,28 @@ fn parallel_slot_working_statuses(
             .collect();
     }
 
-    statuses.sort_by(|left, right| left.slot_id.cmp(&right.slot_id));
+    statuses.sort_by(|left, right| compare_parallel_slot_ids(&left.slot_id, &right.slot_id));
     statuses
+}
+
+fn compare_parallel_slot_ids(left: &str, right: &str) -> Ordering {
+    match (
+        parse_slot_numeric_suffix(left),
+        parse_slot_numeric_suffix(right),
+    ) {
+        (Some((left_prefix, left_number)), Some((right_prefix, right_number)))
+            if left_prefix == right_prefix =>
+        {
+            left_number.cmp(&right_number).then_with(|| left.cmp(right))
+        }
+        _ => left.cmp(right),
+    }
+}
+
+fn parse_slot_numeric_suffix(slot_id: &str) -> Option<(&str, u64)> {
+    let (prefix, suffix) = slot_id.rsplit_once('-')?;
+    let number = suffix.parse::<u64>().ok()?;
+    Some((prefix, number))
 }
 
 fn roster_entry_for_slot<'a>(
@@ -192,7 +213,8 @@ fn rotated_parallel_slot_status_index(status_count: usize, elapsed_seconds: u64)
     if status_count == 0 {
         return None;
     }
-    Some(((elapsed_seconds / ROTATION_WINDOW_SECONDS) as usize) % status_count)
+    let status_count = status_count as u64;
+    Some(((elapsed_seconds / ROTATION_WINDOW_SECONDS) % status_count) as usize)
 }
 
 #[cfg(test)]
@@ -235,6 +257,13 @@ mod tests {
                         "akra-pool/slot-1",
                         "agent-1 / task-1",
                     ),
+                    ParallelModePoolSlotSnapshot::new(
+                        "slot-10",
+                        ParallelModePoolSlotState::Running,
+                        "akra-agent/slot-10/task-ten",
+                        "akra-pool/slot-10",
+                        "agent-10 / task-10",
+                    ),
                 ],
             ),
             ParallelModeAgentRosterSnapshot::new(
@@ -257,6 +286,15 @@ mod tests {
                         "2m",
                         "checking status rotation",
                     ),
+                    ParallelModeAgentRosterEntry::new(
+                        "agent-10",
+                        "Task Ten",
+                        "slot-10",
+                        "akra-agent/slot-10/task-ten",
+                        "running",
+                        "10m",
+                        "checking natural sort",
+                    ),
                 ],
                 "empty",
             ),
@@ -271,12 +309,13 @@ mod tests {
         let snapshot = supervisor_snapshot_with_slots();
         let statuses = parallel_slot_working_statuses(&snapshot);
 
-        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.len(), 3);
         assert_eq!(statuses[0].slot_id, "slot-1");
         assert_eq!(statuses[0].state_label, "blocked / running");
         assert_eq!(statuses[0].duration_label.as_deref(), Some("1m 5s"));
         assert!(statuses[0].detail.contains("Task One"));
         assert_eq!(statuses[1].slot_id, "slot-2");
+        assert_eq!(statuses[2].slot_id, "slot-10");
     }
 
     #[test]

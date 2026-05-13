@@ -194,7 +194,7 @@ use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
 };
 use parallel_peek_overlay_ui::{ParallelPeekOverlayStep, ParallelPeekOverlayUiState};
-use parallel_supervisor_events::ParallelSupervisorEventLog;
+use parallel_supervisor_events::{PARALLEL_SUPERVISOR_OPERATOR_ACTOR, ParallelSupervisorEventLog};
 use planning::{PlanningWorkerPanelState, PlanningWorkerStatus, PlanningWorkerVisibility};
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{

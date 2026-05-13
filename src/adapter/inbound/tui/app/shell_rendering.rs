@@ -107,7 +107,8 @@ fn draw_inline_conversation_shell(
     // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
     if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
         if app.parallel_mode_enabled() {
-            let tail_area = inline_body_render_area(layout[1], &tail_view.lines);
+            let tail_band = layout.get(1).copied().unwrap_or(frame_area);
+            let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
             render_inline_body(frame, tail_area, tail_view.lines, false);
             if !app.parallel_mode_prompt_input_locked() {
                 set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);

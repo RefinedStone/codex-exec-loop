@@ -22,8 +22,8 @@ use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
     AutoFollowSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, InlineShellCommandInput,
-    ManualIntakeSubmitContext, NativeTuiApp, PromptOrigin, ShellActionAvailability,
-    ShellChromeEvent,
+    ManualIntakeSubmitContext, NativeTuiApp, PARALLEL_SUPERVISOR_OPERATOR_ACTOR, PromptOrigin,
+    ShellActionAvailability, ShellChromeEvent,
 };
 
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
@@ -200,7 +200,7 @@ impl NativeTuiApp {
         if self.parallel_mode_enabled() {
             self.show_supersession_overlay();
             self.record_parallel_supervisor_event(
-                "You",
+                PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
                 truncate_parallel_prompt_event_text(&transcript_text, 96),
             );
             self.record_parallel_supervisor_event(
@@ -1296,11 +1296,8 @@ mod tests {
                 .expect("think clear command should parse"),
         );
 
-        assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
-        assert_eq!(
-            app.turn_options.reasoning_effort,
-            Some(ConversationTurnOptions::DEFAULT_REASONING_EFFORT)
-        );
+        assert_eq!(app.turn_options.model, None);
+        assert_eq!(app.turn_options.reasoning_effort, None);
     }
 
     #[test]

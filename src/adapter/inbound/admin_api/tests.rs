@@ -1202,8 +1202,10 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pipeline\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra/metrics#system\""));
     assert!(BASE_TEMPLATE.contains(
-        r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}akra-graphic{% endif %}">"#
+        r#"{% set is_akra = current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}"#
     ));
+    assert!(BASE_TEMPLATE.contains(r#"<body class="{% if is_akra %}akra-graphic{% endif %}">"#));
+    assert!(BASE_TEMPLATE.contains(r#"{% if is_akra %}"#));
     assert!(!BASE_TEMPLATE.contains(
         r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks" %}akra-graphic{% endif %}">"#
     ));

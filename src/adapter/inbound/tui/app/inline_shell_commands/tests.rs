@@ -416,19 +416,19 @@ fn model_view_and_think_command_hints_are_argument_aware() {
 
     assert_eq!(
         model_plain.buffered_hint(),
-        "Type `:model` to choose the model and think level."
+        "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults."
     );
     assert_eq!(
         model_set.buffered_hint(),
-        "`:model` does not accept arguments; press Enter to open model selection."
+        "`:model` ignores typed model names; press Enter to open model selection."
     );
     assert_eq!(
         model_clear.buffered_hint(),
-        "`:model` does not accept arguments; press Enter to open model selection."
+        "Press Enter to reset model to the app-server default."
     );
     assert_eq!(
         model_invalid.buffered_hint(),
-        "`:model` does not accept arguments; press Enter to open model selection."
+        "`:model` ignores typed model names; press Enter to open model selection."
     );
     assert_eq!(
         view_plain.buffered_hint(),
@@ -464,7 +464,7 @@ fn model_view_and_think_command_hints_are_argument_aware() {
     );
     assert_eq!(
         think_clear.buffered_hint(),
-        "Press Enter to reset think to project default (`high`)."
+        "Press Enter to reset think to the app-server default."
     );
     assert_eq!(
         think_invalid.buffered_hint(),

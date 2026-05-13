@@ -10,18 +10,19 @@ use crate::domain::parallel_mode::{
 use super::AkraTheme;
 
 const MAX_PARALLEL_SUPERVISOR_EVENTS: usize = 96;
+const MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS: usize = 512;
+pub(super) const PARALLEL_SUPERVISOR_OPERATOR_ACTOR: &str = "You";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParallelSupervisorEventEntry {
-    timestamp_label: String,
-    actor: String,
-    body: String,
+    line: Line<'static>,
+    runtime_sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct ParallelSupervisorEventLog {
     entries: VecDeque<ParallelSupervisorEventEntry>,
-    scrollback_entries: Vec<ParallelSupervisorEventEntry>,
+    scrollback_entries: VecDeque<ParallelSupervisorEventEntry>,
     scrollback_runtime_sequences: BTreeSet<i64>,
 }
 
@@ -36,11 +37,11 @@ impl ParallelSupervisorEventLog {
 
     fn push(&mut self, timestamp_label: String, actor: String, body: String) {
         let entry = ParallelSupervisorEventEntry {
-            timestamp_label,
-            actor,
-            body,
+            line: parallel_supervisor_event_line(&timestamp_label, &actor, &body),
+            runtime_sequence: None,
         };
-        self.scrollback_entries.push(entry.clone());
+        self.scrollback_entries.push_back(entry.clone());
+        self.trim_scrollback_entries();
         self.entries.push_back(entry);
         while self.entries.len() > MAX_PARALLEL_SUPERVISOR_EVENTS {
             self.entries.pop_front();
@@ -50,18 +51,14 @@ impl ParallelSupervisorEventLog {
     pub(super) fn lines(&self) -> Vec<Line<'static>> {
         self.entries
             .iter()
-            .map(|entry| {
-                parallel_supervisor_event_line(&entry.timestamp_label, &entry.actor, &entry.body)
-            })
+            .map(|entry| entry.line.clone())
             .collect()
     }
 
     pub(super) fn scrollback_lines(&self) -> Vec<Line<'static>> {
         self.scrollback_entries
             .iter()
-            .map(|entry| {
-                parallel_supervisor_event_line(&entry.timestamp_label, &entry.actor, &entry.body)
-            })
+            .map(|entry| entry.line.clone())
             .collect()
     }
 
@@ -79,18 +76,33 @@ impl ParallelSupervisorEventLog {
             if !self.scrollback_runtime_sequences.insert(entry.sequence) {
                 continue;
             }
-            self.scrollback_entries.push(ParallelSupervisorEventEntry {
-                timestamp_label: compact_stream_timestamp_label(&entry.recorded_at),
-                actor: "Supervisor".to_string(),
-                body: format!(
-                    "{}:{} {} / rev {} / {}",
-                    display_runtime_event_label(&entry.projection_kind),
-                    entry.projection_key,
-                    display_runtime_event_label(&entry.event_kind),
-                    entry.observed_planning_revision,
-                    truncate_event_text(&entry.summary, 76)
-                ),
-            });
+            self.scrollback_entries
+                .push_back(ParallelSupervisorEventEntry {
+                    line: parallel_supervisor_event_line(
+                        &compact_stream_timestamp_label(&entry.recorded_at),
+                        "Supervisor",
+                        &format!(
+                            "{}:{} {} / rev {} / {}",
+                            display_runtime_event_label(&entry.projection_kind),
+                            entry.projection_key,
+                            display_runtime_event_label(&entry.event_kind),
+                            entry.observed_planning_revision,
+                            truncate_event_text(&entry.summary, 76)
+                        ),
+                    ),
+                    runtime_sequence: Some(entry.sequence),
+                });
+            self.trim_scrollback_entries();
+        }
+    }
+
+    fn trim_scrollback_entries(&mut self) {
+        while self.scrollback_entries.len() > MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
+            if let Some(entry) = self.scrollback_entries.pop_front()
+                && let Some(sequence) = entry.runtime_sequence
+            {
+                self.scrollback_runtime_sequences.remove(&sequence);
+            }
         }
     }
 
@@ -106,10 +118,10 @@ impl ParallelSupervisorEventLog {
 }
 
 fn parallel_supervisor_event_line(timestamp: &str, actor: &str, body: &str) -> Line<'static> {
-    if actor == "You" {
+    if actor == PARALLEL_SUPERVISOR_OPERATOR_ACTOR {
         return Line::from(vec![
             Span::raw(format!("[{timestamp}] ")),
-            Span::styled(actor.to_string(), AkraTheme::shortcut()),
+            Span::styled(PARALLEL_SUPERVISOR_OPERATOR_ACTOR, AkraTheme::shortcut()),
             Span::raw(format!(": {body}")),
         ]);
     }
@@ -209,7 +221,11 @@ mod tests {
     fn user_prompt_line_uses_you_label_with_user_emphasis() {
         let mut log = ParallelSupervisorEventLog::default();
 
-        log.push_for_test("11:31:18", "You", "안녕하세요?");
+        log.push_for_test(
+            "11:31:18",
+            PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
+            "안녕하세요?",
+        );
 
         let lines = log.lines();
         assert_eq!(lines[0].to_string(), "[11:31:18] You: 안녕하세요?");
@@ -239,10 +255,31 @@ mod tests {
     }
 
     #[test]
-    fn scrollback_keeps_local_events_and_runtime_feed_append_only() {
+    fn log_keeps_recent_events_without_reformatting_on_read() {
         let mut log = ParallelSupervisorEventLog::default();
 
-        log.push_for_test("11:45:02", "You", "안녕하세요?");
+        for index in 0..(MAX_PARALLEL_SUPERVISOR_EVENTS + 4) {
+            log.push_for_test("11:45:02", "Supervisor", format!("event-{index:03}"));
+        }
+
+        let rendered = log.lines();
+        assert_eq!(rendered.len(), MAX_PARALLEL_SUPERVISOR_EVENTS);
+        assert!(!rendered[0].to_string().contains("event-000"));
+        assert!(
+            rendered[0].to_string().contains("event-004"),
+            "oldest retained event should be the first item after capping"
+        );
+    }
+
+    #[test]
+    fn scrollback_keeps_local_events_and_runtime_feed_append_only_with_cap() {
+        let mut log = ParallelSupervisorEventLog::default();
+
+        log.push_for_test(
+            "11:45:02",
+            PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
+            "안녕하세요?",
+        );
         log.record_runtime_feed_entries(&[
             runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
             runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
@@ -257,6 +294,19 @@ mod tests {
             runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
             runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
         ]);
+        let before_tail = log
+            .scrollback_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(before_tail.matches("session detail:slot-1").count(), 1);
+        assert_eq!(before_tail.matches("slot lease:slot-2").count(), 1);
+        assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 1);
+
+        for index in 0..MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
+            log.push_for_test("11:45:03", "Supervisor", format!("tail-{index:03}"));
+        }
 
         let rendered = log
             .scrollback_lines()
@@ -264,19 +314,14 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.starts_with("[11:45:02] You: 안녕하세요?"));
+        assert_eq!(
+            log.scrollback_lines().len(),
+            MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS
+        );
         assert!(!rendered.contains("Parallel Event Stream"));
-        assert_eq!(rendered.matches("session detail:slot-1").count(), 1);
-        assert_eq!(rendered.matches("slot lease:slot-2").count(), 1);
-        assert_eq!(rendered.matches("distributor queue:queue-1").count(), 1);
-        assert!(
-            rendered.find("session detail:slot-1").unwrap()
-                < rendered.find("slot lease:slot-2").unwrap()
-        );
-        assert!(
-            rendered.find("slot lease:slot-2").unwrap()
-                < rendered.find("distributor queue:queue-1").unwrap()
-        );
+        assert!(!rendered.contains("slot lease:slot-2"));
+        assert!(rendered.contains("tail-000"));
+        assert_eq!(rendered.matches("tail-511").count(), 1);
     }
 
     fn runtime_feed_entry(

@@ -60,7 +60,7 @@ implementation planning out of this file.
   reconcile, opens an automation epoch, and dispatches any already-ready accepted queue up to
   idle-slot capacity.
 - The first off-to-on `:parallel` in a TUI process treats the pool as disposable initial setup:
-  registered `akra` slots are forced back to the current `prerelease` baseline and stale lease,
+  all registered `akra` slots are forced back to the current `prerelease` baseline and stale lease,
   session, and distributor mirrors for reset slots are cleared.
 - Re-running `:parallel`/`:pa` while already enabled refreshes readiness and supervisor projection
   only; it does not reset the pool, reopen the automation epoch, or launch workers by itself.

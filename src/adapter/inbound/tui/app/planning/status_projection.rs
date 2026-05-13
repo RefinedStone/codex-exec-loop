@@ -140,7 +140,8 @@ fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<S
         let trimmed = rest.trim();
         return (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
-    Some(summary_line)
+    let trimmed = summary_line.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 pub(crate) fn build_planning_notice_line(
@@ -555,10 +556,14 @@ mod tests {
         );
         assert_eq!(
             remove_legacy_valid_planning_summary_prefix(
-                "planning: invalid  |  failure: missing result-output.md".to_string()
+                "  planning: invalid  |  failure: missing result-output.md  ".to_string()
             )
             .as_deref(),
             Some("planning: invalid  |  failure: missing result-output.md")
+        );
+        assert_eq!(
+            remove_legacy_valid_planning_summary_prefix("   ".to_string()),
+            None
         );
     }
 
