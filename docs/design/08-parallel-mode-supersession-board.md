@@ -2,6 +2,11 @@
 
 This file describes the shipped parallel-mode board shape. It is not a future UI plan.
 
+The board is a TUI projection over the application control-plane. It must not calculate dispatch,
+capacity, retry, worker launch, or supersession policy itself. See
+[`05-parallel-control-plane-architecture.md`](./05-parallel-control-plane-architecture.md) for the
+ownership contract.
+
 ## Current Shape
 
 The board is a dense operations view inside the native TUI. It combines:
@@ -21,6 +26,7 @@ timeline for session transitions, and distributor corridor for serialized delive
 
 - TUI command entry: `src/adapter/inbound/tui/app/parallel_mode.rs`
 - Popup projection/copy: `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession.rs`
+- Application control-plane: `src/application/service/parallel_mode/control_plane/`
 - Parallel-mode service boundary: `src/application/service/parallel_mode/`
 - Domain projection rules: `src/domain/parallel_mode/`
 - Rendering contract tests: `src/adapter/inbound/tui/app/shell_rendering_contract_tests/`

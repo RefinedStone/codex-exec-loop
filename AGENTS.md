@@ -20,9 +20,9 @@ Read this first, then open only the referenced markdown that matches the task.
 
 ## Quick Rules
 
-- Layout: `src/domain`, `src/application/service`, `src/application/port`, `src/adapter/inbound/{tui,cli,admin_api,telegram_bot}`, `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}`, `schema`, `templates`, `assets`, `scripts`, and `docs`
-- Architecture: `adapter -> application -> domain`; define ports before adding a real outbound boundary; keep mapping logic in adapters
-- Current implementation: Ratatui/Crossterm inline shell, app-server runtime, SQLite planning authority store, filesystem planning workspace, admin web UI/API, Telegram bot control plane, Git/GitHub parallel-mode delivery, npm/native release packaging
+- Layout: `src/core`, `src/domain`, `src/application/service`, `src/application/port`, `src/adapter/inbound/{tui,cli,admin_api,telegram_bot}`, `src/adapter/outbound/{app_server,db,filesystem,git,github,telegram}`, `schema`, `templates`, `assets`, `scripts`, and `docs`
+- Architecture: `adapter/inbound -> core or application -> domain`; define ports before adding a real outbound boundary; keep mapping logic in adapters
+- Current implementation: Ratatui/Crossterm inline shell, headless core runtime, app-server runtime, SQLite planning authority store, filesystem planning workspace, admin web UI/API, Telegram bot control plane, Git/GitHub parallel-mode control-plane delivery, npm/native release packaging
 - Style: explicit, Kotlin-readable Rust; small single-purpose functions; consistent `Service` / `Port` / `Adapter` / `Request` / `Response` / `State` naming
 - Commands: source `"$HOME/.cargo/env"`, then run `cargo run`, `cargo build`, `cargo test`, or `cargo fmt`; add `cargo clippy --all-targets --all-features -D warnings` for lint-sensitive work; use `bash scripts/check_native_pr.sh` before broad native/TUI PRs
 - Tests: unit tests beside modules, integration tests under `tests/`; focus on startup checks, app-server parsing, stream reduction, and session list mapping
@@ -38,5 +38,7 @@ Read this first, then open only the referenced markdown that matches the task.
 - [`docs/agent/README.md`](./docs/agent/README.md)
 - [`docs/agent/01-project-playbook.md`](./docs/agent/01-project-playbook.md)
 - [`docs/agent/02-github-and-worktree.md`](./docs/agent/02-github-and-worktree.md)
+- [`docs/design/04-hexagonal-runtime-architecture.md`](./docs/design/04-hexagonal-runtime-architecture.md)
+- [`docs/design/05-parallel-control-plane-architecture.md`](./docs/design/05-parallel-control-plane-architecture.md)
 - [`docs/plan/04-worktree-branch-rules.md`](./docs/plan/04-worktree-branch-rules.md)
 - [`docs/plan/11-parallel-worktree-plan.md`](./docs/plan/11-parallel-worktree-plan.md)

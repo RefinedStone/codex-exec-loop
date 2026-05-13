@@ -26,12 +26,12 @@
 
 | 회차 | 주제 | 저장소 진입점 | 이번 회차 관찰 지점 |
 | --- | --- | --- | --- |
-| 1 | Rust 사고방식과 저장소 지도 | [README.md](../../README.md), [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [src/lib.rs](../../src/lib.rs) | 계층과 테스트 게이트를 함께 읽는 법 |
+| 1 | Rust 사고방식과 저장소 지도 | [README.md](../../README.md), [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [src/lib.rs](../../src/lib.rs) | core/application/domain 계층과 테스트 게이트를 함께 읽는 법 |
 | 2 | 타입 모델링과 직렬화 계약 | [src/domain/planning](../../src/domain/planning), [src/domain/parallel_mode.rs](../../src/domain/parallel_mode.rs) | planning/parallel domain projection이 허용 상태를 닫는 방식 |
 | 3 | 에러 처리와 포트 경계 | [src/application/service/planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs), [src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs), [src/adapter/outbound/github/automation.rs](../../src/adapter/outbound/github/automation.rs) | 실패 경계와 포트 책임 |
 | 4 | 상태 머신과 이벤트 기반 런타임 | [src/adapter/inbound/tui/app/conversation_runtime.rs](../../src/adapter/inbound/tui/app/conversation_runtime.rs), [src/adapter/inbound/tui/app/shell_runtime.rs](../../src/adapter/inbound/tui/app/shell_runtime.rs) | 통과하는 상태 전이 테스트를 근거로 런타임 읽기 |
 | 5 | 파일시스템, Git, SQLite를 명시적으로 다루기 | [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs), [src/adapter/outbound/db/sqlite_planning_authority_adapter.rs](../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs) | authority store, worktree, projection의 진실 소스 분리 |
-| 6 | 구조 경계와 안전한 리팩터링 | [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [docs/design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md), [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs) | 현재 경계 규칙을 근거로 작은 리팩터링을 판정하는 법 |
+| 6 | 구조 경계와 안전한 리팩터링 | [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [docs/design/05-parallel-control-plane-architecture.md](../design/05-parallel-control-plane-architecture.md), [docs/design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md) | 현재 경계 규칙을 근거로 작은 리팩터링을 판정하는 법 |
 
 ## 회차별 교안
 

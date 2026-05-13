@@ -17,11 +17,13 @@
 ## 읽기 순서
 
 1. [../design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md)
-2. [../design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md)
-3. [../../src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs)
-4. [../../src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs)
-5. [../../src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs)
-6. [../../src/adapter/inbound/tui/app/shell_rendering.rs](../../src/adapter/inbound/tui/app/shell_rendering.rs)
+2. [../design/05-parallel-control-plane-architecture.md](../design/05-parallel-control-plane-architecture.md)
+3. [../design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md)
+4. [../../src/application/service/parallel_mode/control_plane](../../src/application/service/parallel_mode/control_plane)
+5. [../../src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs)
+6. [../../src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs)
+7. [../../src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs)
+8. [../../src/adapter/inbound/tui/app/shell_rendering.rs](../../src/adapter/inbound/tui/app/shell_rendering.rs)
 
 ## 이번 회차 관찰 지점
 
@@ -32,6 +34,7 @@
     decision은 `src/domain/parallel_mode.rs`로 내려가 있다.
   - `src/adapter/inbound/tui/app/shell_presentation.rs`와 `shell_rendering.rs`도 presentation, wording, layout, overlay projection이 넓게 섞여 있다.
 - boundary 단서:
+  - control-plane이 mutation ordering을 소유하고 domain이 policy를 소유하는지 확인한다.
   - service child module이 I/O orchestration과 순수 판단을 다시 섞기 시작하는지 확인한다.
   - domain으로 내려간 projection이 application/TUI copy로 다시 중복되지 않는지 확인한다.
 - 수업에서 볼 질문:
@@ -49,6 +52,7 @@
   - 같이 옮길 테스트
 - 연습:
   - `parallel_mode/pool.rs`에서 domain으로 내려간 판단과 service에 남은 I/O orchestration을 구분한다.
+  - `parallel_mode/control_plane`에서 effect ordering과 domain decision 호출의 경계를 설명한다.
   - `parallel_mode/distributor.rs`에서 Git/GitHub delivery side effect와 queue-state projection의 경계를 설명한다.
   - shell presentation에서 copy, view model, rendering 책임이 어떤 파일에 놓였는지 추적한다.
 

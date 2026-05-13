@@ -18,7 +18,9 @@ and one-off research notes are not kept in this tree.
 - [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): operator-visible shell modes,
   conversation flow, planning/continuation flow, and recovery states
 - [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md):
-  `adapter -> application -> domain` dependency rules and current boundary ownership
+  `core`, `application`, `domain`, and adapter dependency rules and current boundary ownership
+- [design/05-parallel-control-plane-architecture.md](design/05-parallel-control-plane-architecture.md):
+  parallel-mode control-plane ownership, R6 runtime decision, and projection rules
 - [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md):
   DB-backed planning authority, staged draft promotion, runtime task intake, and recovery rules
 - [design/07-tui-layered-architecture-and-aesthetic-contract.md](design/07-tui-layered-architecture-and-aesthetic-contract.md):
@@ -47,6 +49,8 @@ and one-off research notes are not kept in this tree.
 - TUI: Ratatui/Crossterm inline shell in `src/adapter/inbound/tui/`, including sessions,
   diagnostics, planning, directions, queue, model/think controls, follow-up, and parallel-mode
   overlays.
+- Core runtime: headless app command/effect/completion/snapshot coordination in `src/core/`,
+  separated from TUI-only shell code so inbound adapters can share the same lifecycle boundary.
 - CLI: `akra doctor`, `akra status`, `akra queue`, `akra reset`, `akra planning-tool`,
   `akra parallel-tick`, `akra admin`, and `akra telegram` dispatch through
   `src/adapter/inbound/cli.rs`.

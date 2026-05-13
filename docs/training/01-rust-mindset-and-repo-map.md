@@ -3,7 +3,7 @@
 ## 세션 목표
 
 - 이 저장소를 `Spring Boot` 애플리케이션처럼 읽지 않고, Rust의 경계 중심 구조로 읽는 법을 익힌다.
-- `adapter -> application -> domain` 의존 방향이 실제 파일 배치에서 어떻게 드러나는지 확인한다.
+- `adapter/inbound -> core or application -> domain` 의존 방향이 실제 파일 배치에서 어떻게 드러나는지 확인한다.
 - 첫 품질 게이트로 `cargo test`와 `clippy`를 재측정한다.
 
 ## Spring Boot/Kotlin 비교
@@ -11,6 +11,7 @@
 | 익숙한 개념 | 이 저장소에서 대응되는 개념 |
 | --- | --- |
 | `Controller` | inbound adapter, 특히 [src/adapter/inbound/tui](../../src/adapter/inbound/tui) |
+| 애플리케이션 런타임/코디네이터 | [src/core](../../src/core) |
 | `Service` | [src/application/service](../../src/application/service) |
 | `Repository` interface | [src/application/port/outbound](../../src/application/port/outbound) |
 | `JpaRepository` 구현체 | [src/adapter/outbound](../../src/adapter/outbound) |
@@ -21,15 +22,17 @@
 1. [../../README.md](../../README.md)
 2. [../design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md)
 3. [../../src/lib.rs](../../src/lib.rs)
-4. [../../src/adapter/inbound/cli.rs](../../src/adapter/inbound/cli.rs)
-5. [../../src/adapter/inbound/tui/app.rs](../../src/adapter/inbound/tui/app.rs)
+4. [../../src/core](../../src/core)
+5. [../../src/adapter/inbound/cli.rs](../../src/adapter/inbound/cli.rs)
+6. [../../src/adapter/inbound/tui/app.rs](../../src/adapter/inbound/tui/app.rs)
 
 ## 강의 흐름
 
 1. `main -> lib -> inbound adapter` 흐름을 따라 실행 진입점을 설명한다.
-2. `domain`이 왜 UI 타입과 파일시스템 타입을 몰라야 하는지 설명한다.
-3. Kotlin에서 흔한 “service에서 다 해결” 습관이 Rust에서 왜 더 빨리 부채가 되는지 연결한다.
-4. 문서가 말하는 구조와 실제 파일 크기, 테스트 배치를 대조한다.
+2. inbound adapter가 core command 또는 application service 호출로 번역되는 지점을 확인한다.
+3. `domain`이 왜 UI 타입과 파일시스템 타입을 몰라야 하는지 설명한다.
+4. Kotlin에서 흔한 “service에서 다 해결” 습관이 Rust에서 왜 더 빨리 부채가 되는지 연결한다.
+5. 문서가 말하는 구조와 실제 파일 크기, 테스트 배치를 대조한다.
 
 ## 이번 회차 관찰 지점
 

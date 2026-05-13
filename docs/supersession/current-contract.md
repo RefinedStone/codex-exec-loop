@@ -117,9 +117,11 @@ implementation planning out of this file.
 
 ## Code Entry
 
+- Core app runtime: `src/core/`
 - Shell runtime: `src/adapter/inbound/tui/app.rs`
 - Shell command registry: `src/adapter/inbound/tui/app/inline_shell_commands.rs`
 - Supersession shell entrypoint: `src/adapter/inbound/tui/app/parallel_mode.rs`
+- Supersession control-plane: `src/application/service/parallel_mode/control_plane/`
 - Supersession application services: `src/application/service/parallel_mode/`
 - Planning feature entrypoint: `src/adapter/inbound/tui/app/planning/`
 - Planning services: `src/application/service/planning/`
