@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use chrono::Utc;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::domain::parallel_mode::{
@@ -117,16 +118,69 @@ impl ParallelSupervisorEventLog {
     }
 }
 
-fn parallel_supervisor_event_line(timestamp: &str, actor: &str, body: &str) -> Line<'static> {
-    if actor == PARALLEL_SUPERVISOR_OPERATOR_ACTOR {
-        return Line::from(vec![
-            Span::raw(format!("[{timestamp}] ")),
-            Span::styled(PARALLEL_SUPERVISOR_OPERATOR_ACTOR, AkraTheme::shortcut()),
-            Span::raw(format!(": {body}")),
-        ]);
-    }
+pub(super) fn parallel_supervisor_event_line(
+    timestamp: &str,
+    actor: &str,
+    body: &str,
+) -> Line<'static> {
+    let actor_style = parallel_supervisor_actor_style(actor);
+    let body_style = parallel_supervisor_body_style(actor, body);
+    Line::from(vec![
+        Span::styled(format!("[{timestamp}] "), AkraTheme::subtle()),
+        Span::styled(format!("{actor}: "), actor_style),
+        Span::styled(body.to_string(), body_style),
+    ])
+}
 
-    Line::from(format!("[{timestamp}] {actor}: {body}"))
+fn parallel_supervisor_actor_style(actor: &str) -> Style {
+    if actor == PARALLEL_SUPERVISOR_OPERATOR_ACTOR {
+        return AkraTheme::shortcut();
+    }
+    match actor {
+        "Ledger" => AkraTheme::brand(),
+        "Orchestrator" => AkraTheme::danger().add_modifier(Modifier::BOLD),
+        "Distributor" | "Pool" => AkraTheme::accent().add_modifier(Modifier::BOLD),
+        "Supervisor" => AkraTheme::warning().add_modifier(Modifier::BOLD),
+        _ if actor.starts_with("Agent ") => AkraTheme::tool().add_modifier(Modifier::BOLD),
+        _ => AkraTheme::muted().add_modifier(Modifier::BOLD),
+    }
+}
+
+fn parallel_supervisor_body_style(actor: &str, body: &str) -> Style {
+    if actor == PARALLEL_SUPERVISOR_OPERATOR_ACTOR {
+        return AkraTheme::shortcut();
+    }
+    if actor == "Ledger" || actor == "Orchestrator" || actor == "Distributor" {
+        return parallel_supervisor_actor_style(actor);
+    }
+    if actor.starts_with("Agent ") {
+        return AkraTheme::tool();
+    }
+    if is_important_parallel_message(body) {
+        return parallel_supervisor_actor_style(actor);
+    }
+    Style::default()
+}
+
+fn is_important_parallel_message(body: &str) -> bool {
+    const IMPORTANT_MARKERS: [&str; 14] = [
+        "blocked",
+        "failed",
+        "failure",
+        "error",
+        "completed",
+        "complete",
+        "merged",
+        "official",
+        "차단",
+        "실패",
+        "오류",
+        "완료",
+        "병합",
+        "보류",
+    ];
+    let body = body.to_ascii_lowercase();
+    IMPORTANT_MARKERS.iter().any(|marker| body.contains(marker))
 }
 
 fn display_runtime_event_label(label: &str) -> String {
@@ -229,7 +283,7 @@ mod tests {
 
         let lines = log.lines();
         assert_eq!(lines[0].to_string(), "[11:31:18] You: 안녕하세요?");
-        assert_eq!(lines[0].spans[1].content.as_ref(), "You");
+        assert_eq!(lines[0].spans[1].content.as_ref(), "You: ");
         assert_eq!(lines[0].spans[1].style.fg, Some(Color::Yellow));
         assert!(
             lines[0].spans[1]
@@ -237,10 +291,18 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
+        assert_eq!(lines[0].spans[2].content.as_ref(), "안녕하세요?");
+        assert_eq!(lines[0].spans[2].style.fg, Some(Color::Yellow));
+        assert!(
+            lines[0].spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     #[test]
-    fn non_user_event_line_keeps_plain_log_style() {
+    fn non_user_event_line_highlights_actor_label() {
         let mut log = ParallelSupervisorEventLog::default();
 
         log.push_for_test("11:31:19", "Task Intake", "task generation started.");
@@ -250,8 +312,25 @@ mod tests {
             lines[0].to_string(),
             "[11:31:19] Task Intake: task generation started."
         );
-        assert_eq!(lines[0].spans.len(), 1);
-        assert_eq!(lines[0].spans[0].style, Style::default());
+        assert_eq!(lines[0].spans[1].content.as_ref(), "Task Intake: ");
+        assert_eq!(lines[0].spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(lines[0].spans[2].style, Style::default());
+    }
+
+    #[test]
+    fn important_event_line_highlights_message_body() {
+        let mut log = ParallelSupervisorEventLog::default();
+
+        log.push_for_test("11:31:20", "Ledger", "official completion을 확인했습니다.");
+
+        let lines = log.lines();
+        assert_eq!(
+            lines[0].to_string(),
+            "[11:31:20] Ledger: official completion을 확인했습니다."
+        );
+        assert_eq!(lines[0].spans[1].content.as_ref(), "Ledger: ");
+        assert_ne!(lines[0].spans[1].style, Style::default());
+        assert_ne!(lines[0].spans[2].style, Style::default());
     }
 
     #[test]

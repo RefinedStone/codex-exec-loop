@@ -8,6 +8,7 @@ use crate::domain::parallel_mode::{
     ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
 };
 
+use super::super::super::super::parallel_supervisor_events::parallel_supervisor_event_line;
 use super::super::super::super::{AkraTheme, NativeTuiApp};
 use super::SupersessionOverlayView;
 
@@ -586,12 +587,10 @@ fn parallel_stream_line(
     actor: impl Into<String>,
     body: impl Into<String>,
 ) -> Line<'static> {
-    Line::from(format!(
-        "[{}] {}: {}",
-        timestamp.into(),
-        actor.into(),
-        body.into()
-    ))
+    let timestamp = timestamp.into();
+    let actor = actor.into();
+    let body = body.into();
+    parallel_supervisor_event_line(&timestamp, &actor, &body)
 }
 
 fn parallel_history_actor(state_label: &str, agent_id: &str) -> String {
