@@ -62,6 +62,21 @@ pub(crate) struct ModelSelectionOverlayView {
 }
 
 /*
+ * Conversation view selection controls how much implementation transcript noise
+ * remains visible while preserving user, Codex, and Codex Commentary messages.
+ */
+pub(crate) struct ViewSelectionOverlayView {
+    // Picker title and invariant visibility summary.
+    pub(crate) header_lines: Vec<Line<'static>>,
+    // View rows with current and selected mode styling already applied.
+    pub(crate) mode_lines: Vec<Line<'static>>,
+    // Current mode and Enter behavior.
+    pub(crate) status_lines: Vec<Line<'static>>,
+    // Navigation and close hints.
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
+/*
  * Supersession overlay flattens parallel-mode orchestration into independent panels.
  * Each section maps to a different operational concern: global mode, capability,
  * pool capacity, live roster, selected detail, distributor queue, and controls.

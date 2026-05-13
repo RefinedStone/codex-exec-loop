@@ -42,7 +42,8 @@ pub(crate) use list_projection::{OverlayListEntryView, OverlayListView};
 pub(crate) use popup::{
     ModelSelectionOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
     QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    build_model_selection_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, build_supersession_overlay_view,
+    ViewSelectionOverlayView, build_model_selection_overlay_view,
+    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view, build_view_selection_overlay_view,
 };

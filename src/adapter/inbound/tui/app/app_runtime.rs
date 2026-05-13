@@ -250,6 +250,7 @@ impl NativeTuiApp {
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
+            view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
             auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),
             directions_maintenance_overlay_ui_state:
                 super::DirectionsMaintenanceOverlayUiState::default(),
@@ -260,6 +261,7 @@ impl NativeTuiApp {
             core_runtime,
             turn_control_truth,
             turn_options: Default::default(),
+            conversation_view_mode: super::ConversationViewMode::default(),
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,

@@ -512,8 +512,8 @@ mod tests {
     use crate::adapter::inbound::tui::app::test_helpers;
     use crate::adapter::inbound::tui::app::{
         AutoFollowSubmitContext, BackgroundMessage, ConversationInputEvent, ConversationState,
-        NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep, PlanningWorkerStatus,
-        PlanningWorkerVisibility, ShellOverlay, StartupState,
+        ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep,
+        PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay, StartupState,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -1168,6 +1168,35 @@ mod tests {
             app.turn_options.reasoning_effort,
             Some(ConversationTurnOptions::DEFAULT_REASONING_EFFORT)
         );
+    }
+
+    #[test]
+    fn inline_view_picker_and_argument_update_conversation_view_mode() {
+        let workspace = TempWorkspace::new("view-mode-command");
+        let mut app = make_test_app(&workspace);
+
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":view").expect("view command should parse"),
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::ViewSelection);
+        app.handle_view_selection_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('3'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert_eq!(app.conversation_view_mode, ConversationViewMode::Detail);
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("conversation view set to detail")
+        );
+
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":view midium").expect("view command should parse"),
+        );
+
+        assert_eq!(app.conversation_view_mode, ConversationViewMode::Medium);
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub enum ShellOverlay {
     Startup,
     Sessions,
     ModelSelection,
+    ViewSelection,
     Supersession,
     Help,
     Queue,
@@ -101,6 +102,7 @@ pub enum ShellChromeEvent {
         limit: usize,
     },
     ModelSelectionOverlayShown,
+    ViewSelectionOverlayShown,
     SupersessionOverlayShown,
     HelpOverlayShown,
     QueueOverlayShown,
@@ -197,6 +199,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::ModelSelectionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::ModelSelection;
+        }
+        ShellChromeEvent::ViewSelectionOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::ViewSelection;
         }
         ShellChromeEvent::SupersessionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -525,6 +531,20 @@ mod tests {
             ExitConfirmationState::Hidden
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::ModelSelection);
+        assert!(reduced.effects.is_empty());
+    }
+    #[test]
+    fn showing_view_selection_overlay_hides_exit_confirmation() {
+        // view selection은 transcript projection만 바꾸는 local inspection surface다.
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::ViewSelectionOverlayShown);
+
+        assert_eq!(
+            reduced.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::ViewSelection);
         assert!(reduced.effects.is_empty());
     }
     #[test]

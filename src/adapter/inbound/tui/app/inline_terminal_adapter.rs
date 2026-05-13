@@ -238,7 +238,9 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
              */
             format_conversation_scrollback_lines(
                 &conversation.messages,
-                app.planning_worker_shows_debug_details(),
+                app.conversation_view_mode,
+                app.conversation_view_mode.shows_debug_details()
+                    || app.planning_worker_shows_debug_details(),
             )
         }
         ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),

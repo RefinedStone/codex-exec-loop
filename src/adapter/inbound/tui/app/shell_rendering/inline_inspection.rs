@@ -1,11 +1,11 @@
 use super::super::shell_presentation::{
     DirectionsMaintenanceOverlayView, HelpOverlayView, ModelSelectionOverlayView, OverlayListView,
     PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, SupersessionOverlayView, build_directions_maintenance_overlay_view,
-    build_help_overlay_view, build_model_selection_overlay_view,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    build_supersession_overlay_view,
+    StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_model_selection_overlay_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep,
@@ -40,6 +40,9 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
         ShellOverlay::ModelSelection => {
             draw_inline_model_selection_inspection(frame, inspection_area, app)
+        }
+        ShellOverlay::ViewSelection => {
+            draw_inline_view_selection_inspection(frame, inspection_area, app)
         }
         ShellOverlay::Supersession => {
             draw_inline_supersession_inspection(frame, inspection_area, app)
@@ -271,6 +274,36 @@ fn draw_inline_model_selection_inspection(frame: &mut Frame<'_>, area: Rect, app
         effort_lines,
         false,
     );
+    render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+fn draw_inline_view_selection_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_view_selection_overlay_view(app);
+    let ViewSelectionOverlayView {
+        header_lines,
+        mode_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&status_lines, 4)),
+            Constraint::Length(inline_section_height(&key_lines, 3)),
+        ])
+        .split(area);
+
+    render_inline_section(
+        frame,
+        layout[0],
+        inline_overlay_title("Select Conversation View"),
+        body_lines,
+        true,
+    );
+    render_inline_section(frame, layout[1], Line::from("Views"), mode_lines, false);
     render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }

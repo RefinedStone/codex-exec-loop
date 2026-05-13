@@ -6,6 +6,7 @@ use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
+use super::view_selection_overlay_ui::ConversationViewMode;
 use crate::application::service::planning::PlanningResetTarget;
 use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
 
@@ -19,6 +20,7 @@ pub(crate) enum InlineShellCommand {
     Turns,
     Stop,
     Model,
+    View,
     Think,
     Doctor,
     PlanningInit,
@@ -60,10 +62,11 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model  :view [simple|medium|detail]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level.";
+const VIEW_USAGE: &str = "Type `:view` to choose transcript visibility for tool/status rows.";
 const THINK_USAGE: &str =
     "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
 const THINK_SUPPORTED_VALUES: &str = ConversationReasoningEffort::SUPPORTED_LABELS;
@@ -138,6 +141,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":model"],
         suggestion_detail: "model and think",
         buffered_hint: MODEL_USAGE,
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::View,
+        primary_name: ":view",
+        aliases: &[":view"],
+        suggestion_detail: "conversation view",
+        buffered_hint: VIEW_USAGE,
         execution_status: None,
         requires_argument: false,
     },
@@ -226,6 +238,7 @@ impl InlineShellCommandInput {
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::Model => model_argument_hint(self.argument()),
+            InlineShellCommand::View => view_argument_hint(self.argument()),
             InlineShellCommand::Think => think_argument_hint(self.argument()),
             InlineShellCommand::Queue => {
                 planning_overlay_argument_hint(self.argument(), InlineShellCommand::Queue, "queue")
@@ -245,6 +258,7 @@ impl InlineShellCommandInput {
             InlineShellCommand::Turns => None,
             InlineShellCommand::Stop => None,
             InlineShellCommand::Model => None,
+            InlineShellCommand::View => None,
             InlineShellCommand::Think => None,
             _ => self.command.spec().execution_status.map(str::to_string),
         }
@@ -363,6 +377,7 @@ impl InlineShellCommand {
             InlineShellCommand::Reset => ":reset ",
             InlineShellCommand::Turns => ":turns ",
             InlineShellCommand::Model => ":model",
+            InlineShellCommand::View => ":view",
             InlineShellCommand::Think => ":think ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
@@ -393,6 +408,7 @@ impl InlineShellCommand {
             InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::Stop => ":stop",
             InlineShellCommand::Model => ":model",
+            InlineShellCommand::View => ":view [simple|medium|detail]",
             InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|default>",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
@@ -467,6 +483,22 @@ fn model_argument_hint(argument: Option<&str>) -> String {
         Some(_) => {
             "`:model` does not accept arguments; press Enter to open model selection.".to_string()
         }
+    }
+}
+fn view_argument_hint(argument: Option<&str>) -> String {
+    let Some(argument) = argument else {
+        return VIEW_USAGE.to_string();
+    };
+    match ConversationViewMode::parse(argument) {
+        Some(mode) => format!(
+            "Press Enter to set conversation view to `{}`.",
+            mode.label()
+        ),
+        None => format!(
+            "Press Enter to apply `:view {}`. Supported values: {}.",
+            argument.trim(),
+            ConversationViewMode::SUPPORTED_LABELS
+        ),
     }
 }
 fn think_argument_hint(argument: Option<&str>) -> String {

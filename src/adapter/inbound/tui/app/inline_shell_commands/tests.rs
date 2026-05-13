@@ -53,6 +53,15 @@ fn parse_recognizes_supported_aliases() {
             ":model gpt-5.4",
             Some((InlineShellCommand::Model, Some("gpt-5.4"))),
         ),
+        (":view", Some((InlineShellCommand::View, None))),
+        (
+            ":view detail",
+            Some((InlineShellCommand::View, Some("detail"))),
+        ),
+        (
+            ":view midium",
+            Some((InlineShellCommand::View, Some("midium"))),
+        ),
         (
             ":think high",
             Some((InlineShellCommand::Think, Some("high"))),
@@ -115,6 +124,7 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Turns,
             InlineShellCommand::Stop,
             InlineShellCommand::Model,
+            InlineShellCommand::View,
             InlineShellCommand::Think,
             InlineShellCommand::Doctor,
             InlineShellCommand::PlanningInit,
@@ -176,6 +186,10 @@ fn suggestions_filter_by_prefix() {
         InlineShellCommand::suggestions(":mo"),
         vec![InlineShellCommand::Model]
     );
+    assert_eq!(
+        InlineShellCommand::suggestions(":v"),
+        vec![InlineShellCommand::View]
+    );
 }
 
 #[test]
@@ -205,7 +219,7 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(10));
+    assert!(state.move_selection(11));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -236,6 +250,7 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
     assert_eq!(InlineShellCommand::Model.completion_text(), ":model");
+    assert_eq!(InlineShellCommand::View.completion_text(), ":view");
     assert_eq!(InlineShellCommand::Think.completion_text(), ":think ");
     assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
 }
@@ -269,6 +284,7 @@ fn help_entries_use_renderable_command_forms() {
     assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
     assert!(rendered.contains(":stop - stop active sessions"));
     assert!(rendered.contains(":model - model and think"));
+    assert!(rendered.contains(":view [simple|medium|detail] - conversation view"));
     assert!(
         rendered.contains(":think <none|minimal|low|medium|high|xhigh|default> - reasoning effort")
     );
@@ -372,13 +388,18 @@ fn parallel_command_hint_is_argument_aware() {
 }
 
 #[test]
-fn model_and_think_command_hints_are_argument_aware() {
+fn model_view_and_think_command_hints_are_argument_aware() {
     let model_plain = InlineShellCommandInput::parse(":model").expect("command should parse");
     let model_set = InlineShellCommandInput::parse(":model gpt-5.4").expect("command should parse");
     let model_clear =
         InlineShellCommandInput::parse(":model default").expect("command should parse");
     let model_invalid =
         InlineShellCommandInput::parse(":model gpt 5").expect("command should parse");
+    let view_plain = InlineShellCommandInput::parse(":view").expect("command should parse");
+    let view_medium = InlineShellCommandInput::parse(":view medium").expect("command should parse");
+    let view_midium = InlineShellCommandInput::parse(":view midium").expect("command should parse");
+    let view_detail = InlineShellCommandInput::parse(":view detail").expect("command should parse");
+    let view_invalid = InlineShellCommandInput::parse(":view all").expect("command should parse");
     let think_plain = InlineShellCommandInput::parse(":think").expect("command should parse");
     let think_high = InlineShellCommandInput::parse(":think high").expect("command should parse");
     let think_xhigh =
@@ -403,6 +424,26 @@ fn model_and_think_command_hints_are_argument_aware() {
     assert_eq!(
         model_invalid.buffered_hint(),
         "`:model` does not accept arguments; press Enter to open model selection."
+    );
+    assert_eq!(
+        view_plain.buffered_hint(),
+        "Type `:view` to choose transcript visibility for tool/status rows."
+    );
+    assert_eq!(
+        view_medium.buffered_hint(),
+        "Press Enter to set conversation view to `medium`."
+    );
+    assert_eq!(
+        view_midium.buffered_hint(),
+        "Press Enter to set conversation view to `medium`."
+    );
+    assert_eq!(
+        view_detail.buffered_hint(),
+        "Press Enter to set conversation view to `detail`."
+    );
+    assert_eq!(
+        view_invalid.buffered_hint(),
+        "Press Enter to apply `:view all`. Supported values: simple, medium, detail."
     );
     assert_eq!(
         think_plain.buffered_hint(),
@@ -492,6 +533,7 @@ fn execution_status_stays_alias_neutral() {
         (":turns 5", None),
         (":stop", None),
         (":model gpt-5.4", None),
+        (":view detail", None),
         (":think high", None),
         (":reset queue", None),
     ];

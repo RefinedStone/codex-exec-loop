@@ -1,6 +1,8 @@
 use super::super::tui_testkit;
 use super::*;
-use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines_with_debug;
+use crate::adapter::inbound::tui::app::shell_presentation::{
+    format_conversation_lines_for_view, format_conversation_lines_with_debug,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -80,6 +82,50 @@ fn transcript_formatting_expands_tabs_in_content_and_debug_detail() {
 
     assert!(lines.contains(&"  let    ok = true;".to_string()));
     assert!(lines.contains(&"  phase    final".to_string()));
+}
+#[test]
+fn transcript_view_modes_filter_tool_and_status_rows() {
+    let messages = vec![
+        ConversationMessage::new(ConversationMessageKind::User, "hello", None, None),
+        ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "thinking",
+            Some("commentary".to_string()),
+            None,
+        ),
+        ConversationMessage::new(ConversationMessageKind::Agent, "answer", None, None),
+        ConversationMessage::new(
+            ConversationMessageKind::Tool,
+            "command: cargo test",
+            None,
+            None,
+        ),
+        ConversationMessage::new(
+            ConversationMessageKind::Status,
+            "thread status: running",
+            None,
+            None,
+        ),
+    ];
+
+    let simple = format_conversation_lines_for_view(&messages, ConversationViewMode::Simple, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(simple.contains("You:"));
+    assert!(simple.contains("Codex Commentary:"));
+    assert!(simple.contains("Codex:"));
+    assert!(!simple.contains("Tool:"));
+    assert!(!simple.contains("Status:"));
+
+    let medium = format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(medium.contains("Tool:"));
+    assert!(medium.contains("Status:"));
 }
 
 // Inline main-buffer tests keep the app-server-first mode frameless: the stable
@@ -405,6 +451,29 @@ fn inline_model_selection_inspection_renders_model_and_effort_picker() {
 }
 
 #[test]
+fn inline_view_selection_inspection_renders_visibility_picker() {
+    let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_view_selection_overlay();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline view selection render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Select Conversation View / inline inspection"));
+    assert!(rendered.contains("Views"));
+    assert!(rendered.contains("simple"));
+    assert!(rendered.contains("medium"));
+    assert!(rendered.contains("detail"));
+    assert!(rendered.contains("Codex and Codex Commentary stay visible"));
+    assert!(rendered.contains("Enter/1-3: apply"));
+    assert!(!rendered.contains(":view <"));
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
 fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
@@ -705,6 +774,8 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     let help = shell_presentation::build_help_overlay_view();
     app.show_model_selection_overlay();
     let model_selection = shell_presentation::build_model_selection_overlay_view(&app);
+    app.show_view_selection_overlay();
+    let view_selection = shell_presentation::build_view_selection_overlay_view(&app);
     let queue = shell_presentation::build_queue_overlay_view(&app);
     let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
     let supersession = shell_presentation::build_supersession_overlay_view(&app);
@@ -715,6 +786,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
         sessions.header_lines[0].to_string(),
         help.header_lines[0].to_string(),
         model_selection.header_lines[0].to_string(),
+        view_selection.header_lines[0].to_string(),
         queue.header_lines[0].to_string(),
         directions.header_lines[0].to_string(),
         supersession.header_lines[0].to_string(),

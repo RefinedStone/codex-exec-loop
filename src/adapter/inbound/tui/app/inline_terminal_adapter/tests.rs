@@ -5,8 +5,8 @@ use super::{
     sync_inline_viewport, terminal_options_for_render_mode,
 };
 use crate::adapter::inbound::tui::app::{
-    ConversationMessage, ConversationMessageKind, ConversationState, INLINE_VIEWPORT_HEIGHT,
-    InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
+    ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewMode,
+    INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
 };
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
@@ -523,6 +523,50 @@ fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() 
         .collect::<Vec<_>>()
         .join("\n");
     assert!(debug_lines.contains("planning worker temporary session: refresh / refresh ok"));
+}
+
+#[test]
+fn inline_history_view_mode_controls_tool_and_status_rows() {
+    let mut app = make_test_app();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "visible codex reply",
+        Some("commentary".to_string()),
+        None,
+    ));
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Tool,
+        "command: cargo test [completed]",
+        None,
+        None,
+    ));
+    conversation.messages.push(ConversationMessage::new(
+        ConversationMessageKind::Status,
+        "thread status: running",
+        None,
+        None,
+    ));
+
+    let simple_lines = current_inline_history_lines(&app)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(simple_lines.contains("Codex Commentary:"));
+    assert!(!simple_lines.contains("Tool:"));
+    assert!(!simple_lines.contains("Status:"));
+
+    app.conversation_view_mode = ConversationViewMode::Medium;
+    let medium_lines = current_inline_history_lines(&app)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(medium_lines.contains("Tool:"));
+    assert!(medium_lines.contains("Status:"));
 }
 
 #[test]

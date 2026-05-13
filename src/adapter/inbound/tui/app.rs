@@ -136,6 +136,8 @@ mod theme;
 mod tui_testkit;
 #[path = "app/turn_submission_runtime.rs"]
 mod turn_submission_runtime;
+#[path = "app/view_selection_overlay_ui.rs"]
+mod view_selection_overlay_ui;
 
 // Re-exports below are the narrow surface area sibling modules expect from this
 // app module root. Keeping them here makes the dependency graph explicit: app
@@ -200,6 +202,9 @@ use shell_presentation::format_conversation_lines;
 #[cfg(test)]
 use shell_presentation::{build_inline_tail_lines, build_planning_init_overlay_view};
 use theme::AkraTheme;
+use view_selection_overlay_ui::{
+    ConversationViewMode, VIEW_SELECTION_MODE_OPTIONS, ViewSelectionOverlayUiState,
+};
 
 // Auto-follow submission carries more than a generated prompt: it records the
 // turn that produced the handoff, the transcript line shown to the operator, any
@@ -286,6 +291,7 @@ struct NativeTuiApp {
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
     model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
+    view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
@@ -295,6 +301,7 @@ struct NativeTuiApp {
     core_runtime: CoreRuntime<CoreEffectRunner>,
     turn_control_truth: ConversationRuntimeControlTruth,
     turn_options: ConversationTurnOptions,
+    conversation_view_mode: ConversationViewMode,
     planning_worker_panel_state: PlanningWorkerPanelState,
     planning_worker_visibility: PlanningWorkerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,
