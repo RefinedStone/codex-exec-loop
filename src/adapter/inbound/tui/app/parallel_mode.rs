@@ -415,6 +415,14 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn open_parallel_mode_automation_epoch(&mut self, workspace_directory: String) {
+        self.apply_parallel_mode_control_plane_command(
+            ParallelModeControlPlaneCommand::OpenEpoch {
+                workspace_directory,
+            },
+        );
+    }
+
     #[cfg(test)]
     pub(super) fn apply_parallel_mode_orchestrator_wake_request(
         &mut self,
@@ -425,8 +433,7 @@ impl NativeTuiApp {
         self.request_parallel_mode_dispatch(workspace_directory, trigger, Some(epoch_id));
     }
 
-    #[cfg(test)]
-    fn request_parallel_mode_dispatch(
+    pub(super) fn request_parallel_mode_dispatch(
         &mut self,
         workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,

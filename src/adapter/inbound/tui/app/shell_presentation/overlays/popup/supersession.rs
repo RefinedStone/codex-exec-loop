@@ -42,7 +42,10 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let capability_lines = build_distributor_lines_with_mud(&supervisor_snapshot.distributor, &[]);
     let pool_lines = build_pool_lines_with_mud(&supervisor_snapshot.pool, activity_frame, &[]);
     let roster_lines = build_orchestrator_lines(&supervisor_snapshot.distributor);
-    let detail_lines = build_parallel_event_stream_lines(&supervisor_snapshot);
+    let detail_lines = build_parallel_event_stream_lines(
+        &supervisor_snapshot,
+        app.parallel_supervisor_event_lines(),
+    );
     let mut distributor_lines =
         build_roster_lines_with_mud(&supervisor_snapshot, activity_frame, &[]);
     distributor_lines.extend(build_detail_lines_with_mud(&supervisor_snapshot, &[]));
@@ -430,6 +433,7 @@ fn build_detail_lines_with_mud(
 
 fn build_parallel_event_stream_lines(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    local_event_lines: Vec<Line<'static>>,
 ) -> Vec<Line<'static>> {
     let mut events = Vec::new();
 
@@ -559,6 +563,8 @@ fn build_parallel_event_stream_lines(
             ),
         ));
     }
+
+    events.extend(local_event_lines);
 
     if events.is_empty() {
         return vec![Line::from(
