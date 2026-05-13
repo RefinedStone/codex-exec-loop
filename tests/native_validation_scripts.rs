@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,12 +9,21 @@ fn make_records_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "codex-exec-loop-validation-{}-{nonce}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&dir).expect("validation temp dir should be created");
-    dir
+    let temp_dir = std::env::temp_dir();
+
+    for attempt in 0..100 {
+        let dir = temp_dir.join(format!(
+            "codex-exec-loop-validation-{}-{nonce}-{attempt}",
+            std::process::id()
+        ));
+        match fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("validation temp dir should be created: {error}"),
+        }
+    }
+
+    panic!("unique validation temp dir should be allocated");
 }
 
 fn write_record(dir: &Path, file_name: &str, body: &str) {

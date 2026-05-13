@@ -15,7 +15,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
-    PlanningDraftFileRecord, PlanningWorkspaceLoadRecord,
+    PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
 };
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
@@ -302,6 +302,84 @@ fn staged_draft_rows_do_not_mutate_active_workspace_or_task_authority_snapshot()
         .expect("task authority snapshot should remain accepted authority");
     assert_eq!(snapshot.task_authority, task_authority);
     assert_eq!(snapshot.queue_projection, queue_projection);
+}
+
+#[test]
+fn repo_scoped_workspace_port_delegates_active_and_draft_operations() {
+    let workspace_dir = temp_workspace("repo-scoped-port");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let port: &dyn RepoScopedPlanningWorkspacePort = &adapter;
+
+    assert!(!port.is_git_backed_workspace(&workspace_dir));
+    assert!(
+        port.resolve_active_workspace_root(&workspace_dir)
+            .is_absolute()
+    );
+
+    port.commit_active_workspace_files(
+        &workspace_dir,
+        &PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("active result output".to_string()),
+        },
+    )
+    .expect("active workspace should commit through repo-scoped port");
+    assert_eq!(
+        port.load_active_workspace_files(&workspace_dir)
+            .expect("active workspace should load through repo-scoped port")
+            .result_output_markdown
+            .as_deref(),
+        Some("active result output")
+    );
+
+    port.replace_active_planning_file(
+        &workspace_dir,
+        RESULT_OUTPUT_FILE_PATH,
+        Some("updated active result"),
+    )
+    .expect("active file should update through repo-scoped port");
+    assert_eq!(
+        port.load_active_planning_file(&workspace_dir, RESULT_OUTPUT_FILE_PATH)
+            .expect("active file should load through repo-scoped port")
+            .as_deref(),
+        Some("updated active result")
+    );
+
+    let staged = port
+        .stage_repo_scoped_draft_files(
+            &workspace_dir,
+            "draft-port",
+            &[PlanningDraftFileRecord {
+                active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                body: "draft result output".to_string(),
+            }],
+        )
+        .expect("draft should stage through repo-scoped port");
+    assert_eq!(staged.draft_name, "draft-port");
+
+    let staged_path = port
+        .replace_repo_scoped_draft_file(
+            &workspace_dir,
+            "draft-port",
+            RESULT_OUTPUT_FILE_PATH,
+            "updated draft result",
+        )
+        .expect("draft file should update through repo-scoped port");
+    assert!(staged_path.contains("draft-port"));
+
+    let loaded = port
+        .load_repo_scoped_draft_files(&workspace_dir, "draft-port")
+        .expect("draft should load through repo-scoped port");
+    assert_eq!(loaded.staged_files.len(), 1);
+    assert_eq!(loaded.staged_files[0].body, "updated draft result");
+
+    port.remove_active_planning_entry(&workspace_dir, RESULT_OUTPUT_FILE_PATH)
+        .expect("active file should remove through repo-scoped port");
+    assert_eq!(
+        port.load_active_planning_file(&workspace_dir, RESULT_OUTPUT_FILE_PATH)
+            .expect("active file lookup should still succeed")
+            .as_deref(),
+        None
+    );
 }
 
 #[test]
