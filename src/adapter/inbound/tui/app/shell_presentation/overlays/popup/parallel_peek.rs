@@ -72,21 +72,19 @@ fn build_agent_lines(
     let mut lines = Vec::new();
     for (index, entry) in active_agents.iter().enumerate() {
         let prefix = if index == selected_index { ">" } else { " " };
+        let thread_label = if entry.thread_id.is_some() {
+            "thread ok"
+        } else {
+            "thread pending"
+        };
         lines.push(Line::from(format!(
-            "{prefix} {}. {} / {} / {} / {}",
+            "{prefix} {}. {} / {} / {} / {} / {}",
             index + 1,
             entry.agent_id,
             entry.slot_id,
             display_peek_state_label(&entry.state_label),
-            entry.thread_id.as_deref().unwrap_or("thread pending")
-        )));
-        lines.push(Line::from(format!(
-            "   task: {}",
-            truncate_peek_text(&entry.task_title, 88)
-        )));
-        lines.push(Line::from(format!(
-            "   latest: {}",
-            truncate_peek_text(&entry.latest_summary, 96)
+            thread_label,
+            truncate_peek_text(&entry.task_title, 36)
         )));
     }
     lines

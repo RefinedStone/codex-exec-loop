@@ -667,7 +667,7 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
         request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: Sender<ConversationStreamEvent>,
     ) -> Result<()> {
-        // Parallel worker sessions are isolated and ephemeral; distributor code handles commits/PRs after the worker exits.
+        // Parallel worker sessions use isolated processes but persist app-server threads so `:peek` can read them later.
         let result = self.with_isolated_streaming_runtime(|connection| {
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(request.cwd.to_string()),
@@ -677,7 +677,7 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 model: None,
                 developer_instructions: Some(request.developer_instructions.to_string()),
                 service_name: Some(request.service_name.to_string()),
-                ephemeral: Some(true),
+                ephemeral: Some(false),
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_planning_and_parallel_streams_use_isolated_ephemeral_threads() {
+    fn hidden_planning_stays_ephemeral_while_parallel_threads_are_readable_for_peek() {
         let fake_codex = FakeCodex::install("isolated-workers");
         let adapter = test_adapter();
 
@@ -959,7 +959,7 @@ mod tests {
             thread_starts[1]["params"]["serviceName"],
             "akra-parallel-worker"
         );
-        assert_eq!(thread_starts[1]["params"]["ephemeral"], true);
+        assert_eq!(thread_starts[1]["params"]["ephemeral"], false);
         assert_eq!(
             thread_starts[1]["params"]["developerInstructions"],
             "You are an isolated worker."

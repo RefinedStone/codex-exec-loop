@@ -9,8 +9,8 @@ use super::super::shell_presentation::{
     build_supersession_overlay_view, build_view_selection_overlay_view,
 };
 use super::super::{
-    AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, PlanningInitOverlayStep,
-    ShellOverlay,
+    AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
+    PlanningInitOverlayStep, ShellOverlay,
 };
 use super::inline_layout::{
     inline_section_height, render_inline_scrolled_section, render_inline_section,
@@ -72,6 +72,7 @@ pub(super) fn draw_inline_parallel_mode_inspection(
 
 fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_parallel_peek_overlay_view(app);
+    let step = app.parallel_peek_overlay_ui_state.step();
     let ParallelPeekOverlayView {
         header_lines,
         agent_lines,
@@ -80,12 +81,12 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&agent_lines, 9)),
-            Constraint::Min(8),
+            Constraint::Min(6),
             Constraint::Length(inline_section_height(&status_lines, 4)),
             Constraint::Length(inline_section_height(&key_lines, 4)),
         ])
@@ -98,22 +99,24 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
         body_lines,
         true,
     );
-    render_inline_scrolled_section(
-        frame,
-        layout[1],
-        Line::from("Active Agents"),
-        agent_lines,
-        0,
-    );
-    render_inline_scrolled_section(
-        frame,
-        layout[2],
-        Line::from("Conversation Preview"),
-        conversation_lines,
-        0,
-    );
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    match step {
+        ParallelPeekOverlayStep::AgentList => render_inline_scrolled_section(
+            frame,
+            layout[1],
+            Line::from("Active Agents"),
+            agent_lines,
+            0,
+        ),
+        ParallelPeekOverlayStep::ConversationPreview => render_inline_scrolled_section(
+            frame,
+            layout[1],
+            Line::from("Conversation Preview"),
+            conversation_lines,
+            0,
+        ),
+    }
+    render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
     let HelpOverlayView {

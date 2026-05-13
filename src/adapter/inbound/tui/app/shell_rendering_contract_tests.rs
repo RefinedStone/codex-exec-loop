@@ -527,6 +527,79 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
 }
 
 #[test]
+fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer() {
+    /*
+     * `:peek` starts as an agent picker. In inline app-server mode the picker must
+     * spend the available inspection body on active agents instead of letting the
+     * empty conversation preview consume the compact terminal height.
+     */
+    let mut terminal = Terminal::new(TestBackend::new(80, 18)).expect("test terminal");
+    let mut app = make_test_app();
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![
+                ParallelModeAgentRosterEntry::new(
+                    "agent-guardian",
+                    "Guard peek rows",
+                    "slot-1",
+                    "akra-agent/slot-1/guard-peek-rows",
+                    "running",
+                    "active",
+                    "checking compact picker rendering",
+                )
+                .with_thread_id(Some("thread-guardian".to_string())),
+                ParallelModeAgentRosterEntry::new(
+                    "agent-builder",
+                    "Build peek rows",
+                    "slot-2",
+                    "akra-agent/slot-2/build-peek-rows",
+                    "starting",
+                    "active",
+                    "starting the second worker",
+                )
+                .with_thread_id(Some("thread-builder".to_string())),
+                ParallelModeAgentRosterEntry::new(
+                    "agent-reviewer",
+                    "Review peek rows",
+                    "slot-3",
+                    "akra-agent/slot-3/review-peek-rows",
+                    "commit_ready",
+                    "official",
+                    "official completion is waiting for delivery",
+                )
+                .with_thread_id(Some("thread-reviewer".to_string())),
+            ],
+            "empty",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    )));
+    app.shell_overlay = ShellOverlay::ParallelPeek;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline parallel peek picker render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Parallel Peek / inline inspection"));
+    assert!(rendered.contains("Active Agents"));
+    assert!(rendered.contains("> 1. agent-guardian / slot-1"));
+    assert!(rendered.contains("agent-builder / slot-2"));
+    assert!(rendered.contains("agent-reviewer / slot-3"));
+    assert!(rendered.contains("3 active parallel agent(s) ready for peek"));
+    assert!(
+        !rendered.contains("Select an active agent and press Enter"),
+        "agent list should be the primary compact picker surface:\n{rendered}"
+    );
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
 fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();
