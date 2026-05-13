@@ -16,6 +16,7 @@ server_log="${output_dir}/akra-admin.log"
 admin_html="${output_dir}/admin.html"
 metrics_html="${output_dir}/admin-metrics.html"
 tasks_html="${output_dir}/admin-tasks.html"
+akra_tasks_html="${output_dir}/admin-akra-tasks.html"
 dashboard_json="${output_dir}/dashboard.json"
 events_json="${output_dir}/events.json"
 events_incremental_json="${output_dir}/events-incremental.json"
@@ -136,11 +137,13 @@ base_url="http://127.0.0.1:${port}"
 graphic_url="${base_url}/admin/akra"
 metrics_url="${base_url}/admin/akra/metrics"
 tasks_url="${base_url}/admin/tasks"
+akra_tasks_url="${base_url}/admin/akra/tasks"
 wait_for_server "${graphic_url}"
 
 curl -fsS "${graphic_url}" >"${admin_html}"
 curl -fsS "${metrics_url}" >"${metrics_html}"
 curl -fsS "${tasks_url}" >"${tasks_html}"
+curl -fsS "${akra_tasks_url}" >"${akra_tasks_html}"
 curl -fsS "${base_url}/api/admin/akra/dashboard" >"${dashboard_json}"
 curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
@@ -181,9 +184,10 @@ for token in \
   '정보 카드' \
   'AKRA ADMIN CONTROL CENTER' \
   'akraHashTabRoutes' \
-  'directions: "/admin/directions"' \
-  'tasks: "/admin/tasks"' \
-  'href="/admin/directions"' \
+  'directions: "/admin/akra/directions"' \
+  'tasks: "/admin/akra/tasks"' \
+  'href="/admin/akra/directions"' \
+  'href="/admin/akra/tasks"' \
   '작전 방향' \
   'hashchange' \
   'MISSION FLOW' \
@@ -311,6 +315,34 @@ done
 require_not_contains "${tasks_html}" '<body class="akra-graphic">'
 require_not_contains "${tasks_html}" 'aria-label="게임발전국 작업 관리"'
 require_not_contains "${tasks_html}" 'class="akra-task-console"'
+require_not_contains "${admin_html}" 'tasks: "/admin/tasks"'
+require_not_contains "${admin_html}" 'href="/admin/tasks"'
+
+for token in \
+  '<body class="akra-graphic">' \
+  'href="/admin/akra/tasks" class="active"><span class="nav-icon">T</span><span>작업 관리</span></a>' \
+  '<summary>Add task</summary>' \
+  'Task catalog view' \
+  'Skipped tasks' \
+  'class="toolbar"' \
+  'class="create-panel"' \
+  'class="metric-row"' \
+  'class="list-panel"' \
+  'class="entity-list" id="task-list"' \
+  'Search tasks' \
+  'id="task-list"' \
+  'data-list-filter="task-list"' \
+  '/admin/akra/tasks/upsert' \
+  '/admin/akra/tasks/delete' \
+  '/admin/files/export' \
+  '/admin/files/apply' \
+  '게임발전국 작업 관리'; do
+  require_contains "${akra_tasks_html}" "${token}"
+done
+
+require_not_contains "${akra_tasks_html}" 'href="/admin/tasks" class="active">Tasks</a>'
+require_not_contains "${akra_tasks_html}" 'action="/admin/tasks/upsert"'
+require_not_contains "${akra_tasks_html}" 'action="/admin/tasks/delete"'
 
 for token in \
   '"workspace"' \

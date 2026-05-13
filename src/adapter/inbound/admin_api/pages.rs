@@ -40,6 +40,84 @@ use std::collections::HashMap;
  * pages.rs는 form field를 application request DTO로 옮기고 response shape을 고르지만,
  * direction/task/draft의 유효성, authority mutation, workspace file write는 facade가 소유한다.
  */
+#[derive(Clone, Copy)]
+enum PlanningAdminSurface {
+    Default,
+    Akra,
+}
+
+impl PlanningAdminSurface {
+    fn directions_title(self) -> &'static str {
+        match self {
+            Self::Default => "Directions",
+            Self::Akra => "게임발전국 작전 방향",
+        }
+    }
+
+    fn directions_nav(self) -> &'static str {
+        match self {
+            Self::Default => "directions",
+            Self::Akra => "akra_directions",
+        }
+    }
+
+    fn directions_path(self) -> &'static str {
+        match self {
+            Self::Default => "/admin/directions",
+            Self::Akra => "/admin/akra/directions",
+        }
+    }
+
+    fn direction_upsert_path(self) -> &'static str {
+        match self {
+            Self::Default => "/admin/directions/upsert",
+            Self::Akra => "/admin/akra/directions/upsert",
+        }
+    }
+
+    fn direction_delete_path(self) -> &'static str {
+        match self {
+            Self::Default => "/admin/directions/delete",
+            Self::Akra => "/admin/akra/directions/delete",
+        }
+    }
+
+    fn tasks_title(self) -> &'static str {
+        match self {
+            Self::Default => "Tasks",
+            Self::Akra => "게임발전국 작업 관리",
+        }
+    }
+
+    fn tasks_nav(self) -> &'static str {
+        match self {
+            Self::Default => "tasks",
+            Self::Akra => "akra_tasks",
+        }
+    }
+
+    fn tasks_path(self) -> &'static str {
+        match self {
+            Self::Default => "/admin/tasks",
+            Self::Akra => "/admin/akra/tasks",
+        }
+    }
+
+    fn task_upsert_path(self) -> &'static str {
+        match self {
+            Self::Default => "/admin/tasks/upsert",
+            Self::Akra => "/admin/akra/tasks/upsert",
+        }
+    }
+
+    fn task_delete_path(self) -> &'static str {
+        match self {
+            Self::Default => "/admin/tasks/delete",
+            Self::Akra => "/admin/akra/tasks/delete",
+        }
+    }
+}
+
 pub(super) async fn akra_dashboard_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
@@ -139,6 +217,23 @@ pub(super) async fn directions_page(
     jar: CookieJar,
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
+    render_directions_page(state, jar, query, PlanningAdminSurface::Default).await
+}
+
+pub(super) async fn akra_directions_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    render_directions_page(state, jar, query, PlanningAdminSurface::Akra).await
+}
+
+async fn render_directions_page(
+    state: AdminAppState,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+    surface: PlanningAdminSurface,
+) -> std::result::Result<Response, StatusCode> {
     /*
      * direction edit 화면은 compact overview와 management projection을 동시에 필요로 한다.
      * overview는 navigation badge, runtime/doctor 상태, queue summary를 채우고, management view는 editable direction과
@@ -156,11 +251,13 @@ pub(super) async fn directions_page(
     render_html(
         jar,
         DirectionsTemplate {
-            page_title: "Directions".to_string(),
-            current_nav: "directions",
+            page_title: surface.directions_title().to_string(),
+            current_nav: surface.directions_nav(),
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
             notice: query.get("notice").cloned(),
+            direction_upsert_path: surface.direction_upsert_path(),
+            direction_delete_path: surface.direction_delete_path(),
             overview,
             management,
         },
@@ -171,6 +268,23 @@ pub(super) async fn tasks_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
     query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    render_tasks_page(state, jar, query, PlanningAdminSurface::Default).await
+}
+
+pub(super) async fn akra_tasks_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    render_tasks_page(state, jar, query, PlanningAdminSurface::Akra).await
+}
+
+async fn render_tasks_page(
+    state: AdminAppState,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+    surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
     // task page도 direction page와 같은 management projection을 쓰지만 nav marker와 redirect notice target은 task flow로 분리한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
@@ -185,11 +299,13 @@ pub(super) async fn tasks_page(
     render_html(
         jar,
         TasksTemplate {
-            page_title: "Tasks".to_string(),
-            current_nav: "tasks",
+            page_title: surface.tasks_title().to_string(),
+            current_nav: surface.tasks_nav(),
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
             notice: query.get("notice").cloned(),
+            task_upsert_path: surface.task_upsert_path(),
+            task_delete_path: surface.task_delete_path(),
             overview,
             management,
         },
@@ -200,6 +316,23 @@ pub(super) async fn upsert_direction_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
     Form(form): Form<DirectionMutationForm>,
+) -> std::result::Result<Response, StatusCode> {
+    upsert_direction_for_surface(state, jar, form, PlanningAdminSurface::Default).await
+}
+
+pub(super) async fn upsert_akra_direction_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<DirectionMutationForm>,
+) -> std::result::Result<Response, StatusCode> {
+    upsert_direction_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
+}
+
+async fn upsert_direction_for_surface(
+    state: AdminAppState,
+    jar: CookieJar,
+    form: DirectionMutationForm,
+    surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
     /*
      * browser form은 모든 direction field를 text로 운반한다.
@@ -220,7 +353,7 @@ pub(super) async fn upsert_direction_page(
             state: form.state,
         })
         .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location("/admin/directions", &outcome.notice)).into_response())
+    Ok(Redirect::to(&notice_location(surface.directions_path(), &outcome.notice)).into_response())
 }
 
 pub(super) async fn delete_direction_page(
@@ -228,19 +361,53 @@ pub(super) async fn delete_direction_page(
     jar: CookieJar,
     Form(form): Form<IdDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
+    delete_direction_for_surface(state, jar, form, PlanningAdminSurface::Default).await
+}
+
+pub(super) async fn delete_akra_direction_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<IdDeleteForm>,
+) -> std::result::Result<Response, StatusCode> {
+    delete_direction_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
+}
+
+async fn delete_direction_for_surface(
+    state: AdminAppState,
+    jar: CookieJar,
+    form: IdDeleteForm,
+    surface: PlanningAdminSurface,
+) -> std::result::Result<Response, StatusCode> {
     // route가 direction delete라는 operation 의미를 제공하고, shared IdDeleteForm은 선택된 id와 CSRF proof만 운반한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
         .facade
         .delete_direction(PlanningAdminDirectionDeleteRequest { id: form.id })
         .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location("/admin/directions", &outcome.notice)).into_response())
+    Ok(Redirect::to(&notice_location(surface.directions_path(), &outcome.notice)).into_response())
 }
 
 pub(super) async fn upsert_task_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
     Form(form): Form<TaskMutationForm>,
+) -> std::result::Result<Response, StatusCode> {
+    upsert_task_for_surface(state, jar, form, PlanningAdminSurface::Default).await
+}
+
+pub(super) async fn upsert_akra_task_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<TaskMutationForm>,
+) -> std::result::Result<Response, StatusCode> {
+    upsert_task_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
+}
+
+async fn upsert_task_for_surface(
+    state: AdminAppState,
+    jar: CookieJar,
+    form: TaskMutationForm,
+    surface: PlanningAdminSurface,
 ) -> std::result::Result<Response, StatusCode> {
     /*
      * task form string은 여기서 parse하지 않고 의도적으로 그대로 통과시킨다.
@@ -264,7 +431,7 @@ pub(super) async fn upsert_task_page(
             blocked_by_text: form.blocked_by_text,
         })
         .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location("/admin/tasks", &outcome.notice)).into_response())
+    Ok(Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response())
 }
 
 pub(super) async fn delete_task_page(
@@ -272,13 +439,30 @@ pub(super) async fn delete_task_page(
     jar: CookieJar,
     Form(form): Form<IdDeleteForm>,
 ) -> std::result::Result<Response, StatusCode> {
+    delete_task_for_surface(state, jar, form, PlanningAdminSurface::Default).await
+}
+
+pub(super) async fn delete_akra_task_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    Form(form): Form<IdDeleteForm>,
+) -> std::result::Result<Response, StatusCode> {
+    delete_task_for_surface(state, jar, form, PlanningAdminSurface::Akra).await
+}
+
+async fn delete_task_for_surface(
+    state: AdminAppState,
+    jar: CookieJar,
+    form: IdDeleteForm,
+    surface: PlanningAdminSurface,
+) -> std::result::Result<Response, StatusCode> {
     // task delete도 direction delete와 같은 post-redirect-get shape를 써서 destructive POST가 browser refresh로 반복되지 않게 한다.
     verify_form_csrf(&jar, &form.csrf_token)?;
     let outcome = state
         .facade
         .delete_task(PlanningAdminTaskDeleteRequest { id: form.id })
         .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location("/admin/tasks", &outcome.notice)).into_response())
+    Ok(Redirect::to(&notice_location(surface.tasks_path(), &outcome.notice)).into_response())
 }
 
 pub(super) async fn export_files_page(
