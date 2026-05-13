@@ -4,6 +4,8 @@ use axum::response::{IntoResponse, Response};
 
 const AKRA_OFFICE_BACKGROUND: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/akra-office-background.png");
+const FINAL_DRAFT_MAP_SPRITE: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/final-draft-map-sprite.png");
 const AKRA_OBJECT_SPRITES: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/akra-object-sprites.png");
 const GAMEBALJEONGUK_ATLAS_64X96: &[u8] =
@@ -30,6 +32,7 @@ pub(super) async fn admin_graphic_asset(
 ) -> std::result::Result<Response, StatusCode> {
     let bytes = match asset_name.as_str() {
         "akra-office-background.png" => AKRA_OFFICE_BACKGROUND,
+        "final-draft-map-sprite.png" => FINAL_DRAFT_MAP_SPRITE,
         "akra-object-sprites.png" => AKRA_OBJECT_SPRITES,
         "gamebaljeonguk_atlas_64x96.png" => GAMEBALJEONGUK_ATLAS_64X96,
         "gamebaljeonguk_atlas_128x192.png" => GAMEBALJEONGUK_ATLAS_128X192,

@@ -68,6 +68,15 @@
       body.akra-graphic .page-header {
         display: none;
       }
+      body.akra-dashboard-page .admin-layout {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      body.akra-dashboard-page .sidebar {
+        display: none;
+      }
+      body.akra-dashboard-page .shell {
+        padding: 6px;
+      }
       .graphic-brand {
         display: grid;
         grid-template-columns: 54px minmax(0, 1fr);
@@ -847,7 +856,7 @@
     </script>
   </head>
   {% set is_akra = current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}
-  <body class="{% if is_akra %}akra-graphic{% endif %}">
+  <body class="{% if is_akra %}akra-graphic{% endif %}{% if current_nav == "akra_dashboard" %} akra-dashboard-page{% endif %}">
     <div class="admin-layout">
       <aside class="sidebar">
         {% if is_akra %}
