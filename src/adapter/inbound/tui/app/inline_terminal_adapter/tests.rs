@@ -167,7 +167,7 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
 }
 
 #[test]
-fn parallel_event_stream_flushes_to_host_scrollback_without_single_mode_transcript() {
+fn parallel_event_stream_stays_out_of_host_scrollback() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
@@ -196,10 +196,13 @@ fn parallel_event_stream_flushes_to_host_scrollback_without_single_mode_transcri
         !terminal_scrollback.contains("Parallel Event Stream"),
         "the stream title belongs to the live inline section, not durable host scrollback:\n{terminal_scrollback}"
     );
-    assert!(terminal_scrollback.contains("parallel-event-00"));
+    assert!(
+        !terminal_scrollback.contains("parallel-event-00"),
+        "parallel board events should not be written into host scrollback:\n{terminal_scrollback}"
+    );
     assert!(
         !terminal_scrollback.contains("single mode history must not own parallel scrollback"),
-        "parallel mode scrollback should use the event stream, not the hidden transcript:\n{terminal_scrollback}"
+        "parallel mode should also suppress the hidden single-mode transcript:\n{terminal_scrollback}"
     );
     let screen_text = tui_testkit::screen_text(&terminal);
     assert!(screen_text.contains("Parallel Event Stream"));
@@ -215,7 +218,7 @@ fn parallel_event_stream_flushes_to_host_scrollback_without_single_mode_transcri
     );
     assert!(
         !screen_text.contains("parallel-event-00"),
-        "old parallel events should remain available through host scrollback instead of forcing the viewport to show every row:\n{screen_text}"
+        "old parallel events should not force the live viewport to show every row:\n{screen_text}"
     );
 }
 

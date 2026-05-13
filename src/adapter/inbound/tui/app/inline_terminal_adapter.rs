@@ -223,11 +223,12 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.parallel_mode_enabled() {
         /*
-         * Parallel mode owns the main inline body with the supervisor board. Its
-         * durable scrollback should therefore be the event stream, not the
-         * single-thread transcript placeholder that may still exist underneath.
+         * Parallel mode owns the main inline body with the supervisor board, so
+         * host scrollback must stay quiet. Flushing the board event stream here
+         * makes every refresh look like ordinary terminal output piling up above
+         * the live shell.
          */
-        return app.parallel_supervisor_event_scrollback_lines();
+        return Vec::new();
     }
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
         /*

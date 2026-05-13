@@ -56,7 +56,8 @@ impl ParallelSupervisorEventLog {
             .collect()
     }
 
-    pub(super) fn scrollback_lines(&self) -> Vec<Line<'static>> {
+    #[cfg(test)]
+    fn scrollback_lines(&self) -> Vec<Line<'static>> {
         self.scrollback_entries
             .iter()
             .map(|entry| {
@@ -173,10 +174,6 @@ impl super::NativeTuiApp {
 
     pub(crate) fn parallel_supervisor_event_lines(&self) -> Vec<Line<'static>> {
         self.parallel_supervisor_event_log.lines()
-    }
-
-    pub(crate) fn parallel_supervisor_event_scrollback_lines(&self) -> Vec<Line<'static>> {
-        self.parallel_supervisor_event_log.scrollback_lines()
     }
 
     pub(super) fn record_parallel_supervisor_runtime_feed_for_scrollback(
