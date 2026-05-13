@@ -107,17 +107,26 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
             agent_lines,
             0,
         ),
-        ParallelPeekOverlayStep::ConversationPreview => render_inline_scrolled_section(
-            frame,
-            layout[1],
-            Line::from("Conversation Preview"),
-            conversation_lines,
-            0,
-        ),
+        ParallelPeekOverlayStep::ConversationPreview => {
+            let scroll_offset = inline_preview_scroll_offset(layout[1], conversation_lines.len());
+            render_inline_scrolled_section(
+                frame,
+                layout[1],
+                Line::from("Conversation Preview"),
+                conversation_lines,
+                scroll_offset,
+            );
+        }
     }
     render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
+
+fn inline_preview_scroll_offset(area: Rect, line_count: usize) -> u16 {
+    let visible_body_height = area.height.saturating_sub(1) as usize;
+    line_count.saturating_sub(visible_body_height) as u16
+}
+
 fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
     let HelpOverlayView {
         header_lines,

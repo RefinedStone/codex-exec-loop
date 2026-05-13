@@ -4,6 +4,7 @@ use crate::adapter::inbound::tui::app::shell_presentation::{
     format_conversation_lines_for_view, format_conversation_lines_with_debug,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
+use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -595,6 +596,63 @@ fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer()
     assert!(
         !rendered.contains("Select an active agent and press Enter"),
         "agent list should be the primary compact picker surface:\n{rendered}"
+    );
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_parallel_peek_preview_prioritizes_loaded_transcript_in_compact_main_buffer() {
+    /*
+     * Once a parallel agent is selected, `:peek` is meant to show the agent
+     * conversation. The compact inline viewport should therefore land on the
+     * loaded transcript instead of spending the visible rows on preview metadata.
+     */
+    let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("test terminal");
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::ParallelPeek;
+    app.parallel_peek_overlay_ui_state.open_preview(
+        super::super::parallel_peek_overlay_ui::ParallelPeekConversationPreview {
+            agent_id: "agent-scribe".to_string(),
+            slot_id: "slot-2".to_string(),
+            task_title: "Check test updates".to_string(),
+            thread_id: Some("thread-scribe".to_string()),
+            snapshot: Some(ConversationSnapshot {
+                thread_id: "thread-scribe".to_string(),
+                title: "Scribe transcript".to_string(),
+                cwd: "/tmp/pool/slot-2".to_string(),
+                messages: vec![
+                    ConversationMessage::new(
+                        ConversationMessageKind::User,
+                        "please inspect the test changes",
+                        None,
+                        None,
+                    ),
+                    ConversationMessage::new(
+                        ConversationMessageKind::Agent,
+                        "the current test changes need one focused assertion",
+                        Some("final_answer".to_string()),
+                        None,
+                    ),
+                ],
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            }),
+            status_text: "conversation snapshot loaded".to_string(),
+        },
+    );
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline parallel peek conversation render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Conversation Preview"));
+    assert!(rendered.contains("conversation:"));
+    assert!(rendered.contains("User: please inspect the test changes"));
+    assert!(rendered.contains("Agent: the current test changes need one focused assertion"));
+    assert!(
+        !rendered.contains("thread: thread-scribe"),
+        "compact preview should scroll past metadata to the transcript:\n{rendered}"
     );
     assert!(!rendered.contains("┌"));
 }

@@ -103,22 +103,16 @@ fn build_conversation_lines(
     let Some(preview) = preview else {
         return vec![Line::from("No conversation preview is loaded.")];
     };
-    let mut lines = vec![
-        Line::from(format!("agent: {}", preview.agent_id)),
-        Line::from(format!("slot: {}", preview.slot_id)),
-        Line::from(format!(
-            "thread: {}",
-            preview.thread_id.as_deref().unwrap_or("not captured yet")
-        )),
-        Line::from(format!(
-            "task: {}",
-            truncate_peek_text(&preview.task_title, 96)
-        )),
-        Line::from(format!("status: {}", preview.status_text)),
-    ];
+    let mut lines = vec![Line::from(format!(
+        "thread: {}",
+        preview.thread_id.as_deref().unwrap_or("not captured yet")
+    ))];
 
     match preview.snapshot.as_ref() {
-        Some(snapshot) => lines.extend(build_snapshot_message_lines(snapshot)),
+        Some(snapshot) => {
+            lines.extend(build_snapshot_context_lines(snapshot));
+            lines.extend(build_snapshot_transcript_lines(snapshot));
+        }
         None => lines.push(Line::from(
             "Conversation transcript is not available for this agent yet.",
         )),
@@ -155,7 +149,7 @@ fn build_key_lines(step: ParallelPeekOverlayStep) -> Vec<Line<'static>> {
     }
 }
 
-fn build_snapshot_message_lines(snapshot: &ConversationSnapshot) -> Vec<Line<'static>> {
+fn build_snapshot_context_lines(snapshot: &ConversationSnapshot) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!(
             "title: {}",
@@ -163,19 +157,6 @@ fn build_snapshot_message_lines(snapshot: &ConversationSnapshot) -> Vec<Line<'st
         )),
         Line::from(format!("cwd: {}", truncate_peek_text(&snapshot.cwd, 96))),
     ];
-    if snapshot.messages.is_empty() {
-        lines.push(Line::from("conversation: no messages captured yet"));
-    } else {
-        lines.push(Line::from("conversation:"));
-        let skip_count = snapshot.messages.len().saturating_sub(80);
-        lines.extend(
-            snapshot
-                .messages
-                .iter()
-                .skip(skip_count)
-                .map(format_message_line),
-        );
-    }
     if !snapshot.warnings.is_empty() {
         lines.push(Line::from(format!(
             "warnings: {}",
@@ -197,6 +178,24 @@ fn build_snapshot_message_lines(snapshot: &ConversationSnapshot) -> Vec<Line<'st
                 .collect::<Vec<_>>()
                 .join(" / ")
         )));
+    }
+    lines
+}
+
+fn build_snapshot_transcript_lines(snapshot: &ConversationSnapshot) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if snapshot.messages.is_empty() {
+        lines.push(Line::from("conversation: no messages captured yet"));
+    } else {
+        lines.push(Line::from("conversation:"));
+        let skip_count = snapshot.messages.len().saturating_sub(80);
+        lines.extend(
+            snapshot
+                .messages
+                .iter()
+                .skip(skip_count)
+                .map(format_message_line),
+        );
     }
     lines
 }
