@@ -126,6 +126,20 @@ pub(crate) fn build_planning_summary_line(
             max_detail_len,
             always_show,
         })
+        .and_then(remove_legacy_valid_planning_summary_prefix)
+}
+
+fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<String> {
+    const LEGACY_VALID_PREFIX: &str = "planning: valid";
+    const LEGACY_VALID_SEGMENT_PREFIX: &str = "planning: valid  |  ";
+
+    if summary_line == LEGACY_VALID_PREFIX {
+        return None;
+    }
+    if let Some(rest) = summary_line.strip_prefix(LEGACY_VALID_SEGMENT_PREFIX) {
+        return Some(rest.to_string());
+    }
+    Some(summary_line)
 }
 
 pub(crate) fn build_planning_notice_line(
@@ -415,6 +429,7 @@ mod tests {
     use super::{
         build_queue_framing_lines_from_projection, build_queue_framing_summary_from_projection,
         build_resumed_session_status_text, compact_queue_framing_summary,
+        remove_legacy_valid_planning_summary_prefix,
     };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::domain::planning::{
@@ -517,6 +532,28 @@ mod tests {
         assert_eq!(
             compact_queue_framing_summary("now: Review overlays", 96),
             "now: Review overlays  |  next: none  |  proposed: none  |  blocked: none"
+        );
+    }
+
+    #[test]
+    fn legacy_valid_planning_summary_prefix_is_removed_for_tui_surfaces() {
+        assert_eq!(
+            remove_legacy_valid_planning_summary_prefix("planning: valid".to_string()),
+            None
+        );
+        assert_eq!(
+            remove_legacy_valid_planning_summary_prefix(
+                "planning: valid  |  queue: queue head: rank 1 / task-1".to_string()
+            )
+            .as_deref(),
+            Some("queue: queue head: rank 1 / task-1")
+        );
+        assert_eq!(
+            remove_legacy_valid_planning_summary_prefix(
+                "planning: invalid  |  failure: missing result-output.md".to_string()
+            )
+            .as_deref(),
+            Some("planning: invalid  |  failure: missing result-output.md")
         );
     }
 

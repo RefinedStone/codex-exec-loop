@@ -3,6 +3,7 @@ use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::{
     format_conversation_lines_for_view, format_conversation_lines_with_debug,
 };
+use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -878,6 +879,60 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
     assert!(rendered.contains("queue: idle"));
     assert!(rendered.contains("parallel alert:"));
 }
+
+#[test]
+fn inline_tail_omits_legacy_planning_valid_status_in_single_and_parallel_home() {
+    fn rendered_tail(parallel_mode_enabled: bool) -> String {
+        let mut app = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        tui_testkit::append_agent_history_message(&mut app, "planning status baseline");
+        app.sync_ready_conversation_planning_runtime_projection(
+            sample_planning_runtime_projection(
+                "Planning Context",
+                "queue head: rank 1 / task-1 / Implement shell planning status",
+            ),
+        );
+        if parallel_mode_enabled {
+            app.set_parallel_mode_enabled_for_test(true);
+            app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
+                ParallelModeReadinessState::Ready,
+            )));
+            app.set_parallel_mode_supervisor_snapshot_for_test(Some(
+                ParallelModeSupervisorSnapshot::new(
+                    ParallelModeSupervisorState::Supervise,
+                    "/tmp/root",
+                    ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+                    ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+                    ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+                    ParallelModeDistributorSnapshot::new(
+                        Vec::new(),
+                        Vec::new(),
+                        "idle",
+                        "queue idle",
+                    ),
+                    None,
+                ),
+            ));
+        }
+        build_inline_tail_lines(&app)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let single_rendered = rendered_tail(false);
+    assert!(!single_rendered.contains("planning: valid"));
+    assert!(single_rendered.contains("queue: queue head: rank 1 / task-1"));
+    assert!(single_rendered.contains("now: Implement shell planning status"));
+
+    let parallel_rendered = rendered_tail(true);
+    assert!(!parallel_rendered.contains("planning: valid"));
+    assert!(parallel_rendered.contains("parallel: ready  |  mode: parallel"));
+    assert!(parallel_rendered.contains("queue: queue head: rank 1 / task-1"));
+    assert!(parallel_rendered.contains("now: Implement shell planning status"));
+}
+
 #[test]
 fn inline_tail_reports_partial_handle_based_session_catalog_status() {
     let mut app = make_test_app();
