@@ -9,7 +9,7 @@ use super::{
 pub(in super::super) fn format_conversation_lines(
     messages: &[ConversationMessage],
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_for_view(messages, ConversationViewMode::default(), false)
+    format_conversation_lines_for_view(messages, ConversationViewMode::Medium, false)
 }
 
 pub(in super::super) fn format_conversation_lines_for_view(
@@ -29,7 +29,7 @@ pub(in super::super) fn format_conversation_lines_with_debug(
     let view_mode = if show_debug_details {
         ConversationViewMode::Detail
     } else {
-        ConversationViewMode::default()
+        ConversationViewMode::Medium
     };
     format_conversation_lines_capped(messages, view_mode, show_debug_details)
 }
@@ -98,7 +98,12 @@ fn format_conversation_lines_uncapped(
 
     // Empty threads still need visible transcript content so the panel does not look broken.
     if lines.is_empty() {
-        lines.push(Line::from("No messages in this thread yet."));
+        let empty_message = if messages.is_empty() {
+            "No messages in this thread yet.".to_string()
+        } else {
+            format!("No messages visible in {} view.", view_mode.label())
+        };
+        lines.push(Line::from(empty_message));
     }
 
     lines

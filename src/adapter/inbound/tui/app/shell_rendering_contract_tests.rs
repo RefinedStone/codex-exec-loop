@@ -108,6 +108,14 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
         ),
     ];
 
+    let default = format_conversation_lines(&messages)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(default.contains("Tool:"));
+    assert!(default.contains("Status:"));
+
     let simple = format_conversation_lines_for_view(&messages, ConversationViewMode::Simple, false)
         .into_iter()
         .map(|line| line.to_string())
@@ -126,6 +134,19 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
         .join("\n");
     assert!(medium.contains("Tool:"));
     assert!(medium.contains("Status:"));
+
+    let only_hidden_messages = messages[3..].to_vec();
+    let simple_empty = format_conversation_lines_for_view(
+        &only_hidden_messages,
+        ConversationViewMode::Simple,
+        false,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(simple_empty.contains("No messages visible in simple view."));
+    assert!(!simple_empty.contains("No messages in this thread yet."));
 }
 
 // Inline main-buffer tests keep the app-server-first mode frameless: the stable

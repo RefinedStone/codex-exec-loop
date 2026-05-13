@@ -40,6 +40,8 @@ impl ConversationViewMode {
     pub(super) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "simple" => Some(Self::Simple),
+            // `midium` is accepted as an input alias for the original operator request;
+            // UI labels and help text keep the canonical `medium` spelling.
             "medium" | "midium" => Some(Self::Medium),
             "detail" | "detailed" => Some(Self::Detail),
             _ => None,
