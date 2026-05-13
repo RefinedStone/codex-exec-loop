@@ -230,6 +230,13 @@ struct AutoFollowSubmitContext {
 struct ManualIntakeSubmitContext {
     transcript_text: String,
     handoff_task: Option<PlanningTaskHandoff>,
+    parallel_mode_enabled_at_submission: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingManualPromptPreparation {
+    transcript_text: String,
+    parallel_mode_enabled_at_submission: bool,
 }
 
 // Prompt origin is captured at submission time so later stream handling can
@@ -295,6 +302,7 @@ struct NativeTuiApp {
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
+    pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,

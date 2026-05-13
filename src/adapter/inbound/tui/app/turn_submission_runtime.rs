@@ -22,8 +22,8 @@ use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
     AutoFollowSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, InlineShellCommandInput,
-    ManualIntakeSubmitContext, NativeTuiApp, PARALLEL_SUPERVISOR_OPERATOR_ACTOR, PromptOrigin,
-    ShellActionAvailability, ShellChromeEvent,
+    ManualIntakeSubmitContext, NativeTuiApp, PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
+    PendingManualPromptPreparation, PromptOrigin, ShellActionAvailability, ShellChromeEvent,
 };
 
 const AUTO_FOLLOW_TRANSCRIPT_DEBUG_MAX_BLOCK_LINES: usize = 32;
@@ -126,15 +126,19 @@ impl NativeTuiApp {
             prompt,
             prompt_origin: core_prompt_origin(prompt_origin),
             turn_options: self.turn_options.clone(),
-            slot_lease_handoff: self.build_parallel_mode_slot_lease_handoff(),
+            slot_lease_handoff: self.build_parallel_mode_slot_lease_handoff(prompt_origin),
         }
     }
 
-    fn build_parallel_mode_slot_lease_handoff(&self) -> Option<ParallelTurnSlotLeaseHandoff> {
+    fn build_parallel_mode_slot_lease_handoff(
+        &self,
+        prompt_origin: &PromptOrigin,
+    ) -> Option<ParallelTurnSlotLeaseHandoff> {
         // A slot lease needs a concrete planning handoff so the parallel pool can
         // bind cleanup ownership. Application/domain code owns the lease request and
         // slug policy; the TUI only forwards task identity.
-        if !self.parallel_mode_enabled() {
+        if !prompt_origin_allows_parallel_slot_handoff(prompt_origin, self.parallel_mode_enabled())
+        {
             return None;
         }
         let ConversationState::Ready(conversation) = &self.conversation_state else {
@@ -197,7 +201,12 @@ impl NativeTuiApp {
         if transcript_text.is_empty() {
             return;
         }
-        if self.parallel_mode_enabled() {
+        let parallel_mode_enabled_at_submission = self.parallel_mode_enabled();
+        self.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+            transcript_text: transcript_text.clone(),
+            parallel_mode_enabled_at_submission,
+        });
+        if parallel_mode_enabled_at_submission {
             self.show_supersession_overlay();
             self.record_parallel_supervisor_event(
                 PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
@@ -247,7 +256,13 @@ impl NativeTuiApp {
                 if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
                     return;
                 }
-                self.apply_manual_prompt_intake_outcome(*intake, transcript_text);
+                let parallel_mode_enabled_at_submission =
+                    self.take_manual_prompt_parallel_mode_at_submission(&transcript_text);
+                self.apply_manual_prompt_intake_outcome(
+                    *intake,
+                    transcript_text,
+                    parallel_mode_enabled_at_submission,
+                );
             }
             ManualPromptPreparationResult::BootstrapReviewRequired {
                 transcript_text,
@@ -257,6 +272,7 @@ impl NativeTuiApp {
                 if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
                     return;
                 }
+                self.clear_manual_prompt_preparation_if_matches(&transcript_text);
                 let draft_name = review.draft_name.clone();
                 self.planning_init_overlay_ui_state
                     .open_simple_review_summary(
@@ -281,6 +297,7 @@ impl NativeTuiApp {
                 if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
                     return;
                 }
+                self.clear_manual_prompt_preparation_if_matches(&transcript_text);
                 let status_text = match kind {
                     ManualPlanningBootstrapFailureKind::Stage => {
                         format!("planning bootstrap failed: {reason}")
@@ -301,6 +318,7 @@ impl NativeTuiApp {
                 if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
                     return;
                 }
+                self.clear_manual_prompt_preparation_if_matches(&transcript_text);
                 self.dispatch_conversation_input(
                     ConversationInputEvent::ManualPromptPreparationFailed {
                         transcript_text,
@@ -315,8 +333,9 @@ impl NativeTuiApp {
         &mut self,
         outcome: ManualPromptIntakeOutcome,
         transcript_text: String,
+        parallel_mode_enabled_at_submission: bool,
     ) {
-        if self.parallel_mode_enabled() {
+        if parallel_mode_enabled_at_submission {
             self.apply_parallel_manual_prompt_intake_outcome(outcome, transcript_text);
             return;
         }
@@ -333,6 +352,7 @@ impl NativeTuiApp {
                     PromptOrigin::ManualIntake(Box::new(ManualIntakeSubmitContext {
                         transcript_text: handoff.transcript_text,
                         handoff_task: handoff.task,
+                        parallel_mode_enabled_at_submission,
                     })),
                 );
             }
@@ -345,6 +365,31 @@ impl NativeTuiApp {
                     },
                 );
             }
+        }
+    }
+
+    fn take_manual_prompt_parallel_mode_at_submission(&mut self, transcript_text: &str) -> bool {
+        if self
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .is_some_and(|pending| pending.transcript_text == transcript_text)
+        {
+            return self
+                .pending_manual_prompt_preparation
+                .take()
+                .map(|pending| pending.parallel_mode_enabled_at_submission)
+                .unwrap_or_else(|| self.parallel_mode_enabled());
+        }
+        self.parallel_mode_enabled()
+    }
+
+    fn clear_manual_prompt_preparation_if_matches(&mut self, transcript_text: &str) {
+        if self
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .is_some_and(|pending| pending.transcript_text == transcript_text)
+        {
+            self.pending_manual_prompt_preparation = None;
         }
     }
 
@@ -573,6 +618,16 @@ fn truncate_parallel_prompt_event_text(text: &str, max_chars: usize) -> String {
     let mut truncated = trimmed.chars().take(keep).collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+fn prompt_origin_allows_parallel_slot_handoff(
+    prompt_origin: &PromptOrigin,
+    current_parallel_mode_enabled: bool,
+) -> bool {
+    match prompt_origin {
+        PromptOrigin::Manual | PromptOrigin::AutoFollow(_) => current_parallel_mode_enabled,
+        PromptOrigin::ManualIntake(context) => context.parallel_mode_enabled_at_submission,
+    }
 }
 
 fn core_prompt_origin(prompt_origin: &PromptOrigin) -> CorePromptOrigin {
@@ -1130,6 +1185,8 @@ mod tests {
         let mut committed_app = make_test_app(&workspace);
         committed_app.set_parallel_mode_enabled_for_test(true);
         set_input(&mut committed_app, "안녕하세요 ?");
+        committed_app.submit_manual_prompt_from_text("안녕하세요 ?".to_string());
+        committed_app.set_parallel_mode_enabled_for_test(false);
 
         committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
             transcript_text: "안녕하세요 ?".to_string(),
@@ -1157,6 +1214,52 @@ mod tests {
             .join("\n");
         assert!(event_lines.contains("Task Intake: committed task task-1"));
         assert!(event_lines.contains("Orchestrator: task intake dispatch requested"));
+    }
+
+    #[test]
+    fn normal_manual_intake_stays_on_main_turn_after_parallel_mode_toggle() {
+        let workspace = TempWorkspace::new("turn-submit-normal-manual-intake");
+        let task = sample_handoff_task();
+        let mut committed_app = make_test_app(&workspace);
+        set_input(&mut committed_app, "turn this into a task");
+        committed_app.submit_manual_prompt_from_text("turn this into a task".to_string());
+        committed_app.set_parallel_mode_enabled_for_test(true);
+
+        committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            transcript_text: "turn this into a task".to_string(),
+            runtime_projection: runtime_projection(),
+            intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
+                committed_task_id: task.task_id.clone(),
+                committed_planning_revision: 7,
+                handoff: handoff(
+                    "wrapped task prompt",
+                    "turn this into a task",
+                    Some(task.clone()),
+                ),
+            }),
+        });
+
+        let committed_conversation = ready_conversation(&committed_app);
+        assert_eq!(
+            committed_conversation
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("turn this into a task")
+        );
+        assert_eq!(
+            committed_conversation.last_planning_task_handoff(),
+            Some(&task)
+        );
+        assert_eq!(committed_conversation.status_text, "starting turn");
+        let event_lines = committed_app
+            .parallel_supervisor_event_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!event_lines.contains("Task Intake: committed task task-1"));
+        assert!(!event_lines.contains("Orchestrator: task intake dispatch requested"));
     }
 
     #[test]
@@ -1223,6 +1326,7 @@ mod tests {
             &PromptOrigin::ManualIntake(Box::new(super::super::ManualIntakeSubmitContext {
                 transcript_text: "operator text".to_string(),
                 handoff_task: Some(task.clone()),
+                parallel_mode_enabled_at_submission: true,
             })),
         );
 
@@ -1238,6 +1342,19 @@ mod tests {
                 task.task_title.clone(),
             ))
         );
+
+        let normal_intake_request = app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            Some("thread-1".to_string()),
+            "wrapped task prompt".to_string(),
+            &PromptOrigin::ManualIntake(Box::new(super::super::ManualIntakeSubmitContext {
+                transcript_text: "operator text".to_string(),
+                handoff_task: Some(task.clone()),
+                parallel_mode_enabled_at_submission: false,
+            })),
+        );
+
+        assert_eq!(normal_intake_request.slot_lease_handoff, None);
 
         app.set_parallel_mode_enabled_for_test(false);
         let manual_request = app.build_turn_submission_request(

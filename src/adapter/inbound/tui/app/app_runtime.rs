@@ -259,6 +259,7 @@ impl NativeTuiApp {
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
             parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
+            pending_manual_prompt_preparation: None,
             parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
