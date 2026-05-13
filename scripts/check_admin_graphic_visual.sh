@@ -24,6 +24,8 @@ events_error_json="${output_dir}/events-error.json"
 game_js="${output_dir}/akra-diorama.js"
 office_asset="${output_dir}/akra-office-background.png"
 final_draft_map_asset="${output_dir}/final-draft-map-sprite.png"
+final_draft_desk_asset="${output_dir}/sprite_fd_desk_1.png"
+final_draft_tower_asset="${output_dir}/sprite_fd_event_log_tower.png"
 sprite_asset="${output_dir}/akra-object-sprites.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
@@ -151,6 +153,8 @@ curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${event
 curl -fsS "${base_url}/admin/assets/game/akra-diorama.js" >"${game_js}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-office-background.png" >"${office_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/final-draft-map-sprite.png" >"${final_draft_map_asset}"
+curl -fsS "${base_url}/admin/assets/graphics/sprite_fd_desk_1.png" >"${final_draft_desk_asset}"
+curl -fsS "${base_url}/admin/assets/graphics/sprite_fd_event_log_tower.png" >"${final_draft_tower_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-object-sprites.png" >"${sprite_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png" >"${agent_atlas_large_asset}"
@@ -212,6 +216,8 @@ for token in \
   'background-image: var(--agent-sprite-sheet)' \
   'background: var(--office-bg-image) 0 0 / 100% 100% no-repeat' \
   'final-draft-map-sprite.png' \
+  'office-map-image' \
+  'width: min(100%, 1040px)' \
   'background-size: 384px 504px' \
   'avatar-Artificer' \
   'agentAvatarClass' \
@@ -235,6 +241,8 @@ for token in \
   'PIXI.Container' \
   'app.ticker.add' \
   'gamebaljeonguk_atlas_128x192.png' \
+  'sprite_fd_desk_1.png' \
+  'sprite_fd_event_log_tower.png' \
   'AGENT_FRAME_WIDTH' \
   'AGENT_SPRITE_SCALE' \
   'makePacket' \
@@ -375,6 +383,14 @@ cmp -s assets/admin/graphics/akra-office-background.png "${office_asset}" || {
 }
 cmp -s assets/admin/graphics/final-draft-map-sprite.png "${final_draft_map_asset}" || {
   echo "served final draft map asset does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/graphics/sprite_fd_desk_1.png "${final_draft_desk_asset}" || {
+  echo "served final draft desk sprite asset does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/graphics/sprite_fd_event_log_tower.png "${final_draft_tower_asset}" || {
+  echo "served final draft event tower sprite asset does not match workspace asset" >&2
   exit 1
 }
 cmp -s assets/admin/graphics/akra-object-sprites.png "${sprite_asset}" || {

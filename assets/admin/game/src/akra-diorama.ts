@@ -1,6 +1,17 @@
 type StatusSeverity = "normal" | "success" | "warning" | "danger" | "info" | "muted";
 type TargetKind = "distributor" | "events";
-type AssetKey = "floor" | "desk" | "server" | "whiteboard" | "sofa" | "plant" | "agentAtlas";
+type AssetKey =
+  | "fdDesk1"
+  | "fdDesk2"
+  | "fdDesk3"
+  | "fdDesk4"
+  | "fdDesk5"
+  | "fdBossDesk"
+  | "fdDistributorDesk"
+  | "fdEventLogTower"
+  | "fdSofa"
+  | "fdPlant"
+  | "agentAtlas";
 type Facing = "down" | "side" | "up";
 
 interface Point {
@@ -187,19 +198,18 @@ const TARGET_POINTS: Record<TargetKind, Point> = {
 };
 
 const STRUCTURE_SPECS: StructureSpec[] = [
-  { key: "whiteboard", x: 530, y: 190, scale: 0.2, anchorX: 0.5, anchorY: 1 },
-  { key: "desk", x: 480, y: 405, scale: 0.24 },
-  { key: "desk", x: 670, y: 330, scale: 0.24 },
-  { key: "desk", x: 515, y: 600, scale: 0.24 },
-  { key: "desk", x: 790, y: 550, scale: 0.24 },
-  { key: "desk", x: 1055, y: 555, scale: 0.24 },
-  { key: "desk", x: 845, y: 245, scale: 0.3 },
-  { key: "desk", x: 1050, y: 295, scale: 0.25 },
-  { key: "server", x: 1325, y: 430, scale: 0.34 },
-  { key: "sofa", x: 780, y: 760, scale: 0.28 },
-  { key: "plant", x: 615, y: 505, scale: 0.1 },
-  { key: "plant", x: 925, y: 485, scale: 0.1 },
-  { key: "plant", x: 1185, y: 620, scale: 0.1 },
+  { key: "fdDesk1", x: 470, y: 405, scale: 0.62 },
+  { key: "fdDesk2", x: 660, y: 330, scale: 0.62 },
+  { key: "fdDesk3", x: 505, y: 600, scale: 0.62 },
+  { key: "fdDesk4", x: 785, y: 548, scale: 0.6 },
+  { key: "fdDesk5", x: 1048, y: 555, scale: 0.58 },
+  { key: "fdBossDesk", x: 840, y: 260, scale: 0.58 },
+  { key: "fdDistributorDesk", x: 1075, y: 315, scale: 0.62 },
+  { key: "fdEventLogTower", x: 1332, y: 520, scale: 0.82 },
+  { key: "fdSofa", x: 805, y: 760, scale: 0.62 },
+  { key: "fdPlant", x: 615, y: 505, scale: 0.7 },
+  { key: "fdPlant", x: 925, y: 485, scale: 0.7 },
+  { key: "fdPlant", x: 1185, y: 620, scale: 0.7 },
 ];
 
 declare const PIXI: {
@@ -260,12 +270,16 @@ declare global {
 
     const basePath = "/admin/assets/graphics/";
     const assets: Record<AssetKey, string> = {
-      floor: basePath + "sprite_floor_tile.png",
-      desk: basePath + "sprite_desk_workstation.png",
-      server: basePath + "sprite_server_rack.png",
-      whiteboard: basePath + "sprite_whiteboard.png",
-      sofa: basePath + "sprite_sofa.png",
-      plant: basePath + "sprite_potted_plant.png",
+      fdDesk1: basePath + "sprite_fd_desk_1.png",
+      fdDesk2: basePath + "sprite_fd_desk_2.png",
+      fdDesk3: basePath + "sprite_fd_desk_3.png",
+      fdDesk4: basePath + "sprite_fd_desk_4.png",
+      fdDesk5: basePath + "sprite_fd_desk_5.png",
+      fdBossDesk: basePath + "sprite_fd_boss_desk.png",
+      fdDistributorDesk: basePath + "sprite_fd_distributor_desk.png",
+      fdEventLogTower: basePath + "sprite_fd_event_log_tower.png",
+      fdSofa: basePath + "sprite_fd_sofa.png",
+      fdPlant: basePath + "sprite_fd_potted_plant.png",
       agentAtlas: basePath + "gamebaljeonguk_atlas_128x192.png",
     };
 

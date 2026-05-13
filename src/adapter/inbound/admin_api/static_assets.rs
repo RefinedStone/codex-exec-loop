@@ -25,6 +25,26 @@ const SPRITE_WHITEBOARD: &[u8] =
 const SPRITE_SOFA: &[u8] = include_bytes!("../../../../assets/admin/graphics/sprite_sofa.png");
 const SPRITE_POTTED_PLANT: &[u8] =
     include_bytes!("../../../../assets/admin/graphics/sprite_potted_plant.png");
+const SPRITE_FD_DESK_1: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_1.png");
+const SPRITE_FD_DESK_2: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_2.png");
+const SPRITE_FD_DESK_3: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_3.png");
+const SPRITE_FD_DESK_4: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_4.png");
+const SPRITE_FD_DESK_5: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_5.png");
+const SPRITE_FD_BOSS_DESK: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_boss_desk.png");
+const SPRITE_FD_DISTRIBUTOR_DESK: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_distributor_desk.png");
+const SPRITE_FD_EVENT_LOG_TOWER: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_event_log_tower.png");
+const SPRITE_FD_SOFA: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_sofa.png");
+const SPRITE_FD_POTTED_PLANT: &[u8] =
+    include_bytes!("../../../../assets/admin/graphics/sprite_fd_potted_plant.png");
 const AKRA_DIORAMA_JS: &[u8] = include_bytes!("../../../../assets/admin/game/akra-diorama.js");
 
 pub(super) async fn admin_graphic_asset(
@@ -42,6 +62,16 @@ pub(super) async fn admin_graphic_asset(
         "sprite_whiteboard.png" => SPRITE_WHITEBOARD,
         "sprite_sofa.png" => SPRITE_SOFA,
         "sprite_potted_plant.png" => SPRITE_POTTED_PLANT,
+        "sprite_fd_desk_1.png" => SPRITE_FD_DESK_1,
+        "sprite_fd_desk_2.png" => SPRITE_FD_DESK_2,
+        "sprite_fd_desk_3.png" => SPRITE_FD_DESK_3,
+        "sprite_fd_desk_4.png" => SPRITE_FD_DESK_4,
+        "sprite_fd_desk_5.png" => SPRITE_FD_DESK_5,
+        "sprite_fd_boss_desk.png" => SPRITE_FD_BOSS_DESK,
+        "sprite_fd_distributor_desk.png" => SPRITE_FD_DISTRIBUTOR_DESK,
+        "sprite_fd_event_log_tower.png" => SPRITE_FD_EVENT_LOG_TOWER,
+        "sprite_fd_sofa.png" => SPRITE_FD_SOFA,
+        "sprite_fd_potted_plant.png" => SPRITE_FD_POTTED_PLANT,
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
