@@ -200,11 +200,8 @@ impl NativeTuiApp {
         if self.parallel_mode_enabled() {
             self.show_supersession_overlay();
             self.record_parallel_supervisor_event(
-                "Operator",
-                format!(
-                    "first user word: {}",
-                    truncate_parallel_prompt_event_text(&transcript_text, 96)
-                ),
+                "You",
+                truncate_parallel_prompt_event_text(&transcript_text, 96),
             );
             self.record_parallel_supervisor_event(
                 "Task Intake",
@@ -325,16 +322,6 @@ impl NativeTuiApp {
         }
 
         match outcome {
-            ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
-                if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
-                    return;
-                }
-                let _ = self.submit_prompt_with_transcript(
-                    handoff.prompt,
-                    handoff.transcript_text,
-                    PromptOrigin::Manual,
-                );
-            }
             ManualPromptIntakeOutcome::TaskCommitted { handoff, .. }
             | ManualPromptIntakeOutcome::TaskUpdated { handoff, .. } => {
                 if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
@@ -367,19 +354,6 @@ impl NativeTuiApp {
         transcript_text: String,
     ) {
         match outcome {
-            ManualPromptIntakeOutcome::NoTaskNeeded(handoff) => {
-                if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
-                    return;
-                }
-                self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
-                self.record_parallel_supervisor_event(
-                    "Task Intake",
-                    "no parallel task was committed; waiting for an actionable operator prompt.",
-                );
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: "parallel task intake: no task committed".to_string(),
-                });
-            }
             ManualPromptIntakeOutcome::TaskCommitted {
                 committed_task_id,
                 committed_planning_revision,
@@ -1083,28 +1057,6 @@ mod tests {
     #[test]
     fn apply_manual_prompt_preparation_routes_manual_intake_outcomes() {
         let workspace = TempWorkspace::new("turn-submit-manual-intake");
-        let mut no_task_app = make_test_app(&workspace);
-        set_input(&mut no_task_app, "answer directly");
-
-        no_task_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
-            transcript_text: "answer directly".to_string(),
-            runtime_projection: runtime_projection(),
-            intake: Box::new(ManualPromptIntakeOutcome::NoTaskNeeded(handoff(
-                "wrapped answer",
-                "answer directly",
-                None,
-            ))),
-        });
-
-        let no_task_conversation = ready_conversation(&no_task_app);
-        assert_eq!(no_task_conversation.status_text, "starting turn");
-        assert_eq!(no_task_conversation.input_buffer, "");
-        assert_eq!(
-            no_task_conversation.messages.last().unwrap().text,
-            "answer directly"
-        );
-        assert!(no_task_conversation.last_planning_task_handoff().is_none());
-
         let task = sample_handoff_task();
         let mut committed_app = make_test_app(&workspace);
         set_input(&mut committed_app, "turn this into a task");
@@ -1174,52 +1126,18 @@ mod tests {
     #[test]
     fn parallel_manual_intake_stays_on_supervisor_layer_without_main_turn() {
         let workspace = TempWorkspace::new("turn-submit-parallel-manual-intake");
-        let mut no_task_app = make_test_app(&workspace);
-        no_task_app.set_parallel_mode_enabled_for_test(true);
-        set_input(&mut no_task_app, "안녕하세요");
-
-        no_task_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
-            transcript_text: "안녕하세요".to_string(),
-            runtime_projection: runtime_projection(),
-            intake: Box::new(ManualPromptIntakeOutcome::NoTaskNeeded(handoff(
-                "wrapped answer",
-                "안녕하세요",
-                None,
-            ))),
-        });
-
-        let no_task_conversation = ready_conversation(&no_task_app);
-        assert!(no_task_conversation.messages.is_empty());
-        assert_eq!(no_task_conversation.input_buffer, "");
-        assert_eq!(
-            no_task_conversation.status_text,
-            "parallel task intake: no task committed"
-        );
-        assert!(
-            no_task_app
-                .parallel_supervisor_event_lines()
-                .iter()
-                .any(|line| line
-                    .to_string()
-                    .contains("Task Intake: no parallel task was committed"))
-        );
-
         let task = sample_handoff_task();
         let mut committed_app = make_test_app(&workspace);
         committed_app.set_parallel_mode_enabled_for_test(true);
-        set_input(&mut committed_app, "turn this into a task");
+        set_input(&mut committed_app, "안녕하세요 ?");
 
         committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
-            transcript_text: "turn this into a task".to_string(),
+            transcript_text: "안녕하세요 ?".to_string(),
             runtime_projection: runtime_projection(),
             intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
                 committed_task_id: task.task_id.clone(),
                 committed_planning_revision: 7,
-                handoff: handoff(
-                    "wrapped task prompt",
-                    "turn this into a task",
-                    Some(task.clone()),
-                ),
+                handoff: handoff("wrapped task prompt", "안녕하세요 ?", Some(task.clone())),
             }),
         });
 

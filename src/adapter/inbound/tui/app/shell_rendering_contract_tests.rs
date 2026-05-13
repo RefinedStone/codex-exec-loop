@@ -543,11 +543,7 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     )));
-    app.push_parallel_supervisor_event_for_test(
-        "00:00:00",
-        "Operator",
-        "first user word: 안녕하세요",
-    );
+    app.push_parallel_supervisor_event_for_test("00:00:00", "You", "안녕하세요");
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("expected ready conversation state");
     };
@@ -572,8 +568,8 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
 
     assert!(rendered.contains("Parallel Mode / inline inspection"));
     assert!(rendered.contains("Parallel Event Stream"));
-    assert!(rendered.contains("Operator: first user word: 안녕하세요"));
-    assert!(!rendered.contains("You:"));
+    assert!(rendered.contains("You: 안녕하세요"));
+    assert!(!rendered.contains("Operator: first user word"));
     assert!(!rendered.contains("Codex:"));
     assert!(!rendered.contains("single mode reply must not own"));
     assert!(!rendered.contains("┌"));

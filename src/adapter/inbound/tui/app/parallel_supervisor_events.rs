@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 
 use chrono::Utc;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
+
+use super::AkraTheme;
 
 const MAX_PARALLEL_SUPERVISOR_EVENTS: usize = 96;
 
@@ -41,10 +43,7 @@ impl ParallelSupervisorEventLog {
         self.entries
             .iter()
             .map(|entry| {
-                Line::from(format!(
-                    "[{}] {}: {}",
-                    entry.timestamp_label, entry.actor, entry.body
-                ))
+                parallel_supervisor_event_line(&entry.timestamp_label, &entry.actor, &entry.body)
             })
             .collect()
     }
@@ -58,6 +57,18 @@ impl ParallelSupervisorEventLog {
     ) {
         self.push(timestamp_label.into(), actor.into(), body.into());
     }
+}
+
+fn parallel_supervisor_event_line(timestamp: &str, actor: &str, body: &str) -> Line<'static> {
+    if actor == "You" {
+        return Line::from(vec![
+            Span::raw(format!("[{timestamp}] ")),
+            Span::styled(actor.to_string(), AkraTheme::shortcut()),
+            Span::raw(format!(": {body}")),
+        ]);
+    }
+
+    Line::from(format!("[{timestamp}] {actor}: {body}"))
 }
 
 impl super::NativeTuiApp {
@@ -82,5 +93,45 @@ impl super::NativeTuiApp {
     ) {
         self.parallel_supervisor_event_log
             .push_for_test(timestamp_label, actor, body);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::{Color, Modifier, Style};
+
+    use super::*;
+
+    #[test]
+    fn user_prompt_line_uses_you_label_with_user_emphasis() {
+        let mut log = ParallelSupervisorEventLog::default();
+
+        log.push_for_test("11:31:18", "You", "안녕하세요?");
+
+        let lines = log.lines();
+        assert_eq!(lines[0].to_string(), "[11:31:18] You: 안녕하세요?");
+        assert_eq!(lines[0].spans[1].content.as_ref(), "You");
+        assert_eq!(lines[0].spans[1].style.fg, Some(Color::Yellow));
+        assert!(
+            lines[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn non_user_event_line_keeps_plain_log_style() {
+        let mut log = ParallelSupervisorEventLog::default();
+
+        log.push_for_test("11:31:19", "Task Intake", "task generation started.");
+
+        let lines = log.lines();
+        assert_eq!(
+            lines[0].to_string(),
+            "[11:31:19] Task Intake: task generation started."
+        );
+        assert_eq!(lines[0].spans.len(), 1);
+        assert_eq!(lines[0].spans[0].style, Style::default());
     }
 }
