@@ -61,6 +61,8 @@ pub(super) struct DirectionsTemplate {
     pub(super) workspace_dir: String,
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
+    pub(super) direction_upsert_path: &'static str,
+    pub(super) direction_delete_path: &'static str,
     // direction edit 중에도 validation/runtime 영향이 보이도록 editing table 옆에 overview를 유지한다.
     pub(super) overview: PlanningAdminOverview,
     // management는 page-wide read model이다. direction form도 task/direction cross reference를 같은 projection에서 가져와야 한다.
@@ -76,6 +78,8 @@ pub(super) struct TasksTemplate {
     pub(super) workspace_dir: String,
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
+    pub(super) task_upsert_path: &'static str,
+    pub(super) task_delete_path: &'static str,
     // task edit은 follow-up execution에 직접 영향을 주므로 queue/runtime summary를 task page에도 남긴다.
     pub(super) overview: PlanningAdminOverview,
     // task edit form은 direction choice가 필요하므로 task-only DTO를 쓰면 template-side lookup이 생긴다.

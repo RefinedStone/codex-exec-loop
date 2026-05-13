@@ -58,7 +58,7 @@
 <section class="toolbar">
   <details class="create-panel">
     <summary>Add direction</summary>
-    <form method="post" action="/admin/directions/upsert" class="stack">
+    <form method="post" action="{{ direction_upsert_path }}" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label class="field">
@@ -156,7 +156,7 @@
         </span>
       </summary>
       <div class="entity-detail">
-        <form method="post" action="/admin/directions/upsert" class="stack">
+        <form method="post" action="{{ direction_upsert_path }}" class="stack">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="id" value="{{ direction.id }}">
           <div class="form-grid">
@@ -229,7 +229,7 @@
             <input type="hidden" name="direction_id" value="{{ direction.id }}">
             <button type="submit" class="secondary">Edit detail doc</button>
           </form>
-          <form method="post" action="/admin/directions/delete">
+          <form method="post" action="{{ direction_delete_path }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="id" value="{{ direction.id }}">
             <button type="submit" class="error" data-confirm="Delete this direction and all tasks assigned to it?">Delete direction and tasks</button>

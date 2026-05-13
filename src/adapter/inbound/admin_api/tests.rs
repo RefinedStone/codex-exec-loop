@@ -668,6 +668,8 @@ async fn admin_html_page_routes_render_live_templates() {
         ("/admin/controls", "Controls"),
         ("/admin/akra", "data-admin-graphic"),
         ("/admin/akra/metrics", "AKRA detached metrics"),
+        ("/admin/akra/directions", "게임발전국 작전 방향"),
+        ("/admin/akra/tasks", "게임발전국 작업 관리"),
     ] {
         let response = router
             .clone()
@@ -700,6 +702,16 @@ async fn admin_html_page_routes_render_live_templates() {
         if uri == "/admin/tasks" {
             assert!(body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
+        }
+        if uri == "/admin/akra/directions" {
+            assert!(body.contains(r#"<body class="akra-graphic">"#));
+            assert!(body.contains(r#"<a href="/admin/akra/directions" class="active"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
+            assert!(!body.contains(r#"<a href="/admin/directions" class="active">Directions</a>"#));
+        }
+        if uri == "/admin/akra/tasks" {
+            assert!(body.contains(r#"<body class="akra-graphic">"#));
+            assert!(body.contains(r#"<a href="/admin/akra/tasks" class="active"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
+            assert!(!body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
         }
     }
 }
@@ -750,6 +762,34 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             .is_some_and(|location| location.starts_with("/admin/directions?notice="))
     );
 
+    let akra_direction_upsert = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/akra/directions/upsert",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", "akra-html-direction"),
+                ("title", "AKRA HTML Direction"),
+                ("summary", "Rendered through the graphic admin form"),
+                ("success_criteria_text", "graphic direction is editable"),
+                ("scope_hints_text", "admin,akra"),
+                ("detail_doc_path", "docs/akra-html-direction.md"),
+                ("state", "active"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("AKRA direction upsert should be served");
+    assert_eq!(akra_direction_upsert.status(), StatusCode::SEE_OTHER);
+    assert!(
+        akra_direction_upsert
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|location| location.starts_with("/admin/akra/directions?notice="))
+    );
+
     let task_upsert = router
         .clone()
         .oneshot(html_form_request(
@@ -787,6 +827,50 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
         .expect("task create notice should include generated task id")
         .to_string();
 
+    let akra_task_upsert = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/akra/tasks/upsert",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", ""),
+                ("direction_id", "akra-html-direction"),
+                ("title", "AKRA HTML Task"),
+                ("description", "Created through the graphic browser adapter"),
+                ("status", "ready"),
+                ("base_priority", "60"),
+                ("dynamic_priority_delta", "0"),
+                ("priority_reason", ""),
+                ("depends_on_text", ""),
+                ("blocked_by_text", ""),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("AKRA task upsert should be served");
+    assert_eq!(akra_task_upsert.status(), StatusCode::SEE_OTHER);
+    assert!(
+        akra_task_upsert
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|location| location.starts_with("/admin/akra/tasks?notice="))
+    );
+    let akra_task_location = akra_task_upsert
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .expect("AKRA task create should redirect with generated task id");
+    let akra_task_notice = percent_encoding::percent_decode_str(akra_task_location)
+        .decode_utf8_lossy()
+        .to_string();
+    let akra_task_id = akra_task_notice
+        .split('`')
+        .nth(1)
+        .expect("AKRA task create notice should include generated task id")
+        .to_string();
+
     for (uri, body, location_prefix) in [
         (
             "/admin/files/export",
@@ -807,12 +891,28 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
             "/admin/tasks?notice=",
         ),
         (
+            "/admin/akra/tasks/delete",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", akra_task_id.as_str()),
+            ]),
+            "/admin/akra/tasks?notice=",
+        ),
+        (
             "/admin/directions/delete",
             encoded_form(&[
                 ("csrf_token", csrf_token.as_str()),
                 ("id", "html-direction"),
             ]),
             "/admin/directions?notice=",
+        ),
+        (
+            "/admin/akra/directions/delete",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("id", "akra-html-direction"),
+            ]),
+            "/admin/akra/directions?notice=",
         ),
         (
             "/admin/controls/reset",
@@ -1053,8 +1153,12 @@ fn admin_html_and_json_direction_task_routes_share_facade_methods() {
     for route in [
         ".route(\n            \"/admin/directions/upsert\",\n            post(pages::upsert_direction_page),\n        )",
         ".route(\n            \"/admin/directions/delete\",\n            post(pages::delete_direction_page),\n        )",
+        ".route(\n            \"/admin/akra/directions/upsert\",\n            post(pages::upsert_akra_direction_page),\n        )",
+        ".route(\n            \"/admin/akra/directions/delete\",\n            post(pages::delete_akra_direction_page),\n        )",
         ".route(\"/admin/tasks/upsert\", post(pages::upsert_task_page))",
         ".route(\"/admin/tasks/delete\", post(pages::delete_task_page))",
+        ".route(\n            \"/admin/akra/tasks/upsert\",\n            post(pages::upsert_akra_task_page),\n        )",
+        ".route(\n            \"/admin/akra/tasks/delete\",\n            post(pages::delete_akra_task_page),\n        )",
         ".route(\"/api/planning/directions\", post(api::upsert_direction_api))",
         ".route(\n            \"/api/planning/directions/delete\",\n            post(api::delete_direction_api),\n        )",
         ".route(\"/api/planning/tasks\", post(api::upsert_task_api))",
@@ -1098,7 +1202,7 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra#pipeline\""));
     assert!(BASE_TEMPLATE.contains("href=\"/admin/akra/metrics#system\""));
     assert!(BASE_TEMPLATE.contains(
-        r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" %}akra-graphic{% endif %}">"#
+        r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}akra-graphic{% endif %}">"#
     ));
     assert!(!BASE_TEMPLATE.contains(
         r#"<body class="{% if current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "tasks" %}akra-graphic{% endif %}">"#
@@ -1108,10 +1212,11 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     ));
     assert!(BASE_TEMPLATE.contains("akraHashTabRoutes"));
     assert!(BASE_TEMPLATE.contains("window.location.pathname !== \"/admin/akra\""));
-    assert!(BASE_TEMPLATE.contains("directions: \"/admin/directions\""));
-    assert!(BASE_TEMPLATE.contains("tasks: \"/admin/tasks\""));
+    assert!(BASE_TEMPLATE.contains("directions: \"/admin/akra/directions\""));
+    assert!(BASE_TEMPLATE.contains("tasks: \"/admin/akra/tasks\""));
     assert!(BASE_TEMPLATE.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)"));
-    assert!(BASE_TEMPLATE.contains(r#"href="/admin/directions" class="{% if current_nav == "directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
+    assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
+    assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
     assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
@@ -1164,8 +1269,8 @@ fn tasks_page_uses_default_admin_catalog_without_losing_forms() {
     }
 
     for token in [
-        "action=\"/admin/tasks/upsert\"",
-        "action=\"/admin/tasks/delete\"",
+        "action=\"{{ task_upsert_path }}\"",
+        "action=\"{{ task_delete_path }}\"",
         "action=\"/admin/files/export\"",
         "action=\"/admin/files/apply\"",
         "name=\"csrf_token\"",
@@ -1200,19 +1305,21 @@ fn tasks_page_uses_default_admin_catalog_without_losing_forms() {
 
     assert_eq!(
         TASKS_TEMPLATE
-            .matches("action=\"/admin/tasks/upsert\"")
+            .matches("action=\"{{ task_upsert_path }}\"")
             .count(),
         2
     );
     assert_eq!(
         TASKS_TEMPLATE
-            .matches("action=\"/admin/tasks/delete\"")
+            .matches("action=\"{{ task_delete_path }}\"")
             .count(),
         1
     );
     assert!(!TASKS_TEMPLATE.contains("akra-task-console"));
     assert!(!TASKS_TEMPLATE.contains("게임발전국 작업 관리"));
-    assert!(ADMIN_PAGES.contains("page_title: \"Tasks\".to_string()"));
+    assert!(ADMIN_PAGES.contains("Self::Default => \"Tasks\""));
+    assert!(ADMIN_PAGES.contains("Self::Default => \"/admin/tasks/upsert\""));
+    assert!(ADMIN_PAGES.contains("Self::Akra => \"/admin/akra/tasks/upsert\""));
 }
 
 #[test]
@@ -1335,6 +1442,8 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     for route in [
         ".route(\"/admin/akra\", get(pages::akra_dashboard_page))",
         ".route(\"/admin/akra/metrics\", get(pages::akra_metrics_page))",
+        ".route(\"/admin/akra/directions\", get(pages::akra_directions_page))",
+        ".route(\"/admin/akra/tasks\", get(pages::akra_tasks_page))",
         "\"/api/admin/akra/dashboard\"",
         "\"/api/admin/akra/pool\"",
         "\"/api/admin/akra/agents\"",
@@ -1612,6 +1721,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "akra-admin",
         "/admin/akra",
         "/admin/akra/metrics",
+        "/admin/akra/tasks",
+        "/admin/akra/directions",
         "/admin/tasks",
         "admin-tasks.html",
         "/admin/assets/graphics/akra-office-background.png",

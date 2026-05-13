@@ -3,7 +3,7 @@
 <section class="toolbar">
   <details class="create-panel">
     <summary>Add task</summary>
-    <form method="post" action="/admin/tasks/upsert" class="stack">
+    <form method="post" action="{{ task_upsert_path }}" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label class="field">
@@ -109,7 +109,7 @@
         </span>
       </summary>
       <div class="entity-detail">
-        <form method="post" action="/admin/tasks/upsert" class="stack">
+        <form method="post" action="{{ task_upsert_path }}" class="stack">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="id" value="{{ task.id }}">
           <div class="form-grid">
@@ -171,7 +171,7 @@
             <button type="submit">Save task</button>
           </div>
         </form>
-        <form method="post" action="/admin/tasks/delete" class="danger-zone">
+        <form method="post" action="{{ task_delete_path }}" class="danger-zone">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="id" value="{{ task.id }}">
           <button type="submit" class="error" data-confirm="Delete this task from the planning ledger?">Delete task</button>

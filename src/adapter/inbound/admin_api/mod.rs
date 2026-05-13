@@ -136,6 +136,8 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/admin", get(pages::dashboard_page))
         .route("/admin/akra", get(pages::akra_dashboard_page))
         .route("/admin/akra/metrics", get(pages::akra_metrics_page))
+        .route("/admin/akra/directions", get(pages::akra_directions_page))
+        .route("/admin/akra/tasks", get(pages::akra_tasks_page))
         .route(
             "/admin/assets/graphics/{asset_name}",
             get(static_assets::admin_graphic_asset),
@@ -156,8 +158,24 @@ fn build_router(state: AdminAppState) -> Router {
             "/admin/directions/delete",
             post(pages::delete_direction_page),
         )
+        .route(
+            "/admin/akra/directions/upsert",
+            post(pages::upsert_akra_direction_page),
+        )
+        .route(
+            "/admin/akra/directions/delete",
+            post(pages::delete_akra_direction_page),
+        )
         .route("/admin/tasks/upsert", post(pages::upsert_task_page))
         .route("/admin/tasks/delete", post(pages::delete_task_page))
+        .route(
+            "/admin/akra/tasks/upsert",
+            post(pages::upsert_akra_task_page),
+        )
+        .route(
+            "/admin/akra/tasks/delete",
+            post(pages::delete_akra_task_page),
+        )
         .route("/admin/files/export", post(pages::export_files_page))
         .route("/admin/files/apply", post(pages::apply_files_page))
         .route(
