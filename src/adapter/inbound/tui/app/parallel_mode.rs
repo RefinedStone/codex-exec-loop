@@ -226,7 +226,7 @@ impl NativeTuiApp {
     }
 
     fn parallel_panel_ui_state(&self) -> ParallelPanelUiState {
-        let overlay_event = if self.shell_overlay == ShellOverlay::Supersession {
+        let overlay_event = if self.parallel_mode_panel_visible() {
             ParallelPanelUiEvent::OverlayShown
         } else {
             ParallelPanelUiEvent::OverlayHidden
@@ -245,6 +245,11 @@ impl NativeTuiApp {
             )));
         }
         ParallelPanelStateController::project(events)
+    }
+
+    fn parallel_mode_panel_visible(&self) -> bool {
+        self.shell_overlay == ShellOverlay::Supersession
+            || (self.shell_overlay == ShellOverlay::Hidden && self.parallel_mode_enabled())
     }
 
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {

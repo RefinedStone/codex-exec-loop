@@ -782,6 +782,41 @@ fn inline_tail_adds_only_spinner_to_prompt_during_parallel_loading() {
 }
 
 #[test]
+fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
+    let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(0, "loading: test", "loading", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "loading"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+        Some("loading 3/3: board refresh".to_string()),
+    )));
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline parallel home loading render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Parallel Mode / inline inspection"));
+    assert!(rendered.contains("prompt locked while parallel loading is active"));
+    assert!(
+        [
+            "⠋ >", "⠙ >", "⠹ >", "⠸ >", "⠼ >", "⠴ >", "⠦ >", "⠧ >", "⠇ >", "⠏ >"
+        ]
+        .iter()
+        .any(|frame| rendered.contains(frame))
+    );
+}
+
+#[test]
 fn inline_tail_omits_parallel_loading_spinner_after_empty_non_loading_snapshot() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
