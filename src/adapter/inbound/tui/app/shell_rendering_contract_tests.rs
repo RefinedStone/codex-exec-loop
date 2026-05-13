@@ -658,6 +658,79 @@ fn inline_parallel_peek_preview_prioritizes_loaded_transcript_in_compact_main_bu
 }
 
 #[test]
+fn inline_parallel_peek_preview_can_scroll_between_oldest_and_latest_messages() {
+    /*
+     * Long parallel conversations need an in-preview scroll position. The default
+     * view stays pinned to the latest transcript lines, while an older scroll
+     * position exposes the beginning of the loaded app-server conversation.
+     */
+    let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("test terminal");
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::ParallelPeek;
+
+    let mut messages = Vec::new();
+    messages.push(ConversationMessage::new(
+        ConversationMessageKind::User,
+        "early prompt marker",
+        None,
+        None,
+    ));
+    for index in 1..=12 {
+        messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            format!("middle agent message {index}"),
+            Some("final_answer".to_string()),
+            None,
+        ));
+    }
+    messages.push(ConversationMessage::new(
+        ConversationMessageKind::Agent,
+        "latest answer marker",
+        Some("final_answer".to_string()),
+        None,
+    ));
+    app.parallel_peek_overlay_ui_state.open_preview(
+        super::super::parallel_peek_overlay_ui::ParallelPeekConversationPreview {
+            agent_id: "agent-scribe".to_string(),
+            slot_id: "slot-2".to_string(),
+            task_title: "Scroll transcript".to_string(),
+            thread_id: Some("thread-scribe".to_string()),
+            snapshot: Some(ConversationSnapshot {
+                thread_id: "thread-scribe".to_string(),
+                title: "Scrollable transcript".to_string(),
+                cwd: "/tmp/pool/slot-2".to_string(),
+                messages,
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            }),
+            status_text: "conversation snapshot loaded".to_string(),
+        },
+    );
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline parallel peek latest render succeeds");
+    let latest_rendered = tui_testkit::screen_text(&terminal);
+    assert!(latest_rendered.contains("latest answer marker"));
+    assert!(
+        !latest_rendered.contains("early prompt marker"),
+        "default preview should stay pinned to latest transcript lines:\n{latest_rendered}"
+    );
+
+    app.parallel_peek_overlay_ui_state
+        .scroll_conversation_to_oldest();
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline parallel peek oldest render succeeds");
+    let oldest_rendered = tui_testkit::screen_text(&terminal);
+    assert!(oldest_rendered.contains("early prompt marker"));
+    assert!(
+        !oldest_rendered.contains("latest answer marker"),
+        "oldest scroll should expose the start of the transcript:\n{oldest_rendered}"
+    );
+}
+
+#[test]
 fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
     let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
     let mut app = make_test_app();

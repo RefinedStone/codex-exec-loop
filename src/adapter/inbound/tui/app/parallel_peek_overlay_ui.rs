@@ -21,6 +21,7 @@ pub(super) struct ParallelPeekOverlayUiState {
     step: ParallelPeekOverlayStep,
     selected_agent_index: usize,
     preview: Option<ParallelPeekConversationPreview>,
+    conversation_scroll_from_bottom: usize,
 }
 
 impl Default for ParallelPeekOverlayUiState {
@@ -29,6 +30,7 @@ impl Default for ParallelPeekOverlayUiState {
             step: ParallelPeekOverlayStep::AgentList,
             selected_agent_index: 0,
             preview: None,
+            conversation_scroll_from_bottom: 0,
         }
     }
 }
@@ -44,6 +46,10 @@ impl ParallelPeekOverlayUiState {
 
     pub fn preview(&self) -> Option<&ParallelPeekConversationPreview> {
         self.preview.as_ref()
+    }
+
+    pub fn conversation_scroll_from_bottom(&self) -> usize {
+        self.conversation_scroll_from_bottom
     }
 
     pub fn reset(&mut self) {
@@ -74,10 +80,32 @@ impl ParallelPeekOverlayUiState {
     pub fn open_preview(&mut self, preview: ParallelPeekConversationPreview) {
         self.step = ParallelPeekOverlayStep::ConversationPreview;
         self.preview = Some(preview);
+        self.conversation_scroll_from_bottom = 0;
     }
 
     pub fn back_to_agent_list(&mut self) {
         self.step = ParallelPeekOverlayStep::AgentList;
         self.preview = None;
+        self.conversation_scroll_from_bottom = 0;
+    }
+
+    pub fn scroll_conversation_older(&mut self, row_count: usize) {
+        self.conversation_scroll_from_bottom = self
+            .conversation_scroll_from_bottom
+            .saturating_add(row_count);
+    }
+
+    pub fn scroll_conversation_newer(&mut self, row_count: usize) {
+        self.conversation_scroll_from_bottom = self
+            .conversation_scroll_from_bottom
+            .saturating_sub(row_count);
+    }
+
+    pub fn scroll_conversation_to_latest(&mut self) {
+        self.conversation_scroll_from_bottom = 0;
+    }
+
+    pub fn scroll_conversation_to_oldest(&mut self) {
+        self.conversation_scroll_from_bottom = usize::MAX;
     }
 }

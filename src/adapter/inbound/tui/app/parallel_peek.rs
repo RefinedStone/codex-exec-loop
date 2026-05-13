@@ -85,6 +85,36 @@ impl NativeTuiApp {
 
     fn handle_parallel_peek_conversation_key(&mut self, key: event::KeyEvent) -> bool {
         match key.code {
+            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                self.parallel_peek_overlay_ui_state
+                    .scroll_conversation_older(1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                self.parallel_peek_overlay_ui_state
+                    .scroll_conversation_newer(1);
+                true
+            }
+            KeyCode::PageUp if key.modifiers.is_empty() => {
+                self.parallel_peek_overlay_ui_state
+                    .scroll_conversation_older(10);
+                true
+            }
+            KeyCode::PageDown if key.modifiers.is_empty() => {
+                self.parallel_peek_overlay_ui_state
+                    .scroll_conversation_newer(10);
+                true
+            }
+            KeyCode::Home if key.modifiers.is_empty() => {
+                self.parallel_peek_overlay_ui_state
+                    .scroll_conversation_to_oldest();
+                true
+            }
+            KeyCode::End if key.modifiers.is_empty() => {
+                self.parallel_peek_overlay_ui_state
+                    .scroll_conversation_to_latest();
+                true
+            }
             KeyCode::Esc | KeyCode::Left | KeyCode::Backspace if key.modifiers.is_empty() => {
                 self.parallel_peek_overlay_ui_state.back_to_agent_list();
                 true

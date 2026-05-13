@@ -144,7 +144,7 @@ fn build_key_lines(step: ParallelPeekOverlayStep) -> Vec<Line<'static>> {
             "Enter: open  |  Up/Down: select  |  Esc/Ctrl+O/Ctrl+C: close",
         )],
         ParallelPeekOverlayStep::ConversationPreview => vec![AkraTheme::key_line(
-            "Esc/Left: back to agents  |  Ctrl+O/Ctrl+C: close  |  read-only",
+            "Up/Down: scroll  |  PgUp/PgDn/Home/End  |  Esc/Left: agents  |  Ctrl+O/Ctrl+C: close",
         )],
     }
 }

@@ -561,6 +561,36 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
             .map(|snapshot| snapshot.title.as_str()),
         Some("Loaded thread")
     );
+    assert_eq!(
+        runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .conversation_scroll_from_bottom(),
+        0
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::PageUp,
+        KeyModifiers::NONE,
+    )));
+
+    assert_eq!(
+        runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .conversation_scroll_from_bottom(),
+        10
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
+
+    assert_eq!(
+        runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .conversation_scroll_from_bottom(),
+        0
+    );
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
 

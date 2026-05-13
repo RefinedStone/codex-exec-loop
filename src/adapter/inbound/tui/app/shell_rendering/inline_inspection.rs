@@ -108,7 +108,12 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
             0,
         ),
         ParallelPeekOverlayStep::ConversationPreview => {
-            let scroll_offset = inline_preview_scroll_offset(layout[1], conversation_lines.len());
+            let scroll_offset = inline_preview_scroll_offset(
+                layout[1],
+                conversation_lines.len(),
+                app.parallel_peek_overlay_ui_state
+                    .conversation_scroll_from_bottom(),
+            );
             render_inline_scrolled_section(
                 frame,
                 layout[1],
@@ -122,9 +127,12 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
     render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
-fn inline_preview_scroll_offset(area: Rect, line_count: usize) -> u16 {
+fn inline_preview_scroll_offset(area: Rect, line_count: usize, scroll_from_bottom: usize) -> u16 {
     let visible_body_height = area.height.saturating_sub(1) as usize;
-    line_count.saturating_sub(visible_body_height) as u16
+    let max_scroll = line_count.saturating_sub(visible_body_height);
+    max_scroll
+        .saturating_sub(scroll_from_bottom)
+        .min(u16::MAX as usize) as u16
 }
 
 fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
