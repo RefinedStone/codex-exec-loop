@@ -221,6 +221,14 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 }
 
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if app.parallel_mode_enabled() {
+        /*
+         * Parallel mode owns the main inline body with the supervisor board. Its
+         * durable scrollback should therefore be the event stream, not the
+         * single-thread transcript placeholder that may still exist underneath.
+         */
+        return app.parallel_supervisor_event_scrollback_lines();
+    }
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
         /*
          * Startup banner wins over conversation history because before the first

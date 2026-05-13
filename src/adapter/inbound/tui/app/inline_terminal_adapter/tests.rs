@@ -166,6 +166,47 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
     );
 }
 
+#[test]
+fn parallel_event_stream_flushes_to_host_scrollback_without_single_mode_transcript() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    append_history_message(
+        &mut app,
+        "single mode history must not own parallel scrollback",
+    );
+    for index in 0..40 {
+        app.push_parallel_supervisor_event_for_test(
+            "11:45:02",
+            "Task Intake",
+            format!("parallel-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("parallel event draw transaction");
+
+    let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
+    assert!(terminal_history.contains("Parallel Event Stream"));
+    assert!(terminal_history.contains("parallel-event-00"));
+    assert!(terminal_history.contains("parallel-event-39"));
+    assert!(
+        !terminal_history.contains("single mode history must not own parallel scrollback"),
+        "parallel mode scrollback should use the event stream, not the hidden transcript:\n{terminal_history}"
+    );
+    let screen_text = tui_testkit::screen_text(&terminal);
+    assert!(
+        !screen_text.contains("parallel-event-00"),
+        "old parallel events should remain available through host scrollback instead of forcing the viewport to show every row:\n{screen_text}"
+    );
+    assert!(screen_text.contains("parallel-event-39"));
+}
+
 // VT100 coverage catches terminal-app behavior that TestBackend cannot:
 // newline fallback history must survive live completion and viewport resize
 // without duplicating markers.
@@ -507,7 +548,8 @@ fn inline_history_does_not_flush_startup_banner_while_parallel_home_is_active() 
 
     assert!(!rendered.contains(" █████╗ ██╗  ██╗██████╗  █████╗"));
     assert!(!rendered.contains("╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝"));
-    assert!(rendered.contains("No messages in this thread yet."));
+    assert!(!rendered.contains("No messages in this thread yet."));
+    assert!(rendered.is_empty());
 }
 #[test]
 fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() {
