@@ -167,7 +167,7 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
 }
 
 #[test]
-fn parallel_event_stream_stays_out_of_host_scrollback() {
+fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
@@ -197,12 +197,12 @@ fn parallel_event_stream_stays_out_of_host_scrollback() {
         "the stream title belongs to the live inline section, not durable host scrollback:\n{terminal_scrollback}"
     );
     assert!(
-        !terminal_scrollback.contains("parallel-event-00"),
-        "parallel board events should not be written into host scrollback:\n{terminal_scrollback}"
+        terminal_scrollback.contains("parallel-event-00"),
+        "parallel board events should be written into host scrollback for operator scrollback:\n{terminal_scrollback}"
     );
     assert!(
         !terminal_scrollback.contains("single mode history must not own parallel scrollback"),
-        "parallel mode should also suppress the hidden single-mode transcript:\n{terminal_scrollback}"
+        "parallel mode should suppress the hidden single-mode transcript:\n{terminal_scrollback}"
     );
     let screen_text = tui_testkit::screen_text(&terminal);
     assert!(screen_text.contains("Parallel Event Stream"));
@@ -219,6 +219,32 @@ fn parallel_event_stream_stays_out_of_host_scrollback() {
     assert!(
         !screen_text.contains("parallel-event-00"),
         "old parallel events should not force the live viewport to show every row:\n{screen_text}"
+    );
+
+    for index in 40..60 {
+        runtime.app_mut().push_parallel_supervisor_event_for_test(
+            "11:45:03",
+            "Task Intake",
+            format!("parallel-event-{index:02}"),
+        );
+    }
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("parallel event delta draw transaction");
+
+    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
+    assert!(
+        !terminal_scrollback.contains("Parallel Event Stream"),
+        "redraws must not replay the live section title into host scrollback:\n{terminal_scrollback}"
+    );
+    assert_eq!(
+        terminal_scrollback.matches("parallel-event-00").count(),
+        1,
+        "existing parallel events should not duplicate on later redraws:\n{terminal_scrollback}"
+    );
+    assert_eq!(
+        terminal_scrollback.matches("parallel-event-40").count(),
+        1,
+        "new parallel events should append into host scrollback exactly once:\n{terminal_scrollback}"
     );
 }
 

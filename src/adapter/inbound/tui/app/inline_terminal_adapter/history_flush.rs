@@ -150,6 +150,10 @@ impl HistoryFlushState {
         self.remember(current_lines);
     }
 
+    pub(crate) fn has_pending_lines(&self, current_lines: &[Line<'static>]) -> bool {
+        !self.pending_lines(current_lines).is_empty()
+    }
+
     fn remember(&mut self, current_lines: &[Line<'static>]) {
         self.rendered_lines = current_lines.to_vec();
     }

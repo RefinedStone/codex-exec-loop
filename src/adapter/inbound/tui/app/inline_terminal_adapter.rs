@@ -1,7 +1,7 @@
 use ratatui::Terminal;
 use ratatui::TerminalOptions;
 use ratatui::Viewport;
-use ratatui::backend::Backend;
+use ratatui::backend::{Backend, ClearType};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::text::Line;
 
@@ -129,6 +129,19 @@ fn clear_inline_viewport<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B
     terminal.clear()
 }
 
+fn clear_visible_inline_rows<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+    let area = current_viewport_area(terminal);
+    for y in area.y..area.bottom() {
+        terminal
+            .backend_mut()
+            .set_cursor_position(Position { x: area.x, y })?;
+        terminal
+            .backend_mut()
+            .clear_region(ClearType::CurrentLine)?;
+    }
+    terminal.backend_mut().flush()
+}
+
 fn sync_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
@@ -136,9 +149,13 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
 ) -> Result<bool, B::Error> {
     // Capture render settings before mutating terminal state so one transaction uses
     // a stable history insertion mode and render mode.
-    let (render_mode, insert_mode) = {
+    let (render_mode, insert_mode, parallel_mode_enabled) = {
         let app = runtime.app_mut();
-        (app.inline_history_render_mode, app.history_insert_mode)
+        (
+            app.inline_history_render_mode,
+            app.history_insert_mode,
+            app.parallel_mode_enabled(),
+        )
     };
     /*
      * Autoresize can itself move the inline viewport. It happens before history
@@ -167,6 +184,21 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
 
     let current_lines = current_inline_history_lines(runtime.app_mut());
     let writes_host_scrollback = render_mode.writes_host_scrollback();
+    if parallel_mode_enabled
+        && writes_host_scrollback
+        && inline_terminal
+            .history_flush
+            .has_pending_lines(&current_lines)
+    {
+        /*
+         * The parallel board is redrawn as a live inline panel, while its event
+         * rows are also streamed into host scrollback. Clear the previous live
+         * frame before inserting new history rows so panel chrome such as the
+         * "Parallel Event Stream" title is not pushed into terminal scrollback.
+         */
+        clear_visible_inline_rows(terminal)?;
+        inline_terminal.invalidate_back_buffer();
+    }
     let history_sync = if writes_host_scrollback {
         /*
          * HostScrollback mode writes only the history delta. The tail frame stays
@@ -223,12 +255,12 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     if app.parallel_mode_enabled() {
         /*
-         * Parallel mode owns the main inline body with the supervisor board, so
-         * host scrollback must stay quiet. Flushing the board event stream here
-         * makes every refresh look like ordinary terminal output piling up above
-         * the live shell.
+         * Parallel mode owns the main inline body with the supervisor board. The
+         * durable host scrollback should receive only append-only event rows so
+         * operators can scroll back through past activity without replaying the
+         * live panel title or footer chrome.
          */
-        return Vec::new();
+        return app.parallel_supervisor_event_scrollback_lines();
     }
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
         /*
