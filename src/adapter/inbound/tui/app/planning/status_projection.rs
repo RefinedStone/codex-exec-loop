@@ -137,7 +137,8 @@ fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<S
         return None;
     }
     if let Some(rest) = summary_line.strip_prefix(LEGACY_VALID_SEGMENT_PREFIX) {
-        return Some(rest.to_string());
+        let trimmed = rest.trim();
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
     Some(summary_line)
 }
@@ -547,6 +548,10 @@ mod tests {
             )
             .as_deref(),
             Some("queue: queue head: rank 1 / task-1")
+        );
+        assert_eq!(
+            remove_legacy_valid_planning_summary_prefix("planning: valid  |  ".to_string()),
+            None
         );
         assert_eq!(
             remove_legacy_valid_planning_summary_prefix(
