@@ -418,7 +418,7 @@ fn model_and_think_command_hints_are_argument_aware() {
     );
     assert_eq!(
         think_clear.buffered_hint(),
-        "Press Enter to clear the think override."
+        "Press Enter to reset think to project default (`high`)."
     );
     assert_eq!(
         think_invalid.buffered_hint(),

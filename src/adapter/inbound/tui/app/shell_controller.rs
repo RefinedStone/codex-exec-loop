@@ -198,8 +198,12 @@ impl NativeTuiApp {
                 ConversationReasoningEffort::SUPPORTED_LABELS
             ),
             Some(value) if is_turn_option_clear_argument(value) => {
-                self.turn_options.reasoning_effort = None;
-                "think override cleared; app-server default will be used".to_string()
+                self.turn_options.reasoning_effort =
+                    Some(ConversationTurnOptions::DEFAULT_REASONING_EFFORT);
+                format!(
+                    "think reset to project default ({})",
+                    ConversationTurnOptions::DEFAULT_REASONING_EFFORT.label()
+                )
             }
             Some(value) => match ConversationReasoningEffort::parse(value) {
                 Some(effort) => {

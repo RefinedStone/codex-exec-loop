@@ -193,7 +193,7 @@ fn effort_option_index(effort: ConversationReasoningEffort) -> Option<usize> {
 }
 
 fn default_effort_index() -> usize {
-    effort_option_index(ConversationReasoningEffort::Medium).unwrap_or(0)
+    effort_option_index(ConversationTurnOptions::DEFAULT_REASONING_EFFORT).unwrap_or(0)
 }
 
 #[cfg(test)]

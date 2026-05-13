@@ -7,7 +7,7 @@ use super::planning_reset_shell_command::{
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
 use crate::application::service::planning::PlanningResetTarget;
-use crate::domain::conversation::ConversationReasoningEffort;
+use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineShellCommand {
@@ -474,7 +474,10 @@ fn think_argument_hint(argument: Option<&str>) -> String {
         return THINK_USAGE.to_string();
     };
     if is_turn_option_clear_argument(argument) {
-        return "Press Enter to clear the think override.".to_string();
+        return format!(
+            "Press Enter to reset think to project default (`{}`).",
+            ConversationTurnOptions::DEFAULT_REASONING_EFFORT.label()
+        );
     }
     match ConversationReasoningEffort::parse(argument) {
         Some(effort) => format!("Press Enter to set think to `{}`.", effort.label()),

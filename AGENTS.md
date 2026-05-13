@@ -4,7 +4,9 @@ This is the single canonical fast path for Codex in this repo. `AGENT.md` is a
 compatibility pointer only.
 
 ## Work Rules
+- 모든 작업은 worktree를 생성하여 진행하세요
 - 모든 의미있는 작업단위로 commit -> push -> rebase merge(prerelease) 과정을 거치세요
+- 작업 이후에는 worktree를 삭제하세요
 
 ## Review guidelines
 
