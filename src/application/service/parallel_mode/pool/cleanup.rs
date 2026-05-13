@@ -1,4 +1,9 @@
-use std::{path::Path, thread, time::Duration};
+use std::{
+    fs,
+    path::Path,
+    thread,
+    time::{Duration, SystemTime},
+};
 
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -14,12 +19,17 @@ use super::super::{
     branch_exists, record_cleaned_session_detail, record_failed_start_session_detail,
     record_stale_active_lease_released_session_detail,
 };
+use super::paths::resolve_git_dir;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, POOL_BASELINE_BRANCH,
     SlotGitStatus, inspect_slot_git_status, remove_slot_lease, slot_id,
 };
 
 const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
+#[cfg(not(test))]
+const STALE_INDEX_LOCK_RELEASE_AFTER: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const STALE_INDEX_LOCK_RELEASE_AFTER: Duration = Duration::from_secs(0);
 
 /*
 reusable slot cleanup은 reconcile 과정에서 "이제 pool baseline으로 되돌려도 되는" slot을
@@ -388,6 +398,7 @@ detached baseline으로 두는 이유는 idle slot이 특정 작업 branch를 �
 pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_akra(
     slot_path: &Path,
 ) -> super::super::git_sequence::GitCommandSequenceReport {
+    remove_stale_slot_index_lock(slot_path);
     // git sequence API는 argv 조각을 문자열로 받으므로 Path 변환은 sequence 조립 직전에만 수행한다.
     let slot_path_string = slot_path.display().to_string();
     run_git_sequence(
@@ -420,4 +431,24 @@ pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_akr
             ),
         ],
     )
+}
+
+fn remove_stale_slot_index_lock(slot_path: &Path) {
+    let Some(git_dir) = resolve_git_dir(slot_path) else {
+        return;
+    };
+    let index_lock_path = git_dir.join("index.lock");
+    let Ok(metadata) = fs::metadata(&index_lock_path) else {
+        return;
+    };
+    let Ok(modified_at) = metadata.modified() else {
+        return;
+    };
+    let Ok(lock_age) = SystemTime::now().duration_since(modified_at) else {
+        return;
+    };
+    if lock_age < STALE_INDEX_LOCK_RELEASE_AFTER {
+        return;
+    }
+    let _ = fs::remove_file(index_lock_path);
 }
