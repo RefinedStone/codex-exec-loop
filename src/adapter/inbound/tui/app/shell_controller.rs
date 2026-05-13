@@ -108,6 +108,9 @@ impl NativeTuiApp {
                 self.planning_init_overlay_ui_state.reset();
                 self.planning_draft_editor_ui_state.reset();
             }
+            ShellOverlay::ModelSelection => {
+                self.model_selection_overlay_ui_state = ModelSelectionOverlayUiState::default();
+            }
             _ => {}
         }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
@@ -162,32 +165,26 @@ impl NativeTuiApp {
     fn show_help_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
     }
+    pub(super) fn show_model_selection_overlay(&mut self) {
+        self.model_selection_overlay_ui_state
+            .reset_from_turn_options(&self.turn_options);
+        self.dispatch_shell_chrome(ShellChromeEvent::ModelSelectionOverlayShown);
+    }
     fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
         self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: argument.unwrap_or_default().to_string(),
         });
     }
     fn handle_model_shell_command(&mut self, argument: Option<&str>) {
-        let status_text = match argument {
-            None => format!(
-                "model override unchanged / current: {} / use :model <model|default>",
-                self.turn_options.model.as_deref().unwrap_or("default")
-            ),
-            Some(value) if is_turn_option_clear_argument(value) => {
-                self.turn_options.model = None;
-                "model override cleared; app-server default will be used".to_string()
-            }
-            Some(value) => match normalize_model_override_argument(value) {
-                Some(model) => {
-                    let status_text = format!("model override set to {model}");
-                    self.turn_options.model = Some(model);
-                    status_text
-                }
-                None => "model override unchanged; use :model <model|default>".to_string(),
-            },
-        };
+        if argument.is_none() {
+            self.show_model_selection_overlay();
+            return;
+        }
+
+        self.show_model_selection_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
+            status_text: "`:model` ignored the typed argument; choose from the picker instead"
+                .to_string(),
         });
     }
     fn handle_think_shell_command(&mut self, argument: Option<&str>) {
@@ -383,6 +380,9 @@ impl NativeTuiApp {
             // board remains visible.
             return self.parallel_mode_prompt_input_locked();
         }
+        if self.shell_overlay == ShellOverlay::ModelSelection {
+            return self.handle_model_selection_overlay_key(key);
+        }
         if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
             return self.handle_directions_overlay_key(key);
         }
@@ -401,5 +401,68 @@ impl NativeTuiApp {
         }
 
         self.dispatch_conversation_intent(ConversationIntentEvent::CtrlCPressed);
+    }
+
+    pub(super) fn handle_model_selection_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::ModelSelection {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                self.model_selection_overlay_ui_state.move_selection(-1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                self.model_selection_overlay_ui_state.move_selection(1);
+            }
+            KeyCode::Char(number)
+                if key.modifiers.is_empty() && number.is_ascii_digit() && number != '0' =>
+            {
+                let index = number.to_digit(10).unwrap_or(0).saturating_sub(1) as usize;
+                if self
+                    .model_selection_overlay_ui_state
+                    .select_active_index(index)
+                {
+                    self.confirm_model_selection_overlay_step();
+                }
+            }
+            KeyCode::Enter if key.modifiers.is_empty() => {
+                self.confirm_model_selection_overlay_step()
+            }
+            KeyCode::Left | KeyCode::Backspace
+                if key.modifiers.is_empty()
+                    && self.model_selection_overlay_ui_state.step()
+                        == ModelSelectionStep::Effort =>
+            {
+                self.model_selection_overlay_ui_state
+                    .return_to_model_selection();
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn confirm_model_selection_overlay_step(&mut self) {
+        match self.model_selection_overlay_ui_state.step() {
+            ModelSelectionStep::Model => {
+                self.model_selection_overlay_ui_state
+                    .advance_from_model_selection();
+            }
+            ModelSelectionStep::Effort => self.apply_model_selection_overlay(),
+        }
+    }
+
+    fn apply_model_selection_overlay(&mut self) {
+        let model = self.model_selection_overlay_ui_state.staged_model().model;
+        let effort = self
+            .model_selection_overlay_ui_state
+            .selected_effort()
+            .effort;
+        self.turn_options.model = Some(model.to_string());
+        self.turn_options.reasoning_effort = Some(effort);
+        self.close_shell_overlay();
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: format!("model set to {model}; think set to {}", effort.label()),
+        });
     }
 }

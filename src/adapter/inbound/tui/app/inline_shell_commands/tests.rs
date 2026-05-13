@@ -48,6 +48,7 @@ fn parse_recognizes_supported_aliases() {
         ),
         (":turns", Some((InlineShellCommand::Turns, None))),
         (":stop", Some((InlineShellCommand::Stop, None))),
+        (":model", Some((InlineShellCommand::Model, None))),
         (
             ":model gpt-5.4",
             Some((InlineShellCommand::Model, Some("gpt-5.4"))),
@@ -234,7 +235,7 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
-    assert_eq!(InlineShellCommand::Model.completion_text(), ":model ");
+    assert_eq!(InlineShellCommand::Model.completion_text(), ":model");
     assert_eq!(InlineShellCommand::Think.completion_text(), ":think ");
     assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
 }
@@ -267,7 +268,7 @@ fn help_entries_use_renderable_command_forms() {
     assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
     assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
     assert!(rendered.contains(":stop - stop active sessions"));
-    assert!(rendered.contains(":model <model|default> - model override"));
+    assert!(rendered.contains(":model - model and think"));
     assert!(
         rendered.contains(":think <none|minimal|low|medium|high|xhigh|default> - reasoning effort")
     );
@@ -389,19 +390,19 @@ fn model_and_think_command_hints_are_argument_aware() {
 
     assert_eq!(
         model_plain.buffered_hint(),
-        "Type `:model <model|default>` to choose the model override."
+        "Type `:model` to choose the model and think level."
     );
     assert_eq!(
         model_set.buffered_hint(),
-        "Press Enter to set model to `gpt-5.4`."
+        "`:model` does not accept arguments; press Enter to open model selection."
     );
     assert_eq!(
         model_clear.buffered_hint(),
-        "Press Enter to clear the model override."
+        "`:model` does not accept arguments; press Enter to open model selection."
     );
     assert_eq!(
         model_invalid.buffered_hint(),
-        "Press Enter to apply `:model gpt 5`. Supported form: :model <model|default>."
+        "`:model` does not accept arguments; press Enter to open model selection."
     );
     assert_eq!(
         think_plain.buffered_hint(),

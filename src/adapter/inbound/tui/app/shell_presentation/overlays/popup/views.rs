@@ -45,6 +45,23 @@ pub(crate) struct SessionOverlayView {
 }
 
 /*
+ * Model selection overlay mirrors the Codex-style two-step picker: choose a
+ * model first, then choose the reasoning effort that should be applied with it.
+ */
+pub(crate) struct ModelSelectionOverlayView {
+    // Picker title and current override summary.
+    pub(crate) header_lines: Vec<Line<'static>>,
+    // Model rows with selection styling already applied.
+    pub(crate) model_lines: Vec<Line<'static>>,
+    // Reasoning-effort rows with selection/staged context already applied.
+    pub(crate) effort_lines: Vec<Line<'static>>,
+    // Step-specific status copy that explains what Enter will do.
+    pub(crate) status_lines: Vec<Line<'static>>,
+    // Navigation and close hints for the current step.
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
+/*
  * Supersession overlay flattens parallel-mode orchestration into independent panels.
  * Each section maps to a different operational concern: global mode, capability,
  * pool capacity, live roster, selected detail, distributor queue, and controls.

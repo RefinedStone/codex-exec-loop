@@ -1118,13 +1118,28 @@ mod tests {
     }
 
     #[test]
-    fn inline_model_and_think_commands_update_turn_options() {
+    fn inline_model_picker_and_think_command_update_turn_options() {
         let workspace = TempWorkspace::new("turn-options-command");
         let mut app = make_test_app(&workspace);
 
         app.execute_inline_shell_command_input(
             InlineShellCommandInput::parse(":model gpt-5.4").expect("model command should parse"),
         );
+        assert_eq!(app.turn_options.model, None);
+        assert_eq!(app.shell_overlay, ShellOverlay::ModelSelection);
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("ignored the typed argument")
+        );
+        app.handle_model_selection_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('2'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        app.handle_model_selection_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('3'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
         app.execute_inline_shell_command_input(
             InlineShellCommandInput::parse(":think high").expect("think command should parse"),
         );
@@ -1144,7 +1159,8 @@ mod tests {
                 .expect("think clear command should parse"),
         );
 
-        assert!(app.turn_options.is_default());
+        assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(app.turn_options.reasoning_effort, None);
     }
 
     #[test]

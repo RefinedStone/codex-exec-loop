@@ -60,10 +60,10 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model <model|default>  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
-const MODEL_USAGE: &str = "Type `:model <model|default>` to choose the model override.";
+const MODEL_USAGE: &str = "Type `:model` to choose the model and think level.";
 const THINK_USAGE: &str =
     "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
 const THINK_SUPPORTED_VALUES: &str = ConversationReasoningEffort::SUPPORTED_LABELS;
@@ -136,10 +136,10 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Model,
         primary_name: ":model",
         aliases: &[":model"],
-        suggestion_detail: "model override",
+        suggestion_detail: "model and think",
         buffered_hint: MODEL_USAGE,
         execution_status: None,
-        requires_argument: true,
+        requires_argument: false,
     },
     InlineShellCommandSpec {
         command: InlineShellCommand::Think,
@@ -362,7 +362,7 @@ impl InlineShellCommand {
         match self {
             InlineShellCommand::Reset => ":reset ",
             InlineShellCommand::Turns => ":turns ",
-            InlineShellCommand::Model => ":model ",
+            InlineShellCommand::Model => ":model",
             InlineShellCommand::Think => ":think ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
@@ -392,7 +392,7 @@ impl InlineShellCommand {
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::Stop => ":stop",
-            InlineShellCommand::Model => ":model <model|default>",
+            InlineShellCommand::Model => ":model",
             InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|default>",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
@@ -461,27 +461,12 @@ pub(super) fn is_turn_option_clear_argument(argument: &str) -> bool {
         "default" | "auto" | "clear" | "unset"
     )
 }
-pub(super) fn normalize_model_override_argument(argument: &str) -> Option<String> {
-    let trimmed = argument.trim();
-    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
-        return None;
-    }
-
-    Some(trimmed.to_string())
-}
 fn model_argument_hint(argument: Option<&str>) -> String {
-    let Some(argument) = argument else {
-        return MODEL_USAGE.to_string();
-    };
-    if is_turn_option_clear_argument(argument) {
-        return "Press Enter to clear the model override.".to_string();
-    }
-    match normalize_model_override_argument(argument) {
-        Some(model) => format!("Press Enter to set model to `{model}`."),
-        None => format!(
-            "Press Enter to apply `:model {}`. Supported form: :model <model|default>.",
-            argument.trim()
-        ),
+    match argument {
+        None => MODEL_USAGE.to_string(),
+        Some(_) => {
+            "`:model` does not accept arguments; press Enter to open model selection.".to_string()
+        }
     }
 }
 fn think_argument_hint(argument: Option<&str>) -> String {

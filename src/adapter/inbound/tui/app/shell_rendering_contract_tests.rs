@@ -381,6 +381,29 @@ fn inline_help_inspection_renders_command_help() {
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }
+
+#[test]
+fn inline_model_selection_inspection_renders_model_and_effort_picker() {
+    let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_model_selection_overlay();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline model selection render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Select Model and Effort / inline inspection"));
+    assert!(rendered.contains("Models"));
+    assert!(rendered.contains("gpt-5.5"));
+    assert!(rendered.contains("Think Level"));
+    assert!(rendered.contains("medium"));
+    assert!(rendered.contains("Enter/1-6: choose model"));
+    assert!(!rendered.contains(":model <"));
+    assert!(!rendered.contains("┌"));
+}
+
 #[test]
 fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
@@ -680,6 +703,8 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     let startup = shell_presentation::build_startup_overlay_view(&app);
     let sessions = shell_presentation::build_session_overlay_view(&app);
     let help = shell_presentation::build_help_overlay_view();
+    app.show_model_selection_overlay();
+    let model_selection = shell_presentation::build_model_selection_overlay_view(&app);
     let queue = shell_presentation::build_queue_overlay_view(&app);
     let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
     let supersession = shell_presentation::build_supersession_overlay_view(&app);
@@ -689,6 +714,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
         startup.header_lines[0].to_string(),
         sessions.header_lines[0].to_string(),
         help.header_lines[0].to_string(),
+        model_selection.header_lines[0].to_string(),
         queue.header_lines[0].to_string(),
         directions.header_lines[0].to_string(),
         supersession.header_lines[0].to_string(),

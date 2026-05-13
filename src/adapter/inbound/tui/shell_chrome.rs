@@ -12,6 +12,7 @@ pub enum ShellOverlay {
     Hidden,
     Startup,
     Sessions,
+    ModelSelection,
     Supersession,
     Help,
     Queue,
@@ -99,6 +100,7 @@ pub enum ShellChromeEvent {
     SessionsOverlayShown {
         limit: usize,
     },
+    ModelSelectionOverlayShown,
     SupersessionOverlayShown,
     HelpOverlayShown,
     QueueOverlayShown,
@@ -191,6 +193,10 @@ pub fn reduce_shell_chrome(
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Sessions;
             queue_session_load_if_allowed(&mut state, limit, &mut effects);
+        }
+        ShellChromeEvent::ModelSelectionOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::ModelSelection;
         }
         ShellChromeEvent::SupersessionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -505,6 +511,20 @@ mod tests {
             ExitConfirmationState::Hidden
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::Help);
+        assert!(reduced.effects.is_empty());
+    }
+    #[test]
+    fn showing_model_selection_overlay_hides_exit_confirmation() {
+        // model selection도 app-server IO 없이 shell focus만 가져가는 inspection surface다.
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::ModelSelectionOverlayShown);
+
+        assert_eq!(
+            reduced.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::ModelSelection);
         assert!(reduced.effects.is_empty());
     }
     #[test]

@@ -80,6 +80,8 @@ mod history_insertion;
 mod inline_shell_commands;
 #[path = "app/inline_terminal_adapter.rs"]
 mod inline_terminal_adapter;
+#[path = "app/model_selection_overlay_ui.rs"]
+mod model_selection_overlay_ui;
 #[path = "app/parallel_mode.rs"]
 mod parallel_mode;
 #[path = "app/parallel_mode_shell_command.rs"]
@@ -175,7 +177,10 @@ use github_polling::GithubReviewPollingState;
 use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{
     InlineShellCommand, InlineShellCommandInput, is_turn_option_clear_argument,
-    normalize_model_override_argument,
+};
+use model_selection_overlay_ui::{
+    MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionOverlayUiState,
+    ModelSelectionStep,
 };
 use parallel_panel_controller::{
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
@@ -280,6 +285,7 @@ struct NativeTuiApp {
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
+    model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
