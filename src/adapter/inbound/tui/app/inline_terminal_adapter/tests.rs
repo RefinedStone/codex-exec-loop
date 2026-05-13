@@ -248,6 +248,129 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
     );
 }
 
+#[test]
+fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    for index in 0..12 {
+        app.push_parallel_supervisor_event_for_test(
+            "11:45:02",
+            "Task Intake",
+            format!("fit-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("initial parallel event draw transaction");
+    assert!(tui_testkit::screen_text(&terminal).contains("Parallel Event Stream"));
+
+    let viewport_top = terminal.get_frame().area().top();
+    inline_terminal.history_flush.visible_history_rows = viewport_top.saturating_add(2);
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+
+    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
+    assert!(
+        !terminal_scrollback.contains("Parallel Event Stream"),
+        "viewport fitting must not push the live stream title into host scrollback:\n{terminal_scrollback}"
+    );
+    assert!(
+        !terminal_scrollback.contains("Command Hints"),
+        "viewport fitting must not push live panel footer chrome into host scrollback:\n{terminal_scrollback}"
+    );
+}
+
+#[test]
+fn vt100_parallel_history_fit_does_not_push_live_panel_chrome() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    for index in 0..12 {
+        app.push_parallel_supervisor_event_for_test(
+            "11:45:02",
+            "Task Intake",
+            format!("vt100-fit-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("initial vt100 parallel event draw transaction");
+
+    let viewport_top = terminal.get_frame().area().top();
+    inline_terminal.history_flush.visible_history_rows = viewport_top.saturating_add(2);
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+
+    let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    assert!(
+        !host_scrollback.contains("Parallel Event Stream"),
+        "vt100 viewport fitting must not push the live stream title into host scrollback:\n{host_scrollback}"
+    );
+    assert!(
+        !host_scrollback.contains("Command Hints"),
+        "vt100 viewport fitting must not push live panel footer chrome into host scrollback:\n{host_scrollback}"
+    );
+}
+
+#[test]
+fn vt100_newline_fallback_parallel_delta_keeps_chrome_out_of_host_scrollback() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+    app.set_parallel_mode_enabled_for_test(true);
+    for index in 0..20 {
+        app.push_parallel_supervisor_event_for_test(
+            "11:45:02",
+            "Task Intake",
+            format!("fallback-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("initial vt100 fallback parallel event draw transaction");
+    for index in 20..40 {
+        runtime.app_mut().push_parallel_supervisor_event_for_test(
+            "11:45:03",
+            "Task Intake",
+            format!("fallback-event-{index:02}"),
+        );
+    }
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("delta vt100 fallback parallel event draw transaction");
+
+    let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    assert!(
+        host_scrollback.contains("fallback-event-00"),
+        "fallback insertion should preserve historical event rows:\n{host_scrollback}"
+    );
+    assert!(
+        host_scrollback.contains("fallback-event-20"),
+        "fallback insertion should append delta event rows:\n{host_scrollback}"
+    );
+    assert!(
+        !host_scrollback.contains("Parallel Event Stream"),
+        "fallback insertion must not push live stream title into host scrollback:\n{host_scrollback}"
+    );
+    assert!(
+        !host_scrollback.contains("Command Hints"),
+        "fallback insertion must not push live footer chrome into host scrollback:\n{host_scrollback}"
+    );
+}
+
 // VT100 coverage catches terminal-app behavior that TestBackend cannot:
 // newline fallback history must survive live completion and viewport resize
 // without duplicating markers.

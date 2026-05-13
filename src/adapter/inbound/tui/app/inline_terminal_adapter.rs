@@ -168,6 +168,27 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     let cursor_position = terminal.get_cursor_position()?;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     inline_terminal.viewport.insert_mode = insert_mode;
+    let current_lines = current_inline_history_lines(runtime.app_mut());
+    let writes_host_scrollback = render_mode.writes_host_scrollback();
+    let parallel_history_pending = parallel_mode_enabled
+        && writes_host_scrollback
+        && inline_terminal
+            .history_flush
+            .has_pending_lines(&current_lines);
+    let parallel_history_fit_would_scroll = parallel_mode_enabled
+        && writes_host_scrollback
+        && inline_terminal.history_flush.visible_history_rows > viewport_area.top();
+    if parallel_history_pending || parallel_history_fit_would_scroll {
+        /*
+         * Parallel mode streams event rows into host scrollback while redrawing
+         * the board as a live inline panel. Any scrollback movement before the
+         * next draw can otherwise push panel chrome into terminal history. Blank
+         * the old live frame first, then let history fitting/insertion move only
+         * empty rows plus the event rows it explicitly writes.
+         */
+        clear_visible_inline_rows(terminal)?;
+        inline_terminal.invalidate_back_buffer();
+    }
     let visible_history_adjusted = inline_terminal.history_flush.fit_visible_rows_to_viewport(
         terminal,
         terminal_size,
@@ -182,23 +203,6 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         inline_terminal.invalidate_back_buffer();
     }
 
-    let current_lines = current_inline_history_lines(runtime.app_mut());
-    let writes_host_scrollback = render_mode.writes_host_scrollback();
-    if parallel_mode_enabled
-        && writes_host_scrollback
-        && inline_terminal
-            .history_flush
-            .has_pending_lines(&current_lines)
-    {
-        /*
-         * The parallel board is redrawn as a live inline panel, while its event
-         * rows are also streamed into host scrollback. Clear the previous live
-         * frame before inserting new history rows so panel chrome such as the
-         * "Parallel Event Stream" title is not pushed into terminal scrollback.
-         */
-        clear_visible_inline_rows(terminal)?;
-        inline_terminal.invalidate_back_buffer();
-    }
     let history_sync = if writes_host_scrollback {
         /*
          * HostScrollback mode writes only the history delta. The tail frame stays
