@@ -17,7 +17,7 @@
 ## 읽기 순서
 
 1. [../../src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs)
-2. [../../src/application/service/parallel_mode/tests/pool.rs](../../src/application/service/parallel_mode/tests/pool.rs)
+2. [../../src/application/service/parallel_mode/tests/pool/mod.rs](../../src/application/service/parallel_mode/tests/pool/mod.rs)
 3. [../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs](../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs)
 4. [../../src/adapter/outbound/filesystem/planning_workspace.rs](../../src/adapter/outbound/filesystem/planning_workspace.rs)
 

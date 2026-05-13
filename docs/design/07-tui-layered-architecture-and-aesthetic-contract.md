@@ -30,7 +30,7 @@ the fixed Akra theme.
 | Add or rename an overlay section | Projection view model first, rendering second | Overlay contract test and snapshot |
 | Change border, selection, title, key, success, warning, danger, muted, or accent styling | `theme.rs` only | `bash scripts/check_tui_layering.sh` and focused rendering test |
 | Change popup or inline geometry | Rendering and layout layer | Snapshot plus narrow and wide viewport capture when practical |
-| Change scrollback, resize, alt-screen, or inline replay behavior | Terminal adapter layer | Follow `docs/plan/29-terminal-ui-testing-methodology.md` |
+| Change scrollback, resize, alt-screen, or inline replay behavior | Terminal adapter layer | Follow `docs/validation/terminal-ui-testing-methodology.md` |
 | Add a keybinding | Input reducer/controller first | Display it only after the input path exists and is tested |
 
 ## Design Tokens And Foundations

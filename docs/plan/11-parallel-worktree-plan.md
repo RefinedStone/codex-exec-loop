@@ -14,7 +14,7 @@ This file should stay lightweight. Expand it only while two or more live branche
 - shell flow and rendering: `src/adapter/inbound/tui/app.rs`, `src/adapter/inbound/tui/app/app_runtime.rs`, `src/adapter/inbound/tui/app/shell_rendering.rs`, `src/adapter/inbound/tui/app/shell_presentation.rs`, `src/adapter/inbound/tui/app/shell_controller.rs`
 - session surfaces: `src/adapter/inbound/tui/app/session_overlay_ui.rs`, `src/adapter/inbound/tui/app/session_shell_controller.rs`
 - planning surfaces: `src/adapter/inbound/tui/app/planning_init_overlay_ui.rs`, `src/adapter/inbound/tui/app/planning_draft_editor_ui.rs`, `src/adapter/inbound/tui/app/planning/`, `src/application/service/planning/authoring/init.rs`, `src/application/service/planning/runtime/prompt.rs`, `src/application/service/planning/repair/reconciliation.rs`
-- docs and operator contract: `docs/supersession/current-contract.md`, `docs/supersession/remaining-work.md`, `docs/README.md`
+- docs and operator contract: `docs/supersession/current-contract.md`, `docs/README.md`
 
 ## Usage Rule
 

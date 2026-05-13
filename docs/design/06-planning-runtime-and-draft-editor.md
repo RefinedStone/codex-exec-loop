@@ -46,8 +46,8 @@ already running. It is intentionally separate from broad planning authoring: `:p
 staged-draft surface, while task intake creates a single validated task mutation against the accepted
 task authority.
 
-The TUI no longer exposes task intake as an inline command. Admin/API task creation and future
-manual prompt intake reuse the same `PlanningTaskIntakeRequest` -> draft -> validation -> commit
+The TUI no longer exposes task intake as an inline command. Admin/API task creation and manual
+prompt intake paths reuse the same `PlanningTaskIntakeRequest` -> draft -> validation -> commit
 path. A committed runtime task never interrupts an existing
 `in_progress` task; it enters as a normal `ready` candidate for the next queue selection.
 
@@ -99,10 +99,12 @@ snapshot, regenerates any colliding id suffix, revalidates, and retries within a
 - Real-terminal validation is still required for restart recovery, distributor delivery, and multi-worktree operator flow.
 - The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
 
-## Historical Redesign References
+## Current Authority Baseline
 
-- The repo-shared authority migration described in [../plan/18-repo-shared-planning-authority-store.md](../plan/18-repo-shared-planning-authority-store.md) is now implemented on this branch.
-- The pre-cutover failure record in [../plan/19-supersession-runtime-risk-audit.md](../plan/19-supersession-runtime-risk-audit.md) should be read as historical context for the issues the authority-store cutover addressed.
+- Repo-shared SQLite planning authority is the current implementation for git-backed workspaces.
+- Historical pre-store redesign notes are no longer kept as active docs; use this file and
+  [../supersession/current-contract.md](../supersession/current-contract.md) for the shipped
+  authority contract.
 
 ## Code Entry
 

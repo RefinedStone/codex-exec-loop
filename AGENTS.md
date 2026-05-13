@@ -31,7 +31,7 @@ Read this first, then open only the referenced markdown that matches the task.
 - Delivery default: once a change is reviewable, finish with `commit -> push -> PR` unless the user says to hold locally
 - Parallel work: one worktree and one reviewable slice per branch, usually from `origin/prerelease`; inspect active work before choosing a lane
 - Worktree cleanup: after a branch is merged into `prerelease`, remove the finished worktree from the integration checkout. Prefer `bash scripts/cleanup_merged_worktrees.sh --apply --branch <finished-branch>` for the lane you just integrated, but never for `akra-agent/slot-*` parallel-mode slot branches. If the lane is fully disposable but the repo still reports dirty CRLF or local churn noise, use `--force-dirty` explicitly for that finished branch only.
-- Do not expand this file into backlog or design notes; keep that in `docs/design` or `docs/plan`
+- Do not expand this file into backlog or design notes; keep stable design detail in `docs/design` and operational workflow in `docs/plan`
 
 ## Open When Needed
 

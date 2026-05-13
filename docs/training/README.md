@@ -31,7 +31,7 @@
 | 3 | 에러 처리와 포트 경계 | [src/application/service/planning/worker/orchestration.rs](../../src/application/service/planning/worker/orchestration.rs), [src/application/service/parallel_mode/distributor.rs](../../src/application/service/parallel_mode/distributor.rs), [src/adapter/outbound/github/automation.rs](../../src/adapter/outbound/github/automation.rs) | 실패 경계와 포트 책임 |
 | 4 | 상태 머신과 이벤트 기반 런타임 | [src/adapter/inbound/tui/app/conversation_runtime.rs](../../src/adapter/inbound/tui/app/conversation_runtime.rs), [src/adapter/inbound/tui/app/shell_runtime.rs](../../src/adapter/inbound/tui/app/shell_runtime.rs) | 통과하는 상태 전이 테스트를 근거로 런타임 읽기 |
 | 5 | 파일시스템, Git, SQLite를 명시적으로 다루기 | [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs), [src/adapter/outbound/db/sqlite_planning_authority_adapter.rs](../../src/adapter/outbound/db/sqlite_planning_authority_adapter.rs) | authority store, worktree, projection의 진실 소스 분리 |
-| 6 | 구조 부채 지도와 안전한 리팩터링 | [docs/plan/17-structure-and-architecture-debt-map.md](../plan/17-structure-and-architecture-debt-map.md), [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs), [src/adapter/inbound/tui/app/shell_presentation.rs](../../src/adapter/inbound/tui/app/shell_presentation.rs) | 남은 mixed-responsibility hotspot 분해 계획 |
+| 6 | 구조 경계와 안전한 리팩터링 | [docs/design/04-hexagonal-runtime-architecture.md](../design/04-hexagonal-runtime-architecture.md), [docs/design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md), [src/application/service/parallel_mode/pool.rs](../../src/application/service/parallel_mode/pool.rs) | 현재 경계 규칙을 근거로 작은 리팩터링을 판정하는 법 |
 
 ## 회차별 교안
 

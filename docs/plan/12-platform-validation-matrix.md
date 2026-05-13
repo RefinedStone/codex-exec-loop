@@ -99,8 +99,8 @@ Use this profile when a change touches:
 - compact status wording or next-action copy
 - queue, automation, planning, or directions operator surfaces
 - session resume context
-- external `akra doctor`, `akra init`, `akra reset`
-- in-shell `:doctor`, `:init`, `:reset`
+- external `akra doctor`, `akra status`, `akra queue`, `akra reset`
+- in-shell `:doctor`, `:planning`, `:queue`, `:reset`
 
 Record these rows with:
 
@@ -127,8 +127,8 @@ Run the full `terminal-baseline` checklist plus these additional checks:
    - confirm they explain current state, cause, and next action in operator language
    - confirm executable work, proposals, and blocked work read like work framing rather than file dumps
 11. Lifecycle command parity
-   - exercise the relevant external command path with `akra doctor`, `akra init`, and the applicable `akra reset <target>`
-   - exercise the matching in-shell path with `:doctor`, `:init`, and the matching `:reset <target>`
+   - exercise the relevant external command path with `akra doctor`, `akra status`, `akra queue`, and the applicable `akra reset <target>`
+   - exercise the matching in-shell path with `:doctor`, `:planning`, `:queue`, and the matching `:reset <target>`
    - confirm both command surfaces report the same lifecycle state and safety expectation
 
 ### `prompt-input-delay-pty`

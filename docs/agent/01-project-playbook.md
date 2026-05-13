@@ -29,7 +29,7 @@
 - `templates/admin/` and `assets/admin/`: admin UI templates and packaged visual assets
 - `npm/`: platform wrapper, staged npm package metadata, and runtime tests
 - `scripts/`: PR gates, native release packaging, validation capture, planning-tool wrapper, GitHub identity wrapper, and merged-worktree cleanup
-- `docs/`: current contracts, design notes, plan history, validation records, release notes, and training references
+- `docs/`: current contracts, design notes, workflow runbooks, validation records, and training references
 
 Keep mapping logic in adapters, not domain models.
 
@@ -101,5 +101,5 @@ Keep mapping logic in adapters, not domain models.
 - Use `bash scripts/check_native_pr.sh` before opening broad native/TUI PRs; it runs TUI layering, rustfmt check, tests, and clippy in the same order as CI.
 - If a TUI bug is being fixed, start by adding the reproducer test or validation capture in the same PR.
 - For TUI changes, include a screenshot or short terminal capture in the PR when practical.
-- For terminal-affecting TUI PRs, run the focused cargo commands from `docs/plan/29-terminal-ui-testing-methodology.md` and record at least `Windows Terminal / PowerShell / inline` plus `Windows Terminal / WSL bash / inline` with `scripts/capture_native_validation.sh` or `.ps1`.
-- Keep backlog, rollout notes, and long-lived design detail in `docs/`, not in agent files.
+- For terminal-affecting TUI PRs, follow `docs/validation/terminal-ui-testing-methodology.md` and record at least `Windows Terminal / PowerShell / inline` plus `Windows Terminal / WSL bash / inline` with `scripts/capture_native_validation.sh` or `.ps1`.
+- Keep stable design detail in `docs/design/` and operational workflow in `docs/plan/`; keep backlog and rollout planning out of compact agent files.
