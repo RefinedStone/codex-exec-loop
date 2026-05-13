@@ -14,10 +14,9 @@
     --game-yellow: #f5c84b;
     --game-red: #ff6b6b;
     --game-violet: #9d7cff;
-    --office-bg-image: url("/admin/assets/graphics/akra-office-background.png");
-    --object-sprite-sheet: url("/admin/assets/graphics/akra-object-sprites.png");
+    --office-bg-image: url("/admin/assets/graphics/final-draft-map-sprite.png");
     --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
-    --office-board-height: 720px;
+    --office-board-height: clamp(520px, 56vw, 650px);
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
@@ -247,10 +246,7 @@
     min-height: var(--office-board-height);
     overflow: hidden;
     isolation: isolate;
-    background:
-      linear-gradient(90deg, rgba(5, 12, 23, 0.42), rgba(5, 12, 23, 0.08) 32%, rgba(5, 12, 23, 0.36)),
-      var(--office-bg-image) center / cover no-repeat,
-      linear-gradient(180deg, #0a1628, #0e1c30);
+    background: var(--office-bg-image) 0 0 / 100% 100% no-repeat #0a1628;
   }
   .office-board #pixi-diorama {
     position: absolute;
@@ -494,11 +490,6 @@
   .desk.agent-3 { animation-delay: -1s; }
   .desk.agent-4 { animation-delay: -1.5s; }
   .desk.agent-5 { animation-delay: -2s; }
-  .object-sprite {
-    display: none;
-    background-image: var(--object-sprite-sheet);
-    background-size: 627px 627px;
-  }
   .desk,
   .distributor-desk,
   .event-board {
@@ -1034,43 +1025,555 @@
     from { transform: translateX(-120%); }
     to { transform: translateX(120%); }
   }
+  .akra-game {
+    display: grid;
+    gap: 10px;
+    min-height: calc(100vh - 12px);
+  }
+  .draft-topbar {
+    display: grid;
+    grid-template-columns: 292px minmax(210px, 0.9fr) repeat(3, minmax(170px, 0.7fr)) 244px;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .draft-brand,
+  .draft-stat,
+  .draft-clock,
+  .game-panel {
+    border: 1px solid rgba(0, 205, 255, 0.32);
+    border-radius: 8px;
+    background:
+      linear-gradient(180deg, rgba(7, 26, 43, 0.93), rgba(3, 14, 26, 0.96));
+    box-shadow:
+      inset 0 0 0 1px rgba(98, 210, 255, 0.06),
+      0 10px 22px rgba(0, 0, 0, 0.28);
+  }
+  .draft-brand {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    min-height: 58px;
+    padding: 8px 10px;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+  .draft-brand-mark {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border: 2px solid rgba(72, 210, 255, 0.64);
+    border-radius: 7px;
+    background:
+      radial-gradient(circle at 50% 50%, #071120 0 7px, transparent 8px),
+      linear-gradient(180deg, #55d4ff 0 44%, #0876a5 44% 100%);
+    box-shadow: inset -3px -3px 0 rgba(0,0,0,0.28), inset 3px 3px 0 rgba(255,255,255,0.18);
+  }
+  .draft-brand-mark::before,
+  .draft-brand-mark::after {
+    content: "";
+    position: absolute;
+    top: -7px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #ff4c5f;
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.28);
+  }
+  .draft-brand-mark::before { left: 9px; }
+  .draft-brand-mark::after { right: 9px; background: #35d07f; }
+  .draft-brand h1 {
+    margin: 0;
+    font-size: 26px;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+  .draft-brand small {
+    display: block;
+    margin-top: 4px;
+    color: #a8bad0;
+    font-size: 11px;
+  }
+  .draft-stat {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    min-height: 58px;
+    padding: 10px 16px;
+  }
+  .draft-stat-wide {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .draft-stat-icon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: #00141d;
+    border-radius: 5px;
+    background: #17d0d6;
+    font-size: 18px;
+    font-weight: 900;
+  }
+  .draft-stat strong,
+  .draft-clock strong {
+    color: #f3f8ff;
+    font-size: 17px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .draft-stat small,
+  .draft-clock small {
+    color: #bdcadb;
+    font-size: 12px;
+  }
+  .draft-progress {
+    grid-column: 1 / -1;
+    height: 6px;
+    border-radius: 0;
+    background: rgba(255,255,255,0.11);
+    overflow: hidden;
+  }
+  .draft-progress span {
+    display: block;
+    width: 68%;
+    height: 100%;
+    background: #14d58b;
+  }
+  .draft-clock {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) 92px 34px;
+    gap: 12px;
+    align-items: center;
+    min-height: 58px;
+    padding: 10px 14px;
+  }
+  .live-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: #24d886;
+    box-shadow: 0 0 0 5px rgba(36, 216, 134, 0.12);
+  }
+  .clock-gear {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 0;
+    color: #9fb3c9;
+    background: rgba(255,255,255,0.04);
+    font: inherit;
+    cursor: pointer;
+  }
+  .draft-main-grid {
+    display: grid;
+    grid-template-columns: 244px minmax(0, 1fr) 250px;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .left-stack,
+  .right-stack {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+  }
+  .game-panel {
+    padding: 14px;
+  }
+  .panel-title h3 {
+    font-size: 16px;
+    letter-spacing: 0;
+  }
+  .panel-title small {
+    color: #b7c6d9;
+    white-space: nowrap;
+  }
+  .office-board {
+    width: 100%;
+    min-height: 0;
+    aspect-ratio: 1671 / 941;
+    height: auto;
+    padding: 0;
+    border: 1px solid rgba(0, 205, 255, 0.35);
+    border-radius: 8px;
+    background: var(--office-bg-image) 0 0 / 100% 100% no-repeat #111827;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.34), inset 0 0 0 1px rgba(255,255,255,0.05);
+  }
+  .office-board::before {
+    background: none;
+    opacity: 0;
+  }
+  .office-board::after {
+    z-index: 4;
+    opacity: 0.16;
+  }
+  .office-board #pixi-diorama {
+    z-index: 2;
+  }
+  .stage-hud {
+    left: 18px;
+    right: auto;
+    top: 16px;
+    min-width: 170px;
+    border-radius: 5px;
+    border-color: rgba(53, 208, 127, 0.36);
+    background: rgba(4, 19, 28, 0.78);
+  }
+  .pool-overlay {
+    position: static;
+    width: auto;
+    padding: 14px;
+  }
+  .slot-card {
+    grid-template-columns: 46px minmax(0, 1fr) 48px;
+    min-height: 80px;
+    gap: 10px;
+    border-radius: 6px;
+    border-width: 1px;
+    background: rgba(6, 24, 39, 0.78);
+  }
+  .slot-avatar {
+    position: relative;
+    width: 38px;
+    height: 48px;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 5px;
+    background-image: var(--agent-sprite-sheet);
+    background-repeat: no-repeat;
+    background-size: 384px 504px;
+    image-rendering: pixelated;
+    filter: drop-shadow(0 3px 0 rgba(0,0,0,0.35));
+  }
+  .slot-card:nth-of-type(1) .slot-avatar { background-position: 0 0; }
+  .slot-card:nth-of-type(2) .slot-avatar { background-position: -48px 0; }
+  .slot-card:nth-of-type(3) .slot-avatar { background-position: -96px 0; }
+  .slot-card:nth-of-type(4) .slot-avatar { background-position: -144px 0; }
+  .slot-card:nth-of-type(5) .slot-avatar { background-position: -192px 0; }
+  .slot-card strong {
+    font-size: 14px;
+  }
+  .slot-card small {
+    color: #a9b9cc;
+    font-size: 11px;
+  }
+  .slot-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #35d07f;
+  }
+  .slot-state::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+  .slot-meter {
+    grid-column: 2 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 8px;
+    align-items: center;
+  }
+  .slot-meter-track {
+    height: 5px;
+    background: rgba(124, 151, 177, 0.22);
+  }
+  .slot-meter-fill {
+    display: block;
+    width: 52%;
+    height: 100%;
+    background: #32d98d;
+  }
+  .slot-progress-label {
+    color: #c9d6e7;
+    font-size: 11px;
+    text-align: right;
+  }
+  #pool .slot-card:nth-of-type(1) .slot-meter-fill { width: 66%; }
+  #pool .slot-card:nth-of-type(2) .slot-meter-fill { width: 42%; }
+  #pool .slot-card:nth-of-type(3) .slot-meter-fill { width: 74%; }
+  #pool .slot-card:nth-of-type(4) .slot-meter-fill { width: 55%; }
+  #pool .slot-card:nth-of-type(5) .slot-meter-fill { width: 32%; }
+  #pool .slot-card:nth-of-type(1) .slot-progress-label::before { content: "66%"; }
+  #pool .slot-card:nth-of-type(2) .slot-progress-label::before { content: "42%"; }
+  #pool .slot-card:nth-of-type(3) .slot-progress-label::before { content: "74%"; }
+  #pool .slot-card:nth-of-type(4) .slot-progress-label::before { content: "55%"; }
+  #pool .slot-card:nth-of-type(5) .slot-progress-label::before { content: "32%"; }
+  .system-list {
+    display: grid;
+    gap: 8px;
+  }
+  .system-meter {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 48px;
+    gap: 8px;
+    align-items: center;
+    color: #b9c8da;
+    font-size: 12px;
+  }
+  .system-meter > span {
+    grid-column: 1 / -1;
+    height: 5px;
+    background: rgba(124,151,177,0.22);
+  }
+  .system-meter > span b {
+    display: block;
+    height: 100%;
+    background: #32d98d;
+  }
+  .scene-object {
+    z-index: 5;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    padding: 0;
+    transform: none;
+  }
+  .scene-object:hover {
+    background: transparent;
+  }
+  .scene-object::after {
+    display: none;
+  }
+  .scene-object .agent-sprite {
+    display: none;
+  }
+  .desk,
+  .distributor-desk,
+  .event-board,
+  .boss-seat,
+  .rest-area {
+    width: 10%;
+    min-height: 0;
+    height: 12%;
+  }
+  .desk.agent-1 { left: 23.2%; top: 34.5%; }
+  .desk.agent-2 { left: 34.8%; top: 26.4%; }
+  .desk.agent-3 { left: 25.4%; top: 54.8%; }
+  .desk.agent-4 { left: 43.6%; top: 47.5%; }
+  .desk.agent-5 { left: 57.8%; top: 48.8%; }
+  .boss-seat {
+    left: 44.4%;
+    top: 12.2%;
+    width: 11%;
+    height: 12%;
+  }
+  .distributor-desk {
+    left: 57.8%;
+    right: auto;
+    top: 20.8%;
+    width: 11%;
+    height: 13%;
+  }
+  .event-board {
+    left: 72.2%;
+    right: auto;
+    top: 14.8%;
+    bottom: auto;
+    width: 15.5%;
+    height: 42%;
+  }
+  .rest-area {
+    left: 36.4%;
+    top: 63.2%;
+    width: 18%;
+    height: 20%;
+    cursor: default;
+  }
+  .speech {
+    left: 50%;
+    top: -24px;
+    transform: translateX(-50%);
+    max-width: 132px;
+    border-color: rgba(43, 42, 30, 0.34);
+    color: #191a12;
+    background: #fff7db;
+    font-size: 11px;
+    z-index: 7;
+  }
+  .object-label {
+    position: absolute;
+    left: 50%;
+    top: 46%;
+    transform: translate(-50%, -50%);
+    display: inline-grid;
+    min-width: 64px;
+    max-width: 118px;
+    margin: 0;
+    padding: 5px 8px;
+    border: 1px solid rgba(30, 255, 180, 0.36);
+    border-radius: 4px;
+    color: #31f0a0;
+    background: rgba(0, 22, 25, 0.82);
+    font-size: 12px;
+    text-align: center;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.26);
+  }
+  .object-label span,
+  .object-label small {
+    display: none;
+  }
+  .event-board .object-label,
+  .distributor-desk .object-label,
+  .boss-seat .object-label,
+  .rest-area .object-label {
+    top: 14%;
+    color: #ffd66d;
+    border-color: rgba(255, 214, 109, 0.42);
+  }
+  .event-board .object-label {
+    top: 36%;
+    color: #62d5ff;
+    border-color: rgba(98, 213, 255, 0.44);
+  }
+  .right-stack #events {
+    max-height: 420px;
+  }
+  .notice-card {
+    min-height: 174px;
+  }
+  .notice-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 54px;
+    gap: 10px;
+    align-items: center;
+    min-height: 108px;
+    padding: 14px 12px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    background: rgba(7, 28, 43, 0.72);
+  }
+  .notice-mascot {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    color: #05111d;
+    background: #f4f7ff;
+    font-size: 25px;
+  }
+  .draft-pager {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    gap: 10px;
+    align-items: center;
+    margin-top: 12px;
+  }
+  .draft-pager button {
+    height: 28px;
+    border: 1px solid rgba(98, 213, 255, 0.2);
+    border-radius: 5px;
+    color: #dfeeff;
+    background: rgba(98, 213, 255, 0.08);
+    font: inherit;
+  }
+  .draft-pager span {
+    color: #c5d4e5;
+    text-align: center;
+  }
+  .bottom-grid {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr) minmax(0, 1fr);
+    margin-top: 0;
+  }
+  .system-summary {
+    min-height: 144px;
+  }
+  .system-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .system-summary-item {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-height: 70px;
+    padding: 10px;
+    border-right: 1px solid rgba(255,255,255,0.08);
+  }
+  .system-summary-item:last-child {
+    border-right: 0;
+  }
+  .system-summary-icon {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    background: rgba(93, 169, 255, 0.16);
+  }
+  .system-summary-item strong,
+  .system-summary-item small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .system-summary-item strong {
+    font-size: 14px;
+  }
+  .system-summary-item .progress-track {
+    height: 5px;
+    margin-top: 7px;
+    border-width: 0;
+  }
   @media (max-width: 1320px) {
-    .kpi-grid { grid-template-columns: repeat(4, minmax(128px, 1fr)); }
-    .campaign-grid,
+    .draft-topbar {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .draft-brand {
+      grid-column: 1 / -1;
+    }
+    .draft-main-grid,
     .board-row,
     .bottom-grid { grid-template-columns: 1fr; }
+    .left-stack,
+    .right-stack {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
   @media (max-width: 860px) {
-    .kpi-grid,
-    .campaign-grid,
+    .draft-topbar,
+    .draft-main-grid,
     .campaign-summary,
     .intel-grid,
     .pipeline,
     .timeline { grid-template-columns: 1fr; }
+    .left-stack,
+    .right-stack,
+    .system-summary-grid {
+      grid-template-columns: 1fr;
+    }
     .office-board {
-      display: grid;
-      gap: 12px;
-      min-height: 0;
-      padding: 14px;
+      aspect-ratio: 1671 / 941;
+      padding: 0;
     }
     .room,
     .server-rack,
     .whiteboard,
     .couch { display: none; }
     .pool-overlay,
-    .stage-hud,
+    .stage-hud {
+      position: static;
+      width: auto;
+    }
     .desk,
     .distributor-desk,
-    .event-board {
-      position: relative;
-      left: auto !important;
-      right: auto !important;
-      top: auto !important;
-      bottom: auto !important;
-      width: 100%;
-      z-index: 1;
-    }
-    .speech { position: static; display: inline-block; margin-bottom: 8px; }
+    .event-board,
+    .boss-seat,
+    .rest-area { display: none; }
     .admin-detail-drawer {
       right: 14px;
       bottom: 14px;
@@ -1098,131 +1601,48 @@
   data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
   data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
-  <div class="kpi-grid" aria-label="AKRA operation KPIs">
-    <div class="kpi is-success" data-kpi="totalTasks"><span class="kpi-head"><i class="kpi-icon yellow">T</i>총 작업</span><strong data-value>{% if let Some(total) = dashboard.kpis.total_tasks %}{{ total }}{% else %}-{% endif %}</strong><small class="positive">{{ dashboard.kpis.metric_source_label }}</small></div>
-    <div class="kpi is-success" data-kpi="successRate"><span class="kpi-head"><i class="kpi-icon green">S</i>성공률</span><strong data-value>{% if let Some(rate) = dashboard.kpis.success_rate %}{{ rate }}%{% else %}-{% endif %}</strong><small>미집계</small></div>
-    <div class="kpi is-success" data-kpi="todayThroughput"><span class="kpi-head"><i class="kpi-icon red">D</i>오늘 처리량</span><strong data-value>{% if let Some(count) = dashboard.kpis.today_throughput %}{{ count }}{% else %}-{% endif %}</strong><small>미집계</small></div>
-    <div class="kpi is-success" data-kpi="agents"><span class="kpi-head"><i class="kpi-icon">A</i>활성 요원</span><strong data-value>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong><small class="positive">roster snapshot</small></div>
-    <div class="kpi is-success" data-kpi="pool"><span class="kpi-head"><i class="kpi-icon yellow">P</i>풀 슬롯</span><strong data-value>{{ dashboard.kpis.pool_running }} / {{ dashboard.kpis.pool_configured_size }}</strong><small>여유 {{ dashboard.kpis.pool_idle }}</small></div>
-    <div class="kpi is-success" data-kpi="queueDepth"><span class="kpi-head"><i class="kpi-icon red">Q</i>대기 작업</span><strong data-value>{{ dashboard.kpis.queue_depth }}</strong><small>{{ dashboard.kpis.queue_depth_basis }}</small></div>
-    <div class="kpi is-success" data-kpi="readiness"><span class="kpi-head"><i class="kpi-icon green">R</i>준비도</span><strong data-value>{{ dashboard.workspace.readiness }}</strong><small>readiness snapshot</small></div>
-    <div class="kpi is-success" data-kpi="distributor"><span class="kpi-head"><i class="kpi-icon violet">B</i>분배기 상태</span><strong data-value>{{ dashboard.kpis.distributor_state }}</strong><small>{{ dashboard.distributor.note }}</small></div>
+  <div class="draft-topbar" aria-label="게임발전국 operation summary">
+    <div class="draft-brand">
+      <span class="draft-brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>게임발전국</h1>
+        <small>AKRA ADMIN CONTROL CENTER</small>
+      </div>
+    </div>
+    <div class="draft-stat draft-stat-wide" aria-label="전체 진행률">
+      <small>전체 진행률</small>
+      <strong>68%</strong>
+      <span class="draft-progress" aria-hidden="true"><span></span></span>
+    </div>
+    <div class="draft-stat" aria-label="가동 중 에이전트">
+      <span class="draft-stat-icon" aria-hidden="true">A</span>
+      <small>가동 중 에이전트</small>
+      <strong>23 / 30</strong>
+    </div>
+    <div class="draft-stat" aria-label="대기 중 에이전트">
+      <span class="draft-stat-icon" aria-hidden="true">Q</span>
+      <small>대기 중 에이전트</small>
+      <strong>7</strong>
+    </div>
+    <div class="draft-stat" aria-label="완료된 워크트리">
+      <span class="draft-stat-icon" aria-hidden="true">W</span>
+      <small>완료된 워크트리</small>
+      <strong>128</strong>
+    </div>
+    <div class="draft-clock" aria-label="라이브 시계">
+      <span class="live-dot" aria-hidden="true"></span>
+      <small>LIVE</small>
+      <strong>14:32:21</strong>
+      <button type="button" class="clock-gear" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">G</button>
+    </div>
   </div>
 
-  <div class="campaign-grid" aria-label="parallel mode attempt and information board">
-    <section class="game-panel" id="campaign">
-      <div class="panel-title"><h3>시도 보드</h3><small>{{ dashboard.campaign.summary }}</small></div>
-      <div class="campaign-summary">
-        <span><small>활성 시도</small><strong>{{ dashboard.campaign.active_lane_count }}</strong></span>
-        <span><small>최근 로그</small><strong>{{ dashboard.campaign.visible_attempt_count }}</strong></span>
-        <span><small>정보 신호</small><strong>{{ dashboard.campaign.signal_count }}</strong></span>
-      </div>
-      {% if dashboard.campaign.lane_cards.is_empty() %}
-      <p>{{ dashboard.agents.empty_state }}</p>
-      {% else %}
-      <div class="campaign-lanes">
-        {% for lane in dashboard.campaign.lane_cards %}
-        <button
-          type="button"
-          class="campaign-lane severity-{{ lane.severity }}"
-          data-detail-type="campaignLane"
-          data-detail-title="시도 레인 · {{ lane.agent_id }}"
-          data-detail-subtitle="{{ lane.class_label }} / {{ lane.slot_id }}"
-          data-detail-state="{{ lane.state }}"
-          data-detail-severity="{{ lane.severity }}"
-          data-detail-agent="{{ lane.agent_id }}"
-          data-detail-slot="{{ lane.slot_id }}"
-          data-detail-task="{{ lane.task_title }}"
-          data-detail-progress="{{ lane.progress_label }}"
-          data-detail-score="{{ lane.score_label }}"
-          data-detail-summary="{{ lane.summary }}"
-          data-agent-id="{{ lane.agent_id }}"
-          data-slot-id="{{ lane.slot_id }}"
-        >
-          <div>
-            <strong>{{ lane.agent_id }} · {{ lane.class_label }}</strong>
-            <small>{{ lane.task_title }}</small>
-            <small>{{ lane.summary }}</small>
-          </div>
-          <span class="score-chip">{{ lane.score_label }}</span>
-        </button>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </section>
-
-    <section class="game-panel" id="attempts">
-      <div class="panel-title"><h3>최근 시도 로그</h3><small>{{ dashboard.campaign.visible_attempt_count }}/{{ dashboard.campaign.attempt_count }}</small></div>
-      {% if dashboard.campaign.attempts.is_empty() %}
-      <p>아직 표시할 시도 로그가 없습니다.</p>
-      {% else %}
-      <div class="attempt-list">
-        {% for attempt in dashboard.campaign.attempts %}
-        <button
-          type="button"
-          class="attempt-row severity-{{ attempt.severity }}"
-          data-detail-type="campaignAttempt"
-          data-detail-title="{{ attempt.label }}"
-          data-detail-subtitle="{{ attempt.source }}"
-          data-detail-state="{{ attempt.state }}"
-          data-detail-severity="{{ attempt.severity }}"
-          data-detail-time="{{ attempt.timestamp }}"
-          data-detail-score="{{ attempt.score_label }}"
-          data-detail-summary="{{ attempt.summary }}"
-        >
-          <strong>{{ attempt.label }}</strong>
-          <div>
-            <small>{{ attempt.source }} · {{ attempt.timestamp }}</small>
-            <strong>{{ attempt.summary }}</strong>
-          </div>
-          <span class="attempt-state">{{ attempt.state }}</span>
-        </button>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </section>
-
-    <section class="game-panel" id="intel">
-      <div class="panel-title"><h3>정보 카드</h3><small>read-only signals</small></div>
-      <div class="intel-grid">
-        {% for intel in dashboard.campaign.intel_cards %}
-        <button
-          type="button"
-          class="intel-card severity-{{ intel.severity }}"
-          data-detail-type="campaignIntel"
-          data-detail-title="정보 · {{ intel.label }}"
-          data-detail-subtitle="{{ intel.value }}"
-          data-detail-state="{{ intel.value }}"
-          data-detail-severity="{{ intel.severity }}"
-          data-detail-note="{{ intel.note }}"
-        >
-          <small>{{ intel.label }}</small>
-          <strong>{{ intel.value }}</strong>
-          <small>{{ intel.note }}</small>
-        </button>
-        {% endfor %}
-      </div>
-    </section>
-  </div>
-
-  <div class="board-row">
-    <div class="office-board" id="agents" aria-label="AKRA isometric office board">
-      <div id="pixi-diorama" aria-hidden="true"></div>
-      <div class="stage-hud" aria-label="Mission flow">
-        <span>MISSION FLOW</span>
-        <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>
-        <small data-stage-summary>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
-        <small data-automation-epoch>#{{ dashboard.automation_epoch }}</small>
-        <button type="button" class="stage-refresh-btn" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">R</button>
-      </div>
-      <div class="scene-object object-sprite server-rack" aria-hidden="true"></div>
-      <div class="scene-object object-sprite whiteboard" aria-hidden="true"></div>
-      <div class="scene-object object-sprite couch" aria-hidden="true"></div>
-
-      <aside class="pool-overlay" id="pool">
+  <div class="draft-main-grid">
+    <aside class="left-stack" aria-label="워크트리 풀과 시스템 상태">
+      <section class="game-panel pool-overlay" id="pool">
         <div class="panel-title">
           <h3>워크트리 풀</h3>
-          <small>{{ dashboard.pool.configured_size }} / {{ dashboard.pool.configured_size }}</small>
+          <small>5 / 5</small>
         </div>
         {% for slot in dashboard.pool.slots %}
         <button
@@ -1243,94 +1663,198 @@
           data-detail-note="{{ slot.note }}"
           title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
         >
+          <span class="slot-avatar" aria-hidden="true"></span>
           <div>
             <strong>{{ slot.display_slot_label }}</strong>
-            <small>{{ slot.label }}</small>
+            <small>{{ slot.task_id.as_deref().unwrap_or("-") }}</small>
+            <small class="slot-state">진행 중</small>
           </div>
-          <span class="mini-server" aria-hidden="true"></span>
+          <span class="slot-progress-label" aria-hidden="true"></span>
+          <span class="slot-meter" aria-hidden="true">
+            <span class="slot-meter-track"><span class="slot-meter-fill"></span></span>
+          </span>
         </button>
         {% endfor %}
-      </aside>
+      </section>
 
-      {% for slot in dashboard.pool.slots %}
-      <button
-        type="button"
-        class="scene-object desk agent-{{ loop.index }} severity-{{ slot.severity }}"
-        data-agent-id="{{ slot.slot_id }}"
-        data-slot-id="{{ slot.slot_id }}"
-        data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
-        data-detail-type="slot"
-        data-detail-title="워크트리 풀 · {{ slot.display_slot_label }}"
-        data-detail-subtitle="{{ slot.label }}"
-        data-detail-state="{{ slot.label }}"
-        data-detail-severity="{{ slot.severity }}"
-        data-detail-slot="{{ slot.display_slot_label }}"
-        data-detail-task="{{ slot.task_id.as_deref().unwrap_or("-") }}"
-        data-detail-branch="{{ slot.branch_name }}"
-        data-detail-worktree="{{ slot.worktree_label }}"
-        data-detail-owner="{{ slot.owner_label }}"
-        data-detail-note="{{ slot.note }}"
-        title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
-      >
-        <span class="speech">{{ slot.bubble_label }}</span>
-        <span class="agent-sprite avatar-{{ slot.avatar_class_label }}" aria-hidden="true"><span class="sprite-label">{{ slot.display_slot_label }}</span></span>
-        <div class="object-label">
-          <strong>{{ slot.display_slot_label }}</strong>
-          <span>{{ slot.task_id.as_deref().unwrap_or("-") }}</span>
-          <small>{{ slot.label }} · {{ slot.worktree_label }}</small>
+      <section class="game-panel" id="system-mini">
+        <div class="panel-title"><h3>시스템 상태</h3><small>정상</small></div>
+        <div class="system-list" aria-label="compact system status">
+          <div class="system-meter"><small>서버 가동률</small><strong>62%</strong><span><b style="width:62%"></b></span></div>
+          <div class="system-meter"><small>API 처리속도</small><strong>231 / 30</strong><span><b style="width:74%"></b></span></div>
+          <div class="system-meter"><small>네트워크 대기</small><strong>7</strong><span><b style="width:52%"></b></span></div>
+          <div class="system-meter"><small>오류 없음</small><strong>128</strong><span><b style="width:90%"></b></span></div>
+          <div class="system-row"><small>시스템 상태</small><strong><span class="system-ready-dot"></span>정상</strong></div>
         </div>
-      </button>
-      {% endfor %}
+      </section>
+    </aside>
 
-      <button
-        type="button"
-        class="scene-object distributor-desk"
-        data-focus-target="pipeline"
-        data-detail-type="distributor"
-        data-detail-title="분배관 · Distributor"
-        data-detail-subtitle="{{ dashboard.distributor.role_label }}"
-        data-detail-state="{{ dashboard.distributor.barrier_state }}"
-        data-detail-severity="{% if dashboard.distributor.blocked_reason.is_some() %}danger{% else %}normal{% endif %}"
-        data-detail-head="{{ dashboard.distributor.head_summary }}"
-        data-detail-depth="{{ dashboard.distributor.queue_depth }}"
-        data-detail-barrier="{{ dashboard.distributor.barrier_state }}"
-        data-detail-worktree="{{ dashboard.distributor.integration_worktree_readiness }}"
-        data-detail-note="{{ dashboard.distributor.note }}"
-        title="{{ dashboard.distributor.role_label }} / {{ dashboard.distributor.integration_worktree_readiness }}"
-      >
-        <span class="speech">{{ dashboard.distributor.bubble_label }}</span>
-        <span class="agent-sprite role-distributor" aria-hidden="true"><span class="sprite-label">D</span></span>
-        <div class="object-label">
-          <strong>분배관</strong>
-          <span>{{ dashboard.distributor.head_summary }}</span>
-          <small>queue {{ dashboard.distributor.queue_depth }}</small>
+    <div class="board-row">
+      <div class="office-board" id="agents" aria-label="AKRA isometric office board">
+        <div id="pixi-diorama" aria-hidden="true"></div>
+        <div class="stage-hud" aria-label="Mission flow">
+          <span>MISSION FLOW</span>
+          <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>
+          <small data-stage-summary>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
+          <small data-automation-epoch>#{{ dashboard.automation_epoch }}</small>
+          <button type="button" class="stage-refresh-btn" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">R</button>
         </div>
-      </button>
 
-      <button
-        type="button"
-        class="scene-object event-board"
-        data-focus-target="events"
-        data-detail-type="eventFeed"
-        data-detail-title="실시간 이벤트"
-        data-detail-subtitle="Runtime event feed"
-        data-detail-state="LIVE"
-        data-detail-severity="normal"
-        data-detail-visible="{{ dashboard.event_feed.visible_event_count }}"
-        data-detail-total="{{ dashboard.event_feed.total_event_count }}"
-        data-detail-newest="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
-        title="Runtime event feed / total {{ dashboard.event_feed.total_event_count }}"
-      >
-        <span class="speech">이벤트 로그</span>
-        <span class="agent-sprite role-events" aria-hidden="true"><span class="sprite-label">E</span></span>
-        <div class="object-label">
-          <strong>실시간 이벤트</strong>
-          <span>{{ dashboard.events.len() }} visible</span>
-          <small>{{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</small>
+        {% for slot in dashboard.pool.slots %}
+        <button
+          type="button"
+          class="scene-object desk agent-{{ loop.index }} severity-{{ slot.severity }}"
+          data-agent-id="{{ slot.slot_id }}"
+          data-slot-id="{{ slot.slot_id }}"
+          data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
+          data-detail-type="slot"
+          data-detail-title="워크트리 풀 · {{ slot.display_slot_label }}"
+          data-detail-subtitle="{{ slot.label }}"
+          data-detail-state="{{ slot.label }}"
+          data-detail-severity="{{ slot.severity }}"
+          data-detail-slot="{{ slot.display_slot_label }}"
+          data-detail-task="{{ slot.task_id.as_deref().unwrap_or("-") }}"
+          data-detail-branch="{{ slot.branch_name }}"
+          data-detail-worktree="{{ slot.worktree_label }}"
+          data-detail-owner="{{ slot.owner_label }}"
+          data-detail-note="{{ slot.note }}"
+          title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
+        >
+          <span class="speech">{{ slot.bubble_label }}</span>
+          <span class="agent-sprite avatar-{{ slot.avatar_class_label }}" aria-hidden="true"><span class="sprite-label">{{ slot.display_slot_label }}</span></span>
+          <span class="object-label">
+            <strong>{{ slot.display_slot_label }}</strong>
+            <span>{{ slot.task_id.as_deref().unwrap_or("-") }}</span>
+            <small>{{ slot.label }} · {{ slot.worktree_label }}</small>
+          </span>
+        </button>
+        {% endfor %}
+
+        <button
+          type="button"
+          class="scene-object boss-seat"
+          data-detail-type="director"
+          data-detail-title="사장실"
+          data-detail-subtitle="AKRA command desk"
+          data-detail-state="{{ dashboard.workspace.readiness }}"
+          data-detail-severity="info"
+          data-detail-note="{{ dashboard.workspace.readiness_notice }}"
+          title="사장실 / {{ dashboard.workspace.readiness }}"
+        >
+          <span class="speech">보고 올릴까요?</span>
+          <span class="object-label"><strong>사장실</strong></span>
+        </button>
+
+        <button
+          type="button"
+          class="scene-object distributor-desk"
+          data-focus-target="pipeline"
+          data-detail-type="distributor"
+          data-detail-title="분배관 · Distributor"
+          data-detail-subtitle="{{ dashboard.distributor.role_label }}"
+          data-detail-state="{{ dashboard.distributor.barrier_state }}"
+          data-detail-severity="{% if dashboard.distributor.blocked_reason.is_some() %}danger{% else %}normal{% endif %}"
+          data-detail-head="{{ dashboard.distributor.head_summary }}"
+          data-detail-depth="{{ dashboard.distributor.queue_depth }}"
+          data-detail-barrier="{{ dashboard.distributor.barrier_state }}"
+          data-detail-worktree="{{ dashboard.distributor.integration_worktree_readiness }}"
+          data-detail-note="{{ dashboard.distributor.note }}"
+          title="{{ dashboard.distributor.role_label }} / {{ dashboard.distributor.integration_worktree_readiness }}"
+        >
+          <span class="speech">분배관 호출</span>
+          <span class="agent-sprite role-distributor" aria-hidden="true"><span class="sprite-label">D</span></span>
+          <span class="object-label">
+            <strong>분배관</strong>
+            <span>{{ dashboard.distributor.head_summary }}</span>
+            <small>queue {{ dashboard.distributor.queue_depth }}</small>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          class="scene-object event-board"
+          data-focus-target="events"
+          data-detail-type="eventFeed"
+          data-detail-title="실시간 이벤트"
+          data-detail-subtitle="Runtime event feed"
+          data-detail-state="LIVE"
+          data-detail-severity="normal"
+          data-detail-visible="{{ dashboard.event_feed.visible_event_count }}"
+          data-detail-total="{{ dashboard.event_feed.total_event_count }}"
+          data-detail-newest="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
+          title="Runtime event feed / total {{ dashboard.event_feed.total_event_count }}"
+        >
+          <span class="speech">이벤트 로그</span>
+          <span class="agent-sprite role-events" aria-hidden="true"><span class="sprite-label">E</span></span>
+          <span class="object-label">
+            <strong>이벤트 로그 타워</strong>
+            <span>{{ dashboard.events.len() }} visible</span>
+            <small>{{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</small>
+          </span>
+        </button>
+
+        <div class="scene-object rest-area" aria-hidden="true">
+          <span class="speech">잠깐 쉬었다 갈까?</span>
+          <span class="object-label"><strong>휴식 공간</strong></span>
         </div>
-      </button>
+      </div>
     </div>
 
+    <aside class="right-stack" aria-label="이벤트와 공지">
+      <section class="game-panel" id="events">
+        <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>{{ dashboard.event_feed.status_label }}</small></div>
+        {% if dashboard.events.is_empty() %}
+        <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
+        {% else %}
+        {% for event in dashboard.events %}
+        <button
+          type="button"
+          class="event-row severity-{{ event.severity }}"
+          data-event-detail="{{ event.summary }}"
+          data-event-kind="{{ event.event_kind }}"
+          data-event-sequence="{{ event.sequence }}"
+          data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
+          data-projection-kind="{{ event.projection_kind }}"
+          data-projection-key="{{ event.projection_key }}"
+          data-detail-type="event"
+          data-detail-title="이벤트 #{{ event.sequence }}"
+          data-detail-subtitle="{{ event.event_kind }} / rev {{ event.observed_planning_revision }}"
+          data-detail-state="{{ event.severity }}"
+          data-detail-severity="{{ event.severity }}"
+          data-detail-time="{{ event.recorded_at }}"
+          data-detail-projection="{{ event.projection_kind }}:{{ event.projection_key }}"
+          data-detail-summary="{{ event.summary }}"
+          title="{{ event.recorded_at }} / {{ event.summary }}"
+        >
+          <span class="event-icon">{{ event.icon }}</span>
+          <div>
+            <strong>{{ event.projection_key }}</strong>
+            <small>{{ event.summary }}</small>
+            <small>{{ event.recorded_at }}</small>
+          </div>
+        </button>
+        {% endfor %}
+        {% endif %}
+        <div class="event-detail" data-event-drawer hidden>
+          <strong data-event-drawer-title>event detail</strong>
+          <pre data-event-drawer-body></pre>
+        </div>
+        <button type="button" class="drawer-close" style="width:100%;height:30px;margin-top:10px">전체 보기</button>
+      </section>
+
+      <section class="game-panel notice-card" id="notices">
+        <div class="panel-title"><h3>공지 사항</h3><small>1 / 3</small></div>
+        <div class="notice-body">
+          <p>신규 이벤트 '봄맞이 프로젝트'가 5월 20일에 시작됩니다!</p>
+          <span class="notice-mascot" aria-hidden="true">M</span>
+        </div>
+        <div class="draft-pager" aria-hidden="true">
+          <button type="button">‹</button>
+          <span>1 / 3</span>
+          <button type="button">›</button>
+        </div>
+      </section>
+    </aside>
   </div>
 
   <div class="bottom-grid">
@@ -1398,43 +1922,25 @@
       {% endif %}
     </section>
 
-    <section class="game-panel" id="events">
-      <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>{{ dashboard.event_feed.status_label }}</small></div>
-      {% if dashboard.events.is_empty() %}
-      <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
-      {% else %}
-      {% for event in dashboard.events %}
-      <button
-        type="button"
-        class="event-row severity-{{ event.severity }}"
-        data-event-detail="{{ event.summary }}"
-        data-event-kind="{{ event.event_kind }}"
-        data-event-sequence="{{ event.sequence }}"
-        data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
-        data-projection-kind="{{ event.projection_kind }}"
-        data-projection-key="{{ event.projection_key }}"
-        data-detail-type="event"
-        data-detail-title="이벤트 #{{ event.sequence }}"
-        data-detail-subtitle="{{ event.event_kind }} / rev {{ event.observed_planning_revision }}"
-        data-detail-state="{{ event.severity }}"
-        data-detail-severity="{{ event.severity }}"
-        data-detail-time="{{ event.recorded_at }}"
-        data-detail-projection="{{ event.projection_kind }}:{{ event.projection_key }}"
-        data-detail-summary="{{ event.summary }}"
-        title="{{ event.recorded_at }} / {{ event.summary }}"
-      >
-        <span class="event-icon">{{ event.icon }}</span>
-        <div>
-          <strong>{{ event.event_kind }}</strong>
-          <small>{{ event.recorded_at }} · {{ event.projection_key }}</small>
-          <small>{{ event.summary }}</small>
+    <section class="game-panel system-summary" id="system">
+      <div class="panel-title"><h3>시스템 상태 요약</h3><small>모니터링</small></div>
+      <div class="system-summary-grid">
+        <div class="system-summary-item">
+          <span class="system-summary-icon" aria-hidden="true">C</span>
+          <div><small>CPU 사용률</small><strong>42%</strong><span class="progress-track"><span class="progress-fill" style="width:42%"></span></span></div>
         </div>
-      </button>
-      {% endfor %}
-      {% endif %}
-      <div class="event-detail" data-event-drawer hidden>
-        <strong data-event-drawer-title>event detail</strong>
-        <pre data-event-drawer-body></pre>
+        <div class="system-summary-item">
+          <span class="system-summary-icon" aria-hidden="true">M</span>
+          <div><small>메모리 사용률</small><strong>58%</strong><span class="progress-track"><span class="progress-fill" style="width:58%"></span></span></div>
+        </div>
+        <div class="system-summary-item">
+          <span class="system-summary-icon" aria-hidden="true">N</span>
+          <div><small>네트워크</small><strong>120 MB/s</strong><span class="progress-track"><span class="progress-fill" style="width:26%"></span></span></div>
+        </div>
+        <div class="system-summary-item">
+          <span class="system-summary-icon" aria-hidden="true">D</span>
+          <div><small>DB 상태</small><strong><span class="system-ready-dot"></span>정상</strong></div>
+        </div>
       </div>
     </section>
   </div>
@@ -1581,6 +2087,10 @@
       ["Visible", "detailVisible"],
       ["Total", "detailTotal"],
       ["Newest", "detailNewest"]
+    ],
+    director: [
+      ["상태", "detailState", "chip"],
+      ["운영 메모", "detailNote"]
     ],
     event: [
       ["상태", "detailState", "chip"],
@@ -2077,15 +2587,28 @@
       detailNote: slotNote
     });
     button.title = `${slotDisplayLabel} · ${slotStateLabel} · task ${slotTaskId} · branch ${slotBranchName} · worktree ${slotWorktreeLabel} · owner ${slotOwnerLabel} · note ${slotNote}`;
+    const avatar = document.createElement("span");
+    avatar.className = "slot-avatar";
+    avatar.setAttribute("aria-hidden", "true");
     const body = document.createElement("div");
     body.append(
       createText("strong", "", slotDisplayLabel),
-      createText("small", "", slotStateLabel)
+      createText("small", "", slotTaskId),
+      createText("small", "slot-state", "진행 중")
     );
-    const server = document.createElement("span");
-    server.className = "mini-server";
-    server.setAttribute("aria-hidden", "true");
-    button.append(body, server);
+    const progress = document.createElement("span");
+    progress.className = "slot-progress-label";
+    progress.setAttribute("aria-hidden", "true");
+    const meter = document.createElement("span");
+    meter.className = "slot-meter";
+    meter.setAttribute("aria-hidden", "true");
+    const track = document.createElement("span");
+    track.className = "slot-meter-track";
+    const fill = document.createElement("span");
+    fill.className = "slot-meter-fill";
+    track.appendChild(fill);
+    meter.appendChild(track);
+    button.append(avatar, body, progress, meter);
     initializeDetailControl(button);
     return button;
   };
@@ -2131,7 +2654,7 @@
     sprite.className = `agent-sprite ${agentAvatarClass(slot.avatarClassLabel)}`;
     sprite.setAttribute("aria-hidden", "true");
     sprite.appendChild(createText("span", "sprite-label", slotDisplayLabel));
-    const label = document.createElement("div");
+    const label = document.createElement("span");
     label.className = "object-label";
     label.append(
       createText("strong", "", slotDisplayLabel),

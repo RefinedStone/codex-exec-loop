@@ -111,6 +111,21 @@ interface AgentSpeechBubble {
   label: PixiText;
 }
 
+interface StructureSpec {
+  key: AssetKey;
+  x: number;
+  y: number;
+  scale: number;
+  anchorX?: number;
+  anchorY?: number;
+  zOffset?: number;
+}
+
+interface StructureSprite {
+  spec: StructureSpec;
+  sprite: PixiSprite;
+}
+
 interface RoamSnapshot {
   point: Point;
   destination: Point;
@@ -144,6 +159,48 @@ const AGENT_SPEECH_BUBBLE_MAX_WIDTH = 116;
 const AGENT_SPEECH_BUBBLE_MIN_WIDTH = 54;
 const AGENT_SPEECH_BUBBLE_TAIL_HEIGHT = 7;
 const AGENT_SPEECH_BUBBLE_HEAD_GAP = 8;
+const MAP_WIDTH = 1671;
+const MAP_HEIGHT = 941;
+
+const SLOT_SEATS: Point[] = [
+  { x: 450, y: 420 },
+  { x: 640, y: 345 },
+  { x: 500, y: 615 },
+  { x: 760, y: 565 },
+  { x: 1030, y: 570 },
+];
+
+const ROAM_POINTS: Point[] = [
+  { x: 535, y: 470 },
+  { x: 700, y: 485 },
+  { x: 880, y: 575 },
+  { x: 1065, y: 530 },
+  { x: 905, y: 660 },
+  { x: 630, y: 665 },
+  { x: 1130, y: 395 },
+  { x: 790, y: 370 },
+];
+
+const TARGET_POINTS: Record<TargetKind, Point> = {
+  distributor: { x: 1060, y: 300 },
+  events: { x: 1330, y: 390 },
+};
+
+const STRUCTURE_SPECS: StructureSpec[] = [
+  { key: "whiteboard", x: 530, y: 190, scale: 0.2, anchorX: 0.5, anchorY: 1 },
+  { key: "desk", x: 480, y: 405, scale: 0.24 },
+  { key: "desk", x: 670, y: 330, scale: 0.24 },
+  { key: "desk", x: 515, y: 600, scale: 0.24 },
+  { key: "desk", x: 790, y: 550, scale: 0.24 },
+  { key: "desk", x: 1055, y: 555, scale: 0.24 },
+  { key: "desk", x: 845, y: 245, scale: 0.3 },
+  { key: "desk", x: 1050, y: 295, scale: 0.25 },
+  { key: "server", x: 1325, y: 430, scale: 0.34 },
+  { key: "sofa", x: 780, y: 760, scale: 0.28 },
+  { key: "plant", x: 615, y: 505, scale: 0.1 },
+  { key: "plant", x: 925, y: 485, scale: 0.1 },
+  { key: "plant", x: 1185, y: 620, scale: 0.1 },
+];
 
 declare const PIXI: {
   Application: new (options: Record<string, unknown>) => PixiApplication;
@@ -213,11 +270,13 @@ declare global {
     };
 
     const root = boardEl.closest<HTMLElement>("[data-admin-graphic]");
+    const structureLayer = new PIXI.Container();
     const pathLayer = new PIXI.Graphics();
     const packetLayer = new PIXI.Container();
     const agentLayer = new PIXI.Container();
+    structureLayer.sortableChildren = true;
     agentLayer.sortableChildren = true;
-    app.stage.addChild(pathLayer, packetLayer, agentLayer);
+    app.stage.addChild(structureLayer, agentLayer, pathLayer, packetLayer);
 
     const statusPalette: Record<StatusSeverity, number> = {
       normal: 0x35d07f,
@@ -231,6 +290,7 @@ declare global {
     let textures: Partial<Record<AssetKey, PixiTexture>> = {};
     let agentFrameSets: AgentFrameSet[] = [];
     let agentUnits: AgentUnit[] = [];
+    let structureSprites: StructureSprite[] = [];
     let roamSnapshots = new Map<string, RoamSnapshot>();
     let stageBurst = 0;
     let elapsed = 0;
@@ -242,21 +302,32 @@ declare global {
       height: boardEl.offsetHeight || initialHeight,
     });
 
-    const fallbackPoints = (): Point[] => {
+    const designToBoardPoint = (point: Point): Point => {
       const { width, height } = boardSize();
-      return [
-        { x: width * 0.35, y: height * 0.50 },
-        { x: width * 0.50, y: height * 0.65 },
-        { x: width * 0.28, y: height * 0.72 },
-        { x: width * 0.60, y: height * 0.52 },
-        { x: width * 0.43, y: height * 0.82 },
-      ];
+      return {
+        x: (point.x / MAP_WIDTH) * width,
+        y: (point.y / MAP_HEIGHT) * height,
+      };
     };
 
-    let targets: Record<TargetKind, Point> = {
-      distributor: { x: initialWidth * 0.80, y: initialHeight * 0.52 },
-      events: { x: initialWidth * 0.82, y: initialHeight * 0.76 },
+    const boardToDesignPoint = (point: Point): Point => {
+      const { width, height } = boardSize();
+      return {
+        x: width > 0 ? (point.x / width) * MAP_WIDTH : point.x,
+        y: height > 0 ? (point.y / height) * MAP_HEIGHT : point.y,
+      };
     };
+
+    const boardVisualScale = (): number => {
+      const { width, height } = boardSize();
+      return Math.min(width / MAP_WIDTH, height / MAP_HEIGHT) || 1;
+    };
+
+    const fallbackPoints = (): Point[] => {
+      return SLOT_SEATS;
+    };
+
+    let targets: Record<TargetKind, Point> = { ...TARGET_POINTS };
 
     const parseSeverity = (node: HTMLElement): StatusSeverity => {
       if (isStatusSeverity(node.dataset.detailSeverity)) return node.dataset.detailSeverity;
@@ -285,15 +356,11 @@ declare global {
     };
 
     const roamBounds = () => {
-      const { width, height } = boardSize();
-      const horizontalInset = Math.min(width * 0.5, Math.max(56, width * 0.08));
-      const topInset = Math.min(height * 0.5, Math.max(168, height * 0.24));
-      const bottomInset = Math.max(58, height * 0.08);
       return {
-        left: horizontalInset,
-        right: Math.max(horizontalInset, width - horizontalInset),
-        top: topInset,
-        bottom: Math.max(topInset, height - bottomInset),
+        left: 360,
+        right: 1185,
+        top: 285,
+        bottom: 700,
       };
     };
 
@@ -306,11 +373,11 @@ declare global {
     };
 
     const chooseRoamPoint = (index: number, routeIndex: number): Point => {
-      const bounds = roamBounds();
-      return {
-        x: lerp(bounds.left, bounds.right, seededRatio(index, routeIndex, 1)),
-        y: lerp(bounds.top, bounds.bottom, seededRatio(index, routeIndex, 2)),
-      };
+      const preferred = ROAM_POINTS[(index + routeIndex) % ROAM_POINTS.length];
+      return clampRoamPoint({
+        x: preferred.x + (seededRatio(index, routeIndex, 1) - 0.5) * 44,
+        y: preferred.y + (seededRatio(index, routeIndex, 2) - 0.5) * 34,
+      });
     };
 
     const makeAtlasFrame = (
@@ -373,13 +440,22 @@ declare global {
       yBias = 0.76
     ): Point => {
       if (!node) return fallback;
+      const element = node as HTMLElement;
+      const seatX = Number(element.dataset.seatX || "");
+      const seatY = Number(element.dataset.seatY || "");
+      if (Number.isFinite(seatX) && Number.isFinite(seatY) && seatX > 0 && seatY > 0) {
+        return { x: seatX, y: seatY };
+      }
+      const slotClass = [...element.classList].find((className) => /^agent-\d+$/.test(className));
+      const slotIndex = slotClass ? Number(slotClass.replace("agent-", "")) - 1 : -1;
+      if (slotIndex >= 0 && SLOT_SEATS[slotIndex]) return SLOT_SEATS[slotIndex];
       const boardRect = boardEl.getBoundingClientRect();
       const rect = node.getBoundingClientRect();
       if (rect.width <= 0 && rect.height <= 0) return fallback;
-      return {
+      return boardToDesignPoint({
         x: rect.left - boardRect.left + rect.width * xBias,
         y: rect.top - boardRect.top + rect.height * yBias,
-      };
+      });
     };
 
     const makePacket = (color: number): PixiGraphics => {
@@ -391,6 +467,35 @@ declare global {
       packet.alpha = 0.84;
       packetLayer.addChild(packet);
       return packet;
+    };
+
+    const agentSpriteScale = (): number =>
+      AGENT_SPRITE_SCALE * clamp(boardVisualScale(), 0.58, 1.08);
+
+    const syncStructureSprites = (): void => {
+      const scale = boardVisualScale();
+      for (const { spec, sprite } of structureSprites) {
+        const point = designToBoardPoint(spec);
+        sprite.x = point.x;
+        sprite.y = point.y;
+        sprite.scale.set(spec.scale * scale);
+        sprite.zIndex = point.y + (spec.zOffset || 0);
+      }
+    };
+
+    const buildStructureSprites = (): void => {
+      for (const child of structureLayer.removeChildren()) child.destroy({ children: true });
+      structureSprites = [];
+      for (const spec of STRUCTURE_SPECS) {
+        const texture = textures[spec.key];
+        if (!texture) continue;
+        const sprite = new PIXI.Sprite(texture);
+        sprite.anchor.set(spec.anchorX ?? 0.5, spec.anchorY ?? 1);
+        sprite.alpha = 0.96;
+        structureLayer.addChild(sprite);
+        structureSprites.push({ spec, sprite });
+      }
+      syncStructureSprites();
     };
 
     const speechNodeFor = (node: HTMLElement): HTMLElement | null =>
@@ -502,7 +607,7 @@ declare global {
       const speechBubble = makeSpeechBubble(node);
       if (sprite) {
         sprite.anchor.set(0.5, 1);
-        sprite.scale.set(AGENT_SPRITE_SCALE);
+        sprite.scale.set(agentSpriteScale());
         group.addChild(shadow, ring, sprite);
       } else {
         group.addChild(shadow, ring);
@@ -562,16 +667,17 @@ declare global {
     const syncLayout = (): void => {
       const { width, height } = boardSize();
       if (width > 0 && height > 0) app.renderer.resize(width, height);
+      syncStructureSprites();
       targets = {
         distributor: resolvePoint(
           root?.querySelector(".distributor-desk"),
-          { x: width * 0.80, y: height * 0.52 },
+          TARGET_POINTS.distributor,
           0.5,
           0.6
         ),
         events: resolvePoint(
           root?.querySelector(".event-board"),
-          { x: width * 0.82, y: height * 0.76 },
+          TARGET_POINTS.events,
           0.5,
           0.58
         ),
@@ -581,8 +687,9 @@ declare global {
         const fallbackPoint = resolvePoint(unit.node, points[unit.index % points.length], 0.5, 0.78);
         unit.point = clampRoamPoint(unit.point || fallbackPoint);
         unit.destination = clampRoamPoint(unit.destination || chooseRoamPoint(unit.index, 0));
-        unit.group.x = unit.point.x;
-        unit.group.y = unit.point.y;
+        const point = designToBoardPoint(unit.point);
+        unit.group.x = point.x;
+        unit.group.y = point.y;
       }
     };
 
@@ -664,15 +771,16 @@ declare global {
         ? Math.floor((elapsed * 7.5 + unit.phase * 6) % frames.length)
         : 0;
       unit.sprite.texture = frames[frameIndex] || frames[0];
+      const scale = agentSpriteScale();
       unit.sprite.scale.set(
-        unit.facing === "side" ? unit.facingSign * AGENT_SPRITE_SCALE : AGENT_SPRITE_SCALE,
-        AGENT_SPRITE_SCALE
+        unit.facing === "side" ? unit.facingSign * scale : scale,
+        scale
       );
     };
 
     const applySpeechBubbleFrame = (unit: AgentUnit): void => {
       if (!unit.speechBubble) return;
-      const spriteHeight = AGENT_FRAME_HEIGHT * AGENT_SPRITE_SCALE;
+      const spriteHeight = AGENT_FRAME_HEIGHT * agentSpriteScale();
       const driftX = Math.sin(elapsed * 1.7 + unit.phase * 11) * 1.5;
       const driftY = Math.sin(elapsed * 2.6 + unit.phase * 9) * 3;
       unit.speechBubble.group.x = driftX;
@@ -682,6 +790,29 @@ declare global {
         ? 0.9 + Math.sin(elapsed * 2.2 + unit.phase * 5) * 0.06
         : 0;
       unit.speechBubble.group.scale.set(1 + stageBurst * 0.025);
+    };
+
+    const drawDashedLine = (
+      graphics: PixiGraphics,
+      start: Point,
+      end: Point,
+      color: number,
+      alpha: number
+    ): void => {
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance <= 0) return;
+      const dash = 10;
+      const gap = 8;
+      const ux = dx / distance;
+      const uy = dy / distance;
+      graphics.lineStyle(2, color, alpha);
+      for (let offset = 0; offset < distance; offset += dash + gap) {
+        const segmentEnd = Math.min(offset + dash, distance);
+        graphics.moveTo(start.x + ux * offset, start.y + uy * offset);
+        graphics.lineTo(start.x + ux * segmentEnd, start.y + uy * segmentEnd);
+      }
     };
 
     const renderTick = (delta: number): void => {
@@ -695,12 +826,13 @@ declare global {
         applySpeechBubbleFrame(unit);
 
         const target = targets[unit.targetKind] || targets.distributor;
-        const start = { x: unit.point.x, y: unit.point.y - 24 };
-        const end = { x: target.x, y: target.y - 18 };
+        const boardPoint = designToBoardPoint(unit.point);
+        const boardTarget = designToBoardPoint(target);
+        const scale = boardVisualScale();
+        const start = { x: boardPoint.x, y: boardPoint.y - 24 * scale };
+        const end = { x: boardTarget.x, y: boardTarget.y - 18 * scale };
         const alpha = 0.22 + stageBurst * 0.16;
-        pathLayer.lineStyle(2, unit.color, alpha);
-        pathLayer.moveTo(start.x, start.y);
-        pathLayer.lineTo(end.x, end.y);
+        drawDashedLine(pathLayer, start, end, unit.color, alpha);
 
         const travel = (elapsed * unit.speed + unit.phase) % 1;
         const arc = Math.sin(travel * Math.PI) * (24 + stageBurst * 10);
@@ -711,13 +843,18 @@ declare global {
         unit.packet.scale.set(0.92 + stageBurst * 0.18);
 
         const bob = Math.sin(elapsed * 3.4 + unit.phase * 8) * 2.2;
-        unit.group.x = unit.point.x;
-        unit.group.y = unit.point.y + bob - stageBurst * 1.5;
-        unit.group.zIndex = unit.point.y;
+        unit.group.x = boardPoint.x;
+        unit.group.y = boardPoint.y + bob - stageBurst * 1.5;
+        unit.group.zIndex = boardPoint.y;
         unit.ring.clear();
         unit.ring.lineStyle(2, unit.color, 0.58 + stageBurst * 0.2);
         const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * 0.12 + stageBurst * 0.12;
-        unit.ring.drawEllipse(0, 0, AGENT_RING_WIDTH * ringPulse, AGENT_RING_HEIGHT * ringPulse);
+        unit.ring.drawEllipse(
+          0,
+          0,
+          AGENT_RING_WIDTH * ringPulse * scale,
+          AGENT_RING_HEIGHT * ringPulse * scale
+        );
       }
     };
 
@@ -751,6 +888,7 @@ declare global {
     };
 
     loadTextures().then(() => {
+      buildStructureSprites();
       rebuildAgentUnits();
       app.ticker.add(renderTick);
       window.addEventListener("akra:mission-pulse", onMissionPulse);

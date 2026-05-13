@@ -23,6 +23,7 @@ events_incremental_json="${output_dir}/events-incremental.json"
 events_error_json="${output_dir}/events-error.json"
 game_js="${output_dir}/akra-diorama.js"
 office_asset="${output_dir}/akra-office-background.png"
+final_draft_map_asset="${output_dir}/final-draft-map-sprite.png"
 sprite_asset="${output_dir}/akra-object-sprites.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
@@ -149,6 +150,7 @@ curl -fsS "${base_url}/api/admin/akra/events?limit=50" >"${events_json}"
 curl -fsS "${base_url}/api/admin/akra/events?afterSequence=0&limit=50" >"${events_incremental_json}"
 curl -fsS "${base_url}/admin/assets/game/akra-diorama.js" >"${game_js}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-office-background.png" >"${office_asset}"
+curl -fsS "${base_url}/admin/assets/graphics/final-draft-map-sprite.png" >"${final_draft_map_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/akra-object-sprites.png" >"${sprite_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
 curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png" >"${agent_atlas_large_asset}"
@@ -160,10 +162,10 @@ if [[ "${events_error_status}" != "400" ]]; then
 fi
 
 for token in \
-  '<body class="akra-graphic">' \
+  '<body class="akra-graphic akra-dashboard-page">' \
   'aria-label="게임발전국 AKRA Admin Control Center"' \
   'class="office-board" id="agents"' \
-  'class="pool-overlay" id="pool"' \
+  'class="game-panel pool-overlay" id="pool"' \
   'data-detail-title="워크트리 풀 · 슬롯' \
   'data-detail-slot="슬롯' \
   'data-detail-task="' \
@@ -173,15 +175,12 @@ for token in \
   'data-detail-worktree="' \
   'data-detail-owner="' \
   'title="슬롯' \
-  'class="scene-object object-sprite server-rack"' \
   'id="events"' \
-  'id="campaign"' \
-  'id="attempts"' \
-  'id="intel"' \
+  'id="notices"' \
+  'id="system-mini"' \
   'id="pipeline"' \
-  '시도 보드' \
-  '최근 시도 로그' \
-  '정보 카드' \
+  '공지 사항' \
+  '시스템 상태 요약' \
   'AKRA ADMIN CONTROL CENTER' \
   'akraHashTabRoutes' \
   'directions: "/admin/akra/directions"' \
@@ -192,7 +191,7 @@ for token in \
   'hashchange' \
   'MISSION FLOW' \
   'stage-refresh-btn' \
-  '--office-board-height: 720px' \
+  '--office-board-height: clamp(520px, 56vw, 650px)' \
   '/admin/assets/game/akra-diorama.js' \
   'data-admin-graphic' \
   'data-api-base' \
@@ -210,15 +209,12 @@ for token in \
   'is-bursting' \
   'data-event-feed-status' \
   'gamebaljeonguk_atlas_64x96.png' \
-  'background-image: var(--object-sprite-sheet)' \
   'background-image: var(--agent-sprite-sheet)' \
-  'var(--office-bg-image) center / cover no-repeat' \
-  'akra-office-background.png' \
-  'akra-object-sprites.png' \
+  'background: var(--office-bg-image) 0 0 / 100% 100% no-repeat' \
+  'final-draft-map-sprite.png' \
   'background-size: 384px 504px' \
   'avatar-Artificer' \
   'agentAvatarClass' \
-  'background-size: 627px 627px' \
   'prependEventRows' \
   'stale snapshot' \
   'skeleton-line' \
@@ -255,9 +251,7 @@ done
 for token in \
   'class="akra-topbar"' \
   'class="ops-status"' \
-  'class="right-stack"' \
   'id="metrics"' \
-  'id="system"' \
   '길드 성과' \
   '운영 지표' \
   'akra_admin' \
@@ -377,6 +371,10 @@ done
 
 cmp -s assets/admin/graphics/akra-office-background.png "${office_asset}" || {
   echo "served office background asset does not match workspace asset" >&2
+  exit 1
+}
+cmp -s assets/admin/graphics/final-draft-map-sprite.png "${final_draft_map_asset}" || {
+  echo "served final draft map asset does not match workspace asset" >&2
   exit 1
 }
 cmp -s assets/admin/graphics/akra-object-sprites.png "${sprite_asset}" || {
