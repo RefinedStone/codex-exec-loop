@@ -273,6 +273,21 @@ impl NativeTuiApp {
     pub(super) fn push_input_character(&mut self, character: char) {
         self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
     }
+    pub(super) fn insert_input_text(&mut self, text: String) -> bool {
+        if text.is_empty() || !self.can_edit_prompt_input() {
+            return false;
+        }
+
+        self.dispatch_conversation_input(ConversationInputEvent::TextInserted { text });
+        true
+    }
+    pub(super) fn can_edit_prompt_input(&self) -> bool {
+        match self.shell_overlay {
+            ShellOverlay::Hidden => true,
+            ShellOverlay::Supersession => !self.parallel_mode_prompt_input_locked(),
+            _ => false,
+        }
+    }
     pub(super) fn is_inline_command_palette_active(&self) -> bool {
         matches!(
             &self.conversation_state,
@@ -330,8 +345,14 @@ impl NativeTuiApp {
     pub(super) fn pop_input_character(&mut self) {
         self.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
     }
+    pub(super) fn delete_next_input_character(&mut self) {
+        self.dispatch_conversation_input(ConversationInputEvent::DeletePressed);
+    }
     pub(super) fn delete_previous_input_word(&mut self) {
         self.dispatch_conversation_input(ConversationInputEvent::PreviousWordDeleted);
+    }
+    pub(super) fn move_input_cursor(&mut self, movement: InputCursorMovement) {
+        self.dispatch_conversation_input(ConversationInputEvent::CursorMoved { movement });
     }
     pub(super) fn clear_prompt_input(&mut self) {
         self.clear_input_buffer();

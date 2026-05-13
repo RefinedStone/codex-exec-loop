@@ -103,6 +103,7 @@ pub(crate) struct ConversationViewModel {
     // Runtime notices are de-duplicated so repeated recovery probes do not spam the footer.
     pub(crate) runtime_notices: Vec<String>,
     pub(crate) input_buffer: String,
+    input_cursor_byte_index: Option<usize>,
     pub(crate) inline_shell_command_palette_state: InlineShellCommandPaletteState,
     // Startup submit lets initial CLI text wait until the draft/thread is ready to accept it.
     pub(crate) startup_submit_armed: bool,
@@ -147,6 +148,7 @@ impl ConversationViewModel {
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
             input_buffer: String::new(),
+            input_cursor_byte_index: None,
             inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
             startup_submit_armed: false,
             active_turn_id: None,
@@ -201,6 +203,7 @@ impl ConversationViewModel {
             warnings,
             runtime_notices,
             input_buffer: String::new(),
+            input_cursor_byte_index: None,
             inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
             startup_submit_armed: false,
             active_turn_id: None,
@@ -239,6 +242,17 @@ impl ConversationViewModel {
         self.inline_shell_command_palette_state
             .sync_to_input(&self.input_buffer, preferred_selection);
     }
+    pub(crate) fn input_cursor_byte_index(&self) -> usize {
+        self.input_cursor_byte_index
+            .map(|index| clamp_to_char_boundary(&self.input_buffer, index))
+            .unwrap_or(self.input_buffer.len())
+    }
+    pub(crate) fn set_input_cursor_byte_index(&mut self, index: usize) {
+        self.input_cursor_byte_index = Some(clamp_to_char_boundary(&self.input_buffer, index));
+    }
+    pub(crate) fn move_input_cursor_to_end(&mut self) {
+        self.input_cursor_byte_index = None;
+    }
     pub(crate) fn move_inline_shell_command_palette_selection(&mut self, delta: isize) -> bool {
         self.inline_shell_command_palette_state
             .move_selection(delta)
@@ -248,6 +262,7 @@ impl ConversationViewModel {
     }
     pub(crate) fn insert_inline_shell_command_completion(&mut self, command: InlineShellCommand) {
         self.input_buffer = command.completion_text().to_string();
+        self.move_input_cursor_to_end();
         self.sync_inline_shell_command_palette();
     }
     pub(crate) fn draft_workspace_directory(&self) -> &str {
@@ -286,6 +301,7 @@ impl ConversationViewModel {
         self.push_message(transcript_message);
         if clear_input_buffer {
             self.input_buffer.clear();
+            self.input_cursor_byte_index = None;
             self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
         }
         self.mark_turn_submitting(workspace_directory);
@@ -302,6 +318,7 @@ impl ConversationViewModel {
             None,
         ));
         self.input_buffer.clear();
+        self.input_cursor_byte_index = None;
         self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
         self.status_text = status_text;
     }
@@ -592,4 +609,12 @@ impl ConversationViewModel {
             }
         }
     }
+}
+
+fn clamp_to_char_boundary(buffer: &str, index: usize) -> usize {
+    let mut clamped_index = index.min(buffer.len());
+    while clamped_index > 0 && !buffer.is_char_boundary(clamped_index) {
+        clamped_index -= 1;
+    }
+    clamped_index
 }

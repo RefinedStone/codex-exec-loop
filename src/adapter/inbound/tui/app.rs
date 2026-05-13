@@ -156,7 +156,7 @@ use auto_follow_controls::{
 use auto_follow_overlay_ui::{
     AutoFollowOverlayUiEvent, AutoFollowOverlayUiState, reduce_auto_follow_overlay_ui,
 };
-use conversation_input::{ConversationInputEvent, reduce_conversation_input};
+use conversation_input::{ConversationInputEvent, InputCursorMovement, reduce_conversation_input};
 use conversation_intents::{
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
     ConversationIntentState, reduce_conversation_intents,

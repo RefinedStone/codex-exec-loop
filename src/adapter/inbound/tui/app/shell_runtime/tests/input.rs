@@ -1097,3 +1097,89 @@ fn ctrl_w_deletes_previous_buffered_word() {
     };
     assert_eq!(conversation.input_buffer, "ship this ");
 }
+
+#[test]
+fn arrow_keys_move_prompt_cursor_before_editing() {
+    /*
+     * Main prompt editing is no longer append-only. Left/Right move the composer
+     * cursor and Backspace deletes relative to that cursor instead of always
+     * trimming the buffer tail.
+     */
+    let mut runtime = make_test_runtime();
+    for character in "hello".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Backspace,
+        KeyModifiers::NONE,
+    )));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "helo");
+    assert_eq!(conversation.input_cursor_byte_index(), "he".len());
+}
+
+#[test]
+fn option_arrow_moves_prompt_cursor_by_word() {
+    let mut runtime = make_test_runtime();
+    for character in "one two three".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT)));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('X'),
+        KeyModifiers::NONE,
+    )));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "one two Xthree");
+}
+
+#[test]
+fn command_arrow_moves_prompt_cursor_to_line_boundary() {
+    let mut runtime = make_test_runtime();
+    for character in "one\ntwo".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Left,
+        KeyModifiers::SUPER,
+    )));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('X'),
+        KeyModifiers::NONE,
+    )));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "one\nXtwo");
+}
+
+#[test]
+fn paste_event_inserts_multiline_text_without_submit() {
+    /*
+     * Bracketed paste arrives as one crossterm Paste event. The runtime must keep
+     * embedded newlines as prompt text instead of treating them as Enter submits.
+     */
+    let mut runtime = make_test_runtime();
+    runtime.app_mut().startup_state = StartupState::Ready(sample_startup_diagnostics(
+        &runtime.app().current_workspace_directory(),
+    ));
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Paste("first\nsecond".to_string()));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "first\nsecond");
+    assert!(conversation.messages.is_empty());
+    assert!(conversation.can_accept_manual_prompt());
+    assert!(runtime.take_redraw_request());
+}

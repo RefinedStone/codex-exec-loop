@@ -115,10 +115,12 @@ fn drain_ready_terminal_events(runtime: &mut ShellRuntime) -> Result<()> {
 }
 
 /*
- * 값이 없는 RAII guard지만 의미는 크다. activate 성공은 raw mode와 focus-change event 구독을
+ * RAII guard의 activate 성공은 raw mode, focus-change event 구독, paste event 구독을
  * frontend가 소유한다는 뜻이고, Drop은 정상 종료, 오류 반환, early return 모두에서 복구를 시도한다.
  */
-struct TerminalRestoreGuard;
+struct TerminalRestoreGuard {
+    bracketed_paste_enabled: bool,
+}
 
 impl TerminalRestoreGuard {
     fn activate() -> Result<Self> {
@@ -132,7 +134,10 @@ impl TerminalRestoreGuard {
             let _ = disable_raw_mode();
             return Err(error.into());
         }
-        Ok(Self)
+        let bracketed_paste_enabled = execute!(stdout, event::EnableBracketedPaste).is_ok();
+        Ok(Self {
+            bracketed_paste_enabled,
+        })
     }
 }
 
@@ -143,6 +148,9 @@ impl Drop for TerminalRestoreGuard {
          * 실패해도 raw mode 해제, focus 구독 해제, cursor 복구를 계속 시도하는 편이 낫다.
          */
         let mut stdout = io::stdout();
+        if self.bracketed_paste_enabled {
+            let _ = execute!(stdout, event::DisableBracketedPaste);
+        }
         let _ = execute!(stdout, event::DisableFocusChange);
         let _ = disable_raw_mode();
         /*

@@ -13,10 +13,17 @@ pub(super) enum ConversationInputEvent {
     CharacterTyped {
         character: char,
     },
+    TextInserted {
+        text: String,
+    },
     NewlineInserted,
     BackspacePressed,
+    DeletePressed,
     PreviousWordDeleted,
     InputCleared,
+    CursorMoved {
+        movement: InputCursorMovement,
+    },
     // Palette events are navigation/completion state changes layered on top of
     // the same input buffer; they do not represent prompt submission.
     InlineCommandPaletteSelectionMoved {
@@ -45,6 +52,20 @@ pub(super) enum ConversationInputEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InputCursorMovement {
+    PreviousCharacter,
+    NextCharacter,
+    PreviousWord,
+    NextWord,
+    PreviousLine,
+    NextLine,
+    LineStart,
+    LineEnd,
+    BufferStart,
+    BufferEnd,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ConversationInputReduction {
     pub state: ConversationViewModel,
@@ -59,21 +80,40 @@ pub(super) fn reduce_conversation_input(
     // events only shape local view-model state.
     match event {
         ConversationInputEvent::CharacterTyped { character } => {
-            modify_input_buffer_and_sync(&mut state, |buffer| buffer.push(character));
+            let mut text = String::new();
+            text.push(character);
+            insert_text_into_input_buffer_and_sync(&mut state, &text);
+        }
+        ConversationInputEvent::TextInserted { text } => {
+            let normalized_text = normalize_inserted_text(&text);
+            insert_text_into_input_buffer_and_sync(&mut state, &normalized_text);
         }
         ConversationInputEvent::NewlineInserted => {
-            modify_input_buffer_and_sync(&mut state, |buffer| buffer.push('\n'));
+            insert_text_into_input_buffer_and_sync(&mut state, "\n");
         }
         ConversationInputEvent::BackspacePressed => {
-            modify_input_buffer_and_sync(&mut state, |buffer| {
-                buffer.pop();
-            });
+            modify_input_buffer_and_sync(&mut state, delete_previous_character);
+        }
+        ConversationInputEvent::DeletePressed => {
+            modify_input_buffer_and_sync(&mut state, delete_next_character);
         }
         ConversationInputEvent::PreviousWordDeleted => {
             modify_input_buffer_and_sync(&mut state, delete_previous_word);
         }
         ConversationInputEvent::InputCleared => {
-            modify_input_buffer_and_sync(&mut state, String::clear);
+            modify_input_buffer_and_sync(&mut state, |buffer, _cursor| {
+                buffer.clear();
+                0
+            });
+            state.move_input_cursor_to_end();
+        }
+        ConversationInputEvent::CursorMoved { movement } => {
+            let cursor_byte_index = move_input_cursor(
+                &state.input_buffer,
+                state.input_cursor_byte_index(),
+                movement,
+            );
+            state.set_input_cursor_byte_index(cursor_byte_index);
         }
         ConversationInputEvent::InlineCommandPaletteSelectionMoved { delta } => {
             state.move_inline_shell_command_palette_selection(delta);
@@ -116,18 +156,51 @@ pub(super) fn reduce_conversation_input(
 
 fn modify_input_buffer_and_sync(
     state: &mut ConversationViewModel,
-    modifier: impl FnOnce(&mut String),
+    modifier: impl FnOnce(&mut String, usize) -> usize,
 ) {
     // All direct buffer edits pass through this helper so startup-submit safety
     // and inline command palette derivation stay coupled to prompt text changes.
     clear_startup_submit_after_input_change(state);
-    modifier(&mut state.input_buffer);
+    let cursor_byte_index = state.input_cursor_byte_index();
+    let next_cursor_byte_index = modifier(&mut state.input_buffer, cursor_byte_index);
+    state.set_input_cursor_byte_index(next_cursor_byte_index);
     state.sync_inline_shell_command_palette();
 }
 
-fn delete_previous_word(buffer: &mut String) {
+fn insert_text_into_input_buffer_and_sync(state: &mut ConversationViewModel, text: &str) {
+    modify_input_buffer_and_sync(state, |buffer, cursor_byte_index| {
+        buffer.insert_str(cursor_byte_index, text);
+        cursor_byte_index + text.len()
+    });
+}
+
+fn normalize_inserted_text(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn delete_previous_character(buffer: &mut String, cursor_byte_index: usize) -> usize {
+    if cursor_byte_index == 0 || buffer.is_empty() {
+        return cursor_byte_index;
+    }
+
+    let previous_byte_index = previous_character_start(buffer, cursor_byte_index);
+    buffer.drain(previous_byte_index..cursor_byte_index);
+    previous_byte_index
+}
+
+fn delete_next_character(buffer: &mut String, cursor_byte_index: usize) -> usize {
+    if cursor_byte_index >= buffer.len() {
+        return cursor_byte_index;
+    }
+
+    let next_byte_index = next_character_end(buffer, cursor_byte_index);
+    buffer.drain(cursor_byte_index..next_byte_index);
+    cursor_byte_index
+}
+
+fn delete_previous_word(buffer: &mut String, cursor_byte_index: usize) -> usize {
     if buffer.is_empty() {
-        return;
+        return cursor_byte_index;
     }
     /*
      * Ctrl+W behaves like a terminal word erase: first drop trailing whitespace,
@@ -135,12 +208,178 @@ fn delete_previous_word(buffer: &mut String) {
      * separator before it. Newlines are whitespace here, so multi-line prompts
      * collapse back to the prior line boundary naturally.
      */
-    let trimmed = buffer.trim_end_matches(|character: char| character.is_whitespace());
-    let word_start = trimmed
-        .rfind(|character: char| character.is_whitespace())
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    buffer.truncate(word_start);
+    let word_start = move_to_previous_word_start(buffer, cursor_byte_index);
+    buffer.drain(word_start..cursor_byte_index);
+    word_start
+}
+
+fn move_input_cursor(
+    buffer: &str,
+    cursor_byte_index: usize,
+    movement: InputCursorMovement,
+) -> usize {
+    match movement {
+        InputCursorMovement::PreviousCharacter => {
+            previous_character_start(buffer, cursor_byte_index)
+        }
+        InputCursorMovement::NextCharacter => next_character_end(buffer, cursor_byte_index),
+        InputCursorMovement::PreviousWord => move_to_previous_word_start(buffer, cursor_byte_index),
+        InputCursorMovement::NextWord => move_to_next_word_end(buffer, cursor_byte_index),
+        InputCursorMovement::PreviousLine => {
+            move_to_adjacent_line(buffer, cursor_byte_index, LineDirection::Previous)
+        }
+        InputCursorMovement::NextLine => {
+            move_to_adjacent_line(buffer, cursor_byte_index, LineDirection::Next)
+        }
+        InputCursorMovement::LineStart => current_line_start(buffer, cursor_byte_index),
+        InputCursorMovement::LineEnd => current_line_end(buffer, cursor_byte_index),
+        InputCursorMovement::BufferStart => 0,
+        InputCursorMovement::BufferEnd => buffer.len(),
+    }
+}
+
+fn previous_character_start(buffer: &str, cursor_byte_index: usize) -> usize {
+    if cursor_byte_index == 0 {
+        return 0;
+    }
+
+    buffer[..cursor_byte_index]
+        .char_indices()
+        .last()
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(0)
+}
+
+fn next_character_end(buffer: &str, cursor_byte_index: usize) -> usize {
+    if cursor_byte_index >= buffer.len() {
+        return buffer.len();
+    }
+
+    buffer[cursor_byte_index..]
+        .char_indices()
+        .nth(1)
+        .map(|(offset, _)| cursor_byte_index + offset)
+        .unwrap_or(buffer.len())
+}
+
+fn move_to_previous_word_start(buffer: &str, cursor_byte_index: usize) -> usize {
+    let mut next_cursor_byte_index = cursor_byte_index;
+
+    while next_cursor_byte_index > 0
+        && character_before(buffer, next_cursor_byte_index)
+            .is_some_and(|character| character.is_whitespace())
+    {
+        next_cursor_byte_index = previous_character_start(buffer, next_cursor_byte_index);
+    }
+
+    while next_cursor_byte_index > 0
+        && character_before(buffer, next_cursor_byte_index)
+            .is_some_and(|character| !character.is_whitespace())
+    {
+        next_cursor_byte_index = previous_character_start(buffer, next_cursor_byte_index);
+    }
+
+    next_cursor_byte_index
+}
+
+fn move_to_next_word_end(buffer: &str, cursor_byte_index: usize) -> usize {
+    let mut next_cursor_byte_index = cursor_byte_index;
+
+    while next_cursor_byte_index < buffer.len()
+        && character_at(buffer, next_cursor_byte_index)
+            .is_some_and(|character| character.is_whitespace())
+    {
+        next_cursor_byte_index = next_character_end(buffer, next_cursor_byte_index);
+    }
+
+    while next_cursor_byte_index < buffer.len()
+        && character_at(buffer, next_cursor_byte_index)
+            .is_some_and(|character| !character.is_whitespace())
+    {
+        next_cursor_byte_index = next_character_end(buffer, next_cursor_byte_index);
+    }
+
+    next_cursor_byte_index
+}
+
+fn character_before(buffer: &str, cursor_byte_index: usize) -> Option<char> {
+    if cursor_byte_index == 0 {
+        return None;
+    }
+
+    buffer[..cursor_byte_index].chars().next_back()
+}
+
+fn character_at(buffer: &str, cursor_byte_index: usize) -> Option<char> {
+    if cursor_byte_index >= buffer.len() {
+        return None;
+    }
+
+    buffer[cursor_byte_index..].chars().next()
+}
+
+fn current_line_start(buffer: &str, cursor_byte_index: usize) -> usize {
+    buffer[..cursor_byte_index]
+        .rfind('\n')
+        .map(|newline_index| newline_index + 1)
+        .unwrap_or(0)
+}
+
+fn current_line_end(buffer: &str, cursor_byte_index: usize) -> usize {
+    buffer[cursor_byte_index..]
+        .find('\n')
+        .map(|offset| cursor_byte_index + offset)
+        .unwrap_or(buffer.len())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineDirection {
+    Previous,
+    Next,
+}
+
+fn move_to_adjacent_line(
+    buffer: &str,
+    cursor_byte_index: usize,
+    direction: LineDirection,
+) -> usize {
+    let current_start = current_line_start(buffer, cursor_byte_index);
+    let current_column = buffer[current_start..cursor_byte_index].chars().count();
+
+    match direction {
+        LineDirection::Previous => {
+            if current_start == 0 {
+                return cursor_byte_index;
+            }
+
+            let previous_end = current_start - 1;
+            let previous_start = current_line_start(buffer, previous_end);
+            byte_index_at_line_column(buffer, previous_start, previous_end, current_column)
+        }
+        LineDirection::Next => {
+            let current_end = current_line_end(buffer, cursor_byte_index);
+            if current_end == buffer.len() {
+                return cursor_byte_index;
+            }
+
+            let next_start = current_end + 1;
+            let next_end = current_line_end(buffer, next_start);
+            byte_index_at_line_column(buffer, next_start, next_end, current_column)
+        }
+    }
+}
+
+fn byte_index_at_line_column(
+    buffer: &str,
+    line_start: usize,
+    line_end: usize,
+    column: usize,
+) -> usize {
+    buffer[line_start..line_end]
+        .char_indices()
+        .nth(column)
+        .map(|(offset, _)| line_start + offset)
+        .unwrap_or(line_end)
 }
 
 fn clear_startup_submit_after_input_change(state: &mut ConversationViewModel) {
@@ -181,6 +420,34 @@ mod tests {
     }
 
     #[test]
+    fn character_typed_inserts_at_cursor_position() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "ship now".to_string();
+        state.set_input_cursor_byte_index("ship ".len());
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CharacterTyped { character: 'i' },
+        );
+
+        assert_eq!(reduced.state.input_buffer, "ship inow");
+        assert_eq!(reduced.state.input_cursor_byte_index(), "ship i".len());
+    }
+
+    #[test]
+    fn text_inserted_preserves_newlines_without_submitting() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "before ".to_string();
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::TextInserted {
+                text: "first\r\nsecond".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.state.input_buffer, "before first\nsecond");
+    }
+
+    #[test]
     fn newline_inserted_adds_line_break() {
         // Shift/Alt-enter style input adds a literal newline to the prompt; it is
         // not a submit signal at this reducer level.
@@ -189,6 +456,65 @@ mod tests {
         let reduced = reduce_conversation_input(state, ConversationInputEvent::NewlineInserted);
 
         assert_eq!(reduced.state.input_buffer, "draft\n");
+    }
+
+    #[test]
+    fn cursor_movement_controls_backspace_target() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "hello".to_string();
+        let moved_left = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CursorMoved {
+                movement: InputCursorMovement::PreviousCharacter,
+            },
+        );
+        let moved_left = reduce_conversation_input(
+            moved_left.state,
+            ConversationInputEvent::CursorMoved {
+                movement: InputCursorMovement::PreviousCharacter,
+            },
+        );
+        let reduced =
+            reduce_conversation_input(moved_left.state, ConversationInputEvent::BackspacePressed);
+
+        assert_eq!(reduced.state.input_buffer, "helo");
+        assert_eq!(reduced.state.input_cursor_byte_index(), "he".len());
+    }
+
+    #[test]
+    fn word_cursor_movement_targets_previous_word_start() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "one two three".to_string();
+        let moved = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CursorMoved {
+                movement: InputCursorMovement::PreviousWord,
+            },
+        );
+        let reduced = reduce_conversation_input(
+            moved.state,
+            ConversationInputEvent::CharacterTyped { character: 'X' },
+        );
+
+        assert_eq!(reduced.state.input_buffer, "one two Xthree");
+    }
+
+    #[test]
+    fn vertical_cursor_movement_uses_matching_line_column() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "ab\ncde".to_string();
+        let moved = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CursorMoved {
+                movement: InputCursorMovement::PreviousLine,
+            },
+        );
+        let reduced = reduce_conversation_input(
+            moved.state,
+            ConversationInputEvent::CharacterTyped { character: 'X' },
+        );
+
+        assert_eq!(reduced.state.input_buffer, "abX\ncde");
     }
 
     #[test]

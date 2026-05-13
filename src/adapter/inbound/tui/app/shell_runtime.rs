@@ -9,7 +9,7 @@ use crate::core::app::CoreEffectCompletion;
 use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
-use super::{BackgroundMessage, NativeTuiApp, ShellChromeEvent};
+use super::{BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
 
@@ -195,10 +195,17 @@ impl ShellRuntime {
 
                 self.handle_key_press(key, now);
             }
+            Event::Paste(text) => self.handle_paste_text(text, now),
             Event::Resize(_, _) => self.request_redraw_at(now),
             Event::FocusGained => self.frame_scheduler.set_focused(true, now),
             Event::FocusLost => self.frame_scheduler.set_focused(false, now),
             _ => {}
+        }
+    }
+
+    fn handle_paste_text(&mut self, text: String, now: Instant) {
+        if self.app.insert_input_text(text) {
+            self.request_redraw_at(now);
         }
     }
 
@@ -286,7 +293,68 @@ impl ShellRuntime {
             KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
                 self.app.delete_previous_input_word()
             }
+            KeyCode::Left if key.modifiers.is_empty() => self
+                .app
+                .move_input_cursor(InputCursorMovement::PreviousCharacter),
+            KeyCode::Right if key.modifiers.is_empty() => self
+                .app
+                .move_input_cursor(InputCursorMovement::NextCharacter),
+            KeyCode::Up if key.modifiers.is_empty() => self
+                .app
+                .move_input_cursor(InputCursorMovement::PreviousLine),
+            KeyCode::Down if key.modifiers.is_empty() => {
+                self.app.move_input_cursor(InputCursorMovement::NextLine)
+            }
+            KeyCode::Left if key.modifiers == KeyModifiers::ALT => self
+                .app
+                .move_input_cursor(InputCursorMovement::PreviousWord),
+            KeyCode::Right if key.modifiers == KeyModifiers::ALT => {
+                self.app.move_input_cursor(InputCursorMovement::NextWord)
+            }
+            KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => self
+                .app
+                .move_input_cursor(InputCursorMovement::PreviousWord),
+            KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
+                self.app.move_input_cursor(InputCursorMovement::NextWord)
+            }
+            KeyCode::Left if key.modifiers == KeyModifiers::SUPER => {
+                self.app.move_input_cursor(InputCursorMovement::LineStart)
+            }
+            KeyCode::Right if key.modifiers == KeyModifiers::SUPER => {
+                self.app.move_input_cursor(InputCursorMovement::LineEnd)
+            }
+            KeyCode::Up if key.modifiers == KeyModifiers::SUPER => {
+                self.app.move_input_cursor(InputCursorMovement::BufferStart)
+            }
+            KeyCode::Down if key.modifiers == KeyModifiers::SUPER => {
+                self.app.move_input_cursor(InputCursorMovement::BufferEnd)
+            }
+            KeyCode::Left if key.modifiers == KeyModifiers::META => {
+                self.app.move_input_cursor(InputCursorMovement::LineStart)
+            }
+            KeyCode::Right if key.modifiers == KeyModifiers::META => {
+                self.app.move_input_cursor(InputCursorMovement::LineEnd)
+            }
+            KeyCode::Up if key.modifiers == KeyModifiers::META => {
+                self.app.move_input_cursor(InputCursorMovement::BufferStart)
+            }
+            KeyCode::Down if key.modifiers == KeyModifiers::META => {
+                self.app.move_input_cursor(InputCursorMovement::BufferEnd)
+            }
+            KeyCode::Home if key.modifiers.is_empty() => {
+                self.app.move_input_cursor(InputCursorMovement::LineStart)
+            }
+            KeyCode::End if key.modifiers.is_empty() => {
+                self.app.move_input_cursor(InputCursorMovement::LineEnd)
+            }
+            KeyCode::Home if key.modifiers == KeyModifiers::CONTROL => {
+                self.app.move_input_cursor(InputCursorMovement::BufferStart)
+            }
+            KeyCode::End if key.modifiers == KeyModifiers::CONTROL => {
+                self.app.move_input_cursor(InputCursorMovement::BufferEnd)
+            }
             KeyCode::Backspace => self.app.pop_input_character(),
+            KeyCode::Delete => self.app.delete_next_input_character(),
             KeyCode::Enter => self.app.start_turn_submission(),
             KeyCode::Char(character)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>

@@ -128,28 +128,30 @@ pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> 
     Prefixes are part of the prompt projection, so cursor_column is measured after the prefix.
     That makes renderer cursor placement match exactly what the user sees in the footer.
     */
+    let cursor_byte_index = conversation.input_cursor_byte_index();
     let buffer_lines = conversation.input_buffer.split('\n').collect::<Vec<_>>();
     let mut lines = Vec::with_capacity(buffer_lines.len().max(1));
     let mut cursor_line_index = 0;
     let mut cursor_column = 0;
+    let mut line_start_byte_index = 0;
+    let mut cursor_position_resolved = false;
 
     for (index, buffer_line) in buffer_lines.iter().enumerate() {
-        let line = if index == 0 {
-            Line::from(vec![
-                Span::raw(PROMPT_PRIMARY_PREFIX),
-                Span::raw((*buffer_line).to_string()),
-            ])
-        } else {
-            Line::from(vec![
-                Span::raw(PROMPT_CONTINUATION_PREFIX),
-                Span::raw((*buffer_line).to_string()),
-            ])
-        };
-        if index + 1 == buffer_lines.len() {
+        let prefix = prompt_line_prefix(index);
+        let line = Line::from(vec![
+            Span::raw(prefix),
+            Span::raw((*buffer_line).to_string()),
+        ]);
+        let line_end_byte_index = line_start_byte_index + buffer_line.len();
+        if !cursor_position_resolved && cursor_byte_index <= line_end_byte_index {
             cursor_line_index = index;
-            cursor_column = line.width();
+            let cursor_line_text =
+                &conversation.input_buffer[line_start_byte_index..cursor_byte_index];
+            cursor_column = prompt_line_width_before_cursor(prefix, cursor_line_text);
+            cursor_position_resolved = true;
         }
         lines.push(line);
+        line_start_byte_index = line_end_byte_index.saturating_add(1);
     }
 
     PromptBufferView {
@@ -157,6 +159,22 @@ pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> 
         cursor_line_index,
         cursor_column,
     }
+}
+
+fn prompt_line_prefix(line_index: usize) -> &'static str {
+    if line_index == 0 {
+        PROMPT_PRIMARY_PREFIX
+    } else {
+        PROMPT_CONTINUATION_PREFIX
+    }
+}
+
+fn prompt_line_width_before_cursor(prefix: &'static str, text_before_cursor: &str) -> usize {
+    Line::from(vec![
+        Span::raw(prefix),
+        Span::raw(text_before_cursor.to_string()),
+    ])
+    .width()
 }
 
 pub(super) fn wrapped_row_count(line_width: usize, content_width: u16) -> usize {
@@ -169,4 +187,27 @@ pub(super) fn wrapped_row_count(line_width: usize, content_width: u16) -> usize 
     }
 
     line_width.div_ceil(content_width as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_cursor_offset_uses_conversation_cursor_position() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.input_buffer = "hello".to_string();
+        conversation.set_input_cursor_byte_index(2);
+
+        assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((4, 0)));
+    }
+
+    #[test]
+    fn prompt_cursor_offset_handles_multiline_middle_cursor() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.input_buffer = "one\ntwo".to_string();
+        conversation.set_input_cursor_byte_index("one\n".len() + 1);
+
+        assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((3, 1)));
+    }
 }
