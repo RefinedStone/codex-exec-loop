@@ -191,20 +191,32 @@ fn parallel_event_stream_flushes_to_host_scrollback_without_single_mode_transcri
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("parallel event draw transaction");
 
-    let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
-    assert!(terminal_history.contains("Parallel Event Stream"));
-    assert!(terminal_history.contains("parallel-event-00"));
-    assert!(terminal_history.contains("parallel-event-39"));
+    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
     assert!(
-        !terminal_history.contains("single mode history must not own parallel scrollback"),
-        "parallel mode scrollback should use the event stream, not the hidden transcript:\n{terminal_history}"
+        !terminal_scrollback.contains("Parallel Event Stream"),
+        "the stream title belongs to the live inline section, not durable host scrollback:\n{terminal_scrollback}"
+    );
+    assert!(terminal_scrollback.contains("parallel-event-00"));
+    assert!(
+        !terminal_scrollback.contains("single mode history must not own parallel scrollback"),
+        "parallel mode scrollback should use the event stream, not the hidden transcript:\n{terminal_scrollback}"
     );
     let screen_text = tui_testkit::screen_text(&terminal);
+    assert!(screen_text.contains("Parallel Event Stream"));
+    assert!(
+        [
+            "parallel-event-37",
+            "parallel-event-38",
+            "parallel-event-39"
+        ]
+        .iter()
+        .any(|event| screen_text.contains(event)),
+        "live stream should show the recent event tail:\n{screen_text}"
+    );
     assert!(
         !screen_text.contains("parallel-event-00"),
         "old parallel events should remain available through host scrollback instead of forcing the viewport to show every row:\n{screen_text}"
     );
-    assert!(screen_text.contains("parallel-event-39"));
 }
 
 // VT100 coverage catches terminal-app behavior that TestBackend cannot:

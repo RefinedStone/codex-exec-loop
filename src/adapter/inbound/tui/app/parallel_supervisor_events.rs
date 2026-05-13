@@ -57,15 +57,12 @@ impl ParallelSupervisorEventLog {
     }
 
     pub(super) fn scrollback_lines(&self) -> Vec<Line<'static>> {
-        if self.scrollback_entries.is_empty() {
-            return Vec::new();
-        }
-        let mut lines = Vec::with_capacity(self.scrollback_entries.len() + 1);
-        lines.push(Line::from("Parallel Event Stream"));
-        lines.extend(self.scrollback_entries.iter().map(|entry| {
-            parallel_supervisor_event_line(&entry.timestamp_label, &entry.actor, &entry.body)
-        }));
-        lines
+        self.scrollback_entries
+            .iter()
+            .map(|entry| {
+                parallel_supervisor_event_line(&entry.timestamp_label, &entry.actor, &entry.body)
+            })
+            .collect()
     }
 
     pub(super) fn record_runtime_feed_from_supervisor_snapshot(
@@ -267,7 +264,8 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.starts_with("Parallel Event Stream\n[11:45:02] You: 안녕하세요?"));
+        assert!(rendered.starts_with("[11:45:02] You: 안녕하세요?"));
+        assert!(!rendered.contains("Parallel Event Stream"));
         assert_eq!(rendered.matches("session detail:slot-1").count(), 1);
         assert_eq!(rendered.matches("slot lease:slot-2").count(), 1);
         assert_eq!(rendered.matches("distributor queue:queue-1").count(), 1);
