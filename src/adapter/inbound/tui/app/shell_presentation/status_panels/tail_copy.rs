@@ -18,6 +18,7 @@ use super::super::{
     ShellOverlay, StartupState, auto_follow_prompt_status_line, build_working_line,
     compact_inline_detail, inline_input_state_label, turn_status_label,
 };
+use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
     build_operator_notice_line, compact_auto_follow_status_summary, compact_inline_summary_label,
     inline_thread_label, parallel_mode_alert_line, parallel_mode_summary_line,
@@ -182,6 +183,9 @@ pub(super) fn build_inline_tail_lines_with_context(
                     "planning: unavailable  |  startup: {}",
                     context.shell_action_availability.status_text()
                 )));
+            }
+            if let Some(parallel_working_line) = build_parallel_slot_working_line(app) {
+                lines.push(parallel_working_line);
             }
 
             lines.extend(planning_worker_panel_lines.into_iter().map(Line::from));

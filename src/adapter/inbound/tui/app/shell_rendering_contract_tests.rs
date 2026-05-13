@@ -934,6 +934,82 @@ fn inline_tail_omits_legacy_planning_valid_status_in_single_and_parallel_home() 
 }
 
 #[test]
+fn inline_tail_places_parallel_slot_working_line_between_queue_and_prompt() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    tui_testkit::append_agent_history_message(&mut app, "parallel slot status baseline");
+    app.sync_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
+        "Planning Context",
+        "queue head: rank 1 / task-1 / Keep slot status visible",
+    ));
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(
+            3,
+            "/tmp/pool",
+            "running",
+            vec![ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                ParallelModePoolSlotState::Running,
+                "akra-agent/slot-1/task-one",
+                "akra-pool/slot-1",
+                "agent-1 / task-1",
+            )],
+        ),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![ParallelModeAgentRosterEntry::new(
+                "agent-1",
+                "Slot Tail",
+                "slot-1",
+                "akra-agent/slot-1/task-one",
+                "running",
+                "42s",
+                "rendering the active slot status",
+            )],
+            "empty",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(None, "empty"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    )));
+    let lines = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    let queue_index = lines
+        .iter()
+        .position(|line| line.contains("queue: queue head: rank 1 / task-1"))
+        .expect("planning queue line should remain visible");
+    let working_index = lines
+        .iter()
+        .position(|line| line.contains("◦ Working") && line.contains("pool slot-1"))
+        .expect("parallel slot working line should identify the active pool slot");
+    let prompt_index = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with('>'))
+        .expect("prompt input row should remain visible");
+
+    assert!(
+        queue_index < working_index,
+        "slot working line should sit below queue status:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        working_index < prompt_index,
+        "slot working line should sit above prompt input:\n{}",
+        lines.join("\n")
+    );
+    assert!(lines[working_index].contains("state: running"));
+    assert!(lines[working_index].contains("Slot Tail"));
+}
+
+#[test]
 fn inline_tail_reports_partial_handle_based_session_catalog_status() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());

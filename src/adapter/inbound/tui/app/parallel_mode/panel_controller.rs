@@ -84,7 +84,7 @@ impl ParallelPanelStateController {
             return true;
         };
         Self::snapshot_is_loading(snapshot)
-            || Self::snapshot_has_running_slot(snapshot)
+            || Self::snapshot_has_live_pool_slot(snapshot)
             || Self::snapshot_has_active_distributor_queue(snapshot)
             || Self::snapshot_has_recoverable_pool_issue(snapshot)
     }
@@ -111,8 +111,11 @@ impl ParallelPanelStateController {
             || snapshot.pool.pool_root_label.starts_with("loading:")
     }
 
-    pub(super) fn snapshot_has_running_slot(snapshot: &ParallelModeSupervisorSnapshot) -> bool {
-        snapshot.pool.running_slots > 0
+    pub(super) fn snapshot_has_live_pool_slot(snapshot: &ParallelModeSupervisorSnapshot) -> bool {
+        snapshot.pool.leased_slots
+            + snapshot.pool.running_slots
+            + snapshot.pool.awaiting_cleanup_slots
+            > 0
     }
 
     pub(super) fn snapshot_has_active_distributor_queue(
@@ -135,9 +138,9 @@ mod tests {
     use super::*;
     use crate::domain::parallel_mode::{
         ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-        ParallelModePoolBoardSnapshot, ParallelModeReadinessState,
-        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-        ParallelModeSupervisorState,
+        ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+        ParallelModeReadinessState, ParallelModeSupervisorDetailSnapshot,
+        ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
     };
 
     fn supervisor_snapshot(pool: ParallelModePoolBoardSnapshot) -> ParallelModeSupervisorSnapshot {
@@ -241,6 +244,30 @@ mod tests {
         assert!(!ParallelPanelStateController::activity_pulse_visible(
             &state
         ));
+        assert!(!ParallelPanelStateController::prompt_input_locked(&state));
+    }
+
+    #[test]
+    fn leased_pool_slot_keeps_activity_pulse_visible_without_locking_prompt() {
+        let state = ParallelPanelUiState {
+            overlay_visible: true,
+            mode_enabled: true,
+            supervisor_snapshot: Some(supervisor_snapshot(ParallelModePoolBoardSnapshot::new(
+                3,
+                "/repo/.akra-worktrees",
+                "leased",
+                vec![ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    ParallelModePoolSlotState::Leased,
+                    "akra-agent/slot-1/task-one",
+                    "akra-pool/slot-1",
+                    "agent-1 / task-1",
+                )],
+            ))),
+            last_status_text: None,
+        };
+
+        assert!(ParallelPanelStateController::activity_pulse_visible(&state));
         assert!(!ParallelPanelStateController::prompt_input_locked(&state));
     }
 }

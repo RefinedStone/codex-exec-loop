@@ -13,6 +13,9 @@ mod live_status_layout;
 // Planning substate vocabulary is centralized here so workspace popup copy stays consistent.
 #[path = "status_panels/plan_indicator.rs"]
 mod plan_indicator;
+// Parallel slot activity copy mirrors the single-turn working line in the inline tail.
+#[path = "status_panels/parallel_working_copy.rs"]
+mod parallel_working_copy;
 // Tail copy builds the textual ribbon; live_status_layout decides how that ribbon occupies terminal rows.
 #[path = "status_panels/tail_copy.rs"]
 mod tail_copy;
