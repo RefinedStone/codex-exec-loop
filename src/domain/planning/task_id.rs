@@ -105,6 +105,21 @@ mod tests {
     }
 
     #[test]
+    fn system_actor_ids_use_system_slug() {
+        let generated_at = Utc.with_ymd_and_hms(2026, 4, 24, 1, 2, 3).unwrap();
+        let policy = PlanningTaskIdPolicy::new();
+
+        let task_id = policy.build_task_id(
+            TaskActor::System,
+            generated_at,
+            "Recover planning queue",
+            None,
+        );
+
+        assert!(task_id.starts_with("task-system-20260424T010203Z-"));
+    }
+
+    #[test]
     fn advances_collision_suffix_from_empty_to_one() {
         let policy = PlanningTaskIdPolicy::new();
 
