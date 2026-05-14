@@ -303,6 +303,81 @@ mod tests {
     use super::*;
 
     #[test]
+    fn conversation_message_constructor_preserves_core_fields() {
+        let message = ConversationMessage::new(
+            ConversationMessageKind::Tool,
+            "edited file",
+            Some("completed".to_string()),
+            Some("item-7".to_string()),
+        );
+
+        assert_eq!(message.kind, ConversationMessageKind::Tool);
+        assert_eq!(message.text, "edited file");
+        assert_eq!(message.phase.as_deref(), Some("completed"));
+        assert_eq!(message.item_id.as_deref(), Some("item-7"));
+        assert_eq!(message.debug_detail, None);
+        assert_eq!(message.display_label, None);
+    }
+
+    #[test]
+    fn conversation_message_builders_add_optional_rendering_metadata() {
+        let message =
+            ConversationMessage::new(ConversationMessageKind::Status, "running", None, None)
+                .with_display_label("status")
+                .with_debug_detail("raw event");
+
+        assert_eq!(message.kind, ConversationMessageKind::Status);
+        assert_eq!(message.text, "running");
+        assert_eq!(message.phase, None);
+        assert_eq!(message.item_id, None);
+        assert_eq!(message.display_label.as_deref(), Some("status"));
+        assert_eq!(message.debug_detail.as_deref(), Some("raw event"));
+    }
+
+    #[test]
+    fn reasoning_effort_parse_accepts_supported_user_spellings() {
+        let cases = [
+            (" none ", ConversationReasoningEffort::None),
+            ("OFF", ConversationReasoningEffort::None),
+            ("minimal", ConversationReasoningEffort::Minimal),
+            ("Low", ConversationReasoningEffort::Low),
+            ("medium", ConversationReasoningEffort::Medium),
+            ("HIGH", ConversationReasoningEffort::High),
+            ("xhigh", ConversationReasoningEffort::XHigh),
+            ("extra high", ConversationReasoningEffort::XHigh),
+            ("extra_high", ConversationReasoningEffort::XHigh),
+            ("x-high", ConversationReasoningEffort::XHigh),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(ConversationReasoningEffort::parse(input), Some(expected));
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_parse_rejects_empty_default_and_unknown_values() {
+        for input in ["", "   ", "default", "auto", "maximum"] {
+            assert_eq!(ConversationReasoningEffort::parse(input), None);
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_label_returns_canonical_values() {
+        let cases = [
+            (ConversationReasoningEffort::None, "none"),
+            (ConversationReasoningEffort::Minimal, "minimal"),
+            (ConversationReasoningEffort::Low, "low"),
+            (ConversationReasoningEffort::Medium, "medium"),
+            (ConversationReasoningEffort::High, "high"),
+            (ConversationReasoningEffort::XHigh, "xhigh"),
+        ];
+
+        for (effort, label) in cases {
+            assert_eq!(effort.label(), label);
+        }
+    }
+
+    #[test]
     fn turn_options_default_to_akra_project_model_policy() {
         let options = ConversationTurnOptions::default();
 
@@ -312,6 +387,7 @@ mod tests {
             Some(ConversationReasoningEffort::High)
         );
         assert!(options.is_default());
+        assert_eq!(options.summary_label(), "model: gpt-5.5  |  think: high");
     }
 
     #[test]
@@ -321,5 +397,67 @@ mod tests {
         assert_eq!(options.model, None);
         assert_eq!(options.reasoning_effort, None);
         assert!(!options.is_default());
+        assert_eq!(options.summary_label(), "model: default  |  think: default");
+    }
+
+    #[test]
+    fn turn_options_default_detection_requires_exact_policy_values() {
+        let wrong_model = ConversationTurnOptions {
+            model: Some("GPT-5.5".to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::High),
+        };
+        let wrong_effort = ConversationTurnOptions {
+            model: Some(ConversationTurnOptions::DEFAULT_MODEL.to_string()),
+            reasoning_effort: Some(ConversationReasoningEffort::Medium),
+        };
+        let missing_model = ConversationTurnOptions {
+            model: None,
+            reasoning_effort: Some(ConversationReasoningEffort::High),
+        };
+
+        assert!(!wrong_model.is_default());
+        assert!(!wrong_effort.is_default());
+        assert!(!missing_model.is_default());
+    }
+
+    #[test]
+    fn turn_options_summary_uses_default_placeholders_independently() {
+        let default_model_only = ConversationTurnOptions {
+            model: None,
+            reasoning_effort: Some(ConversationReasoningEffort::XHigh),
+        };
+        let default_effort_only = ConversationTurnOptions {
+            model: Some("gpt-5.4".to_string()),
+            reasoning_effort: None,
+        };
+
+        assert_eq!(
+            default_model_only.summary_label(),
+            "model: default  |  think: xhigh"
+        );
+        assert_eq!(
+            default_effort_only.summary_label(),
+            "model: gpt-5.4  |  think: default"
+        );
+    }
+
+    #[test]
+    fn runtime_control_truth_defaults_to_codex_app_server_contract() {
+        let truth = ConversationRuntimeControlTruth::default();
+
+        assert_eq!(truth, ConversationRuntimeControlTruth::codex_app_server());
+        assert_eq!(truth.approval, ConversationControlSupport::ManualHandoff);
+        assert_eq!(truth.interrupt, ConversationControlSupport::Unsupported);
+    }
+
+    #[test]
+    fn runtime_control_truth_constructor_keeps_capabilities_independent() {
+        let truth = ConversationRuntimeControlTruth::new(
+            ConversationControlSupport::RuntimeNative,
+            ConversationControlSupport::ManualHandoff,
+        );
+
+        assert_eq!(truth.approval, ConversationControlSupport::RuntimeNative);
+        assert_eq!(truth.interrupt, ConversationControlSupport::ManualHandoff);
     }
 }
