@@ -278,3 +278,169 @@ impl ParallelModeSupervisorSnapshot {
         self.state.label()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_item_state_labels_and_active_flags_are_stable() {
+        let cases = [
+            (ParallelModeQueueItemState::Idle, "idle", false),
+            (ParallelModeQueueItemState::Queued, "queued", true),
+            (ParallelModeQueueItemState::Pushing, "pushing", true),
+            (ParallelModeQueueItemState::PrPending, "pr pending", true),
+            (
+                ParallelModeQueueItemState::MergePending,
+                "merge pending",
+                true,
+            ),
+            (ParallelModeQueueItemState::Integrating, "integrating", true),
+            (ParallelModeQueueItemState::Cleaning, "cleaning", true),
+            (ParallelModeQueueItemState::Done, "done", false),
+            (ParallelModeQueueItemState::Blocked, "blocked", true),
+            (ParallelModeQueueItemState::Failed, "failed", false),
+        ];
+
+        for (state, label, active) in cases {
+            assert_eq!(state.label(), label);
+            assert_eq!(state.is_active(), active, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn feed_and_queue_entries_store_display_fields() {
+        let completion = ParallelModeCompletionFeedEntry::new("merge", "merged branch");
+        assert_eq!(completion.stage_label, "merge");
+        assert_eq!(completion.summary, "merged branch");
+
+        let runtime = ParallelModeRuntimeEventFeedEntry::new(
+            42,
+            "projection_written",
+            "distributor_queue",
+            "queue-1",
+            7,
+            "queue updated",
+            "2026-05-14T07:00:00Z",
+        );
+        assert_eq!(runtime.sequence, 42);
+        assert_eq!(runtime.event_kind, "projection_written");
+        assert_eq!(runtime.projection_kind, "distributor_queue");
+        assert_eq!(runtime.projection_key, "queue-1");
+        assert_eq!(runtime.observed_planning_revision, 7);
+        assert_eq!(runtime.summary, "queue updated");
+        assert_eq!(runtime.recorded_at, "2026-05-14T07:00:00Z");
+
+        let item = ParallelModeDistributorQueueItem::new(
+            "agent-one",
+            "Cover distributor",
+            ParallelModeQueueItemState::Queued,
+            "akra-agent/slot-1",
+            "abc1234",
+            "waiting for push",
+        );
+        assert_eq!(item.source_agent, "agent-one");
+        assert_eq!(item.task_title, "Cover distributor");
+        assert_eq!(item.queue_state, ParallelModeQueueItemState::Queued);
+        assert_eq!(item.branch_name, "akra-agent/slot-1");
+        assert_eq!(item.commit_short_sha, "abc1234");
+        assert_eq!(item.integration_note, "waiting for push");
+    }
+
+    #[test]
+    fn distributor_snapshot_filters_blank_optional_details_and_summarizes_depth() {
+        let runtime_event = ParallelModeRuntimeEventFeedEntry::new(
+            1,
+            "event",
+            "projection",
+            "key",
+            3,
+            "summary",
+            "now",
+        );
+        let status = ParallelModeOrchestratorStatus {
+            queue_head: "queue-1".to_string(),
+            barrier_state: "blocked".to_string(),
+            blocked_reason: Some("conflict".to_string()),
+            conflict_files: vec!["src/lib.rs".to_string()],
+            held_queue_count: 2,
+            integration_worktree_readiness: "dirty".to_string(),
+            slot_return_wait_reason: Some("slot busy".to_string()),
+        };
+        let empty = ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "none")
+            .with_head_blocked_detail(Some("   ".to_string()))
+            .with_head_rebase_provenance(Some(String::new()));
+
+        assert_eq!(empty.queue_depth(), 0);
+        assert_eq!(empty.compact_summary(), "idle");
+        assert_eq!(empty.head_blocked_detail, None);
+        assert_eq!(empty.head_rebase_provenance, None);
+        assert_eq!(
+            empty.orchestrator_status,
+            ParallelModeOrchestratorStatus::idle()
+        );
+
+        let item = ParallelModeDistributorQueueItem::new(
+            "agent-one",
+            "Cover distributor",
+            ParallelModeQueueItemState::MergePending,
+            "branch",
+            "abc1234",
+            "ready",
+        );
+        let snapshot = ParallelModeDistributorSnapshot::new(
+            vec![item],
+            vec![ParallelModeCompletionFeedEntry::new(
+                "push",
+                "pushed branch",
+            )],
+            "merge pending",
+            "waiting",
+        )
+        .with_head_blocked_detail(Some(" blocked by checks ".to_string()))
+        .with_head_rebase_provenance(Some("origin/prerelease".to_string()))
+        .with_orchestrator_status(status.clone())
+        .with_runtime_event_feed(vec![runtime_event.clone()]);
+
+        assert_eq!(snapshot.queue_depth(), 1);
+        assert_eq!(snapshot.compact_summary(), "merge pending / depth 1");
+        assert_eq!(
+            snapshot.head_blocked_detail.as_deref(),
+            Some(" blocked by checks ")
+        );
+        assert_eq!(
+            snapshot.head_rebase_provenance.as_deref(),
+            Some("origin/prerelease")
+        );
+        assert_eq!(snapshot.orchestrator_status, status);
+        assert_eq!(snapshot.runtime_event_feed, vec![runtime_event]);
+        assert_eq!(snapshot.completion_feed[0].summary, "pushed branch");
+    }
+
+    #[test]
+    fn supervisor_snapshot_keeps_child_snapshots_and_state_label() {
+        let pool = ParallelModePoolBoardSnapshot::new(0, "pool", "ready", Vec::new());
+        let roster = ParallelModeAgentRosterSnapshot::new(Vec::new(), "no agents");
+        let detail = ParallelModeSupervisorDetailSnapshot::new(None, "no detail");
+        let distributor =
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "none");
+
+        let snapshot = ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Recover,
+            "/workspace",
+            pool,
+            roster,
+            detail,
+            distributor,
+            Some("readiness blocked".to_string()),
+        );
+
+        assert_eq!(snapshot.state_label(), "recover");
+        assert_eq!(snapshot.workspace_path, "/workspace");
+        assert_eq!(snapshot.pool.pool_root_label, "pool");
+        assert_eq!(snapshot.roster.empty_state, "no agents");
+        assert_eq!(snapshot.detail.empty_state, "no detail");
+        assert_eq!(snapshot.distributor.head_summary, "idle");
+        assert_eq!(snapshot.top_notice.as_deref(), Some("readiness blocked"));
+    }
+}
