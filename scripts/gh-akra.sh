@@ -329,6 +329,13 @@ resolve_token() {
     printf '%s\n' "${AKRA_GITHUB_TOKEN}"
     return 0
   fi
+
+  if token_from_git_credential_fill ||
+    token_from_named_credential_files ||
+    token_from_git_credential_files; then
+    return 0
+  fi
+
   if [[ -n "${GH_TOKEN:-}" ]]; then
     printf '%s\n' "${GH_TOKEN}"
     return 0
@@ -338,14 +345,34 @@ resolve_token() {
     return 0
   fi
 
-  token_from_git_credential_fill ||
-    token_from_named_credential_files ||
-    token_from_git_credential_files ||
-    true
+  true
+}
+
+resolve_gh_exec_token() {
+  if [[ -n "${AKRA_GITHUB_TOKEN:-}" ]]; then
+    printf '%s\n' "${AKRA_GITHUB_TOKEN}"
+    return 0
+  fi
+
+  if token_from_git_credential_fill; then
+    return 0
+  fi
+
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    printf '%s\n' "${GH_TOKEN}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    printf '%s\n' "${GITHUB_TOKEN}"
+    return 0
+  fi
+  true
 }
 
 gh_api_login() {
-  if [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
+  if [[ -n "${gh_exec_token:-}" ]]; then
+    GH_TOKEN="${gh_exec_token}" GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
+  elif [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
     GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
   else
     GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
@@ -788,7 +815,12 @@ parse_review_reply_args() {
 
 reply_review_comment_with_gh() {
   parse_review_reply_args "$@"
-  if [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
+  if [[ -n "${gh_exec_token:-}" ]]; then
+    GH_TOKEN="${gh_exec_token}" GH_HOST=github.com gh api \
+      -X POST \
+      "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
+      -f "body=${body}" >/dev/null
+  elif [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
     GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api \
       -X POST \
       "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
@@ -809,14 +841,15 @@ reply_review_comment_with_api() {
 }
 
 if command -v gh >/dev/null 2>&1; then
+  gh_exec_token="$(resolve_gh_exec_token)"
   verify_gh_login_if_requested
   if [[ "${1-}" == "review-reply" ]]; then
     shift
     reply_review_comment_with_gh "$@"
     exit 0
   fi
-  if [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
-    GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com exec gh "$@"
+  if [[ -n "${gh_exec_token}" ]]; then
+    GH_TOKEN="${gh_exec_token}" GH_HOST=github.com exec gh "$@"
   fi
   GH_HOST=github.com exec gh "$@"
 fi
