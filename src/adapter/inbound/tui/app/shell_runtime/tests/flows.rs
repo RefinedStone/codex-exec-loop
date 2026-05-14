@@ -847,12 +847,53 @@ fn ready_parallel_mode_supervisor_snapshot(
     ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
         workspace_directory.to_string(),
-        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModePoolBoardSnapshot::new(
+            3,
+            &flow_pool_root_label(workspace_directory),
+            "idle",
+            Vec::new(),
+        ),
         ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
         ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     )
+}
+
+fn flow_pool_root_label(workspace_directory: &str) -> String {
+    let workspace_root = Path::new(workspace_directory);
+    let canonical_workspace = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let parent_dir = canonical_workspace
+        .parent()
+        .unwrap_or(canonical_workspace.as_path())
+        .to_path_buf();
+    let repo_name = canonical_workspace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("workspace");
+    let pool_root = parent_dir
+        .join(format!("{repo_name}-akra-worktrees"))
+        .join(stable_short_hash(
+            canonical_workspace.to_string_lossy().as_ref(),
+        ))
+        .join("akra-pool");
+    pool_root.display().to_string()
+}
+
+fn stable_short_hash(value: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    format!("{hash:016x}")[..12].to_string()
 }
 
 fn loading_parallel_mode_supervisor_snapshot(
