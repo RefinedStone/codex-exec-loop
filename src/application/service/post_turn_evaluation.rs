@@ -951,9 +951,10 @@ mod tests {
         PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
         TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
     };
+    use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1588,6 +1589,50 @@ mod tests {
     }
 
     #[test]
+    fn official_completion_refresh_resolved_repair_uses_repaired_projection() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("official-refresh-resolved-repair");
+            seed_ready_queue_authority(&workspace.path);
+            let mut executor =
+                test_executor_with_worker(Arc::new(SequencedPlanningWorkerPort::new([
+                    invalid_task_command_worker_message(),
+                    done_task_command_worker_message(),
+                ])));
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let context = test_context(current_projection);
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+            let contract = official_completion_contract();
+
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
+
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RepairSucceeded
+            );
+            assert_eq!(
+                outcome.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
     fn official_completion_refresh_repeated_queue_head_blocks_slot_finalization() {
         with_test_event_logging(|| {
             let workspace = TempPlanningWorkspace::new("official-refresh-repeated-head");
@@ -1863,11 +1908,52 @@ mod tests {
         }
     }
 
+    struct SequencedPlanningWorkerPort {
+        final_agent_messages: Mutex<VecDeque<&'static str>>,
+    }
+
+    impl SequencedPlanningWorkerPort {
+        fn new<const N: usize>(messages: [&'static str; N]) -> Self {
+            Self {
+                final_agent_messages: Mutex::new(VecDeque::from(messages)),
+            }
+        }
+    }
+
+    impl PlanningWorkerPort for SequencedPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            let final_agent_message = self
+                .final_agent_messages
+                .lock()
+                .expect("sequenced worker mutex should not be poisoned")
+                .pop_front()
+                .expect("sequenced worker should have a response for every request");
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                thread_id: Some("worker-thread-1".to_string()),
+                turn_id: Some("worker-turn-1".to_string()),
+                final_agent_message: Some(final_agent_message.to_string()),
+                changed_planning_file_paths: Vec::new(),
+            })
+        }
+    }
+
     fn invalid_task_command_worker_message() -> &'static str {
         r#"The worker tried to update planning.
 
 ```json
 {"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Missing op"}}]}}
+```"#
+    }
+
+    fn done_task_command_worker_message() -> &'static str {
+        r#"The repair worker corrected planning.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"update_task","task_id":"task-1","status":"done","priority_reason":"Completed by official completion repair."}]}}
 ```"#
     }
 
