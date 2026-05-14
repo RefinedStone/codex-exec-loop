@@ -216,7 +216,7 @@ impl PromptDocumentBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::PromptDocument;
+    use super::{PromptDocument, PromptSection};
 
     #[test]
     // 이 테스트는 builder의 핵심 출력 계약을 한 번에 고정한다.
@@ -237,5 +237,25 @@ mod tests {
             prompt,
             "# task\n\n[rules]\n- do this\n- do that\n\n[payload]\nalpha\n\nbeta\n\n[json]\n```json\n{\n  \"ok\": true\n}\n```"
         );
+    }
+
+    #[test]
+    fn render_skips_empty_sections_even_when_document_is_constructed_directly() {
+        let prompt = PromptDocument {
+            title: " task ".to_string(),
+            sections: vec![
+                PromptSection {
+                    title: "empty".to_string(),
+                    lines: Vec::new(),
+                },
+                PromptSection {
+                    title: " actual ".to_string(),
+                    lines: vec!["body".to_string()],
+                },
+            ],
+        }
+        .render();
+
+        assert_eq!(prompt, "# task\n\n[actual]\nbody");
     }
 }
