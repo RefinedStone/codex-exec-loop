@@ -205,3 +205,80 @@ impl From<RecentSessions> for SessionCatalog {
         Self::ready(SessionCatalogTier::ProviderBackedCatalog, recent_sessions)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier};
+
+    fn recent_sessions_with_warning(warning: &str) -> RecentSessions {
+        RecentSessions {
+            items: Vec::new(),
+            warnings: vec![warning.to_string()],
+            next_cursor: Some("cursor-next".to_string()),
+        }
+    }
+
+    #[test]
+    fn request_and_tier_labels_preserve_catalog_contract_copy() {
+        let request = SessionCatalogRequest::for_workspace(25, "/workspace/current");
+
+        assert_eq!(request.limit, 25);
+        assert_eq!(
+            request.current_workspace_directory.as_deref(),
+            Some("/workspace/current")
+        );
+        assert_eq!(SessionCatalogTier::AttachOnly.label(), "attach-only");
+        assert_eq!(
+            SessionCatalogTier::HandleBasedReattach.label(),
+            "handle-based reattach"
+        );
+        assert_eq!(
+            SessionCatalogTier::ProviderBackedCatalog.label(),
+            "provider-backed catalog"
+        );
+    }
+
+    #[test]
+    fn catalog_accessors_normalize_status_and_ready_payload_variants() {
+        let unsupported = SessionCatalog::unsupported(
+            SessionCatalogTier::AttachOnly,
+            "list API unavailable",
+            vec!["manual attach required".to_string()],
+        );
+        let partial = SessionCatalog::partial(
+            SessionCatalogTier::HandleBasedReattach,
+            "handle lookup only",
+            vec!["no provider rows".to_string()],
+        );
+        let ready = SessionCatalog::ready(
+            SessionCatalogTier::ProviderBackedCatalog,
+            recent_sessions_with_warning("some records were skipped"),
+        );
+
+        assert_eq!(unsupported.tier(), SessionCatalogTier::AttachOnly);
+        assert_eq!(unsupported.warnings(), ["manual attach required"]);
+        assert!(unsupported.recent_sessions().is_none());
+
+        assert_eq!(partial.tier(), SessionCatalogTier::HandleBasedReattach);
+        assert_eq!(partial.warnings(), ["no provider rows"]);
+        assert!(partial.recent_sessions().is_none());
+
+        assert_eq!(ready.tier(), SessionCatalogTier::ProviderBackedCatalog);
+        assert_eq!(ready.warnings(), ["some records were skipped"]);
+        assert_eq!(
+            ready
+                .recent_sessions()
+                .and_then(|recent| recent.next_cursor.as_deref()),
+            Some("cursor-next")
+        );
+    }
+
+    #[test]
+    fn raw_recent_sessions_convert_to_provider_backed_ready_catalog() {
+        let catalog = SessionCatalog::from(recent_sessions_with_warning("provider warning"));
+
+        assert_eq!(catalog.tier(), SessionCatalogTier::ProviderBackedCatalog);
+        assert_eq!(catalog.warnings(), ["provider warning"]);
+        assert!(catalog.recent_sessions().is_some());
+    }
+}
