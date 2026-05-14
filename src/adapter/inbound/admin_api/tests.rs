@@ -1,16 +1,39 @@
+use super::helpers::{
+    encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
+    notice_location, render_fragment, render_html, verify_form_csrf, verify_header_csrf,
+};
 use super::pages::{extract_file_updates, nav_for_kind};
-use super::{build_admin_state, build_router, parse_reset_target};
+use super::{build_admin_state, build_router, parse_args, parse_reset_target};
 use crate::application::service::planning::{
     PlanningAdminDraftKind, PlanningAdminFileKey, PlanningResetTarget,
 };
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
+use axum_extra::extract::CookieJar;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
+
+struct BrokenTemplate;
+
+impl std::fmt::Display for BrokenTemplate {
+    fn fmt(&self, _formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Err(std::fmt::Error)
+    }
+}
+
+impl askama::Template for BrokenTemplate {
+    const EXTENSION: Option<&'static str> = Some("html");
+    const SIZE_HINT: usize = 0;
+    const MIME_TYPE: &'static str = "text/html";
+
+    fn render_into(&self, _writer: &mut (impl std::fmt::Write + ?Sized)) -> askama::Result<()> {
+        Err(std::fmt::Error.into())
+    }
+}
 
 /*
  * admin_api tests는 service 내부가 아니라 inbound HTML/form boundary를 보호한다.
@@ -277,6 +300,102 @@ fn reset_form_and_json_spelling_maps_to_shared_application_target() {
         assert_eq!(parse_reset_target(raw).unwrap(), expected);
     }
     assert!(parse_reset_target("tasks").is_err());
+}
+
+#[test]
+fn admin_server_arg_parser_accepts_default_and_port_only_surface() {
+    let default_args = parse_args(Vec::<String>::new()).expect("default args should parse");
+    assert_eq!(default_args.port, 18442);
+
+    let args = parse_args(["--port".to_string(), "19000".to_string()])
+        .expect("explicit port should parse");
+    assert_eq!(args.port, 19000);
+
+    for (args, expected) in [
+        (
+            vec!["--port".to_string()],
+            "--port requires a value".to_string(),
+        ),
+        (
+            vec!["--port".to_string(), "abc".to_string()],
+            "invalid port: abc".to_string(),
+        ),
+        (
+            vec!["--host".to_string(), "0.0.0.0".to_string()],
+            "unsupported argument: --host".to_string(),
+        ),
+    ] {
+        let error = parse_args(args).expect_err("admin args should fail");
+        assert!(
+            error.to_string().contains(&expected),
+            "expected `{expected}`, got `{error:#}`"
+        );
+    }
+}
+
+#[test]
+fn admin_http_helpers_cover_csrf_redirect_htmx_and_render_failures() {
+    assert_eq!(encode_uri_component("queue reset ok"), "queue%20reset%20ok");
+    assert_eq!(
+        notice_location("/admin/controls", "reset: queue"),
+        "/admin/controls?notice=reset%3A%20queue"
+    );
+
+    let (jar, generated_token) = ensure_csrf_cookie(CookieJar::new());
+    assert_eq!(generated_token.len(), 32);
+    assert!(
+        generated_token
+            .chars()
+            .all(|value| value.is_ascii_hexdigit())
+    );
+    assert!(verify_form_csrf(&jar, &generated_token).is_ok());
+    assert_eq!(
+        verify_form_csrf(&CookieJar::new(), &generated_token),
+        Err(StatusCode::FORBIDDEN)
+    );
+    assert_eq!(
+        verify_form_csrf(&jar, "wrong-token"),
+        Err(StatusCode::FORBIDDEN)
+    );
+
+    let (same_jar, existing_token) = ensure_csrf_cookie(jar);
+    assert_eq!(existing_token, generated_token);
+
+    let mut headers = HeaderMap::new();
+    assert_eq!(
+        verify_header_csrf(&same_jar, &headers),
+        Err(StatusCode::FORBIDDEN)
+    );
+    headers.insert(
+        "x-csrf-token",
+        HeaderValue::from_str(&existing_token).expect("token should be a header value"),
+    );
+    assert!(verify_header_csrf(&same_jar, &headers).is_ok());
+    headers.insert("x-csrf-token", HeaderValue::from_static("wrong-token"));
+    assert_eq!(
+        verify_header_csrf(&same_jar, &headers),
+        Err(StatusCode::FORBIDDEN)
+    );
+
+    let mut htmx_headers = HeaderMap::new();
+    assert!(!is_htmx_request(&htmx_headers));
+    htmx_headers.insert("hx-request", HeaderValue::from_static("TRUE"));
+    assert!(!is_htmx_request(&htmx_headers));
+    htmx_headers.insert("hx-request", HeaderValue::from_static("true"));
+    assert!(is_htmx_request(&htmx_headers));
+
+    assert_eq!(
+        render_fragment(BrokenTemplate).expect_err("fragment render should fail"),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(
+        render_html(CookieJar::new(), BrokenTemplate).expect_err("page render should fail"),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(
+        internal_server_error(anyhow::anyhow!("boom")),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
 }
 
 #[tokio::test]
