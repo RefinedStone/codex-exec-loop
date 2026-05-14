@@ -16,6 +16,7 @@ use crate::application::service::planning::control::{
     PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
 };
 use anyhow::{Result, anyhow, bail};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -251,6 +252,58 @@ fn parse_message_maps_parallel_status_to_parallel_control_surface() {
 }
 
 #[test]
+fn parse_message_ignores_empty_and_plain_chat_text() {
+    for raw in [None, Some(""), Some("   "), Some("hello akra")] {
+        assert_eq!(parse_message(raw), TelegramParsedMessage::Ignore);
+    }
+}
+
+#[test]
+fn parse_message_reports_help_for_unknown_slash_command() {
+    let parsed = parse_message(Some("/deploy"));
+
+    match parsed {
+        TelegramParsedMessage::Error(error) => {
+            assert!(error.contains("지원하지 않는 명령어입니다: /deploy"));
+            assert!(error.contains("/status"));
+            assert!(error.contains("/reset queue"));
+        }
+        other => panic!("unknown slash command should produce help error, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_message_rejects_extra_arguments_for_query_commands() {
+    for (raw, usage) in [
+        ("/help now", "/help"),
+        ("/whoami please", "/whoami"),
+        ("/status detail", "/status"),
+        ("/queue all", "/queue"),
+        ("/parallel_status now", "/parallel_status"),
+    ] {
+        assert_eq!(
+            parse_message(Some(raw)),
+            TelegramParsedMessage::Error(format!("사용법: {usage}")),
+            "Telegram input `{raw}` should reject trailing arguments"
+        );
+    }
+}
+
+#[test]
+fn parse_message_rejects_unknown_plan_and_reset_targets() {
+    assert_eq!(
+        parse_message(Some("/plan repair")),
+        TelegramParsedMessage::Error("사용법: /plan [status]".to_string())
+    );
+    assert_eq!(
+        parse_message(Some("/reset cache")),
+        TelegramParsedMessage::Error(
+            "사용법: /reset queue | /reset directions | /reset all".to_string()
+        )
+    );
+}
+
+#[test]
 fn parse_message_reports_usage_for_reset_without_target() {
     /*
      * `/reset` is destructive enough that Telegram must reject an omitted target
@@ -411,6 +464,80 @@ fn parse_args_reads_token_and_chat_ids_from_environment_and_flags() {
 }
 
 #[test]
+fn parse_args_cli_token_overrides_environment_and_keep_pending_disables_drop() {
+    let args = parse_args_with_environment(
+        [
+            "--token".to_string(),
+            "cli-token".to_string(),
+            "--allow-chat-id".to_string(),
+            "-100".to_string(),
+            "--keep-pending".to_string(),
+        ],
+        TelegramBotEnvironment {
+            token: Some("env-token".to_string()),
+            allowed_chat_ids: [10].into_iter().collect(),
+        },
+    )
+    .expect("args should parse");
+
+    assert_eq!(args.token, "cli-token");
+    assert_eq!(args.allowed_chat_ids, [-100, 10].into_iter().collect());
+    assert_eq!(args.poll_timeout_seconds, 30);
+    assert!(!args.drop_pending_updates);
+}
+
+#[test]
+fn parse_args_rejects_missing_invalid_and_unsupported_values() {
+    for (args, expected_error) in [
+        (
+            vec!["--token".to_string()],
+            "missing value for --token".to_string(),
+        ),
+        (
+            vec!["--allow-chat-id".to_string()],
+            "missing value for --allow-chat-id".to_string(),
+        ),
+        (
+            vec!["--allow-chat-id".to_string(), "not-a-chat".to_string()],
+            "failed to parse telegram chat id from `not-a-chat`".to_string(),
+        ),
+        (
+            vec!["--poll-timeout-seconds".to_string(), "abc".to_string()],
+            "failed to parse poll timeout seconds from `abc`".to_string(),
+        ),
+        (
+            vec!["--poll-timeout-seconds".to_string(), "0".to_string()],
+            "--poll-timeout-seconds must be greater than zero".to_string(),
+        ),
+        (
+            vec!["--unknown".to_string()],
+            "unsupported telegram-bot argument: --unknown".to_string(),
+        ),
+    ] {
+        let error = parse_args_with_environment(
+            args,
+            TelegramBotEnvironment {
+                token: Some("env-token".to_string()),
+                allowed_chat_ids: BTreeSet::new(),
+            },
+        )
+        .expect_err("args should fail");
+        assert!(
+            error.to_string().contains(&expected_error),
+            "expected `{expected_error}`, got `{error:#}`"
+        );
+    }
+
+    let missing_token = parse_args_with_environment(Vec::<String>::new(), Default::default())
+        .expect_err("missing token should fail");
+    assert!(
+        missing_token
+            .to_string()
+            .contains("telegram bot token is required")
+    );
+}
+
+#[test]
 fn load_environment_from_sources_merges_config_file_and_process_env() {
     /*
      * Process env wins over config file content for both token and allowlist.
@@ -431,6 +558,26 @@ fn load_environment_from_sources_merges_config_file_and_process_env() {
 
     assert_eq!(environment.token.as_deref(), Some("env-token"));
     assert_eq!(environment.allowed_chat_ids, [12, 13].into_iter().collect());
+}
+
+#[test]
+fn load_environment_from_sources_accepts_empty_and_sparse_allowlists() {
+    let environment = load_environment_from_sources(
+        Some("AKRA_TELEGRAM_BOT_TOKEN=config-token\nAKRA_TELEGRAM_ALLOWED_CHAT_IDS=10,, -20,\n"),
+        None,
+        None,
+    )
+    .expect("environment should load");
+
+    assert_eq!(environment.token.as_deref(), Some("config-token"));
+    assert_eq!(
+        environment.allowed_chat_ids,
+        [-20, 10].into_iter().collect()
+    );
+
+    let environment = load_environment_from_sources(None, None, Some("".to_string()))
+        .expect("empty process allowlist should load");
+    assert!(environment.allowed_chat_ids.is_empty());
 }
 
 #[test]
@@ -455,6 +602,27 @@ fn apply_environment_file_reads_token_and_allowlist() {
 
     assert_eq!(environment.token.as_deref(), Some("stored-token"));
     assert_eq!(environment.allowed_chat_ids, [10, 11].into_iter().collect());
+}
+
+#[test]
+fn apply_environment_file_reports_malformed_lines_and_bad_chat_ids() {
+    let mut environment = TelegramBotEnvironment::default();
+    let malformed = apply_environment_file(&mut environment, "AKRA_TELEGRAM_BOT_TOKEN");
+    assert!(
+        malformed
+            .expect_err("missing equals should fail")
+            .to_string()
+            .contains("invalid Telegram config entry on line 1")
+    );
+
+    let bad_chat_id =
+        apply_environment_file(&mut environment, "AKRA_TELEGRAM_ALLOWED_CHAT_IDS=10,abc");
+    assert!(
+        bad_chat_id
+            .expect_err("bad chat id should fail")
+            .to_string()
+            .contains("failed to parse telegram chat id from `abc`")
+    );
 }
 
 // Poll-loop tests keep the bot alive across transport and per-message failures.
@@ -525,4 +693,39 @@ fn process_updates_continues_after_individual_message_failure() {
     // First message reports the injected planning failure; second proves the loop recovered.
     assert!(sent_messages[0].text.contains("명령 처리에 실패했습니다."));
     assert!(sent_messages[1].text.contains("상태 요약"));
+}
+
+#[test]
+fn runner_whoami_reports_allowlist_state_without_planning_access() {
+    let (_gateway, runner) = build_runner(&[42]);
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 1,
+            chat_id: 42,
+            text: Some("/whoami".to_string()),
+            sender_display_name: Some("operator".to_string()),
+        })
+        .expect("handler should succeed")
+        .expect("reply should exist");
+
+    assert!(reply.contains("chat_id: 42"));
+    assert!(reply.contains("allowed: yes"));
+    assert!(reply.contains("allowlist_configured: yes"));
+}
+
+#[test]
+fn runner_rejects_unauthorized_chat_against_configured_allowlist() {
+    let (_gateway, runner) = build_runner(&[42]);
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 1,
+            chat_id: 777,
+            text: Some("/parallel".to_string()),
+            sender_display_name: Some("operator".to_string()),
+        })
+        .expect("handler should succeed")
+        .expect("reply should exist");
+
+    assert!(reply.contains("허용되지 않은 chat_id입니다."));
+    assert!(reply.contains("현재 chat_id: 777"));
 }
