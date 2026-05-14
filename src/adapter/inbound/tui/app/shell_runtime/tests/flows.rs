@@ -849,7 +849,7 @@ fn ready_parallel_mode_supervisor_snapshot(
         workspace_directory.to_string(),
         ParallelModePoolBoardSnapshot::new(
             3,
-            &flow_pool_root_label(workspace_directory),
+            flow_pool_root_label(workspace_directory),
             "idle",
             Vec::new(),
         ),

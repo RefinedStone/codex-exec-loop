@@ -60,3 +60,29 @@ pub struct ParallelModeProjection {
     pub readiness: Option<Box<ParallelModeReadinessSnapshot>>,
     pub supervisor: Option<Box<ParallelModeSupervisorSnapshot>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PlanningParallelProjection;
+    use crate::application::service::planning::PlanningRuntimeProjection;
+
+    #[test]
+    fn default_projection_matches_initial_uninitialized_state() {
+        assert_eq!(
+            PlanningParallelProjection::default(),
+            PlanningParallelProjection::initial()
+        );
+        assert_eq!(
+            *PlanningParallelProjection::default().planning_runtime,
+            PlanningRuntimeProjection::uninitialized()
+        );
+    }
+
+    #[test]
+    fn applying_same_empty_parallel_supervisor_snapshot_is_idempotent() {
+        let mut projection = PlanningParallelProjection::default();
+
+        assert!(!projection.apply_parallel_supervisor_snapshot(None));
+        assert!(projection.parallel_mode.supervisor.is_none());
+    }
+}

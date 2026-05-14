@@ -143,3 +143,69 @@ impl SessionSummary {
         value.chars().take(LIMIT - 1).collect::<String>() + "..."
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SessionSummary;
+
+    fn summary_with(preview: &str) -> SessionSummary {
+        SessionSummary {
+            id: "session-1234567890".to_string(),
+            name: None,
+            preview: preview.to_string(),
+            cwd: "/workspace/project".to_string(),
+            source: "provider".to_string(),
+            model_provider: "codex".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: "/sessions/session-1234567890.jsonl".to_string(),
+            git_branch: Some("feature/example".to_string()),
+        }
+    }
+
+    #[test]
+    fn display_helpers_preserve_provider_identity_and_workspace_tail() {
+        let mut summary = summary_with("  first line  \nsecond line");
+        summary.name = Some(" Provider title ".to_string());
+        summary.cwd = "/tmp/workspace/project-name".to_string();
+
+        assert_eq!(summary.short_id(), "session-");
+        assert_eq!(summary.title(), " Provider title ");
+        assert_eq!(summary.first_preview_line(), "first line");
+        assert_eq!(summary.preview_block(), "first line  \nsecond line");
+        assert_eq!(summary.workspace_label(), "project-name");
+    }
+
+    #[test]
+    fn blank_name_and_preview_use_visible_placeholders() {
+        let mut summary = summary_with("   \nsecond line");
+        summary.name = Some("   ".to_string());
+        summary.cwd = "/tmp/workspace/".to_string();
+
+        assert_eq!(summary.title(), "(empty preview)");
+        assert_eq!(summary.first_preview_line(), "(empty preview)");
+        assert_eq!(summary.preview_block(), "second line");
+        assert_eq!(summary.workspace_label(), "/tmp/workspace/");
+
+        let empty_summary = summary_with("   ");
+        assert_eq!(empty_summary.preview_block(), "(empty preview)");
+    }
+
+    #[test]
+    fn preview_title_fallback_truncates_unicode_without_splitting_scalars() {
+        let summary = summary_with(&"한".repeat(73));
+        let title = summary.title();
+
+        assert_eq!(title.chars().count(), 74);
+        assert!(title.starts_with(&"한".repeat(71)));
+        assert!(title.ends_with("..."));
+    }
+
+    #[test]
+    fn invalid_timestamp_falls_back_to_raw_epoch() {
+        let mut summary = summary_with("preview");
+        summary.updated_at_epoch = i64::MAX;
+
+        assert_eq!(summary.updated_at_label(), i64::MAX.to_string());
+    }
+}

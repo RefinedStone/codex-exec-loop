@@ -95,6 +95,13 @@ async fn text_body(response: axum::response::Response) -> String {
     String::from_utf8(body.to_vec()).expect("response body should be UTF-8")
 }
 
+async fn bytes_body(response: axum::response::Response) -> Vec<u8> {
+    to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body should be readable")
+        .to_vec()
+}
+
 async fn bootstrap_admin_json_session(router: &Router) -> (String, String) {
     let response = router
         .clone()
@@ -714,6 +721,121 @@ async fn admin_html_page_routes_render_live_templates() {
             assert!(!body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
         }
     }
+}
+
+#[tokio::test]
+async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names() {
+    let workspace = TempAdminWorkspace::new("asset-routes");
+    let router = admin_test_router(&workspace);
+
+    for asset_name in [
+        "akra-office-background.png",
+        "final-draft-map-sprite.png",
+        "akra-object-sprites.png",
+        "gamebaljeonguk_atlas_64x96.png",
+        "gamebaljeonguk_atlas_128x192.png",
+        "sprite_floor_tile.png",
+        "sprite_desk_workstation.png",
+        "sprite_server_rack.png",
+        "sprite_whiteboard.png",
+        "sprite_sofa.png",
+        "sprite_potted_plant.png",
+        "sprite_fd_desk_1.png",
+        "sprite_fd_desk_2.png",
+        "sprite_fd_desk_3.png",
+        "sprite_fd_desk_4.png",
+        "sprite_fd_desk_5.png",
+        "sprite_fd_boss_desk.png",
+        "sprite_fd_distributor_desk.png",
+        "sprite_fd_event_log_tower.png",
+        "sprite_fd_sofa.png",
+        "sprite_fd_potted_plant.png",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/admin/assets/graphics/{asset_name}"))
+                    .body(Body::empty())
+                    .expect("asset request should build"),
+            )
+            .await
+            .expect("asset request should be served");
+
+        assert_eq!(response.status(), StatusCode::OK, "{asset_name}");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("image/png")),
+            "{asset_name}"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("public, max-age=86400")),
+            "{asset_name}"
+        );
+        let body = bytes_body(response).await;
+        assert!(body.starts_with(b"\x89PNG\r\n\x1a\n"), "{asset_name}");
+    }
+
+    let missing = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin/assets/graphics/not-found.png")
+                .body(Body::empty())
+                .expect("missing asset request should build"),
+        )
+        .await
+        .expect("missing asset request should be served");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names() {
+    let workspace = TempAdminWorkspace::new("game-asset-routes");
+    let router = admin_test_router(&workspace);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin/assets/game/akra-diorama.js")
+                .body(Body::empty())
+                .expect("game asset request should build"),
+        )
+        .await
+        .expect("game asset request should be served");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE),
+        Some(&header::HeaderValue::from_static(
+            "text/javascript; charset=utf-8"
+        ))
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("public, max-age=86400"))
+    );
+    let body = text_body(response).await;
+    assert!(body.contains("PIXI.Application"));
+    assert!(body.contains("AkraAdminGame"));
+
+    let missing = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin/assets/game/missing.js")
+                .body(Body::empty())
+                .expect("missing game asset request should build"),
+        )
+        .await
+        .expect("missing game asset request should be served");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
