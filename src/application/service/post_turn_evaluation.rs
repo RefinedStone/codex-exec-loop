@@ -944,7 +944,7 @@ mod tests {
     use crate::application::service::planning::{
         OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
-        PlanningRuntimeWorkspaceStatus,
+        PlanningRuntimeWorkspaceStatus, PlanningWorkerRunOutcome,
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
@@ -1674,6 +1674,29 @@ mod tests {
                     .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
             );
         });
+    }
+
+    #[test]
+    fn planning_worker_outcome_preserves_non_success_status_when_blocked() {
+        let mut executor = test_executor();
+        let outcome = PlanningWorkerRunOutcome {
+            runtime_projection: PlanningRuntimeProjection::invalid(
+                "accepted task authority is invalid",
+            ),
+            notices: Vec::new(),
+            repair_request: None,
+            worker_summary: None,
+            worker_response: None,
+            rejected_summary: None,
+            task_authority_changed: false,
+        };
+
+        executor.record_planning_worker_outcome(PlanningWorkerStatus::Idle, &outcome);
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::Idle
+        );
     }
 
     fn test_executor() -> PostTurnEvaluationExecutor {
