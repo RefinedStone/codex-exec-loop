@@ -91,13 +91,23 @@ macro_rules! akra_event {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{DroppedLogLines, LazyPayload};
+    use super::{DiagnosticsGuards, DroppedLogLines, LazyPayload, dropped_log_lines};
 
     #[test]
     fn dropped_log_lines_total_saturates_instead_of_wrapping() {
         let snapshot = DroppedLogLines { trace: usize::MAX };
 
         assert_eq!(snapshot.total(), usize::MAX);
+    }
+
+    #[test]
+    fn dropped_log_lines_defaults_to_zero_before_trace_writer_initializes() {
+        assert_eq!(dropped_log_lines(), DroppedLogLines { trace: 0 });
+    }
+
+    #[test]
+    fn diagnostics_guard_drop_is_quiet_without_dropped_lines() {
+        drop(DiagnosticsGuards { _trace_guard: None });
     }
 
     #[test]
