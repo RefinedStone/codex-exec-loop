@@ -156,3 +156,24 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
         .windows(needle_bytes.len())
         .any(|window| window.eq_ignore_ascii_case(needle_bytes))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        contains_ascii_case_insensitive, score_search_field, starts_with_ascii_case_insensitive,
+    };
+
+    #[test]
+    fn score_search_field_prefers_exact_match_before_prefix_or_contains() {
+        assert_eq!(
+            score_search_field("Thread-42", "thread-42", 220, 200, 140),
+            Some(220)
+        );
+    }
+
+    #[test]
+    fn ascii_case_insensitive_helpers_treat_empty_needle_as_match() {
+        assert!(starts_with_ascii_case_insensitive("session", ""));
+        assert!(contains_ascii_case_insensitive("session", ""));
+    }
+}
