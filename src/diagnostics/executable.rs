@@ -42,6 +42,14 @@ mod tests {
     use super::debug_executable_allows_default_diagnostics;
 
     #[test]
+    fn debug_default_diagnostics_require_a_known_binary_name() {
+        assert!(!debug_executable_allows_default_diagnostics(None));
+        assert!(!debug_executable_allows_default_diagnostics(Some(
+            Path::new("/repo/target/debug/custom-akra-wrapper",)
+        )));
+    }
+
+    #[test]
     fn debug_default_diagnostics_are_disabled_for_test_harness_binaries() {
         assert!(!debug_executable_allows_default_diagnostics(Some(
             Path::new("/repo/target/debug/deps/integration_test-abc123",)
@@ -64,6 +72,20 @@ mod tests {
         )));
         assert!(debug_executable_allows_default_diagnostics(Some(
             Path::new("/home/user/deps/repo/target/debug/akra",)
+        )));
+        assert!(debug_executable_allows_default_diagnostics(Some(
+            Path::new("/repo/target/debug/akra-telegram.exe",)
+        )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn debug_default_diagnostics_reject_non_utf8_executable_names() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(!debug_executable_allows_default_diagnostics(Some(
+            Path::new(OsStr::from_bytes(b"/repo/target/debug/\xFF")),
         )));
     }
 }
