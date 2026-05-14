@@ -174,6 +174,18 @@ mod tests {
     }
 
     #[test]
+    fn default_profile_uses_current_codex_app_server_policy() {
+        assert_eq!(
+            TerminalBridgeAttachmentProfile::codex_app_server(),
+            TerminalBridgeAttachmentProfile::codex_app_server_launch()
+        );
+        assert_eq!(
+            TerminalBridgeAttachmentProfile::default(),
+            TerminalBridgeAttachmentProfile::codex_app_server()
+        );
+    }
+
+    #[test]
     fn attachment_labels_stay_kebab_case() {
         // label 문자열은 snapshot 성격의 UI copy라서 kebab-case가 깨지면 shell/test fixture가 함께 흔들린다.
         assert_eq!(
@@ -200,6 +212,7 @@ mod tests {
             TerminalBridgeAttachmentMode::ProxyMediated.label(),
             "proxy-mediated"
         );
+        assert_eq!(TerminalBridgeRecoveryAnchor::None.label(), "none");
         assert_eq!(
             TerminalBridgeRecoveryAnchor::ProviderThreadId.label(),
             "provider-thread-id"
