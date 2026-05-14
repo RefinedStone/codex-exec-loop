@@ -80,7 +80,8 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SUBPROCESS_TIMEOUT_SECS, command_output_with_timeout, parse_subprocess_timeout_secs,
+        DEFAULT_SUBPROCESS_TIMEOUT_SECS, command_output_with_timeout, format_duration,
+        parse_subprocess_timeout_secs,
     };
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -125,5 +126,12 @@ mod tests {
             started_at.elapsed() < Duration::from_secs(2),
             "timeout should return before the child process naturally exits"
         );
+    }
+
+    #[test]
+    fn timeout_duration_format_uses_seconds_only_for_whole_seconds() {
+        assert_eq!(format_duration(Duration::from_secs(2)), "2s");
+        assert_eq!(format_duration(Duration::from_millis(250)), "250ms");
+        assert_eq!(format_duration(Duration::from_millis(1_250)), "1250ms");
     }
 }
