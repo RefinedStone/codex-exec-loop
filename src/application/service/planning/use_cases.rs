@@ -46,6 +46,8 @@ use super::worker::orchestration::{
 use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
     PlanningOfficialCompletionRefreshContract, PriorityQueueTask, QueueIdlePolicy,
+    TurnSnapshotCapture as DomainTurnSnapshotCapture,
+    TurnSnapshotCaptureState as DomainTurnSnapshotCaptureState,
 };
 
 pub const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto-follow stays paused until the next accepted planning worker refresh";
@@ -203,34 +205,8 @@ impl PlanningTurnExecutionSnapshotCaptureRequest {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningTurnExecutionSnapshotCapture {
-    pub workspace_directory: String,
-    pub state: PlanningTurnExecutionSnapshotCaptureState,
-}
-impl PlanningTurnExecutionSnapshotCapture {
-    pub fn ready(
-        workspace_directory: impl Into<String>,
-        snapshot: PlanningExecutionSnapshot,
-    ) -> Self {
-        Self {
-            workspace_directory: workspace_directory.into(),
-            state: PlanningTurnExecutionSnapshotCaptureState::Ready(snapshot),
-        }
-    }
-
-    pub fn capture_failed(workspace_directory: impl Into<String>, message: String) -> Self {
-        Self {
-            workspace_directory: workspace_directory.into(),
-            state: PlanningTurnExecutionSnapshotCaptureState::CaptureFailed(message),
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanningTurnExecutionSnapshotCaptureState {
-    Ready(PlanningExecutionSnapshot),
-    CaptureFailed(String),
-}
+pub type PlanningTurnExecutionSnapshotCapture = DomainTurnSnapshotCapture;
+pub type PlanningTurnExecutionSnapshotCaptureState = DomainTurnSnapshotCaptureState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnReconciliationRequest<'a> {
     pub workspace_directory: &'a str,

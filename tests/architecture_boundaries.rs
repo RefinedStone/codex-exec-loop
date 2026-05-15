@@ -242,7 +242,6 @@ fn core_layer_only_depends_on_application_domain_and_core_modules() {
 }
 
 #[test]
-#[ignore = "future boundary target: core currently coordinates application services directly"]
 fn future_core_layer_is_application_independent() {
     /*
      * Disabled target: if core becomes the innermost app/kernel boundary instead
@@ -257,7 +256,6 @@ fn future_core_layer_is_application_independent() {
 }
 
 #[test]
-#[ignore = "future boundary target: core/app still reuses application DTOs"]
 fn future_core_app_contracts_are_application_dto_free() {
     /*
      * Disabled target: core/app should eventually expose core-owned commands,
@@ -272,7 +270,6 @@ fn future_core_app_contracts_are_application_dto_free() {
 }
 
 #[test]
-#[ignore = "future boundary target: public core/app contracts are not fully core-owned yet"]
 fn future_core_app_public_contracts_are_core_owned() {
     /*
      * Disabled target: this is the strict version of the core/app boundary. Core
@@ -358,7 +355,6 @@ fn core_app_layer_has_no_effect_execution_dependencies() {
 }
 
 #[test]
-#[ignore = "future boundary target: core/runtime still stores raw application services"]
 fn future_core_runtime_does_not_hold_raw_application_services() {
     /*
      * Disabled target: core/runtime may keep the effect boundary, but the concrete
@@ -381,7 +377,6 @@ fn future_core_runtime_does_not_hold_raw_application_services() {
 }
 
 #[test]
-#[ignore = "future boundary target: core/runtime still calls application service modules directly"]
 fn future_core_runtime_uses_application_facade_not_service_modules() {
     /*
      * Disabled target: core/runtime should eventually execute one narrow
@@ -459,20 +454,29 @@ fn core_runtime_has_no_concrete_boundary_or_framework_dependencies() {
 
 #[test]
 fn core_runtime_worker_modules_stay_private_to_effect_boundary() {
-    // Static guard: workers such as turn submission are implementation detail behind CoreEffectRunner.
+    // Static guard: workers such as turn submission are implementation detail behind the
+    // composition-owned CoreEffectRunner, not public core/runtime API.
     let repo_root = repo_root();
     let runtime_mod_path = repo_root.join("src/core/runtime/mod.rs");
     let source = fs::read_to_string(&runtime_mod_path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", runtime_mod_path.display());
     });
+    let composition_mod_path = repo_root.join("src/composition/mod.rs");
+    let composition_source = fs::read_to_string(&composition_mod_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", composition_mod_path.display());
+    });
 
     assert!(
-        source.contains("mod turn_submission;"),
-        "turn submission worker module must stay private to core/runtime"
+        !source.contains("turn_submission"),
+        "turn submission worker module must not live under core/runtime"
     );
     assert!(
-        !source.contains("pub mod turn_submission;"),
-        "turn submission worker module must not become part of the public core runtime contract"
+        composition_source.contains("pub(crate) mod core_turn_submission;"),
+        "turn submission worker module must stay crate-private behind composition CoreEffectRunner"
+    );
+    assert!(
+        !composition_source.contains("pub mod core_turn_submission;"),
+        "turn submission worker module must not become part of a public composition contract"
     );
 }
 

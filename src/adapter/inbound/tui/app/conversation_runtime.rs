@@ -505,6 +505,7 @@ fn queue_post_turn_evaluation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
     use crate::adapter::inbound::tui::app::{AutoFollowSubmitContext, PromptOrigin};
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::planning::{
@@ -515,7 +516,7 @@ mod tests {
     fn stream_snapshot_event(event: ConversationStreamEvent) -> ConversationRuntimeEvent {
         let mut stream_state = TurnStreamState::new();
         ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
-            stream_state.apply_stream_event(event),
+            stream_state.apply_stream_event(core_turn_stream_event_from_application(event)),
         ))
     }
 

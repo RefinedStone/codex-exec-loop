@@ -1,23 +1,23 @@
-use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
+use crate::domain::planning::RuntimeProjection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningParallelProjection {
-    pub planning_runtime: Box<PlanningRuntimeProjection>,
+    pub planning_runtime: Box<RuntimeProjection>,
     pub parallel_mode: ParallelModeProjection,
 }
 
 impl PlanningParallelProjection {
     pub fn initial() -> Self {
         Self {
-            planning_runtime: Box::new(PlanningRuntimeProjection::uninitialized()),
+            planning_runtime: Box::new(RuntimeProjection::uninitialized()),
             parallel_mode: ParallelModeProjection::default(),
         }
     }
 
     pub fn apply_planning_runtime_projection(
         &mut self,
-        projection: Box<PlanningRuntimeProjection>,
+        projection: Box<RuntimeProjection>,
     ) -> bool {
         if self.planning_runtime == projection {
             return false;
@@ -64,7 +64,7 @@ pub struct ParallelModeProjection {
 #[cfg(test)]
 mod tests {
     use super::PlanningParallelProjection;
-    use crate::application::service::planning::PlanningRuntimeProjection;
+    use crate::domain::planning::RuntimeProjection;
 
     #[test]
     fn default_projection_matches_initial_uninitialized_state() {
@@ -74,7 +74,7 @@ mod tests {
         );
         assert_eq!(
             *PlanningParallelProjection::default().planning_runtime,
-            PlanningRuntimeProjection::uninitialized()
+            RuntimeProjection::uninitialized()
         );
     }
 

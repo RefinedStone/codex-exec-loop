@@ -6,49 +6,16 @@ use crate::application::service::planning::runtime::intake::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::planning::{
-    OriginSessionKind, PriorityQueueTask, TaskDefinition, TaskMutationProvenance,
+    ManualPromptIntakeOutcome as DomainManualPromptIntakeOutcome,
+    ManualPromptIntakeRequest as DomainManualPromptIntakeRequest,
+    ManualPromptMainSessionHandoff as DomainManualPromptMainSessionHandoff, OriginSessionKind,
+    PriorityQueueTask, TaskDefinition, TaskHandoff as DomainTaskHandoff, TaskMutationProvenance,
 };
 use serde_json::json;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-// manual prompt hidden intake가 소비하는 원본 입력이다. main-session prompt를 만들기 전에 task authority 여부를 결정한다.
-pub struct ManualPromptIntakeRequest {
-    pub workspace_directory: String,
-    pub raw_prompt: String,
-    // Legacy task lookup key. Provider-neutral audit identity lives in `provenance`.
-    pub legacy_source_turn_id: Option<String>,
-    pub parent_thread_id: Option<String>,
-    pub parent_turn_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-// main-session에 넘길 최종 실행 입력이다. visible transcript에는 `transcript_text`만 남기고, prompt는 app-server로만 간다.
-pub struct ManualPromptMainSessionHandoff {
-    pub prompt: String,
-    pub transcript_text: String,
-    pub task: Option<PlanningTaskHandoff>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-// manual intake outcome은 task authority 변경 여부를 명시한다. Failed도 값으로 내려 TUI가 main turn 시작을 막을 수 있다.
-pub enum ManualPromptIntakeOutcome {
-    TaskCommitted {
-        committed_task_id: String,
-        committed_planning_revision: i64,
-        handoff: ManualPromptMainSessionHandoff,
-    },
-    TaskUpdated {
-        updated_task_id: String,
-        committed_planning_revision: i64,
-        handoff: ManualPromptMainSessionHandoff,
-    },
-    Rejected {
-        reason: String,
-    },
-    Failed {
-        reason: String,
-    },
-}
+pub type ManualPromptIntakeRequest = DomainManualPromptIntakeRequest;
+pub type ManualPromptMainSessionHandoff = DomainManualPromptMainSessionHandoff;
+pub type ManualPromptIntakeOutcome = DomainManualPromptIntakeOutcome;
 
 #[derive(Clone)]
 /*
@@ -173,8 +140,8 @@ impl ManualPromptIntakeService {
 pub(super) fn manual_intake_handoff_from_task(
     task: &TaskDefinition,
     _direction_title: &str,
-) -> PlanningTaskHandoff {
-    PlanningTaskHandoff {
+) -> DomainTaskHandoff {
+    DomainTaskHandoff {
         task_id: task.id.trim().to_string(),
         task_title: task.title.trim().to_string(),
         direction_id: task.direction_id.trim().to_string(),

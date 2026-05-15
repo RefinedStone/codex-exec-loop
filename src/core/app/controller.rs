@@ -158,7 +158,7 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
-            CoreInput::PlanningRuntimeProjectionChanged(projection) => {
+            CoreInput::RuntimeProjectionChanged(projection) => {
                 let changed = self.state.apply_planning_runtime_projection(projection);
                 self.snapshot_changed_outcome(changed)
             }
@@ -235,13 +235,14 @@ mod tests {
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
-        StartupSnapshot, TurnStreamUpdate,
+        StartupSnapshot, TurnStreamEvent, TurnStreamUpdate,
     };
     use crate::domain::conversation::{
         ConversationMessage, ConversationMessageKind,
         ConversationSnapshot as DomainConversationSnapshot,
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
+    use crate::domain::planning::TurnSnapshotCapture;
     use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
@@ -531,8 +532,7 @@ mod tests {
     #[test]
     fn conversation_stream_event_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
-        let stream_event =
-            crate::application::service::conversation_runtime_event::ConversationStreamEvent::StatusUpdated {
+        let stream_event = TurnStreamEvent::StatusUpdated {
             text: "thinking".to_string(),
         };
 
@@ -556,11 +556,10 @@ mod tests {
     #[test]
     fn conversation_turn_completion_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
-        let execution_snapshot_capture =
-            crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::capture_failed(
-                "/tmp/workspace",
-                "planning capture failed".to_string(),
-            );
+        let execution_snapshot_capture = TurnSnapshotCapture::capture_failed(
+            "/tmp/workspace",
+            "planning capture failed".to_string(),
+        );
 
         let outcome = controller.handle_input(CoreInput::ConversationTurnCompleted {
             turn_id: "turn-1".to_string(),
@@ -611,7 +610,7 @@ mod tests {
     fn conversation_load_resets_previous_turn_stream_identity() {
         let mut controller = CoreController::new();
         controller.handle_input(CoreInput::ConversationStreamUpdated(
-            crate::application::service::conversation_runtime_event::ConversationStreamEvent::ThreadPrepared {
+            TurnStreamEvent::ThreadPrepared {
                 thread_id: "old-thread".to_string(),
                 title: "Old Thread".to_string(),
                 cwd: "/tmp/old".to_string(),
@@ -726,9 +725,9 @@ mod tests {
         let planning_projection =
             PlanningRuntimeProjection::invalid("planning validation failed in projection");
 
-        let outcome = controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(
-            Box::new(planning_projection.clone()),
-        ));
+        let outcome = controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+            planning_projection.clone(),
+        )));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
@@ -773,13 +772,13 @@ mod tests {
         let mut controller = CoreController::new();
         let planning_projection =
             PlanningRuntimeProjection::invalid("planning validation failed in projection");
-        controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(Box::new(
+        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
             planning_projection.clone(),
         )));
 
-        let outcome = controller.handle_input(CoreInput::PlanningRuntimeProjectionChanged(
-            Box::new(planning_projection),
-        ));
+        let outcome = controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+            planning_projection,
+        )));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert!(outcome.events.is_empty());
@@ -867,25 +866,24 @@ mod tests {
 
     fn apply_completed_turn(controller: &mut CoreController, thread_id: &str, turn_id: &str) {
         controller.handle_input(CoreInput::ConversationStreamUpdated(
-            crate::application::service::conversation_runtime_event::ConversationStreamEvent::ThreadPrepared {
+            TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
                 title: "Core runtime".to_string(),
                 cwd: "/tmp/workspace".to_string(),
             },
         ));
         controller.handle_input(CoreInput::ConversationStreamUpdated(
-            crate::application::service::conversation_runtime_event::ConversationStreamEvent::TurnStarted {
+            TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
             },
         ));
         controller.handle_input(CoreInput::ConversationTurnCompleted {
             turn_id: turn_id.to_string(),
             changed_planning_file_paths: Vec::new(),
-            execution_snapshot_capture:
-                crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::capture_failed(
-                    "/tmp/workspace",
-                    "test capture skipped".to_string(),
-                ),
+            execution_snapshot_capture: TurnSnapshotCapture::capture_failed(
+                "/tmp/workspace",
+                "test capture skipped".to_string(),
+            ),
         });
     }
 

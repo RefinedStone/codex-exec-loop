@@ -3,22 +3,14 @@ use crate::application::service::parallel_mode::{
     ParallelModeOfficialCompletionReport, ParallelModeOrchestratorTrigger, ParallelModeService,
 };
 use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParallelTurnSlotLeaseHandoff {
-    pub task_id: String,
-    pub task_title: String,
-}
-impl ParallelTurnSlotLeaseHandoff {
-    pub fn new(task_id: impl Into<String>, task_title: impl Into<String>) -> Self {
-        Self {
-            task_id: task_id.into(),
-            task_title: task_title.into(),
-        }
-    }
+use crate::domain::planning::ParallelTurnHandoff;
 
-    fn to_slot_lease_request(&self) -> ParallelModeSlotLeaseRequest {
-        ParallelModeSlotLeaseRequest::from_task_identity(&self.task_id, &self.task_title)
-    }
+pub type ParallelTurnSlotLeaseHandoff = ParallelTurnHandoff;
+
+fn slot_lease_request_from_handoff(
+    handoff: &ParallelTurnSlotLeaseHandoff,
+) -> ParallelModeSlotLeaseRequest {
+    ParallelModeSlotLeaseRequest::from_task_identity(&handoff.task_id, &handoff.task_title)
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
@@ -202,7 +194,7 @@ impl ParallelModeTurnService {
         let Some(slot_lease_request) = request
             .slot_lease_handoff
             .as_ref()
-            .map(ParallelTurnSlotLeaseHandoff::to_slot_lease_request)
+            .map(slot_lease_request_from_handoff)
         else {
             return Ok(ParallelTurnStreamLaunchOutcome {
                 request,
@@ -566,6 +558,7 @@ mod tests {
         ParallelModeTurnService, ParallelTurnSlotLeaseHandoff,
         should_mark_cleanup_pending_after_success,
         should_promote_missing_turn_started_before_success, should_release_unstarted_slot_lease,
+        slot_lease_request_from_handoff,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -668,11 +661,11 @@ mod tests {
     }
     #[test]
     fn slot_lease_handoff_maps_to_domain_request_inside_turn_service_boundary() {
-        let request = ParallelTurnSlotLeaseHandoff::new(
+        let handoff = ParallelTurnSlotLeaseHandoff::new(
             " task-r1-turn-bridge ",
             "Move slot lease request out of TUI",
-        )
-        .to_slot_lease_request();
+        );
+        let request = slot_lease_request_from_handoff(&handoff);
 
         assert_eq!(request.task_id, "task-r1-turn-bridge");
         assert_eq!(request.task_title, "Move slot lease request out of TUI");

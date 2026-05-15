@@ -2,8 +2,8 @@ use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationState, PlanningParallelProjection,
     SessionCatalogReadySnapshot, SessionCatalogState, StartupReadySnapshot, StartupState,
 };
-use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
+use crate::domain::planning::RuntimeProjection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
@@ -82,7 +82,7 @@ impl AppState {
 
     pub fn apply_planning_runtime_projection(
         &mut self,
-        projection: Box<PlanningRuntimeProjection>,
+        projection: Box<RuntimeProjection>,
     ) -> bool {
         let changed = self
             .planning_parallel

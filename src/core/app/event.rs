@@ -1,33 +1,30 @@
-use super::TurnStreamSnapshot;
 use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::manual_prompt_preparation::ManualPromptPreparationResult;
-use crate::application::service::planning::{
-    PlanningRuntimeProjection, PlanningTurnExecutionSnapshotCapture,
-};
-use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
+use super::{TurnStreamEvent, TurnStreamSnapshot};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
+use crate::domain::planning::{
+    ManualPromptOutcome, PostTurnExecution, RuntimeProjection, TurnSnapshotCapture,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
     Command(super::AppCommand),
     EffectCompleted(CoreEffectCompletion),
-    ConversationStreamUpdated(ConversationStreamEvent),
+    ConversationStreamUpdated(TurnStreamEvent),
     ConversationTurnCompleted {
         turn_id: String,
         changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
+        execution_snapshot_capture: TurnSnapshotCapture,
     },
     ConversationRuntimeNotice(String),
     ConversationTurnWorkspaceChanged {
         workspace_directory: String,
     },
     ParallelModeSupervisorSnapshotInvalidated,
-    PlanningRuntimeProjectionChanged(Box<PlanningRuntimeProjection>),
+    RuntimeProjectionChanged(Box<RuntimeProjection>),
     ParallelModeReadinessProjectionChanged(Option<Box<ParallelModeReadinessSnapshot>>),
     ParallelModeSupervisorProjectionChanged(Option<Box<ParallelModeSupervisorSnapshot>>),
 }
@@ -37,8 +34,8 @@ pub enum CoreEffectCompletion {
     StartupChecksLoaded(Result<Box<StartupReadySnapshot>, String>),
     SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
     ConversationLoaded(Result<Box<ConversationReadySnapshot>, String>),
-    ManualPromptPrepared(Box<ManualPromptPreparationResult>),
-    PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
+    ManualPromptPrepared(Box<ManualPromptOutcome>),
+    PostTurnEvaluationCompleted(Box<PostTurnExecution>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,8 +50,8 @@ pub enum AppEvent {
     SessionCatalogChanged(SessionCatalogSnapshot),
     ConversationChanged(ConversationSnapshot),
     TurnStreamSnapshotChanged(TurnStreamSnapshot),
-    ManualPromptPrepared(Box<ManualPromptPreparationResult>),
-    PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
+    ManualPromptPrepared(Box<ManualPromptOutcome>),
+    PostTurnEvaluationCompleted(Box<PostTurnExecution>),
     ConversationTurnWorkspaceChanged { workspace_directory: String },
     ParallelModeSupervisorSnapshotInvalidated,
 }

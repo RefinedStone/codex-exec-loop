@@ -1,73 +1,17 @@
 use crate::application::service::planning::{
-    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, PlanningRuntimeProjection,
-    PlanningServices,
+    ManualPromptIntakeRequest, PlanningRuntimeProjection, PlanningServices,
 };
-use crate::domain::planning::PlanningValidationReport;
+use crate::domain::planning::{
+    ManualPlanningBootstrapFailureKind as DomainManualPlanningBootstrapFailureKind,
+    ManualPlanningBootstrapReview as DomainManualPlanningBootstrapReview,
+    ManualPromptOutcome as DomainManualPromptOutcome,
+    ManualPromptRequest as DomainManualPromptRequest,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManualPromptPreparationRequest {
-    pub workspace_directory: String,
-    pub raw_prompt: String,
-    pub parent_thread_id: Option<String>,
-    pub parent_turn_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManualPlanningBootstrapReview {
-    pub draft_name: String,
-    pub staged_file_count: usize,
-    pub validation_report: PlanningValidationReport,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManualPlanningBootstrapFailureKind {
-    Stage,
-    Promote,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ManualPromptPreparationResult {
-    PromptReady {
-        transcript_text: String,
-        runtime_projection: Box<PlanningRuntimeProjection>,
-        intake: Box<ManualPromptIntakeOutcome>,
-    },
-    BootstrapReviewRequired {
-        transcript_text: String,
-        runtime_projection: Box<PlanningRuntimeProjection>,
-        review: ManualPlanningBootstrapReview,
-    },
-    BootstrapFailed {
-        transcript_text: String,
-        runtime_projection: Box<PlanningRuntimeProjection>,
-        kind: ManualPlanningBootstrapFailureKind,
-        reason: String,
-    },
-    Rejected {
-        transcript_text: String,
-        runtime_projection: Box<PlanningRuntimeProjection>,
-        reason: String,
-    },
-}
-
-impl ManualPromptPreparationResult {
-    pub fn runtime_projection(&self) -> &PlanningRuntimeProjection {
-        match self {
-            ManualPromptPreparationResult::PromptReady {
-                runtime_projection, ..
-            }
-            | ManualPromptPreparationResult::BootstrapReviewRequired {
-                runtime_projection, ..
-            }
-            | ManualPromptPreparationResult::BootstrapFailed {
-                runtime_projection, ..
-            }
-            | ManualPromptPreparationResult::Rejected {
-                runtime_projection, ..
-            } => runtime_projection,
-        }
-    }
-}
+pub type ManualPromptPreparationRequest = DomainManualPromptRequest;
+pub type ManualPlanningBootstrapReview = DomainManualPlanningBootstrapReview;
+pub type ManualPlanningBootstrapFailureKind = DomainManualPlanningBootstrapFailureKind;
+pub type ManualPromptPreparationResult = DomainManualPromptOutcome;
 
 #[derive(Clone)]
 pub struct ManualPromptPreparationService {

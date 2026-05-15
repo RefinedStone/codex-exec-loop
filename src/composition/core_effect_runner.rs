@@ -14,9 +14,10 @@ use crate::application::service::post_turn_evaluation::{
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::composition::core_turn_submission;
 use crate::core::app::{ConversationReadySnapshot, SessionCatalogReadySnapshot};
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
-use crate::core::runtime::{CoreEffectExecutor, turn_submission};
+use crate::core::runtime::CoreEffectExecutor;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -105,7 +106,7 @@ impl CoreEffectRunner {
     }
 
     pub fn spawn_turn_submission(&self, request: crate::core::app::TurnSubmissionRequest) {
-        turn_submission::spawn_turn_submission_worker(
+        core_turn_submission::spawn_turn_submission_worker(
             request,
             self.conversation_service.clone(),
             self.planning_runtime.clone(),
@@ -125,10 +126,7 @@ impl CoreEffectRunner {
         });
     }
 
-    pub fn spawn_post_turn_evaluation(
-        &self,
-        request: crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest,
-    ) {
+    pub fn spawn_post_turn_evaluation(&self, request: crate::domain::planning::PostTurnRequest) {
         let service = self.post_turn_evaluation_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {

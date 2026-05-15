@@ -26,7 +26,11 @@ use crate::application::service::turn_prompt_assembly_service::{
     SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
 };
 use crate::diagnostics::event_log;
-use crate::domain::planning::{PriorityQueueTask, TaskDefinition};
+use crate::domain::planning::{
+    MainSessionHandoff as DomainMainSessionHandoff, PriorityQueueTask,
+    RuntimeQueuedAutoFollowPrompt as DomainRuntimeQueuedAutoFollowPrompt,
+    SubSessionHandoff as DomainSubSessionHandoff, TaskDefinition, TaskHandoff as DomainTaskHandoff,
+};
 use anyhow::Result;
 
 // policy view model을 facade에서 re-export해 caller가 runtime import surface 하나만 바라보게 한다.
@@ -59,13 +63,7 @@ pub enum PlanningRuntimeAutoFollowDecision {
     Blocked(PlanningAutoFollowBlockReason),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-// queued auto-follow는 실제 실행 prompt와 visible session에 남길 transcript copy를 함께 담는다.
-pub struct PlanningRuntimeQueuedAutoFollowPrompt {
-    pub prompt: String,
-    pub transcript_text: String,
-    pub handoff_task: Option<PlanningTaskHandoff>,
-}
+pub type PlanningRuntimeQueuedAutoFollowPrompt = DomainRuntimeQueuedAutoFollowPrompt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // auto-follow preview bundle은 실제 prompt preview와 policy-derived status copy를 한 응답으로 묶는다.
@@ -75,33 +73,9 @@ pub struct PlanningRuntimeAutoFollowPreview {
     pub planning_detail_line: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-// main-session handoff는 operator-visible conversation에 append되므로 transcript copy를 함께 가진다.
-pub struct PlanningMainSessionHandoff {
-    pub prompt: String,
-    pub transcript_text: String,
-    pub task: PlanningTaskHandoff,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-// sub-session handoff는 hidden work를 시작한다. prompt와 task identity만 필요하고 visible transcript marker는 없다.
-pub struct PlanningSubSessionHandoff {
-    pub prompt: String,
-    pub developer_instructions: String,
-    pub service_name: String,
-    pub task: PlanningTaskHandoff,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-// auto-follow, UI status, repair handoff code가 공유하는 compact task identity다.
-pub struct PlanningTaskHandoff {
-    pub task_id: String,
-    pub task_title: String,
-    pub direction_id: String,
-    pub combined_priority: i32,
-    pub updated_at: String,
-    pub status_label: String,
-}
+pub type PlanningMainSessionHandoff = DomainMainSessionHandoff;
+pub type PlanningSubSessionHandoff = DomainSubSessionHandoff;
+pub type PlanningTaskHandoff = DomainTaskHandoff;
 
 #[derive(Clone)]
 /*

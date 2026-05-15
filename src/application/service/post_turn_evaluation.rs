@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
 use crate::application::service::planning::{
     PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON, PlanningPostTurnAutoFollowDecision,
     PlanningPostTurnAutoFollowRequest, PlanningPostTurnAutoFollowSkipReason,
@@ -17,7 +16,17 @@ use crate::application::service::post_turn_decision::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::operator_alert::OperatorAlert;
-use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
+use crate::domain::planning::{
+    PlanningWorkerPanelState as DomainPlanningWorkerPanelState,
+    PlanningWorkerStatus as DomainPlanningWorkerStatus,
+    PostTurnAutoFollowSkipReason as DomainPostTurnAutoFollowSkipReason,
+    PostTurnContext as DomainPostTurnContext,
+    PostTurnContinuationAction as DomainPostTurnContinuationAction,
+    PostTurnExecution as DomainPostTurnExecution, PostTurnOutcome as DomainPostTurnOutcome,
+    PostTurnPlanningRepairState as DomainPostTurnPlanningRepairState,
+    PostTurnProvenance as DomainPostTurnProvenance,
+    PostTurnQueuedPrompt as DomainPostTurnQueuedPrompt, PostTurnRequest as DomainPostTurnRequest,
+};
 use serde_json::json;
 
 pub(crate) const POST_TURN_EVALUATION_TIMEOUT: Duration = Duration::from_secs(600);
@@ -99,150 +108,30 @@ impl PostTurnEvaluationService {
 
 // Post-turn evaluation is the handoff between a completed Codex turn and the
 // planning/parallel-mode continuation that may schedule the next prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnEvaluationRequest {
-    pub context: PostTurnEvaluationContext,
-    pub workspace_directory: String,
-    pub completed_turn_id: String,
-    pub changed_planning_file_paths: Vec<String>,
-    pub execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
-    pub planning_worker_panel_state: PlanningWorkerPanelState,
+pub type PostTurnEvaluationRequest = DomainPostTurnRequest;
+pub type PostTurnEvaluationContext = DomainPostTurnContext;
+pub type PlanningWorkerStatus = DomainPlanningWorkerStatus;
+pub type PlanningWorkerPanelState = DomainPlanningWorkerPanelState;
+pub type PostTurnEvaluationOutcome = DomainPostTurnOutcome;
+pub type PostTurnPlanningRepairState = DomainPostTurnPlanningRepairState;
+pub type PostTurnEvaluationProvenance = DomainPostTurnProvenance;
+pub type PostTurnQueuedPrompt = DomainPostTurnQueuedPrompt;
+pub type PostTurnContinuationAction = DomainPostTurnContinuationAction;
+pub type PostTurnAutoFollowSkipReason = DomainPostTurnAutoFollowSkipReason;
+
+fn post_turn_log_context<'a>(
+    context: &'a PostTurnEvaluationContext,
+    request: &'a PostTurnEvaluationRequest,
+) -> PostTurnWorkerLogContext<'a> {
+    PostTurnWorkerLogContext::new(
+        context.thread_id.as_str(),
+        request.completed_turn_id.as_str(),
+        request.workspace_directory.as_str(),
+    )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnEvaluationContext {
-    pub thread_id: String,
-    pub planning_workspace_directory: String,
-    pub latest_user_message: Option<String>,
-    pub latest_main_reply: Option<String>,
-    pub previous_handoff_task: Option<PlanningTaskHandoff>,
-    pub current_runtime_projection: PlanningRuntimeProjection,
-    pub continuation_paused: bool,
-    pub can_queue_next: bool,
-    pub stop_keyword: String,
-    pub stop_keyword_matched: bool,
-    pub no_file_changes_stop_matched: bool,
-    pub mode_label: String,
-}
-
-impl PostTurnEvaluationContext {
-    fn log_context<'a>(
-        &'a self,
-        request: &'a PostTurnEvaluationRequest,
-    ) -> PostTurnWorkerLogContext<'a> {
-        PostTurnWorkerLogContext::new(
-            self.thread_id.as_str(),
-            request.completed_turn_id.as_str(),
-            request.workspace_directory.as_str(),
-        )
-    }
-
-    fn previous_handoff_task(&self) -> Option<&PlanningTaskHandoff> {
-        self.previous_handoff_task.as_ref()
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PlanningWorkerStatus {
-    #[default]
-    Idle,
-    RefreshRunning,
-    RefreshSucceeded,
-    RefreshFailed,
-    RepairRunning,
-    RepairSucceeded,
-    RepairFailed,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PlanningWorkerPanelState {
-    pub status: PlanningWorkerStatus,
-    pub last_operation_label: Option<String>,
-    pub last_summary: Option<String>,
-    pub last_rejected_summary: Option<String>,
-    pub last_queue_summary: Option<String>,
-    pub last_notice_detail: Option<String>,
-    pub last_prompt: Option<String>,
-    pub last_response: Option<String>,
-    pub last_host_detail: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnEvaluationOutcome {
-    pub provenance: PostTurnEvaluationProvenance,
-    pub runtime_projection: PlanningRuntimeProjection,
-    pub planning_repair_state: Option<PostTurnPlanningRepairState>,
-    pub runtime_notices: Vec<String>,
-    pub action: PostTurnContinuationAction,
-    pub operator_alerts: Vec<OperatorAlert>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnPlanningRepairState {
-    pub attempts_used: usize,
-    pub max_attempts: usize,
-    pub latest_request: crate::application::service::planning::PlanningRepairRequest,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnEvaluationProvenance {
-    pub completed_turn_id: String,
-    pub handoff_task: Option<PlanningTaskHandoff>,
-    pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
-}
-
-impl PostTurnEvaluationProvenance {
-    pub fn new(completed_turn_id: String) -> Self {
-        Self {
-            completed_turn_id,
-            handoff_task: None,
-            parallel_queue_signal: None,
-        }
-    }
-
-    pub fn with_handoff_task(mut self, handoff_task: Option<PlanningTaskHandoff>) -> Self {
-        self.handoff_task = handoff_task;
-        self
-    }
-
-    pub fn with_parallel_queue_signal(
-        mut self,
-        parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
-    ) -> Self {
-        self.parallel_queue_signal = parallel_queue_signal;
-        self
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostTurnQueuedPrompt {
-    pub prompt: String,
-    pub mode_label: String,
-    pub transcript_text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PostTurnContinuationAction {
-    QueueAutoPrompt(Box<PostTurnQueuedPrompt>),
-    SkipAutoFollow {
-        reason: PostTurnAutoFollowSkipReason,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PostTurnAutoFollowSkipReason {
-    PostTurnContinuationPaused,
-    LimitReached,
-    NoAgentReply,
-    StopKeywordMatched,
-    NoFileChanges,
-    PlanningBlocked,
-    PlanningQueueIdlePolicyStop,
-    PlanningQueueHeadRequired,
-    PlanningQueueDrained,
-    PlanningRepeatedQueueHead,
-    ParallelSessionCompleted,
-    PostTurnEvaluationTimedOut,
+fn previous_handoff_task(context: &PostTurnEvaluationContext) -> Option<&PlanningTaskHandoff> {
+    context.previous_handoff_task.as_ref()
 }
 
 #[derive(Debug, Clone)]
@@ -301,14 +190,7 @@ impl PostTurnDecision {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(test, allow(dead_code))]
-pub struct PostTurnEvaluationExecution {
-    pub thread_id: String,
-    pub completed_turn_id: String,
-    pub evaluation: PostTurnEvaluationOutcome,
-    pub planning_worker_panel_state: PlanningWorkerPanelState,
-}
+pub type PostTurnEvaluationExecution = DomainPostTurnExecution;
 #[derive(Clone)]
 struct PostTurnEvaluationExecutor {
     planning_feature: PlanningServices,
@@ -341,7 +223,7 @@ impl PostTurnEvaluationExecutor {
         let planning_workspace_directory = context.planning_workspace_directory.as_str();
         event_log::emit_lazy("post_turn_evaluation_started", || {
             post_turn_event_detail(
-                context.log_context(request),
+                post_turn_log_context(context, request),
                 "post_turn",
                 "started",
                 Some("evaluate"),
@@ -384,7 +266,7 @@ impl PostTurnEvaluationExecutor {
                 &request.workspace_directory,
                 &request.completed_turn_id,
                 repair_request,
-                context.previous_handoff_task(),
+                previous_handoff_task(context),
             );
             runtime_projection = repair_outcome.runtime_projection;
         }
@@ -418,7 +300,7 @@ impl PostTurnEvaluationExecutor {
         };
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
-                context.log_context(request),
+                post_turn_log_context(context, request),
                 "post_turn",
                 "completed",
                 Some(post_turn_action_decision(&post_turn_decision.action)),
@@ -488,14 +370,14 @@ impl PostTurnEvaluationExecutor {
                 completed_turn_id: &request.completed_turn_id,
                 latest_user_message: context.latest_user_message.as_deref(),
                 latest_main_reply: context.latest_main_reply.as_deref(),
-                previous_handoff_task: context.previous_handoff_task(),
+                previous_handoff_task: previous_handoff_task(context),
                 current_runtime_projection: &current_projection,
             });
         let prepared = match preparation {
             PlanningPostTurnQueueRefreshPreparation::Skipped(skipped) => {
                 event_log::emit_lazy("planning_worker_refresh_skipped", || {
                     planning_worker_refresh_skipped_detail(
-                        context.log_context(request),
+                        post_turn_log_context(context, request),
                         skipped.reason.log_label(),
                         &skipped.runtime_projection,
                     )
@@ -508,7 +390,7 @@ impl PostTurnEvaluationExecutor {
         };
         event_log::emit_lazy("planning_worker_refresh_started", || {
             post_turn_event_detail(
-                context.log_context(request),
+                post_turn_log_context(context, request),
                 "refresh",
                 "started",
                 Some("run_worker"),
@@ -556,7 +438,7 @@ impl PostTurnEvaluationExecutor {
                 );
                 event_log::emit_lazy("planning_worker_refresh_failed", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        post_turn_log_context(context, request),
                         "refresh",
                         "worker_failed",
                         Some("block_auto_follow"),
@@ -585,7 +467,7 @@ impl PostTurnEvaluationExecutor {
         self.record_planning_worker_outcome(PlanningWorkerStatus::RefreshSucceeded, &outcome);
         event_log::emit_lazy("planning_worker_refresh_succeeded", || {
             post_turn_event_detail(
-                context.log_context(request),
+                post_turn_log_context(context, request),
                 "refresh",
                 "worker_succeeded",
                 Some("apply_outcome"),
@@ -616,14 +498,14 @@ impl PostTurnEvaluationExecutor {
                 &request.workspace_directory,
                 &request.completed_turn_id,
                 repair_request,
-                context.previous_handoff_task(),
+                previous_handoff_task(context),
             );
             runtime_projection = if repair_outcome.resolved {
                 repair_outcome.runtime_projection
             } else {
                 event_log::emit_lazy("planning_worker_refresh_repair_unresolved", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        post_turn_log_context(context, request),
                         "repair",
                         "unresolved_after_refresh",
                         Some("block_auto_follow"),
@@ -648,7 +530,7 @@ impl PostTurnEvaluationExecutor {
             .worker
             .finalize_post_turn_queue_refresh(PlanningPostTurnQueueRefreshFinalizationRequest {
                 workspace_directory: &request.workspace_directory,
-                previous_handoff_task: context.previous_handoff_task(),
+                previous_handoff_task: previous_handoff_task(context),
                 previous_runtime_projection: &context.current_runtime_projection,
                 refreshed_runtime_projection: &runtime_projection,
                 queue_idle_derivation: prepared.is_queue_idle_derivation(),
@@ -661,7 +543,7 @@ impl PostTurnEvaluationExecutor {
                 } => {
                     event_log::emit_lazy("planning_worker_proposal_promotion_completed", || {
                         post_turn_event_detail(
-                            context.log_context(request),
+                            post_turn_log_context(context, request),
                             "proposal_promotion",
                             "completed",
                             promotion_outcome
@@ -691,7 +573,7 @@ impl PostTurnEvaluationExecutor {
                 } => {
                     event_log::emit_lazy("planning_worker_proposal_promotion_failed", || {
                         post_turn_event_detail(
-                            context.log_context(request),
+                            post_turn_log_context(context, request),
                             "proposal_promotion",
                             "failed",
                             Some("block_auto_follow"),
@@ -729,7 +611,7 @@ impl PostTurnEvaluationExecutor {
                         "planning_worker_refresh_paused_repeated_queue_head",
                         || {
                             post_turn_event_detail(
-                                context.log_context(request),
+                                post_turn_log_context(context, request),
                                 "refresh",
                                 "repeated_queue_head_guard",
                                 Some("pause_auto_follow"),
@@ -769,7 +651,7 @@ impl PostTurnEvaluationExecutor {
             PlanningPostTurnAutoFollowDecision::QueuePrompt(queued_prompt) => {
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        post_turn_log_context(context, request),
                         "auto_follow",
                         "decision",
                         Some("queue"),
@@ -807,7 +689,7 @@ impl PostTurnEvaluationExecutor {
                 let reason = auto_follow_skip_reason_from_planning(reason);
                 event_log::emit_lazy("auto_follow_decision", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        post_turn_log_context(context, request),
                         "auto_follow",
                         "decision",
                         Some("skip"),
@@ -946,6 +828,7 @@ mod tests {
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
         PlanningRuntimeWorkspaceStatus, PlanningWorkerRunOutcome,
     };
+    use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
         PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,

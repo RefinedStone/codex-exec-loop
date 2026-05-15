@@ -1,6 +1,5 @@
 use super::TurnSubmissionRequest;
-use crate::application::service::manual_prompt_preparation::ManualPromptPreparationRequest;
-use crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest;
+use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppCommand {
@@ -18,7 +17,7 @@ pub enum AppCommand {
     LoadConversation {
         thread_id: String,
     },
-    PrepareManualPrompt(Box<ManualPromptPreparationRequest>),
+    PrepareManualPrompt(Box<ManualPromptRequest>),
     SubmitTurn(TurnSubmissionRequest),
-    EvaluatePostTurn(Box<PostTurnEvaluationRequest>),
+    EvaluatePostTurn(Box<PostTurnRequest>),
 }
