@@ -275,10 +275,10 @@ impl ExecutionSnapshot {
     }
 }
 
-const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
-const ACTIVE_PLANNING_FILE_PATHS: [&str; 1] = [RESULT_OUTPUT_FILE_PATH];
+pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+pub const ACTIVE_PLANNING_FILE_PATHS: [&str; 1] = [RESULT_OUTPUT_FILE_PATH];
 
-fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
+pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
     let normalized = path.replace('\\', "/");
     let normalized = normalized.trim_start_matches("./");
 

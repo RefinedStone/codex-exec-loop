@@ -15,23 +15,17 @@ use std::path::{Path, PathBuf};
  * 그래서 TUI, admin API, automation tool이 같은 planning/parallel-mode 계약을 공유한다.
  */
 mod reports;
+mod usage;
 
 use self::reports::{
     DoctorReport, PlanningToolErrorReport, ResetReport, render_doctor_report, render_json_line,
     render_reset_report,
 };
-
-// usage string은 help copy이면서 arity mistake에 대한 정확한 error message다. dispatcher 옆에 두어 route와 copy가 함께 바뀌게 한다.
-const ADMIN_SERVER_USAGE: &str = "Usage: akra admin [--port <port>]";
-const ADMIN_SERVER_ALIAS_USAGE: &str = "Alias: akra admin-server [--port <port>]";
-const DOCTOR_USAGE: &str = "Usage: akra doctor [workspace_dir]";
-const STATUS_USAGE: &str = "Usage: akra status [workspace_dir]";
-const QUEUE_USAGE: &str = "Usage: akra queue [workspace_dir]";
-const RESET_USAGE: &str = "Usage: akra reset <queue|directions|all> [workspace_dir]";
-const PLANNING_TOOL_USAGE: &str = "Usage: akra planning-tool <contract|run> [workspace_dir]";
-const PARALLEL_TICK_USAGE: &str = "Usage: akra parallel-tick [workspace_dir]";
-const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
-const TELEGRAM_BOT_ALIAS_USAGE: &str = "Alias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]";
+use self::usage::{
+    ADMIN_SERVER_ALIAS_USAGE, ADMIN_SERVER_USAGE, DOCTOR_USAGE, PARALLEL_TICK_USAGE,
+    PLANNING_TOOL_USAGE, QUEUE_USAGE, RESET_USAGE, STATUS_USAGE, TELEGRAM_BOT_ALIAS_USAGE,
+    TELEGRAM_BOT_USAGE,
+};
 
 pub fn run_with_env_args(stdout: &mut impl Write) -> Result<Option<i32>> {
     run_with_args(std::env::args_os().skip(1), stdout)

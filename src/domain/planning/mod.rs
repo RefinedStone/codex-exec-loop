@@ -35,6 +35,9 @@ pub(crate) use queue_follow::{
     PlanningQueueFollowBlockReason, PlanningQueueFollowDecision, PlanningQueueFollowFacts,
     PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode,
 };
+pub use runtime_contracts::{
+    ACTIVE_PLANNING_FILE_PATHS, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+};
 pub(crate) use runtime_contracts::{
     ExecutionSnapshot, MainSessionHandoff, ManualPlanningBootstrapFailureKind,
     ManualPlanningBootstrapReview, ManualPromptIntakeOutcome, ManualPromptIntakeRequest,

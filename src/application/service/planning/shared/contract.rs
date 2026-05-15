@@ -1,6 +1,9 @@
+pub use crate::domain::planning::{
+    ACTIVE_PLANNING_FILE_PATHS, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+};
+
 // result-output은 현재 accepted planning state를 대표하는 active planning artifact이다. admin draft,
-// runtime validation, workspace adapter가 같은 경로를 보도록 shared contract에 둔다.
-pub const RESULT_OUTPUT_FILE_PATH: &str = ".codex-exec-loop/planning/result-output.md";
+// runtime validation, workspace adapter가 같은 domain runtime contract를 보도록 여기서 재수출한다.
 // direction detail docs는 direction catalog의 항목별 상세 설명을 markdown으로 저장하는 디렉터리이다.
 pub const PLANNING_DIRECTION_DOCS_DIRECTORY: &str = ".codex-exec-loop/planning/directions";
 // prompt directory는 planning worker와 queue-idle review prompt 같은 prompt artifacts의 기준 위치이다.
@@ -12,31 +15,6 @@ pub const DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH: &str =
 pub const PLANNING_DRAFTS_DIRECTORY: &str = ".codex-exec-loop/planning/drafts";
 // rejected directory는 validation이나 operator review에서 받아들이지 않은 planning output을 보관한다.
 pub const PLANNING_REJECTED_DIRECTORY: &str = ".codex-exec-loop/planning/rejected";
-// active planning files는 "현재 planning state로 간주되는 파일"의 allowlist이다. 지금은 result-output
-// 하나뿐이라 배열 크기가 1이지만, canonical lookup은 확장을 전제로 작성되어 있다.
-pub const ACTIVE_PLANNING_FILE_PATHS: [&str; 1] = [RESULT_OUTPUT_FILE_PATH];
-
-// 이 함수는 임의의 path 문자열이 active planning artifact를 가리키는지 canonical path로 판정한다.
-// absolute path, workspace-relative path, Windows separator가 섞여도 같은 contract path를 반환하게 한다.
-pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
-    // Windows 입력도 `/` 기준으로 비교하기 위해 separator를 먼저 통일한다.
-    let normalized = path.replace('\\', "/");
-    // caller가 `./.codex-exec-loop/...`처럼 현재 directory prefix를 붙여도 같은 logical path로 본다.
-    let normalized = normalized.trim_start_matches("./");
-
-    // allowlist 중 하나가 normalized path의 끝에 directory boundary를 두고 붙어 있는지 찾는다. 이렇게
-    // 하면 `/tmp/workspace/.codex-exec-loop/...` absolute path도 canonical relative contract로 접힌다.
-    ACTIVE_PLANNING_FILE_PATHS
-        .iter()
-        .copied()
-        .find(|candidate| {
-            normalized
-                .strip_suffix(candidate)
-                // suffix 앞이 비어 있으면 exact relative path이고, `/`로 끝나면 absolute/path-prefixed
-                // match이다. 다른 문자로 끝나면 `fooresult-output.md` 같은 우연한 suffix match라 거부한다.
-                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-        })
-}
 
 // direction id에서 기본 detail doc path를 만든다. directions authoring은 id를 저장하고, detail
 // body는 이 convention 아래의 markdown file로 연결한다.

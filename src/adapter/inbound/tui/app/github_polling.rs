@@ -1,5 +1,6 @@
 use super::{BackgroundMessage, NativeTuiApp};
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::parallel_mode::PARALLEL_MODE_INTEGRATION_BRANCH;
 use crate::composition::production;
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
@@ -12,10 +13,9 @@ use std::time::{Duration, Instant};
 
 // GitHub review polling is an optional shell-side watcher for the active PR
 // lane. Explicit env configuration wins, otherwise the adapter may discover an
-// open PR for the current branch against prerelease.
+// open PR for the current branch against the parallel-mode integration branch.
 const GITHUB_PULL_REQUEST_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_PR";
 const GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR: &str = "CODEX_EXEC_LOOP_GITHUB_POLL_INTERVAL_SECS";
-const GITHUB_POLL_BASE_BRANCH: &str = "prerelease";
 const DEFAULT_GITHUB_POLL_INTERVAL_SECONDS: u64 = 60;
 const MAX_STATUS_DETAIL_LENGTH: usize = 48;
 
@@ -52,7 +52,7 @@ impl GithubReviewPollingBootstrap {
             || {
                 production::discover_github_review_poller_service_for_current_branch(
                     repo_root,
-                    GITHUB_POLL_BASE_BRANCH,
+                    PARALLEL_MODE_INTEGRATION_BRANCH,
                 )
             },
             now,

@@ -13,15 +13,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 use crate::application::port::outbound::github_automation_port::{
+    DEFAULT_GITHUB_PUSH_REMOTE_NAME as DEFAULT_PUSH_REMOTE_NAME,
+    GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH,
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
 use crate::subprocess;
-
-const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
-const GITHUB_SCRIPT_RELATIVE_PATH: &str = "scripts/gh-akra.sh";
 
 pub struct GithubAutomationAdapter;
 

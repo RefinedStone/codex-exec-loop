@@ -1,4 +1,6 @@
-use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
+use crate::application::port::outbound::github_automation_port::{
+    DEFAULT_GITHUB_PUSH_REMOTE_NAME, GithubAutomationPort,
+};
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -81,9 +83,10 @@ use self::supervisor::ParallelModeSupervisorService;
 pub(super) use self::support::{
     current_branch_name, current_timestamp, discard_unstarted_slot_branch, ensure_directory_exists,
 };
-const DISTRIBUTOR_INTEGRATION_BRANCH: &str = "prerelease";
+pub(crate) const PARALLEL_MODE_INTEGRATION_BRANCH: &str = "prerelease";
+const DISTRIBUTOR_INTEGRATION_BRANCH: &str = PARALLEL_MODE_INTEGRATION_BRANCH;
 const POOL_BASELINE_BRANCH: &str = DISTRIBUTOR_INTEGRATION_BRANCH;
-const DEFAULT_PUSH_REMOTE_NAME: &str = "origin";
+const DEFAULT_PUSH_REMOTE_NAME: &str = DEFAULT_GITHUB_PUSH_REMOTE_NAME;
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
 const MAX_AGENT_BRANCH_SLUG_LEN: usize = 96;

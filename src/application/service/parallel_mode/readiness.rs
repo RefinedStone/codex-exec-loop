@@ -2,6 +2,7 @@ use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH, current_branch_name,
     remote_branch_name, remote_tracking_branch_ref,
 };
+use crate::application::port::outbound::github_automation_port::GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
@@ -13,7 +14,6 @@ use crate::domain::parallel_mode::{
 use crate::subprocess;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-const GITHUB_SCRIPT_RELATIVE_PATH: &str = "scripts/gh-akra.sh";
 
 /*
 readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것이다. 병렬 모드는 git

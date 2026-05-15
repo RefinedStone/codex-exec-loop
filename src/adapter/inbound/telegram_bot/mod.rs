@@ -27,13 +27,14 @@ const DEFAULT_POLL_TIMEOUT_SECONDS: u16 = 30;
 const DEFAULT_POLL_LIMIT: u8 = 100;
 // 네트워크 장애나 startup discard 실패 때 tight loop로 Telegram API를 때리지 않기 위한 최소 backoff다.
 const DEFAULT_FAILURE_BACKOFF: Duration = Duration::from_secs(2);
-const TELEGRAM_BOT_USAGE: &str = "Usage: akra telegram [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nAlias: akra telegram-bot [--token <token>] [--allow-chat-id <chat_id>]... [--poll-timeout-seconds <seconds>] [--keep-pending]\nEnv: AKRA_TELEGRAM_BOT_TOKEN, AKRA_TELEGRAM_ALLOWED_CHAT_IDS=123,456\nConfig: $XDG_CONFIG_HOME/akra/telegram.env or ~/.config/akra/telegram.env";
 
 // config는 secrets/env/CLI parsing만 맡고, message는 Telegram text를 planning control command로 축소한다.
 mod config;
+mod copy;
 mod message;
 
 use self::config::parse_args;
+pub(crate) use self::copy::{TELEGRAM_BOT_ALIAS_USAGE, TELEGRAM_BOT_COMMAND_USAGE};
 use self::message::{TelegramInboundCommand, TelegramParsedMessage, parse_message};
 
 pub fn run_from_env() -> Result<()> {

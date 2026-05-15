@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 // push remote, gh binary, auth 상태를 같은 snapshot 구조로 표현하면 supervisor UI가 일관된 readiness line을 만들 수 있다.
 use crate::domain::parallel_mode::{ParallelModeCapabilitySnapshot, ParallelModeCapabilityState};
 
+pub const DEFAULT_GITHUB_PUSH_REMOTE_NAME: &str = "origin";
+pub const GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH: &str = "scripts/gh-akra.sh";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // `GithubAutomationCapabilities`는 distributor delivery가 GitHub write side를 사용할 수 있는지
 // 판단하는 세 축의 readiness snapshot이다. push는 git remote 권한이고, PR 생성/조회/close는 gh binary와 auth가 필요하다.

@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{DEFAULT_POLL_TIMEOUT_SECONDS, TELEGRAM_BOT_USAGE};
+use super::DEFAULT_POLL_TIMEOUT_SECONDS;
+use super::copy::telegram_bot_usage_text;
 
 /*
  * config.rs is the Telegram inbound adapter's bootstrap boundary. It resolves secrets and operator
@@ -61,7 +62,7 @@ where
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                println!("{TELEGRAM_BOT_USAGE}");
+                println!("{}", telegram_bot_usage_text());
                 std::process::exit(0);
             }
             "--token" => {
@@ -92,7 +93,10 @@ where
                 drop_pending_updates = false;
             }
             unknown => {
-                bail!("unsupported telegram-bot argument: {unknown}\n{TELEGRAM_BOT_USAGE}");
+                bail!(
+                    "unsupported telegram-bot argument: {unknown}\n{}",
+                    telegram_bot_usage_text()
+                );
             }
         }
     }
