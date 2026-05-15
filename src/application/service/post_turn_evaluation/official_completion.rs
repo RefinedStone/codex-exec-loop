@@ -73,7 +73,7 @@ impl PostTurnEvaluationExecutor {
                 // still the most truthful state for the panel.
                 event_log::emit_lazy("official_completion_capture_failed", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        super::post_turn_log_context(context, request),
                         "official_completion",
                         "capture_failed",
                         Some("skip_official_refresh"),
@@ -127,7 +127,7 @@ impl PostTurnEvaluationExecutor {
                         .filter(|thread_id| !thread_id.trim().is_empty()),
                     latest_user_message: context.latest_user_message.as_deref(),
                     latest_main_reply: context.latest_main_reply.as_deref(),
-                    previous_handoff_task: context.previous_handoff_task(),
+                    previous_handoff_task: super::previous_handoff_task(context),
                     current_runtime_projection: current_projection,
                     contract: completion_report,
                 },
@@ -141,7 +141,7 @@ impl PostTurnEvaluationExecutor {
                     );
                 event_log::emit_lazy("official_completion_refresh_blocked", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        super::post_turn_log_context(context, request),
                         "official_completion",
                         "planning_workspace_unavailable",
                         Some("block_slot_finalization"),
@@ -179,7 +179,7 @@ impl PostTurnEvaluationExecutor {
         }
         event_log::emit_lazy("official_completion_refresh_started", || {
             post_turn_event_detail(
-                context.log_context(request),
+                super::post_turn_log_context(context, request),
                 "official_completion",
                 "refresh_started",
                 Some("run_worker"),
@@ -234,7 +234,7 @@ impl PostTurnEvaluationExecutor {
                     .with_auto_follow_pause_reason(detail.clone());
                 event_log::emit_lazy("official_completion_refresh_failed", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        super::post_turn_log_context(context, request),
                         "official_completion",
                         "worker_failed",
                         Some("block_slot_finalization"),
@@ -267,7 +267,7 @@ impl PostTurnEvaluationExecutor {
         let mut runtime_projection = outcome.runtime_projection.clone();
         event_log::emit_lazy("official_completion_refresh_succeeded", || {
             post_turn_event_detail(
-                context.log_context(request),
+                super::post_turn_log_context(context, request),
                 "official_completion",
                 "worker_succeeded",
                 Some("apply_outcome"),
@@ -305,7 +305,7 @@ impl PostTurnEvaluationExecutor {
                 planning_workspace_directory,
                 &request.completed_turn_id,
                 repair_request,
-                context.previous_handoff_task(),
+                super::previous_handoff_task(context),
             );
             runtime_projection = if repair_outcome.resolved {
                 repair_outcome.runtime_projection
@@ -320,7 +320,7 @@ impl PostTurnEvaluationExecutor {
                     );
                 event_log::emit_lazy("official_completion_repair_unresolved", || {
                     post_turn_event_detail(
-                        context.log_context(request),
+                        super::post_turn_log_context(context, request),
                         "repair",
                         "unresolved_after_official_completion",
                         Some("block_slot_finalization"),
@@ -349,7 +349,7 @@ impl PostTurnEvaluationExecutor {
             .finalize_post_turn_official_completion_refresh(
                 PlanningPostTurnOfficialCompletionFinalizationRequest {
                     planning_workspace_directory,
-                    previous_handoff_task: context.previous_handoff_task(),
+                    previous_handoff_task: super::previous_handoff_task(context),
                     previous_runtime_projection: prepared.planning_workspace_projection(),
                     refreshed_runtime_projection: &runtime_projection,
                     worker_summary: outcome.worker_summary.as_deref(),
@@ -359,7 +359,7 @@ impl PostTurnEvaluationExecutor {
         if let Some(detail) = finalization.repeated_queue_head_detail.as_ref() {
             event_log::emit_lazy("official_completion_paused_repeated_queue_head", || {
                 post_turn_event_detail(
-                    context.log_context(request),
+                    super::post_turn_log_context(context, request),
                     "official_completion",
                     "repeated_queue_head_guard",
                     Some("pause_auto_follow"),
@@ -380,7 +380,7 @@ impl PostTurnEvaluationExecutor {
                 .mark_official_completion_failed(&request.workspace_directory, failure_detail);
             event_log::emit_lazy("official_completion_refresh_blocked", || {
                 post_turn_event_detail(
-                    context.log_context(request),
+                    super::post_turn_log_context(context, request),
                     "official_completion",
                     "finalization_blocked",
                     Some("block_slot_finalization"),
@@ -420,7 +420,7 @@ impl PostTurnEvaluationExecutor {
         );
         event_log::emit_lazy("official_completion_refresh_finalized", || {
             post_turn_event_detail(
-                context.log_context(request),
+                super::post_turn_log_context(context, request),
                 "official_completion",
                 "finalized",
                 Some("finalize_slot"),

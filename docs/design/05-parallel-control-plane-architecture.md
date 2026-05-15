@@ -80,12 +80,13 @@ mutation. Parallel commands continue to go through
 `ParallelModeControlPlaneHandle`, and the domain/application layers continue to
 own policy and ordering.
 
-## Known Debt
+## Boundary Gates
 
-`tests/architecture_boundaries.rs` tracks remaining direct raw-service access
-and other temporary bypasses. New work should remove entries from that debt list
-when practical. Do not add new bypasses to keep a feature moving unless the
-tradeoff is documented and covered by a follow-up test or task.
+`tests/architecture_boundaries.rs` enforces the current boundary: core must not
+depend on application DTOs, runtime workers, raw services, or parallel
+control-plane internals. New work should keep those gates green. Any proposed
+exception is architecture debt and needs an explicit removal path before it is
+accepted.
 
 ## Review Checklist
 

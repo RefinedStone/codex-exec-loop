@@ -6,7 +6,8 @@ use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
-use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
+use crate::composition::core_effect_runner::CoreEffectRunner;
+use crate::core::runtime::CoreRuntime;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationRuntimeControlTruth, ConversationTurnOptions,

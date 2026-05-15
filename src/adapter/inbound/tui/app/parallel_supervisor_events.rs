@@ -267,7 +267,7 @@ impl super::NativeTuiApp {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::style::{Modifier, Style};
 
     use super::*;
 
@@ -284,7 +284,7 @@ mod tests {
         let lines = log.lines();
         assert_eq!(lines[0].to_string(), "[11:31:18] You: 안녕하세요?");
         assert_eq!(lines[0].spans[1].content.as_ref(), "You: ");
-        assert_eq!(lines[0].spans[1].style.fg, Some(Color::Yellow));
+        assert_eq!(lines[0].spans[1].style, AkraTheme::shortcut());
         assert!(
             lines[0].spans[1]
                 .style
@@ -292,7 +292,7 @@ mod tests {
                 .contains(Modifier::BOLD)
         );
         assert_eq!(lines[0].spans[2].content.as_ref(), "안녕하세요?");
-        assert_eq!(lines[0].spans[2].style.fg, Some(Color::Yellow));
+        assert_eq!(lines[0].spans[2].style, AkraTheme::shortcut());
         assert!(
             lines[0].spans[2]
                 .style
@@ -313,7 +313,10 @@ mod tests {
             "[11:31:19] Task Intake: task generation started."
         );
         assert_eq!(lines[0].spans[1].content.as_ref(), "Task Intake: ");
-        assert_eq!(lines[0].spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(
+            lines[0].spans[1].style,
+            AkraTheme::muted().add_modifier(Modifier::BOLD)
+        );
         assert_eq!(lines[0].spans[2].style, Style::default());
     }
 

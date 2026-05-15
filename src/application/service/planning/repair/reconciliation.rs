@@ -16,7 +16,7 @@ use crate::application::service::planning::runtime::validation::PlanningValidati
 use crate::application::service::planning::shared::contract::{
     RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
 };
-use crate::domain::planning::PriorityQueueService;
+use crate::domain::planning::{ExecutionSnapshot as DomainExecutionSnapshot, PriorityQueueService};
 
 pub use super::ledger_recovery::PlanningQueueProjectionAction;
 pub use super::prompt::{
@@ -35,23 +35,7 @@ pub struct PlanningReconciliationService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-/*
- * user turn을 unchanged 상태로 지나가야 하는 planning file snapshot이다. task/direction authority가
- * DB port로 이동했기 때문에 현재는 result-output만 capture한다. `PlanningWorkspaceLoadRecord`와
- * 별도 타입으로 둔 이유는 generic load 결과가 아니라 execution guard라는 의미를 타입에 남기기 위해서다.
- */
-pub struct PlanningExecutionSnapshot {
-    // result-output.md는 completion copy contract를 정의하므로, turn 중 unexpected edit이 있으면 복구한다.
-    pub result_output_markdown: Option<String>,
-}
-
-impl PlanningExecutionSnapshot {
-    // TUI post-turn code는 service 호출 전에 이 cheap path check로 reconciliation 필요 여부를 거른다.
-    pub fn captures_path(path: &str) -> bool {
-        canonical_active_planning_file_path(path).is_some()
-    }
-}
+pub type PlanningExecutionSnapshot = DomainExecutionSnapshot;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 /*

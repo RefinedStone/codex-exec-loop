@@ -18,13 +18,14 @@ use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecuti
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::composition::core_effect_runner::CoreEffectRunner;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 use crate::core::app::{
     AppCommand, AppEvent, ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome,
-    CoreInput, SessionCatalogSnapshot, StartupSnapshot,
+    CoreInput, SessionCatalogSnapshot, StartupSnapshot, TurnStreamEvent,
 };
-use crate::core::runtime::{CoreEffectRunner, CoreRuntime};
+use crate::core::runtime::CoreRuntime;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
@@ -97,6 +98,61 @@ impl NativeTuiAppRuntimeChannels {
         TuiParallelModeControlPlaneEventSink {
             tx: self.tx.clone(),
         }
+    }
+}
+
+pub(super) fn core_turn_stream_event_from_application(
+    event: ConversationStreamEvent,
+) -> TurnStreamEvent {
+    match event {
+        ConversationStreamEvent::AttachmentObserved { profile } => {
+            TurnStreamEvent::AttachmentObserved { profile }
+        }
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id,
+            title,
+            cwd,
+        } => TurnStreamEvent::ThreadPrepared {
+            thread_id,
+            title,
+            cwd,
+        },
+        ConversationStreamEvent::TurnStarted { turn_id } => {
+            TurnStreamEvent::TurnStarted { turn_id }
+        }
+        ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
+        ConversationStreamEvent::AgentMessageDelta {
+            item_id,
+            phase,
+            delta,
+        } => TurnStreamEvent::AgentMessageDelta {
+            item_id,
+            phase,
+            delta,
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        } => TurnStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        },
+        ConversationStreamEvent::ToolActivity { activity } => {
+            TurnStreamEvent::ToolActivity { activity }
+        }
+        ConversationStreamEvent::ApprovalReviewUpdated { review } => {
+            TurnStreamEvent::ApprovalReviewUpdated { review }
+        }
+        ConversationStreamEvent::TurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+        } => TurnStreamEvent::TurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+        },
+        ConversationStreamEvent::Failed { message } => TurnStreamEvent::Failed { message },
     }
 }
 

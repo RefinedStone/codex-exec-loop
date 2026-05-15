@@ -4,6 +4,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
 
+use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
 #[cfg(test)]
 use crate::core::app::CoreEffectCompletion;
 use crate::core::app::CoreInput;
@@ -113,7 +114,9 @@ impl ShellRuntime {
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.app
-                        .dispatch_core_input(CoreInput::ConversationStreamUpdated(event));
+                        .dispatch_core_input(CoreInput::ConversationStreamUpdated(
+                            core_turn_stream_event_from_application(event),
+                        ));
                 }
                 BackgroundMessage::ConversationTurnCompleted {
                     turn_id,

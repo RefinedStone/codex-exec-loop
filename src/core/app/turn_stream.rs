@@ -1,7 +1,5 @@
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::planning::PlanningTurnExecutionSnapshotCapture;
-use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
 use crate::domain::conversation::{ConversationApprovalReview, ConversationToolActivity};
+use crate::domain::planning::{PostTurnExecution, TurnSnapshotCapture};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,12 +28,12 @@ impl TurnStreamState {
         }
     }
 
-    pub fn apply_stream_event(&mut self, event: ConversationStreamEvent) -> TurnStreamSnapshot {
+    pub fn apply_stream_event(&mut self, event: TurnStreamEvent) -> TurnStreamSnapshot {
         let update = match event {
-            ConversationStreamEvent::AttachmentObserved { profile } => {
+            TurnStreamEvent::AttachmentObserved { profile } => {
                 TurnStreamUpdate::AttachmentObserved { profile }
             }
-            ConversationStreamEvent::ThreadPrepared {
+            TurnStreamEvent::ThreadPrepared {
                 thread_id,
                 title,
                 cwd,
@@ -54,7 +52,7 @@ impl TurnStreamState {
                     status_text: "thread started".to_string(),
                 }
             }
-            ConversationStreamEvent::TurnStarted { turn_id } => {
+            TurnStreamEvent::TurnStarted { turn_id } => {
                 self.active_turn_id = Some(turn_id.clone());
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
@@ -64,11 +62,11 @@ impl TurnStreamState {
                     status_text: "turn started".to_string(),
                 }
             }
-            ConversationStreamEvent::StatusUpdated { text } => {
+            TurnStreamEvent::StatusUpdated { text } => {
                 self.status_text = Some(text.clone());
                 TurnStreamUpdate::StatusUpdated { text }
             }
-            ConversationStreamEvent::AgentMessageDelta {
+            TurnStreamEvent::AgentMessageDelta {
                 item_id,
                 phase,
                 delta,
@@ -77,7 +75,7 @@ impl TurnStreamState {
                 phase,
                 delta,
             },
-            ConversationStreamEvent::AgentMessageCompleted {
+            TurnStreamEvent::AgentMessageCompleted {
                 item_id,
                 phase,
                 text,
@@ -86,17 +84,17 @@ impl TurnStreamState {
                 phase,
                 text,
             },
-            ConversationStreamEvent::ToolActivity { activity } => {
+            TurnStreamEvent::ToolActivity { activity } => {
                 TurnStreamUpdate::ToolActivity { activity }
             }
-            ConversationStreamEvent::ApprovalReviewUpdated { review } => {
+            TurnStreamEvent::ApprovalReviewUpdated { review } => {
                 TurnStreamUpdate::ApprovalReviewUpdated { review }
             }
-            ConversationStreamEvent::TurnCompleted {
+            TurnStreamEvent::TurnCompleted {
                 turn_id,
                 changed_planning_file_paths,
             } => self.turn_completed_update(turn_id, changed_planning_file_paths, None),
-            ConversationStreamEvent::Failed { message } => {
+            TurnStreamEvent::Failed { message } => {
                 self.active_turn_id = None;
                 self.status_text = Some("turn failed".to_string());
                 self.terminal = Some(TurnStreamTerminalSnapshot::Failed {
@@ -116,7 +114,7 @@ impl TurnStreamState {
         &mut self,
         turn_id: String,
         changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
+        execution_snapshot_capture: TurnSnapshotCapture,
     ) -> TurnStreamSnapshot {
         let update = self.turn_completed_update(
             turn_id,
@@ -132,7 +130,7 @@ impl TurnStreamState {
 
     pub fn accept_post_turn_evaluation_completion(
         &mut self,
-        execution: &PostTurnEvaluationExecution,
+        execution: &PostTurnExecution,
     ) -> bool {
         if !self.post_turn_evaluation_matches_latest_completed_turn(execution) {
             return false;
@@ -143,7 +141,7 @@ impl TurnStreamState {
 
     fn post_turn_evaluation_matches_latest_completed_turn(
         &self,
-        execution: &PostTurnEvaluationExecution,
+        execution: &PostTurnExecution,
     ) -> bool {
         self.thread_id.as_deref() == Some(execution.thread_id.as_str())
             && self.active_turn_id.is_none()
@@ -160,7 +158,7 @@ impl TurnStreamState {
         &mut self,
         turn_id: String,
         changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
+        execution_snapshot_capture: Option<TurnSnapshotCapture>,
     ) -> TurnStreamUpdate {
         self.active_turn_id = None;
         self.status_text = Some("turn completed".to_string());
@@ -207,6 +205,47 @@ pub struct TurnStreamSnapshot {
     pub status_text: Option<String>,
     pub terminal: Option<TurnStreamTerminalSnapshot>,
     pub update: TurnStreamUpdate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnStreamEvent {
+    AttachmentObserved {
+        profile: TerminalBridgeAttachmentProfile,
+    },
+    ThreadPrepared {
+        thread_id: String,
+        title: String,
+        cwd: String,
+    },
+    TurnStarted {
+        turn_id: String,
+    },
+    StatusUpdated {
+        text: String,
+    },
+    AgentMessageDelta {
+        item_id: String,
+        phase: Option<String>,
+        delta: String,
+    },
+    AgentMessageCompleted {
+        item_id: String,
+        phase: Option<String>,
+        text: String,
+    },
+    ToolActivity {
+        activity: ConversationToolActivity,
+    },
+    ApprovalReviewUpdated {
+        review: ConversationApprovalReview,
+    },
+    TurnCompleted {
+        turn_id: String,
+        changed_planning_file_paths: Vec<String>,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,7 +296,7 @@ pub enum TurnStreamUpdate {
     TurnCompleted {
         turn_id: String,
         changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: Option<PlanningTurnExecutionSnapshotCapture>,
+        execution_snapshot_capture: Option<TurnSnapshotCapture>,
         status_text: String,
     },
     Failed {
@@ -272,19 +311,17 @@ pub enum TurnStreamUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::service::planning::{
-        PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
-    };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
     };
+    use crate::domain::planning::{ExecutionSnapshot, TurnSnapshotCapture};
 
     #[test]
     fn thread_prepared_updates_stream_identity() {
         let mut state = TurnStreamState::new();
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::ThreadPrepared {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
             thread_id: "thread-1".to_string(),
             title: "Core stream".to_string(),
             cwd: "/tmp/workspace".to_string(),
@@ -310,7 +347,7 @@ mod tests {
     fn turn_started_records_active_turn() {
         let mut state = TurnStreamState::new();
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::TurnStarted {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
         });
 
@@ -329,7 +366,7 @@ mod tests {
     fn agent_delta_projects_snapshot_update() {
         let mut state = TurnStreamState::new();
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::AgentMessageDelta {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::AgentMessageDelta {
             item_id: "item-1".to_string(),
             phase: Some("output".to_string()),
             delta: "hello".to_string(),
@@ -349,7 +386,7 @@ mod tests {
     fn completed_message_projects_snapshot_update() {
         let mut state = TurnStreamState::new();
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::AgentMessageCompleted {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::AgentMessageCompleted {
             item_id: "item-1".to_string(),
             phase: None,
             text: "final answer".to_string(),
@@ -374,7 +411,7 @@ mod tests {
             file_change_count: 1,
         };
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::ToolActivity {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::ToolActivity {
             activity: activity.clone(),
         });
 
@@ -391,7 +428,7 @@ mod tests {
             rationale: Some("approve command".to_string()),
         };
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::ApprovalReviewUpdated {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::ApprovalReviewUpdated {
             review: review.clone(),
         });
 
@@ -404,10 +441,8 @@ mod tests {
     #[test]
     fn turn_completed_records_terminal_snapshot_with_execution_capture() {
         let mut state = TurnStreamState::new();
-        let execution_snapshot_capture = PlanningTurnExecutionSnapshotCapture::ready(
-            "/tmp/workspace",
-            PlanningExecutionSnapshot::default(),
-        );
+        let execution_snapshot_capture =
+            TurnSnapshotCapture::ready("/tmp/workspace", ExecutionSnapshot::default());
 
         let snapshot = state.apply_turn_completed(
             "turn-1".to_string(),
@@ -438,11 +473,11 @@ mod tests {
     #[test]
     fn failed_records_terminal_snapshot() {
         let mut state = TurnStreamState::new();
-        state.apply_stream_event(ConversationStreamEvent::TurnStarted {
+        state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
         });
 
-        let snapshot = state.apply_stream_event(ConversationStreamEvent::Failed {
+        let snapshot = state.apply_stream_event(TurnStreamEvent::Failed {
             message: "transport closed".to_string(),
         });
 

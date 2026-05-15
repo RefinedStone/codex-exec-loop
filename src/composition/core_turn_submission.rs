@@ -12,7 +12,7 @@ use crate::application::service::planning::{
     PlanningRuntimeUseCases, PlanningTurnExecutionSnapshotCapture,
     PlanningTurnExecutionSnapshotCaptureRequest,
 };
-use crate::core::app::{CoreInput, TurnSubmissionRequest};
+use crate::core::app::{CoreInput, TurnStreamEvent, TurnSubmissionRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamExecutionObservation {
@@ -33,7 +33,7 @@ pub(crate) fn spawn_turn_submission_worker(
                 Ok(result) => result,
                 Err(error) => {
                     let _ = input_sender.send(CoreInput::ConversationStreamUpdated(
-                        ConversationStreamEvent::Failed {
+                        TurnStreamEvent::Failed {
                             message: format!("parallel mode launch blocked: {error}"),
                         },
                     ));
@@ -112,7 +112,7 @@ fn run_conversation_stream_worker(
 
     if let Some(message) = observation.terminal_failure_message.as_ref() {
         let _ = input_sender.send(CoreInput::ConversationStreamUpdated(
-            ConversationStreamEvent::Failed {
+            TurnStreamEvent::Failed {
                 message: message.clone(),
             },
         ));
@@ -187,7 +187,56 @@ fn conversation_stream_core_input(
             changed_planning_file_paths,
             execution_snapshot_capture: execution_snapshot_capture.clone(),
         },
-        event => CoreInput::ConversationStreamUpdated(event),
+        event => CoreInput::ConversationStreamUpdated(turn_stream_event_from_application(event)),
+    }
+}
+
+fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStreamEvent {
+    match event {
+        ConversationStreamEvent::AttachmentObserved { profile } => {
+            TurnStreamEvent::AttachmentObserved { profile }
+        }
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id,
+            title,
+            cwd,
+        } => TurnStreamEvent::ThreadPrepared {
+            thread_id,
+            title,
+            cwd,
+        },
+        ConversationStreamEvent::TurnStarted { turn_id } => {
+            TurnStreamEvent::TurnStarted { turn_id }
+        }
+        ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
+        ConversationStreamEvent::AgentMessageDelta {
+            item_id,
+            phase,
+            delta,
+        } => TurnStreamEvent::AgentMessageDelta {
+            item_id,
+            phase,
+            delta,
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        } => TurnStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        },
+        ConversationStreamEvent::ToolActivity { activity } => {
+            TurnStreamEvent::ToolActivity { activity }
+        }
+        ConversationStreamEvent::ApprovalReviewUpdated { review } => {
+            TurnStreamEvent::ApprovalReviewUpdated { review }
+        }
+        ConversationStreamEvent::TurnCompleted { .. } => {
+            unreachable!("terminal turn completion is handled before stream event conversion")
+        }
+        ConversationStreamEvent::Failed { message } => TurnStreamEvent::Failed { message },
     }
 }
 

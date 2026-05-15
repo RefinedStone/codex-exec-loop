@@ -19,13 +19,12 @@ use crate::application::service::planning::{
     PlanningAutoFollowBlockReason, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeUseCases,
 };
-use crate::application::service::planning::{
-    PlanningRepairRequest, PlanningRuntimeProjection, PlanningTaskHandoff,
-};
+use crate::application::service::planning::{PlanningRuntimeProjection, PlanningTaskHandoff};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
     ConversationRuntimeControlTruth, ConversationSnapshot,
 };
+use crate::domain::planning::PlanningRepairRequestSnapshot;
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
 #[cfg(test)]
@@ -76,7 +75,7 @@ pub(crate) struct RecordedAutoFollowActivity {
 pub(crate) struct PlanningRepairState {
     pub(crate) attempts_used: usize,
     pub(crate) max_attempts: usize,
-    pub(crate) latest_request: PlanningRepairRequest,
+    pub(crate) latest_request: PlanningRepairRequestSnapshot,
 }
 
 #[derive(Debug, Clone)]

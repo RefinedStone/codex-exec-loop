@@ -31,7 +31,7 @@ use crate::application::service::planning::{
 use crate::application::service::post_turn_evaluation as application_post_turn;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::core::app::{CoreInput, StartupReadySnapshot};
+use crate::core::app::{CoreInput, StartupReadySnapshot, TurnStreamEvent};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
@@ -599,7 +599,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
         .app_mut()
         .core_runtime
         .dispatch_input(CoreInput::ConversationStreamUpdated(
-            ConversationStreamEvent::ThreadPrepared {
+            TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
                 title: "Post-turn test".to_string(),
                 cwd: "/tmp/workspace".to_string(),
@@ -609,7 +609,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
         .app_mut()
         .core_runtime
         .dispatch_input(CoreInput::ConversationStreamUpdated(
-            ConversationStreamEvent::TurnStarted {
+            TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
             },
         ));

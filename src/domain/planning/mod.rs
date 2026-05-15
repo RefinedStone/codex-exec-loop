@@ -20,6 +20,7 @@ mod queue;
 pub(crate) mod queue_follow;
 #[cfg(test)]
 pub(crate) mod repair_candidate;
+pub(crate) mod runtime_contracts;
 pub(crate) mod task_id;
 pub(crate) mod task_references;
 mod validation;
@@ -33,6 +34,16 @@ pub use queue::PriorityQueueService;
 pub(crate) use queue_follow::{
     PlanningQueueFollowBlockReason, PlanningQueueFollowDecision, PlanningQueueFollowFacts,
     PlanningQueueFollowPolicy, PlanningQueueFollowPromptMode,
+};
+pub(crate) use runtime_contracts::{
+    ExecutionSnapshot, MainSessionHandoff, ManualPlanningBootstrapFailureKind,
+    ManualPlanningBootstrapReview, ManualPromptIntakeOutcome, ManualPromptIntakeRequest,
+    ManualPromptMainSessionHandoff, ManualPromptOutcome, ManualPromptRequest, ParallelTurnHandoff,
+    PlanningRepairRequestSnapshot, PlanningWorkerPanelState, PlanningWorkerStatus,
+    PostTurnAutoFollowSkipReason, PostTurnContext, PostTurnContinuationAction, PostTurnExecution,
+    PostTurnOutcome, PostTurnPlanningRepairState, PostTurnProvenance, PostTurnQueuedPrompt,
+    PostTurnRequest, RuntimeProjection, RuntimeQueuedAutoFollowPrompt, RuntimeWorkspaceStatus,
+    SubSessionHandoff, TaskHandoff, TurnSnapshotCapture, TurnSnapshotCaptureState,
 };
 pub(crate) use task_id::PlanningTaskIdPolicy;
 pub(crate) use task_references::PlanningTaskReferencePolicy;

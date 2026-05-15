@@ -118,8 +118,6 @@ impl NativeTuiApp {
         &mut self,
         projection: PlanningRuntimeProjection,
     ) {
-        self.dispatch_core_input(CoreInput::PlanningRuntimeProjectionChanged(Box::new(
-            projection,
-        )));
+        self.dispatch_core_input(CoreInput::RuntimeProjectionChanged(Box::new(projection)));
     }
 }

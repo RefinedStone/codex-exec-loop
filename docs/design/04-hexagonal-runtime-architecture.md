@@ -54,9 +54,9 @@ post-turn evaluation. Parallel-mode mutation still goes through the application
 control-plane handle described in
 [`05-parallel-control-plane-architecture.md`](./05-parallel-control-plane-architecture.md).
 
-Some legacy raw service access remains intentionally tracked by
-`tests/architecture_boundaries.rs`. Treat those entries as temporary debt, not
-as new precedent.
+`tests/architecture_boundaries.rs` keeps the core/application ownership gates
+active. Treat any new exception or debt entry there as a regression unless the
+tradeoff is explicitly documented with a removal path.
 
 ## State Ownership
 
