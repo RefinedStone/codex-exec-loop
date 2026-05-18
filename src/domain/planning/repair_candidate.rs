@@ -125,7 +125,7 @@ mod tests {
     fn rejects_unchanged_previous_handoff_queue_head() {
         let accepted = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T00:00:00Z")],
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T00:00:00Z")],
         };
         let projection = PriorityQueueProjection {
             next_task: Some(queue_task("task-1", TaskStatus::Ready)),
@@ -158,11 +158,11 @@ mod tests {
     fn allows_updated_same_queue_head() {
         let accepted = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T00:00:00Z")],
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T00:00:00Z")],
         };
         let candidate = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T00:01:00Z")],
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T00:01:00Z")],
         };
         let projection = PriorityQueueProjection {
             next_task: Some(queue_task("task-1", TaskStatus::Ready)),
@@ -192,7 +192,7 @@ mod tests {
             version: PLANNING_FORMAT_VERSION,
             tasks: vec![task(
                 "planning-prompt-assembly-remaining-surface-slice",
-                "done",
+                TaskStatus::Done,
                 "2026-04-29T03:00:32Z",
             )],
         };
@@ -200,7 +200,7 @@ mod tests {
             version: PLANNING_FORMAT_VERSION,
             tasks: vec![task(
                 "planning-prompt-assembly-remaining-surface-slice",
-                "ready",
+                TaskStatus::Ready,
                 "2026-04-29T01:43:52Z",
             )],
         };
@@ -220,11 +220,11 @@ mod tests {
     fn rejects_older_accepted_db_timestamp() {
         let accepted = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32Z")],
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T03:00:32Z")],
         };
         let stale_candidate = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T01:43:52Z")],
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T01:43:52Z")],
         };
 
         let failure = PlanningRepairCandidatePolicy::new()
@@ -242,11 +242,19 @@ mod tests {
     fn compares_rfc3339_timestamps_by_time() {
         let accepted = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32+00:00")],
+            tasks: vec![task(
+                "task-1",
+                TaskStatus::Ready,
+                "2026-04-29T03:00:32+00:00",
+            )],
         };
         let candidate = TaskAuthorityDocument {
             version: PLANNING_FORMAT_VERSION,
-            tasks: vec![task("task-1", "ready", "2026-04-29T03:00:32.500Z")],
+            tasks: vec![task(
+                "task-1",
+                TaskStatus::Ready,
+                "2026-04-29T03:00:32.500Z",
+            )],
         };
 
         let failure = PlanningRepairCandidatePolicy::new()
@@ -255,19 +263,130 @@ mod tests {
         assert_eq!(failure, None);
     }
 
-    fn task(id: &str, status: &str, updated_at: &str) -> TaskDefinition {
+    #[test]
+    fn stale_candidate_guard_covers_absent_baseline_removed_task_and_timestamp_parse_edges() {
+        let policy = PlanningRepairCandidatePolicy::new();
+        let candidate = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T00:00:00Z")],
+        };
+
+        assert_eq!(policy.stale_candidate_failure(None, &candidate), None);
+
+        let accepted_removed = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-2", TaskStatus::Ready, "2026-04-29T00:00:00Z")],
+        };
+        assert_eq!(
+            policy
+                .stale_candidate_failure(Some(&accepted_removed), &candidate)
+                .as_deref(),
+            Some("planning worker task authority candidate removed accepted DB task `task-2`")
+        );
+
+        for (candidate_updated_at, accepted_updated_at) in [
+            ("", "2026-04-29T00:00:00Z"),
+            ("not-rfc3339", "2026-04-29T00:00:00Z"),
+            ("2026-04-29T00:00:00Z", "not-rfc3339"),
+        ] {
+            let accepted = TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task("task-1", TaskStatus::Ready, accepted_updated_at)],
+            };
+            let candidate = TaskAuthorityDocument {
+                version: PLANNING_FORMAT_VERSION,
+                tasks: vec![task("task-1", TaskStatus::Ready, candidate_updated_at)],
+            };
+
+            assert_eq!(
+                policy.stale_candidate_failure(Some(&accepted), &candidate),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn queue_advancement_guard_covers_noop_missing_and_no_baseline_edges() {
+        let policy = PlanningRepairCandidatePolicy::new();
+        let candidate = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task("task-1", TaskStatus::Ready, "2026-04-29T00:00:00Z")],
+        };
+        let matching_handoff = Some(PlanningRepairPreviousHandoff {
+            task_id: "task-1",
+            task_title: "Task 1",
+            updated_at: "2026-04-29T00:00:00Z",
+            status_label: "ready",
+        });
+        let matching_projection = PriorityQueueProjection {
+            next_task: Some(queue_task("task-1", TaskStatus::Ready)),
+            active_tasks: Vec::new(),
+            proposed_tasks: Vec::new(),
+            skipped_tasks: Vec::new(),
+        };
+
+        assert_eq!(
+            policy.queue_advancement_failure(None, None, &candidate, &matching_projection),
+            None
+        );
+        assert_eq!(
+            policy.queue_advancement_failure(
+                matching_handoff,
+                None,
+                &candidate,
+                &PriorityQueueProjection {
+                    next_task: None,
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: Vec::new(),
+                },
+            ),
+            None
+        );
+        assert_eq!(
+            policy.queue_advancement_failure(
+                matching_handoff,
+                None,
+                &candidate,
+                &PriorityQueueProjection {
+                    next_task: Some(queue_task("other-task", TaskStatus::Ready)),
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: Vec::new(),
+                },
+            ),
+            None
+        );
+        assert_eq!(
+            policy.queue_advancement_failure(
+                matching_handoff,
+                None,
+                &TaskAuthorityDocument {
+                    version: PLANNING_FORMAT_VERSION,
+                    tasks: Vec::new(),
+                },
+                &matching_projection,
+            ),
+            None
+        );
+        assert_eq!(
+            policy
+                .queue_advancement_failure(matching_handoff, None, &candidate, &matching_projection)
+                .as_deref(),
+            Some(
+                "planning worker refresh returned previous handoff `task-1` as the queue head without DB baseline evidence of a task update"
+            )
+        );
+    }
+
+    fn task(id: &str, status: TaskStatus, updated_at: &str) -> TaskDefinition {
         TaskDefinition {
             id: id.to_string(),
             direction_id: "direction-a".to_string(),
             direction_relation_note: "supports direction".to_string(),
             title: "Task 1".to_string(),
             description: "Do task 1".to_string(),
-            status: match status {
-                "ready" => TaskStatus::Ready,
-                "done" => TaskStatus::Done,
-                "proposed" => TaskStatus::Proposed,
-                _ => panic!("unexpected status"),
-            },
+            status,
             base_priority: 10,
             dynamic_priority_delta: 0,
             priority_reason: String::new(),
