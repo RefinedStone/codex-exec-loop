@@ -5,6 +5,15 @@ state, resize behavior, overlays, prompt editing, or live-tail presentation.
 
 ## Test Layers
 
+Choose the lowest layer that can expose the bug, but prefer temporal evidence when the failure
+depends on redraw order. Use this priority for TUI flow regressions:
+
+1. direct frame recorder: store every rendered buffer, host scrollback, and relevant app-side stream
+   state after each draw transaction; assert the rows that must survive in each frame
+2. Ratatui `TestBackend`: inspect deterministic in-memory screen and scrollback buffers
+3. `insta` snapshot: pin stable full-frame presentation once the flow is already covered
+4. vt100 parser: validate real ANSI/cursor/clear behavior when terminal escape handling is the risk
+
 ### 1. Pure Projection Tests
 
 Use for line builders, status copy, overlays, prompt composition, and transcript projection.
@@ -49,7 +58,18 @@ Required cases:
 
 ### 4. Frame And Viewport Transaction Tests
 
-Use for frontend draw loop and viewport mode selection.
+Use for frontend draw loop, viewport mode selection, and redraw-order bugs. When a bug mentions
+lost rows, duplicated rows, disappearing history, live-tail drift, prompt movement, scrollback
+insertion, frame invalidation, or event-stream retention, add a direct frame-recorder-style test
+that captures every draw transaction in the sequence before using snapshots as broad coverage.
+
+Frame recorder assertions should include:
+
+- screen text for the current live viewport
+- host scrollback text without live panel chrome
+- combined terminal history when the user-visible scrollback contract matters
+- app-side event stream or transcript state when runtime state must outlive redraws
+- before and after frames named for the user flow that triggered the regression
 
 Required cases:
 
@@ -108,6 +128,7 @@ Every TUI rendering PR should state which rows it touches.
 | Thread/session switch | old transcript and deferred history cannot leak into new thread |
 | Streaming turn | active cell or live delta stays live, final output becomes committed history |
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
+| Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback |
 | Terminal fallback | standard and fallback insertion modes each update viewport state correctly |
 
 ## Current Automated Entry Points

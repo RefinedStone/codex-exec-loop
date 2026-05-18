@@ -32,6 +32,62 @@ mod fixtures;
 mod history_flush;
 use self::fixtures::make_test_app;
 
+#[derive(Debug)]
+struct RecordedInlineFrame {
+    label: &'static str,
+    screen_text: String,
+    host_scrollback_text: String,
+    terminal_history_text: String,
+    app_event_stream_text: String,
+}
+
+#[derive(Default)]
+struct InlineFrameRecorder {
+    frames: Vec<RecordedInlineFrame>,
+}
+
+impl InlineFrameRecorder {
+    fn draw_and_record(
+        &mut self,
+        label: &'static str,
+        terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
+        runtime: &mut ShellRuntime,
+        inline_terminal: &mut InlineTerminalState,
+    ) {
+        draw_inline_transaction(terminal, runtime, inline_terminal)
+            .expect("recorded inline draw transaction");
+        self.record(label, terminal, runtime);
+    }
+
+    fn record(
+        &mut self,
+        label: &'static str,
+        terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
+        runtime: &ShellRuntime,
+    ) {
+        self.frames.push(RecordedInlineFrame {
+            label,
+            screen_text: tui_testkit::screen_text(terminal),
+            host_scrollback_text: tui_testkit::inline_scrollback_text(terminal),
+            terminal_history_text: tui_testkit::inline_terminal_history_text(terminal),
+            app_event_stream_text: runtime
+                .app()
+                .parallel_supervisor_event_lines()
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        });
+    }
+
+    fn frame(&self, label: &str) -> &RecordedInlineFrame {
+        self.frames
+            .iter()
+            .find(|frame| frame.label == label)
+            .unwrap_or_else(|| panic!("recorded frame {label} should exist"))
+    }
+}
+
 // Host history sync must insert only committed transcript rows; live agent
 // deltas stay in the active tail until the turn is completed.
 #[test]
@@ -411,6 +467,124 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
     assert!(
         !terminal_scrollback.contains("Parallel Event Stream"),
         "durable stream history must not include live panel chrome:\n{terminal_scrollback}"
+    );
+}
+
+#[test]
+fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(
+        status_runtime_feed_supervisor_snapshot(vec![inline_runtime_feed_entry(
+            1,
+            "seed runtime event one",
+        )]),
+    ));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frame_recorder = InlineFrameRecorder::default();
+
+    frame_recorder.draw_and_record(
+        "initial-status",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let initial_frame = frame_recorder.frame("initial-status");
+    assert!(
+        initial_frame.screen_text.contains("Parallel Event Stream"),
+        "initial frame should render the live parallel stream panel:\n{}",
+        initial_frame.screen_text
+    );
+    assert!(
+        initial_frame
+            .app_event_stream_text
+            .contains("control tower is live"),
+        "initial status rows should be recorded in the app stream immediately:\n{}",
+        initial_frame.app_event_stream_text
+    );
+    assert!(
+        initial_frame
+            .app_event_stream_text
+            .contains("no agent results reported yet"),
+        "initial ledger rows should be recorded in the app stream immediately:\n{}",
+        initial_frame.app_event_stream_text
+    );
+
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(
+            status_runtime_feed_supervisor_snapshot(
+                (1..=40)
+                    .map(|sequence| {
+                        inline_runtime_feed_entry(
+                            sequence,
+                            format!("runtime stream marker {sequence:02}"),
+                        )
+                    })
+                    .collect(),
+            ),
+        ));
+    frame_recorder.draw_and_record(
+        "runtime-tail",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let runtime_tail_frame = frame_recorder.frame("runtime-tail");
+    assert!(
+        runtime_tail_frame
+            .screen_text
+            .contains("runtime stream marker 40"),
+        "redraw should keep following the newest runtime event:\n{}",
+        runtime_tail_frame.screen_text
+    );
+    assert!(
+        runtime_tail_frame
+            .terminal_history_text
+            .contains("control tower is live")
+            && runtime_tail_frame
+                .terminal_history_text
+                .contains("in read-only supervisor mode"),
+        "initial board status should remain in terminal history after redraw:\n{}",
+        runtime_tail_frame.terminal_history_text
+    );
+    assert!(
+        runtime_tail_frame
+            .terminal_history_text
+            .contains("no agent results reported yet"),
+        "initial ledger status should remain in terminal history after redraw:\n{}",
+        runtime_tail_frame.terminal_history_text
+    );
+    assert_eq!(
+        runtime_tail_frame
+            .terminal_history_text
+            .matches("no agent results reported yet")
+            .count(),
+        1,
+        "redraw should not duplicate snapshot status rows:\n{}",
+        runtime_tail_frame.terminal_history_text
+    );
+    assert!(
+        !runtime_tail_frame
+            .host_scrollback_text
+            .contains("Parallel Event Stream"),
+        "host scrollback should persist stream rows but not live panel chrome:\n{}",
+        runtime_tail_frame.host_scrollback_text
+    );
+    assert!(
+        runtime_tail_frame
+            .app_event_stream_text
+            .contains("control tower is live")
+            && runtime_tail_frame
+                .app_event_stream_text
+                .contains("runtime stream marker 40"),
+        "app-side stream should contain both the initial status and latest runtime event:\n{}",
+        runtime_tail_frame.app_event_stream_text
     );
 }
 
