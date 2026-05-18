@@ -138,6 +138,7 @@ mod tests {
     #[test]
     fn new_state_projects_initial_snapshot() {
         assert_eq!(AppState::new().snapshot(), AppSnapshot::initial());
+        assert_eq!(AppState::default().snapshot(), AppSnapshot::initial());
     }
 
     #[test]
@@ -189,6 +190,32 @@ mod tests {
                 startup: StartupSnapshot::Idle,
                 session_catalog: SessionCatalogSnapshot::Idle,
                 conversation: ConversationSnapshot::Loading,
+                planning_parallel: PlanningParallelProjection::initial(),
+            }
+        );
+    }
+
+    #[test]
+    fn failed_results_advance_revision_and_project_messages() {
+        let mut state = AppState::new();
+
+        state.apply_startup_result(Err("startup failed".to_string()));
+        state.apply_session_catalog_result(Err("catalog failed".to_string()));
+        state.apply_conversation_result(Err("conversation failed".to_string()));
+
+        assert_eq!(
+            state.snapshot(),
+            AppSnapshot {
+                revision: 3,
+                startup: StartupSnapshot::Failed {
+                    message: "startup failed".to_string(),
+                },
+                session_catalog: SessionCatalogSnapshot::Failed {
+                    message: "catalog failed".to_string(),
+                },
+                conversation: ConversationSnapshot::Failed {
+                    message: "conversation failed".to_string(),
+                },
                 planning_parallel: PlanningParallelProjection::initial(),
             }
         );
