@@ -173,6 +173,42 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_requested_direction_id_before_lookup() {
+        let directions = catalog(vec![direction(
+            "general-workstream",
+            DirectionState::Active,
+        )]);
+        let error = PlanningActiveDirectionPolicy::new()
+            .select_direction(Some("bad/id"), &directions)
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            PlanningActiveDirectionSelectionError::InvalidDirectionId {
+                direction_id: "bad/id".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_requested_direction() {
+        let directions = catalog(vec![direction(
+            "general-workstream",
+            DirectionState::Active,
+        )]);
+        let error = PlanningActiveDirectionPolicy::new()
+            .select_direction(Some("missing"), &directions)
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            PlanningActiveDirectionSelectionError::UnknownDirection {
+                direction_id: "missing".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn prefers_general_workstream_when_request_is_absent() {
         let directions = catalog(vec![
             direction("other", DirectionState::Active),
@@ -224,6 +260,35 @@ mod tests {
         assert_eq!(
             PlanningActiveDirectionPolicy::new().default_relation_note(None, direction),
             "Task supports direction `general-workstream`: general-workstream summary"
+        );
+    }
+
+    #[test]
+    fn display_messages_are_operator_readable() {
+        assert_eq!(
+            PlanningActiveDirectionSelectionError::InvalidDirectionId {
+                direction_id: "bad id".to_string()
+            }
+            .to_string(),
+            "direction id `bad id` must not contain whitespace or path separators"
+        );
+        assert_eq!(
+            PlanningActiveDirectionSelectionError::UnknownDirection {
+                direction_id: "missing".to_string()
+            }
+            .to_string(),
+            "direction `missing` does not exist"
+        );
+        assert_eq!(
+            PlanningActiveDirectionSelectionError::InactiveDirection {
+                direction_id: "paused".to_string()
+            }
+            .to_string(),
+            "direction `paused` is not active; task mutations can only create tasks for active directions"
+        );
+        assert_eq!(
+            PlanningActiveDirectionSelectionError::NoActiveDirection.to_string(),
+            "task mutation requires an active planning direction"
         );
     }
 }
