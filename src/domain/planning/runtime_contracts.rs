@@ -615,3 +615,24 @@ impl ParallelTurnHandoff {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_projection_prompt_fragment_is_exposed_only_for_ready_projection() {
+        let ready_projection = RuntimeProjection::ready(
+            "Continue the active task".into(),
+            "Queue head ready".into(),
+            None,
+        );
+        assert_eq!(
+            ready_projection.prompt_fragment(),
+            Some("Continue the active task")
+        );
+
+        let invalid_projection = RuntimeProjection::invalid("planning workspace is invalid");
+        assert_eq!(invalid_projection.prompt_fragment(), None);
+    }
+}
