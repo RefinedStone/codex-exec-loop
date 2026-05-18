@@ -687,6 +687,138 @@ fn runtime_detail_selection_prefers_active_queue_head_then_active_lease_then_his
     assert_eq!(history_selected.slot_id, "slot-1");
 }
 
+#[test]
+fn runtime_detail_selection_keeps_active_queue_history_and_starting_detail_paths() {
+    let leased = lease(
+        "slot-2",
+        "task-2",
+        "Task Two",
+        "agent-2",
+        ParallelModeSlotLeaseState::Leased,
+        "2026-01-01T00:10:00Z",
+        None,
+    );
+    let history_detail = session_detail(
+        &leased,
+        "assigned",
+        "agent thread was prepared for execution",
+    );
+
+    let live_selected = ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+        std::slice::from_ref(&leased),
+        std::slice::from_ref(&history_detail),
+        Some(leased.session_key().as_str()),
+        live_defaults(),
+    )
+    .expect("active queue live lease should be selected");
+    assert_eq!(live_selected.state_label, "starting");
+    assert_eq!(
+        live_selected.latest_summary,
+        "agent thread was prepared for execution"
+    );
+
+    let history_selected = ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+        &[],
+        std::slice::from_ref(&history_detail),
+        Some(leased.session_key().as_str()),
+        live_defaults(),
+    )
+    .expect("active queue history detail should be selected without a live lease");
+    assert_eq!(history_selected.session_key, leased.session_key());
+}
+
+#[test]
+fn running_roster_entry_uses_runtime_summary_fallback_when_detail_is_absent() {
+    let running = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Running,
+        "2026-01-01T00:00:00Z",
+        Some("2026-01-01T00:05:00Z"),
+    );
+
+    let roster = super::ParallelModeAgentRosterSnapshot::project_from_leases(
+        vec![running],
+        &[],
+        true,
+        &BTreeMap::new(),
+    );
+
+    assert_eq!(roster.entries[0].state_label, "running");
+    assert_eq!(
+        roster.entries[0].latest_summary,
+        "agent session is active in the leased slot"
+    );
+}
+
+#[test]
+fn agent_roster_duration_labels_cover_pipeline_state_vocabulary() {
+    let states = [
+        ("reported_complete", "reported"),
+        ("ledger_refreshing", "refreshing"),
+        ("pushing", "pushing"),
+        ("pr_pending", "pr pending"),
+        ("merge_pending", "merge pending"),
+        ("integrating", "integrating"),
+    ];
+
+    for (state_label, expected_duration) in states {
+        let running = lease(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            ParallelModeSlotLeaseState::Running,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:05:00Z"),
+        );
+        let detail = session_detail(&running, state_label, "pipeline state projected");
+
+        let roster = super::ParallelModeAgentRosterSnapshot::project_from_leases(
+            vec![running],
+            std::slice::from_ref(&detail),
+            true,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(roster.entries[0].duration_label, expected_duration);
+    }
+}
+
+#[test]
+fn runtime_detail_selection_uses_slot_id_tie_breaker_for_equal_priority_leases() {
+    let slot_one = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Running,
+        "2026-01-01T00:00:00Z",
+        Some("2026-01-01T00:05:00Z"),
+    );
+    let slot_two = lease(
+        "slot-2",
+        "task-2",
+        "Task Two",
+        "agent-2",
+        ParallelModeSlotLeaseState::Running,
+        "2026-01-01T00:00:00Z",
+        Some("2026-01-01T00:05:00Z"),
+    );
+
+    let selected = ParallelModeAgentSessionDetailSnapshot::select_runtime_detail(
+        &[slot_one, slot_two],
+        &[],
+        None,
+        live_defaults(),
+    )
+    .expect("equal-priority leases should still select a stable detail");
+
+    assert_eq!(selected.slot_id, "slot-1");
+}
+
 // cleanup decision은 branch 통합 여부를 slot 반환의 마지막 gate로 삼는다.
 // Running lease는 worktree가 clean이어도 건드리지 않고, lease가 사라진 잔여물은
 // clean+integrated가 모두 참일 때만 자동 청소 후보가 된다.
