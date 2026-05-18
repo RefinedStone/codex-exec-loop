@@ -9,6 +9,12 @@ use crate::adapter::inbound::tui::app::{
     INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
 };
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
+use crate::domain::parallel_mode::{
+    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModeRuntimeEventFeedEntry,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
+};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
@@ -249,6 +255,71 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
 }
 
 #[test]
+fn parallel_runtime_feed_primes_scrollback_without_replaying_old_events() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
+        vec![
+            inline_runtime_feed_entry(2, "seed runtime event two"),
+            inline_runtime_feed_entry(1, "seed runtime event one"),
+        ],
+    )));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("initial runtime feed draw transaction");
+
+    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
+    assert!(
+        !terminal_scrollback.contains("seed runtime event one"),
+        "old runtime feed rows should not be replayed above the live parallel board:\n{terminal_scrollback}"
+    );
+    let screen_text = tui_testkit::screen_text(&terminal);
+    assert!(
+        screen_text.contains("seed runtime event one"),
+        "initial runtime feed should remain visible in the live event stream:\n{screen_text}"
+    );
+    assert_eq!(
+        screen_text.matches("seed runtime event one").count(),
+        1,
+        "initial runtime feed should not be duplicated above the live parallel board:\n{screen_text}"
+    );
+
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
+            vec![
+                inline_runtime_feed_entry(3, "new runtime event three"),
+                inline_runtime_feed_entry(2, "seed runtime event two"),
+                inline_runtime_feed_entry(1, "seed runtime event one"),
+            ],
+        )));
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("runtime feed delta draw transaction");
+
+    let app_scrollback = runtime
+        .app_mut()
+        .parallel_supervisor_event_scrollback_lines()
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        app_scrollback.contains("new runtime event three"),
+        "new runtime events should still append after the primed baseline:\n{app_scrollback}"
+    );
+    assert!(
+        !app_scrollback.contains("seed runtime event one"),
+        "primed runtime events must not be backfilled on later redraws:\n{app_scrollback}"
+    );
+}
+
+#[test]
 fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
@@ -283,6 +354,36 @@ fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
         !terminal_scrollback.contains("Command Hints"),
         "viewport fitting must not push live panel footer chrome into host scrollback:\n{terminal_scrollback}"
     );
+}
+
+fn runtime_feed_supervisor_snapshot(
+    runtime_event_feed: Vec<ParallelModeRuntimeEventFeedEntry>,
+) -> ParallelModeSupervisorSnapshot {
+    ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle")
+            .with_runtime_event_feed(runtime_event_feed),
+        None,
+    )
+}
+
+fn inline_runtime_feed_entry(
+    sequence: i64,
+    summary: impl Into<String>,
+) -> ParallelModeRuntimeEventFeedEntry {
+    ParallelModeRuntimeEventFeedEntry::new(
+        sequence,
+        "parallel_runtime_reset",
+        "parallel_runtime",
+        "pool",
+        60,
+        summary,
+        format!("2026-05-13T11:45:{sequence:02}+00:00"),
+    )
 }
 
 #[test]

@@ -407,9 +407,7 @@ mod tests {
         let mut state = TurnStreamState::default();
         let profile = TerminalBridgeAttachmentProfile::default();
 
-        let attachment = state.apply_stream_event(TurnStreamEvent::AttachmentObserved {
-            profile: profile.clone(),
-        });
+        let attachment = state.apply_stream_event(TurnStreamEvent::AttachmentObserved { profile });
         assert_eq!(attachment.revision, 1);
         assert_eq!(
             attachment.update,

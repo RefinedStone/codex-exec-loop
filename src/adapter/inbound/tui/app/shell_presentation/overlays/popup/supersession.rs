@@ -550,7 +550,13 @@ fn build_parallel_event_stream_lines(
         ));
     }
 
-    for entry in &supervisor_snapshot.distributor.runtime_event_feed {
+    let mut runtime_event_feed = supervisor_snapshot
+        .distributor
+        .runtime_event_feed
+        .iter()
+        .collect::<Vec<_>>();
+    runtime_event_feed.sort_by_key(|entry| entry.sequence);
+    for entry in runtime_event_feed {
         events.push(parallel_stream_line(
             compact_stream_timestamp_label(&entry.recorded_at),
             "Supervisor",

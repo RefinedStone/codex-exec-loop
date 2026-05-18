@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 use chrono::Utc;
 use ratatui::style::{Modifier, Style};
@@ -17,14 +17,14 @@ pub(super) const PARALLEL_SUPERVISOR_OPERATOR_ACTOR: &str = "You";
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParallelSupervisorEventEntry {
     line: Line<'static>,
-    runtime_sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct ParallelSupervisorEventLog {
     entries: VecDeque<ParallelSupervisorEventEntry>,
     scrollback_entries: VecDeque<ParallelSupervisorEventEntry>,
-    scrollback_runtime_sequences: BTreeSet<i64>,
+    runtime_feed_workspace: Option<String>,
+    last_runtime_sequence_seen: Option<i64>,
 }
 
 impl ParallelSupervisorEventLog {
@@ -39,7 +39,6 @@ impl ParallelSupervisorEventLog {
     fn push(&mut self, timestamp_label: String, actor: String, body: String) {
         let entry = ParallelSupervisorEventEntry {
             line: parallel_supervisor_event_line(&timestamp_label, &actor, &body),
-            runtime_sequence: None,
         };
         self.scrollback_entries.push_back(entry.clone());
         self.trim_scrollback_entries();
@@ -67,16 +66,29 @@ impl ParallelSupervisorEventLog {
         &mut self,
         snapshot: &ParallelModeSupervisorSnapshot,
     ) {
+        let workspace_path = snapshot.workspace_path.as_str();
+        if self.runtime_feed_workspace.as_deref() != Some(workspace_path) {
+            self.runtime_feed_workspace = Some(workspace_path.to_string());
+            self.last_runtime_sequence_seen = None;
+        }
         self.record_runtime_feed_entries(&snapshot.distributor.runtime_event_feed);
     }
 
     fn record_runtime_feed_entries(&mut self, entries: &[ParallelModeRuntimeEventFeedEntry]) {
-        let mut entries = entries.iter().collect::<Vec<_>>();
+        let Some(latest_sequence) = entries.iter().map(|entry| entry.sequence).max() else {
+            return;
+        };
+        let Some(previous_sequence) = self.last_runtime_sequence_seen else {
+            self.last_runtime_sequence_seen = Some(latest_sequence);
+            return;
+        };
+
+        let mut entries = entries
+            .iter()
+            .filter(|entry| entry.sequence > previous_sequence)
+            .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.sequence);
         for entry in entries {
-            if !self.scrollback_runtime_sequences.insert(entry.sequence) {
-                continue;
-            }
             self.scrollback_entries
                 .push_back(ParallelSupervisorEventEntry {
                     line: parallel_supervisor_event_line(
@@ -91,19 +103,15 @@ impl ParallelSupervisorEventLog {
                             truncate_event_text(&entry.summary, 76)
                         ),
                     ),
-                    runtime_sequence: Some(entry.sequence),
                 });
             self.trim_scrollback_entries();
         }
+        self.last_runtime_sequence_seen = Some(previous_sequence.max(latest_sequence));
     }
 
     fn trim_scrollback_entries(&mut self) {
         while self.scrollback_entries.len() > MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
-            if let Some(entry) = self.scrollback_entries.pop_front()
-                && let Some(sequence) = entry.runtime_sequence
-            {
-                self.scrollback_runtime_sequences.remove(&sequence);
-            }
+            self.scrollback_entries.pop_front();
         }
     }
 
@@ -366,6 +374,14 @@ mod tests {
             runtime_feed_entry(2, "slot_lease", "slot-2", "slot_lease_upsert"),
             runtime_feed_entry(1, "session_detail", "slot-1", "session_detail_upsert"),
         ]);
+        assert_eq!(
+            log.scrollback_lines()
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>(),
+            vec!["[11:45:02] You: 안녕하세요?".to_string()],
+            "initial runtime feed should establish the append baseline without backfilling old DB events"
+        );
         log.record_runtime_feed_entries(&[
             runtime_feed_entry(
                 3,
@@ -382,9 +398,16 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(before_tail.matches("session detail:slot-1").count(), 1);
-        assert_eq!(before_tail.matches("slot lease:slot-2").count(), 1);
+        assert_eq!(before_tail.matches("session detail:slot-1").count(), 0);
+        assert_eq!(before_tail.matches("slot lease:slot-2").count(), 0);
         assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 1);
+        let operator_index = before_tail
+            .find("You: 안녕하세요?")
+            .expect("operator event should stay in scrollback");
+        let runtime_index = before_tail
+            .find("distributor queue:queue-1")
+            .expect("new runtime event should append");
+        assert!(operator_index < runtime_index);
 
         for index in 0..MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
             log.push_for_test("11:45:03", "Supervisor", format!("tail-{index:03}"));

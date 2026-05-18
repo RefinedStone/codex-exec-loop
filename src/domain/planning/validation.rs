@@ -797,8 +797,8 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(codes.contains(&"missing_dependency_reference"), true);
-        assert_eq!(codes.contains(&"dependency_cycle_detected"), false);
+        assert!(codes.contains(&"missing_dependency_reference"));
+        assert!(!codes.contains(&"dependency_cycle_detected"));
 
         let service = PlanningSemanticValidationService::new();
         let adjacency_map: std::collections::HashMap<String, Vec<String>> =
@@ -806,16 +806,13 @@ mod tests {
         let mut temporary_marks = std::collections::HashSet::new();
         let mut permanent_marks = std::collections::HashSet::new();
 
-        assert_eq!(
-            service.detect_cycle(
-                "detached-task",
-                &adjacency_map,
-                &mut temporary_marks,
-                &mut permanent_marks,
-            ),
-            false
-        );
-        assert_eq!(permanent_marks.contains("detached-task"), true);
+        assert!(!service.detect_cycle(
+            "detached-task",
+            &adjacency_map,
+            &mut temporary_marks,
+            &mut permanent_marks,
+        ));
+        assert!(permanent_marks.contains("detached-task"));
     }
 
     #[test]
@@ -911,7 +908,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(codes.contains(&"done_task_unresolved_blocker"), false);
+        assert!(!codes.contains(&"done_task_unresolved_blocker"));
     }
 
     #[test]

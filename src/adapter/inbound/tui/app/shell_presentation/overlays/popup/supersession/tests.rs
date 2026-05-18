@@ -1,4 +1,7 @@
-use super::{build_detail_lines, build_distributor_lines, build_roster_lines};
+use super::{
+    build_detail_lines, build_distributor_lines, build_parallel_event_stream_lines,
+    build_roster_lines,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -216,6 +219,60 @@ fn distributor_lines_render_runtime_event_feed_with_sequence_and_revision() {
         "event #42 @ 00:03 / session detail:slot-1:task-1 / session detail upsert / rev 7 / runtime session detail stored / session: slot-1:task-1 / state: commit_ready"
     ));
     assert!(!rendered.contains("session_detail_upsert"));
+}
+
+#[test]
+fn parallel_event_stream_orders_runtime_feed_chronologically() {
+    /*
+    The DB projection loads runtime events newest-first for compact dashboard summaries.
+    The live event stream is a timeline, so it must normalize that feed before rendering.
+    */
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/workspace",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "empty"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "empty"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queued")
+            .with_runtime_event_feed(vec![
+                runtime_event_feed_entry(3, "third runtime write"),
+                runtime_event_feed_entry(1, "first runtime write"),
+                runtime_event_feed_entry(2, "second runtime write"),
+            ]),
+        None,
+    );
+    let rendered = build_parallel_event_stream_lines(&snapshot, Vec::new())
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_index = rendered
+        .find("first runtime write")
+        .expect("first event should render");
+    let second_index = rendered
+        .find("second runtime write")
+        .expect("second event should render");
+    let third_index = rendered
+        .find("third runtime write")
+        .expect("third event should render");
+    assert!(first_index < second_index);
+    assert!(second_index < third_index);
+}
+
+fn runtime_event_feed_entry(
+    sequence: i64,
+    summary: impl Into<String>,
+) -> ParallelModeRuntimeEventFeedEntry {
+    ParallelModeRuntimeEventFeedEntry::new(
+        sequence,
+        "parallel_runtime_reset",
+        "parallel_runtime",
+        "pool",
+        60,
+        summary,
+        format!("2026-05-13T11:45:{sequence:02}+00:00"),
+    )
 }
 
 #[test]
