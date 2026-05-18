@@ -403,6 +403,41 @@ mod tests {
     }
 
     #[test]
+    fn default_state_projects_attachment_status_and_runtime_notice_updates() {
+        let mut state = TurnStreamState::default();
+        let profile = TerminalBridgeAttachmentProfile::default();
+
+        let attachment = state.apply_stream_event(TurnStreamEvent::AttachmentObserved {
+            profile: profile.clone(),
+        });
+        assert_eq!(attachment.revision, 1);
+        assert_eq!(
+            attachment.update,
+            TurnStreamUpdate::AttachmentObserved { profile }
+        );
+
+        let status = state.apply_stream_event(TurnStreamEvent::StatusUpdated {
+            text: "running tools".to_string(),
+        });
+        assert_eq!(status.status_text.as_deref(), Some("running tools"));
+        assert_eq!(
+            status.update,
+            TurnStreamUpdate::StatusUpdated {
+                text: "running tools".to_string(),
+            }
+        );
+
+        let notice = state.apply_runtime_notice("runtime reattached".to_string());
+        assert_eq!(notice.status_text.as_deref(), Some("running tools"));
+        assert_eq!(
+            notice.update,
+            TurnStreamUpdate::RuntimeNotice {
+                notice: "runtime reattached".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn tool_activity_projects_domain_activity() {
         let mut state = TurnStreamState::new();
         let activity = ConversationToolActivity {
@@ -435,6 +470,38 @@ mod tests {
         assert_eq!(
             snapshot.update,
             TurnStreamUpdate::ApprovalReviewUpdated { review }
+        );
+    }
+
+    #[test]
+    fn turn_completed_event_records_terminal_snapshot_without_execution_capture() {
+        let mut state = TurnStreamState::new();
+        state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+        });
+
+        let snapshot = state.apply_stream_event(TurnStreamEvent::TurnCompleted {
+            turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+        });
+
+        assert_eq!(snapshot.active_turn_id, None);
+        assert_eq!(snapshot.status_text.as_deref(), Some("turn completed"));
+        assert_eq!(
+            snapshot.terminal,
+            Some(TurnStreamTerminalSnapshot::Completed {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec!["docs/plan.md".to_string()]
+            })
+        );
+        assert_eq!(
+            snapshot.update,
+            TurnStreamUpdate::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+                execution_snapshot_capture: None,
+                status_text: "turn completed".to_string(),
+            }
         );
     }
 
