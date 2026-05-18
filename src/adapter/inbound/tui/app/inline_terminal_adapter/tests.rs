@@ -281,13 +281,13 @@ fn parallel_runtime_feed_primes_scrollback_without_replaying_old_events() {
     );
     let screen_text = tui_testkit::screen_text(&terminal);
     assert!(
-        screen_text.contains("seed runtime event one"),
-        "initial runtime feed should remain visible in the live event stream:\n{screen_text}"
+        !screen_text.contains("seed runtime event one"),
+        "old runtime feed rows should not be replayed into the live event stream:\n{screen_text}"
     );
     assert_eq!(
         screen_text.matches("seed runtime event one").count(),
-        1,
-        "initial runtime feed should not be duplicated above the live parallel board:\n{screen_text}"
+        0,
+        "initial runtime feed should stay hidden after the baseline is primed:\n{screen_text}"
     );
 
     runtime
@@ -316,6 +316,15 @@ fn parallel_runtime_feed_primes_scrollback_without_replaying_old_events() {
     assert!(
         !app_scrollback.contains("seed runtime event one"),
         "primed runtime events must not be backfilled on later redraws:\n{app_scrollback}"
+    );
+    let screen_text = tui_testkit::screen_text(&terminal);
+    assert!(
+        screen_text.contains("new runtime event three"),
+        "new runtime events should append to the live event stream after the primed baseline:\n{screen_text}"
+    );
+    assert!(
+        !screen_text.contains("seed runtime event one"),
+        "primed runtime events must not be backfilled into the live event stream:\n{screen_text}"
     );
 }
 

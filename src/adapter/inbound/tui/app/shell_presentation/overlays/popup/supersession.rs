@@ -550,27 +550,6 @@ fn build_parallel_event_stream_lines(
         ));
     }
 
-    let mut runtime_event_feed = supervisor_snapshot
-        .distributor
-        .runtime_event_feed
-        .iter()
-        .collect::<Vec<_>>();
-    runtime_event_feed.sort_by_key(|entry| entry.sequence);
-    for entry in runtime_event_feed {
-        events.push(parallel_stream_line(
-            compact_stream_timestamp_label(&entry.recorded_at),
-            "Supervisor",
-            format!(
-                "{}:{} {} / rev {} / {}",
-                display_runtime_event_label(&entry.projection_kind),
-                entry.projection_key,
-                display_runtime_event_label(&entry.event_kind),
-                entry.observed_planning_revision,
-                truncate_timeline_text(&entry.summary, 76)
-            ),
-        ));
-    }
-
     events.extend(local_event_lines);
 
     if events.is_empty() {
