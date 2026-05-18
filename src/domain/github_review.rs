@@ -357,7 +357,10 @@ pub fn truncate_notice_text(text: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{GithubPullRequestActivityEvent, GithubPullRequestActivityKind};
+    use super::{
+        GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
+        GithubPullRequestActivitySnapshot, GithubPullRequestTarget, truncate_notice_text,
+    };
 
     fn event(
         kind: GithubPullRequestActivityKind,
@@ -390,6 +393,64 @@ mod tests {
     }
 
     #[test]
+    fn pull_request_target_display_label_keeps_repository_and_number() {
+        let target = GithubPullRequestTarget::new("RefinedStone/codex-exec-loop", 1781);
+
+        assert_eq!(target.display_label(), "RefinedStone/codex-exec-loop#1781");
+    }
+
+    #[test]
+    fn activity_snapshot_sort_orders_timestamp_id_and_kind_ties() {
+        let mut review = event(
+            GithubPullRequestActivityKind::Review,
+            "reviewer",
+            Some("APPROVED"),
+            None,
+        );
+        review.id = 7;
+        review.submitted_at = "2026-04-08T09:00:01Z".to_string();
+        let mut issue_comment = event(
+            GithubPullRequestActivityKind::IssueComment,
+            "reviewer",
+            None,
+            None,
+        );
+        issue_comment.id = 7;
+        issue_comment.submitted_at = "2026-04-08T09:00:01Z".to_string();
+        let mut older_review_comment = event(
+            GithubPullRequestActivityKind::ReviewComment,
+            "reviewer",
+            None,
+            Some("src/lib.rs"),
+        );
+        older_review_comment.id = 99;
+        older_review_comment.submitted_at = "2026-04-08T09:00:00Z".to_string();
+        let mut snapshot = GithubPullRequestActivitySnapshot {
+            target: GithubPullRequestTarget::new("owner/repo", 42),
+            title: "Review queue".to_string(),
+            url: "https://example.invalid/pr/42".to_string(),
+            head_branch: "feature".to_string(),
+            base_branch: "prerelease".to_string(),
+            events: vec![issue_comment, review, older_review_comment],
+        };
+
+        snapshot.sort_events();
+
+        assert_eq!(
+            snapshot
+                .events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                GithubPullRequestActivityKind::ReviewComment,
+                GithubPullRequestActivityKind::Review,
+                GithubPullRequestActivityKind::IssueComment,
+            ]
+        );
+    }
+
+    #[test]
     fn review_comment_notice_uses_file_name_when_available() {
         let event = event(
             GithubPullRequestActivityKind::ReviewComment,
@@ -401,6 +462,67 @@ mod tests {
         assert_eq!(
             event.notice_label(),
             "comment on shell_presentation.rs by reviewer"
+        );
+    }
+
+    #[test]
+    fn notice_labels_cover_comment_fallbacks_and_review_state_vocabulary() {
+        assert_eq!(
+            event(
+                GithubPullRequestActivityKind::ReviewComment,
+                "reviewer",
+                None,
+                None,
+            )
+            .notice_label(),
+            "review comment by reviewer"
+        );
+        assert_eq!(
+            event(
+                GithubPullRequestActivityKind::ReviewComment,
+                "reviewer",
+                None,
+                Some("   "),
+            )
+            .notice_label(),
+            "review comment by reviewer"
+        );
+        assert_eq!(
+            event(
+                GithubPullRequestActivityKind::IssueComment,
+                "operator",
+                None,
+                None,
+            )
+            .notice_label(),
+            "comment by operator"
+        );
+
+        for (state, expected) in [
+            ("CHANGES_REQUESTED", "changes requested by reviewer"),
+            ("DISMISSED", "dismissed review by reviewer"),
+            ("PENDING", "pending review by reviewer"),
+        ] {
+            assert_eq!(
+                event(
+                    GithubPullRequestActivityKind::Review,
+                    "reviewer",
+                    Some(state),
+                    None,
+                )
+                .notice_label(),
+                expected
+            );
+        }
+        assert_eq!(
+            event(
+                GithubPullRequestActivityKind::Review,
+                "reviewer",
+                None,
+                None
+            )
+            .notice_label(),
+            "review by reviewer"
         );
     }
 
@@ -439,6 +561,36 @@ mod tests {
     }
 
     #[test]
+    fn notice_summary_covers_empty_state_body_and_review_comment_without_path() {
+        let review = GithubPullRequestActivityEvent {
+            id: 103,
+            kind: GithubPullRequestActivityKind::Review,
+            submitted_at: "2026-04-08T09:00:00Z".to_string(),
+            author_login: "reviewer".to_string(),
+            body: "   ".to_string(),
+            state: Some("   ".to_string()),
+            url: "https://example.invalid/review/103".to_string(),
+            path: None,
+        };
+        assert_eq!(review.notice_summary(64), "review updated by reviewer");
+
+        let review_comment = GithubPullRequestActivityEvent {
+            id: 104,
+            kind: GithubPullRequestActivityKind::ReviewComment,
+            submitted_at: "2026-04-08T09:00:00Z".to_string(),
+            author_login: "reviewer".to_string(),
+            body: String::new(),
+            state: None,
+            url: "https://example.invalid/review-comment/104".to_string(),
+            path: None,
+        };
+        assert_eq!(
+            review_comment.notice_summary(64),
+            "review comment by reviewer"
+        );
+    }
+
+    #[test]
     fn notice_summary_includes_review_comment_path_and_respects_total_budget() {
         let event = GithubPullRequestActivityEvent {
             id: 101,
@@ -472,5 +624,13 @@ mod tests {
 
         assert_eq!(event.notice_summary(3), "...");
         assert_eq!(event.notice_summary(2), "..");
+    }
+
+    #[test]
+    fn truncate_notice_text_covers_zero_pending_space_and_trimmed_ellipsis_edges() {
+        assert_eq!(truncate_notice_text("anything", 0), "");
+        assert_eq!(truncate_notice_text("   leading", 16), "leading");
+        assert_eq!(truncate_notice_text("abc def", 3), "...");
+        assert_eq!(truncate_notice_text("ab cd ef", 6), "ab...");
     }
 }
