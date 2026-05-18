@@ -756,6 +756,69 @@ mod tests {
     }
 
     #[test]
+    fn validates_blank_duplicate_task_ids_and_acyclic_dependency_walk() {
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction("direction-a")],
+        };
+        let mut blank = task(" ", TaskStatus::Ready);
+        blank.depends_on = vec!["supporting-task".to_string()];
+        let duplicate_a = task("duplicate-task", TaskStatus::Ready);
+        let duplicate_b = task("duplicate-task", TaskStatus::Ready);
+        let mut missing_dependency = task("missing-dependency-task", TaskStatus::Ready);
+        missing_dependency.depends_on = vec!["missing-task".to_string()];
+        let supporting = task("supporting-task", TaskStatus::Done);
+        let ledger = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![
+                blank,
+                duplicate_a,
+                duplicate_b,
+                missing_dependency,
+                supporting,
+            ],
+        };
+
+        let report = validate(&directions, &ledger);
+        let codes = issue_codes(&report);
+
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "blank_task_id")
+                .count(),
+            1
+        );
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "duplicate_task_id")
+                .count(),
+            1
+        );
+        assert_eq!(codes.contains(&"missing_dependency_reference"), true);
+        assert_eq!(codes.contains(&"dependency_cycle_detected"), false);
+
+        let service = PlanningSemanticValidationService::new();
+        let adjacency_map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut temporary_marks = std::collections::HashSet::new();
+        let mut permanent_marks = std::collections::HashSet::new();
+
+        assert_eq!(
+            service.detect_cycle(
+                "detached-task",
+                &adjacency_map,
+                &mut temporary_marks,
+                &mut permanent_marks,
+            ),
+            false
+        );
+        assert_eq!(permanent_marks.contains("detached-task"), true);
+    }
+
+    #[test]
     fn validates_missing_blockers_and_done_task_unresolved_blockers() {
         let directions = DirectionCatalogDocument {
             version: 1,
@@ -812,17 +875,24 @@ mod tests {
         };
         let mut done = task("done-task", TaskStatus::Done);
         done.depends_on = vec!["open-task".to_string()];
+        let mut clean_done = task("clean-done-task", TaskStatus::Done);
+        clean_done.depends_on = vec!["completed-task".to_string()];
+        clean_done.blocked_by = vec!["cancelled-blocker".to_string()];
         let ledger = TaskAuthorityDocument {
             version: 1,
             tasks: vec![
                 done,
+                clean_done,
                 task("open-task", TaskStatus::Ready),
+                task("completed-task", TaskStatus::Done),
+                task("cancelled-blocker", TaskStatus::Cancelled),
                 task("active-a", TaskStatus::InProgress),
                 task("active-b", TaskStatus::InProgress),
             ],
         };
 
         let report = validate(&directions, &ledger);
+        let codes = issue_codes(&report);
 
         assert!(report.issues.iter().any(|issue| {
             issue.file_kind == PlanningFileKind::TaskAuthority
@@ -834,6 +904,14 @@ mod tests {
                 .iter()
                 .any(|issue| issue.code == "multiple_in_progress_tasks")
         );
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "done_task_unresolved_dependency")
+                .count(),
+            1
+        );
+        assert_eq!(codes.contains(&"done_task_unresolved_blocker"), false);
     }
 
     #[test]
