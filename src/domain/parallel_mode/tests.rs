@@ -102,6 +102,28 @@ fn readiness_derivation_marks_ready_when_all_capabilities_are_ready() {
     assert_eq!(readiness, ParallelModeReadinessState::Ready);
 }
 
+// Operator-facing labels are shared by TUI badges, summaries, and diagnostics.
+// Keep every public readiness/capability enum variant covered so new rows do
+// not silently diverge from the compact vocabulary.
+#[test]
+fn readiness_and_capability_labels_cover_parallel_diagnostics_vocabulary() {
+    assert_eq!(ParallelModeReadinessState::Repairing.label(), "repairing");
+    assert!(!ParallelModeReadinessState::Repairing.allows_parallel_mode());
+
+    assert_eq!(
+        ParallelModeCapabilityKey::GitWorktree.label(),
+        "git worktree"
+    );
+    assert_eq!(ParallelModeCapabilityKey::GhAuth.label(), "gh auth");
+    assert_eq!(ParallelModeCapabilityKey::Planning.label(), "planning");
+    assert_eq!(
+        ParallelModeCapabilityKey::AuthorityStore.label(),
+        "authority store"
+    );
+
+    assert_eq!(ParallelModeCapabilityState::Repairing.label(), "repairing");
+}
+
 #[test]
 fn slot_lease_request_from_task_identity_normalizes_parallel_agent_slug() {
     let request = ParallelModeSlotLeaseRequest::from_task_identity(
