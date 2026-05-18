@@ -235,7 +235,8 @@ mod tests {
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
-        StartupSnapshot, TurnStreamEvent, TurnStreamUpdate,
+        StartupSnapshot, TurnStreamEvent, TurnStreamSnapshot, TurnStreamTerminalSnapshot,
+        TurnStreamUpdate,
     };
     use crate::domain::conversation::{
         ConversationMessage, ConversationMessageKind,
@@ -248,8 +249,10 @@ mod tests {
     #[test]
     fn new_controller_exposes_initial_snapshot() {
         let controller = CoreController::new();
+        let default_controller = CoreController::default();
 
         assert_eq!(controller.snapshot(), AppSnapshot::initial());
+        assert_eq!(default_controller.snapshot(), AppSnapshot::initial());
     }
 
     #[test]
@@ -539,16 +542,20 @@ mod tests {
         let outcome = controller.handle_input(CoreInput::ConversationStreamUpdated(stream_event));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
-        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
-        else {
-            panic!("stream event should emit a turn stream snapshot");
-        };
-        assert_eq!(stream_snapshot.revision, 1);
         assert_eq!(
-            stream_snapshot.update,
-            TurnStreamUpdate::StatusUpdated {
-                text: "thinking".to_string()
-            }
+            outcome.events,
+            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+                revision: 1,
+                thread_id: None,
+                title: None,
+                cwd: None,
+                active_turn_id: None,
+                status_text: Some("thinking".to_string()),
+                terminal: None,
+                update: TurnStreamUpdate::StatusUpdated {
+                    text: "thinking".to_string()
+                },
+            })]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -568,18 +575,26 @@ mod tests {
         });
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
-        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
-        else {
-            panic!("turn completion should emit a turn stream snapshot");
-        };
         assert_eq!(
-            stream_snapshot.update,
-            TurnStreamUpdate::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
-                execution_snapshot_capture: Some(execution_snapshot_capture),
-                status_text: "turn completed".to_string(),
-            }
+            outcome.events,
+            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+                revision: 1,
+                thread_id: None,
+                title: None,
+                cwd: None,
+                active_turn_id: None,
+                status_text: Some("turn completed".to_string()),
+                terminal: Some(TurnStreamTerminalSnapshot::Completed {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+                }),
+                update: TurnStreamUpdate::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+                    execution_snapshot_capture: Some(execution_snapshot_capture),
+                    status_text: "turn completed".to_string(),
+                },
+            })]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -593,15 +608,20 @@ mod tests {
         ));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
-        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
-        else {
-            panic!("runtime notice should emit a turn stream snapshot");
-        };
         assert_eq!(
-            stream_snapshot.update,
-            TurnStreamUpdate::RuntimeNotice {
-                notice: "reattached runtime".to_string()
-            }
+            outcome.events,
+            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+                revision: 1,
+                thread_id: None,
+                title: None,
+                cwd: None,
+                active_turn_id: None,
+                status_text: None,
+                terminal: None,
+                update: TurnStreamUpdate::RuntimeNotice {
+                    notice: "reattached runtime".to_string()
+                },
+            })]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -626,14 +646,21 @@ mod tests {
             "runtime reattached".to_string(),
         ));
 
-        let [AppEvent::TurnStreamSnapshotChanged(stream_snapshot)] = outcome.events.as_slice()
-        else {
-            panic!("runtime notice should emit a fresh turn stream snapshot");
-        };
-        assert_eq!(stream_snapshot.revision, 1);
-        assert_eq!(stream_snapshot.thread_id, None);
-        assert_eq!(stream_snapshot.title, None);
-        assert_eq!(stream_snapshot.cwd, None);
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+                revision: 1,
+                thread_id: None,
+                title: None,
+                cwd: None,
+                active_turn_id: None,
+                status_text: None,
+                terminal: None,
+                update: TurnStreamUpdate::RuntimeNotice {
+                    notice: "runtime reattached".to_string()
+                },
+            })]
+        );
         assert!(outcome.effects.is_empty());
     }
 
