@@ -89,22 +89,18 @@ impl ParallelSupervisorEventLog {
             .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.sequence);
         for entry in entries {
-            self.scrollback_entries
-                .push_back(ParallelSupervisorEventEntry {
-                    line: parallel_supervisor_event_line(
-                        &compact_stream_timestamp_label(&entry.recorded_at),
-                        "Supervisor",
-                        &format!(
-                            "{}:{} {} / rev {} / {}",
-                            display_runtime_event_label(&entry.projection_kind),
-                            entry.projection_key,
-                            display_runtime_event_label(&entry.event_kind),
-                            entry.observed_planning_revision,
-                            truncate_event_text(&entry.summary, 76)
-                        ),
-                    ),
-                });
-            self.trim_scrollback_entries();
+            self.push(
+                compact_stream_timestamp_label(&entry.recorded_at),
+                "Supervisor".to_string(),
+                format!(
+                    "{}:{} {} / rev {} / {}",
+                    display_runtime_event_label(&entry.projection_kind),
+                    entry.projection_key,
+                    display_runtime_event_label(&entry.event_kind),
+                    entry.observed_planning_revision,
+                    truncate_event_text(&entry.summary, 76)
+                ),
+            );
         }
         self.last_runtime_sequence_seen = Some(previous_sequence.max(latest_sequence));
     }
@@ -362,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn scrollback_keeps_local_events_and_runtime_feed_append_only_with_cap() {
+    fn event_log_keeps_local_events_and_runtime_feed_append_only_with_cap() {
         let mut log = ParallelSupervisorEventLog::default();
 
         log.push_for_test(
@@ -398,9 +394,18 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
+        let live_tail = log
+            .lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(before_tail.matches("session detail:slot-1").count(), 0);
         assert_eq!(before_tail.matches("slot lease:slot-2").count(), 0);
         assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 1);
+        assert_eq!(live_tail.matches("session detail:slot-1").count(), 0);
+        assert_eq!(live_tail.matches("slot lease:slot-2").count(), 0);
+        assert_eq!(live_tail.matches("distributor queue:queue-1").count(), 1);
         let operator_index = before_tail
             .find("You: 안녕하세요?")
             .expect("operator event should stay in scrollback");
@@ -408,6 +413,13 @@ mod tests {
             .find("distributor queue:queue-1")
             .expect("new runtime event should append");
         assert!(operator_index < runtime_index);
+        let live_operator_index = live_tail
+            .find("You: 안녕하세요?")
+            .expect("operator event should stay in live stream");
+        let live_runtime_index = live_tail
+            .find("distributor queue:queue-1")
+            .expect("new runtime event should append to live stream");
+        assert!(live_operator_index < live_runtime_index);
 
         for index in 0..MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS {
             log.push_for_test("11:45:03", "Supervisor", format!("tail-{index:03}"));

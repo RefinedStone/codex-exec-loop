@@ -1,6 +1,6 @@
 use super::{
     build_detail_lines, build_distributor_lines, build_parallel_event_stream_lines,
-    build_roster_lines,
+    build_roster_lines, parallel_supervisor_event_line,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
@@ -222,10 +222,11 @@ fn distributor_lines_render_runtime_event_feed_with_sequence_and_revision() {
 }
 
 #[test]
-fn parallel_event_stream_orders_runtime_feed_chronologically() {
+fn parallel_event_stream_does_not_replay_raw_runtime_feed() {
     /*
-    The DB projection loads runtime events newest-first for compact dashboard summaries.
-    The live event stream is a timeline, so it must normalize that feed before rendering.
+    The DB projection loads a compact recent runtime feed that can include stale rows from
+    before the operator opened :parallel. The live event stream must use the append-only
+    supervisor event log instead, where the runtime feed has already been baselined.
     */
     let snapshot = ParallelModeSupervisorSnapshot::new(
         ParallelModeSupervisorState::Supervise,
@@ -241,23 +242,23 @@ fn parallel_event_stream_orders_runtime_feed_chronologically() {
             ]),
         None,
     );
-    let rendered = build_parallel_event_stream_lines(&snapshot, Vec::new())
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let rendered = build_parallel_event_stream_lines(
+        &snapshot,
+        vec![parallel_supervisor_event_line(
+            "11:45:04",
+            "You",
+            "안녕하세요",
+        )],
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
 
-    let first_index = rendered
-        .find("first runtime write")
-        .expect("first event should render");
-    let second_index = rendered
-        .find("second runtime write")
-        .expect("second event should render");
-    let third_index = rendered
-        .find("third runtime write")
-        .expect("third event should render");
-    assert!(first_index < second_index);
-    assert!(second_index < third_index);
+    assert!(rendered.contains("You: 안녕하세요"));
+    assert!(!rendered.contains("first runtime write"));
+    assert!(!rendered.contains("second runtime write"));
+    assert!(!rendered.contains("third runtime write"));
 }
 
 fn runtime_event_feed_entry(
