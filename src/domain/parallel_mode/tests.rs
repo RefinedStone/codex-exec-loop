@@ -350,6 +350,19 @@ fn runtime_events_snapshot_reports_latest_visible_event() {
     );
 }
 
+#[test]
+fn runtime_events_snapshot_empty_summary_uses_empty_state_copy() {
+    let snapshot = ParallelModeRuntimeEventsSnapshot::empty("no runtime events captured yet");
+
+    assert_eq!(snapshot.visible_count(), 0);
+    assert_eq!(snapshot.total_event_count, 0);
+    assert_eq!(snapshot.latest(), None);
+    assert_eq!(
+        snapshot.compact_summary(),
+        "no runtime events captured yet".to_string()
+    );
+}
+
 // dispatch eligibility도 같은 state machine이 판단한다. runtime이 이미 소유한 task는
 // 중복 실행하지 않고, startup 실패 후 task가 갱신되기 전까지는 같은 실패를 반복하지 않는다.
 #[test]
