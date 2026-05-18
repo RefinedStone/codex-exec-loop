@@ -671,9 +671,9 @@ impl TaskStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
-        PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
-        PlanningRefreshContractKind, TaskActor,
+        DirectionState, OriginSessionKind, PLANNING_OFFICIAL_COMPLETION_REFRESH_CONTRACT_VERSION,
+        PlanningAuthorityShadowStoreSyncState, PlanningOfficialCompletionRefreshContract,
+        PlanningOfficialCompletionRefreshPayload, PlanningRefreshContractKind, TaskActor,
     };
 
     #[test]
@@ -739,6 +739,29 @@ mod tests {
             serde_json::to_string(&TaskActor::Worker).expect("actor should serialize"),
             "\"worker\""
         );
+    }
+
+    #[test]
+    fn planning_domain_labels_cover_persisted_status_vocabulary() {
+        assert_eq!(
+            PlanningAuthorityShadowStoreSyncState::Bootstrapped.label(),
+            "bootstrapped"
+        );
+        assert_eq!(
+            PlanningAuthorityShadowStoreSyncState::InSync.label(),
+            "in_sync"
+        );
+        assert_eq!(
+            PlanningAuthorityShadowStoreSyncState::Resynced.label(),
+            "resynced"
+        );
+
+        assert_eq!(OriginSessionKind::Main.label(), "main");
+        assert_eq!(OriginSessionKind::Planner.label(), "planner");
+        assert_eq!(OriginSessionKind::Parallel.label(), "parallel");
+
+        assert_eq!(DirectionState::Active.label(), "active");
+        assert_eq!(DirectionState::Done.label(), "done");
     }
 }
 
@@ -933,6 +956,22 @@ mod priority_queue_projection_tests {
         assert_eq!(
             projection.proposal_summary(2).as_deref(),
             Some("3 promotable follow-up proposals available: Plan A | Plan B | +1 more")
+        );
+    }
+
+    #[test]
+    fn proposal_summary_keeps_count_when_all_visible_titles_are_blank() {
+        let projection = projection(
+            None,
+            vec![
+                queue_task(1, "proposal-1", " "),
+                queue_task(2, "proposal-2", "\t"),
+            ],
+        );
+
+        assert_eq!(
+            projection.proposal_summary(2).as_deref(),
+            Some("2 promotable follow-up proposals available")
         );
     }
 
