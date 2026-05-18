@@ -11,7 +11,9 @@ use super::history_insertion::HistoryInsertionMode;
 use super::shell_presentation::{
     build_inline_tail_view, build_startup_banner_lines, format_conversation_scrollback_lines,
 };
-use super::shell_rendering::{draw, prepare_render_state};
+use super::shell_rendering::{
+    draw, inline_parallel_event_stream_visible_rows, prepare_render_state,
+};
 use super::shell_runtime::ShellRuntime;
 use super::{
     ConversationState, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp,
@@ -168,7 +170,7 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     let cursor_position = terminal.get_cursor_position()?;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     inline_terminal.viewport.insert_mode = insert_mode;
-    let current_lines = current_inline_history_lines(runtime.app_mut());
+    let current_lines = current_inline_history_lines_for_viewport(runtime.app_mut(), viewport_area);
     let writes_host_scrollback = render_mode.writes_host_scrollback();
     let parallel_history_pending = parallel_mode_enabled
         && writes_host_scrollback
@@ -256,7 +258,15 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
     result
 }
 
+#[cfg(test)]
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    current_inline_history_lines_for_viewport(app, Rect::new(0, 0, 80, INLINE_VIEWPORT_HEIGHT))
+}
+
+fn current_inline_history_lines_for_viewport(
+    app: &NativeTuiApp,
+    viewport_area: Rect,
+) -> Vec<Line<'static>> {
     if app.parallel_mode_enabled() {
         /*
          * Parallel mode owns the main inline body with the supervisor board. The
@@ -264,7 +274,8 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
          * operators can scroll back through past activity without replaying the
          * live panel title or footer chrome.
          */
-        return app.parallel_supervisor_event_scrollback_lines();
+        let live_tail_lines = inline_parallel_event_stream_visible_rows(app, viewport_area);
+        return app.parallel_supervisor_event_scrollback_lines_before_live_tail(live_tail_lines);
     }
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
         /*

@@ -10,10 +10,10 @@ use crate::adapter::inbound::tui::app::{
 };
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModeRuntimeEventFeedEntry,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModeAgentRosterSnapshot, ParallelModeCompletionFeedEntry,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
+    ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
@@ -37,7 +37,7 @@ use self::fixtures::make_test_app;
 #[test]
 fn host_history_sync_keeps_live_agent_delta_out_of_inserted_history() {
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 160, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
     app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -310,8 +310,8 @@ fn parallel_runtime_feed_primes_baseline_without_scrollback_duplication() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        !app_scrollback.contains("new runtime event three"),
-        "new runtime events should not be duplicated into host scrollback above the live board:\n{app_scrollback}"
+        app_scrollback.contains("new runtime event three"),
+        "new runtime events should be retained in the durable stream history:\n{app_scrollback}"
     );
     assert!(
         !app_scrollback.contains("seed runtime event one"),
@@ -330,6 +330,87 @@ fn parallel_runtime_feed_primes_baseline_without_scrollback_duplication() {
     assert!(
         !screen_text.contains("seed runtime event one"),
         "primed runtime events must not be backfilled into the live event stream:\n{screen_text}"
+    );
+}
+
+#[test]
+fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(
+        status_runtime_feed_supervisor_snapshot(vec![inline_runtime_feed_entry(
+            1,
+            "seed runtime event one",
+        )]),
+    ));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("initial status stream draw transaction");
+
+    let initial_stream = runtime
+        .app_mut()
+        .parallel_supervisor_event_lines()
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        initial_stream.contains("parallel board 상태를 갱신했습니다"),
+        "initial board status should be recorded as stream history:\n{initial_stream}"
+    );
+    assert!(
+        initial_stream.contains("reported 단계 기록: no agent results reported yet"),
+        "initial ledger status should be recorded as stream history:\n{initial_stream}"
+    );
+
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(
+            status_runtime_feed_supervisor_snapshot(
+                (1..=40)
+                    .map(|sequence| {
+                        inline_runtime_feed_entry(
+                            sequence,
+                            format!("runtime stream marker {sequence:02}"),
+                        )
+                    })
+                    .collect(),
+            ),
+        ));
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("runtime stream tail draw transaction");
+
+    let screen_text = tui_testkit::screen_text(&terminal);
+    assert!(
+        screen_text.contains("runtime stream marker 40"),
+        "live stream should keep following new runtime events:\n{screen_text}"
+    );
+    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
+    assert!(
+        terminal_scrollback.contains("control tower is live")
+            && terminal_scrollback.contains("in read-only supervisor mode"),
+        "initial board status should move into durable terminal history instead of disappearing:\n{terminal_scrollback}"
+    );
+    assert!(
+        terminal_scrollback.contains("no agent results reported yet"),
+        "initial ledger status should move into durable terminal history instead of being replaced:\n{terminal_scrollback}"
+    );
+    assert_eq!(
+        terminal_scrollback
+            .matches("no agent results reported yet")
+            .count(),
+        1,
+        "snapshot status rows should not be replayed on every redraw:\n{terminal_scrollback}"
+    );
+    assert!(
+        !terminal_scrollback.contains("Parallel Event Stream"),
+        "durable stream history must not include live panel chrome:\n{terminal_scrollback}"
     );
 }
 
@@ -382,6 +463,41 @@ fn runtime_feed_supervisor_snapshot(
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle")
             .with_runtime_event_feed(runtime_event_feed),
         None,
+    )
+}
+
+fn status_runtime_feed_supervisor_snapshot(
+    runtime_event_feed: Vec<ParallelModeRuntimeEventFeedEntry>,
+) -> ParallelModeSupervisorSnapshot {
+    ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(
+            Vec::new(),
+            vec![
+                ParallelModeCompletionFeedEntry::new("reported", "no agent results reported yet"),
+                ParallelModeCompletionFeedEntry::new(
+                    "ledger refreshing",
+                    "no official refresh workers are active",
+                ),
+                ParallelModeCompletionFeedEntry::new("official", "nothing is queued for merge"),
+                ParallelModeCompletionFeedEntry::new(
+                    "merge queued",
+                    "no distributor queue items are waiting",
+                ),
+                ParallelModeCompletionFeedEntry::new(
+                    "merged",
+                    "nothing has been integrated into prerelease yet",
+                ),
+            ],
+            "idle",
+            "queue idle",
+        )
+        .with_runtime_event_feed(runtime_event_feed),
+        Some("control tower is live in read-only supervisor mode".to_string()),
     )
 }
 

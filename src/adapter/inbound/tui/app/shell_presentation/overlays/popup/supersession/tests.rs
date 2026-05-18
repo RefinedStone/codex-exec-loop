@@ -1,7 +1,8 @@
 use super::{
     build_detail_lines, build_distributor_lines, build_parallel_event_stream_lines,
-    build_roster_lines, parallel_supervisor_event_line,
+    build_roster_lines,
 };
+use crate::adapter::inbound::tui::app::parallel_supervisor_events::parallel_supervisor_event_line;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,

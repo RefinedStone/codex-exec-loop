@@ -52,6 +52,19 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
         .sync_editor_scroll(editor_content_height);
 }
 
+pub(super) fn inline_parallel_event_stream_visible_rows(
+    app: &NativeTuiApp,
+    frame_area: Rect,
+) -> usize {
+    if !app.parallel_mode_enabled() && app.shell_overlay != ShellOverlay::Supersession {
+        return 0;
+    }
+
+    let tail_view = build_inline_tail_view(app, frame_area.width);
+    let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_view.lines);
+    inline_inspection::parallel_event_stream_visible_rows(app, layout[0])
+}
+
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
