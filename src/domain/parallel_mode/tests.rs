@@ -125,6 +125,16 @@ fn readiness_and_capability_labels_cover_parallel_diagnostics_vocabulary() {
 }
 
 #[test]
+fn pool_slot_state_labels_cover_board_vocabulary() {
+    assert_eq!(ParallelModePoolSlotState::Leased.label(), "leased");
+    assert_eq!(
+        ParallelModePoolSlotState::AwaitingCleanup.label(),
+        "awaiting_cleanup"
+    );
+    assert_eq!(ParallelModePoolSlotState::Missing.label(), "missing");
+}
+
+#[test]
 fn slot_lease_request_from_task_identity_normalizes_parallel_agent_slug() {
     let request = ParallelModeSlotLeaseRequest::from_task_identity(
         " task-supersession-runtime ",
@@ -146,6 +156,23 @@ fn slot_lease_request_from_task_identity_falls_back_to_task_title_slug() {
     assert_eq!(request.task_title, "Wire Runtime Into Slot Lease");
     assert_eq!(request.agent_id, "agent-wire-runtime-into-slot-lease");
     assert_eq!(request.task_slug, "wire-runtime-into-slot-lease");
+}
+
+#[test]
+fn slot_lease_request_uses_default_slug_when_task_identity_has_no_words() {
+    let request = ParallelModeSlotLeaseRequest::from_task_identity(" !!! ", " ??? ");
+
+    assert_eq!(request.task_slug, "task");
+    assert_eq!(request.agent_id, "agent-agent");
+}
+
+#[test]
+fn slot_lease_request_slug_trims_separator_runs_from_task_id() {
+    let request =
+        ParallelModeSlotLeaseRequest::from_task_identity(" Task -- Needs Cleanup!!! ", "Fallback");
+
+    assert_eq!(request.task_slug, "task-needs-cleanup");
+    assert_eq!(request.agent_id, "agent-task-needs-cleanup");
 }
 
 // supervisor 상태는 mode toggle과 readiness gate를 함께 본다. 같은 Blocked
@@ -624,6 +651,10 @@ fn live_detail_enrichment_fills_missing_runtime_fields_from_lease() {
         Some("branch is merged into prerelease and the slot is awaiting cleanup")
     );
     assert_eq!(enriched.updated_at, "2026-01-01T00:25:00Z");
+    assert_eq!(
+        cleanup.runtime_state_override(&session_detail(&cleanup, "failed", "cleanup failed")),
+        Some("failed")
+    );
 }
 
 // runtime detail 선택은 현재 queue head가 가장 강한 신호다. queue head가 없으면
@@ -842,6 +873,7 @@ fn pool_slot_cleanup_decision_respects_lease_state_and_branch_integration() {
     );
     assert!(ParallelModePoolSlotCleanupDecision::new(None, true, true).is_cleanup_ready());
     assert!(!ParallelModePoolSlotCleanupDecision::new(None, false, true).is_cleanup_ready());
+    assert!(!ParallelModePoolSlotCleanupDecision::new(None, true, false).is_cleanup_ready());
 }
 
 // board row projection은 lease 생명주기를 TUI slot 상태로 바꾸는 단일 경계다.
@@ -867,6 +899,71 @@ fn pool_slot_snapshot_projects_lease_state_to_pool_slot_state() {
 
     assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
     assert_eq!(slot.owner_label, "agent-1 / task-1");
+}
+
+#[test]
+fn pool_board_compact_summary_lists_all_non_idle_pressure_states() {
+    let snapshot = super::ParallelModePoolBoardSnapshot::new(
+        7,
+        "/repo/.akra-worktrees",
+        "ready",
+        vec![
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                ParallelModePoolSlotState::Idle,
+                "prerelease",
+                "slot-1",
+                "idle",
+            ),
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-2",
+                ParallelModePoolSlotState::Leased,
+                "akra-agent/slot-2/task-2",
+                "slot-2",
+                "agent-2 / task-2",
+            ),
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-3",
+                ParallelModePoolSlotState::Running,
+                "akra-agent/slot-3/task-3",
+                "slot-3",
+                "agent-3 / task-3",
+            ),
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-4",
+                ParallelModePoolSlotState::AwaitingCleanup,
+                "akra-agent/slot-4/task-4",
+                "slot-4",
+                "agent-4 / task-4",
+            ),
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-5",
+                ParallelModePoolSlotState::Blocked,
+                "akra-agent/slot-5/task-5",
+                "slot-5",
+                "blocked",
+            ),
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-6",
+                ParallelModePoolSlotState::Missing,
+                "akra-agent/slot-6/task-6",
+                "slot-6",
+                "missing",
+            ),
+            super::ParallelModePoolSlotSnapshot::new(
+                "slot-7",
+                ParallelModePoolSlotState::Unavailable,
+                "akra-agent/slot-7/task-7",
+                "slot-7",
+                "unavailable",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        snapshot.compact_summary(),
+        "idle 1/7 / leased 1 / running 1 / cleanup 1 / blocked 1 / missing 1 / unavailable 1"
+    );
 }
 
 // 테스트 fixture lease는 실제 pool allocation이 만드는 branch/worktree naming을 축약한다.
