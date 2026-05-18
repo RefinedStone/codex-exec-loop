@@ -373,14 +373,18 @@ mod tests {
 
     #[test]
     fn dispatch_readiness_defers_until_projection_is_ready_and_idle() {
-        assert!(matches!(
+        assert_eq!(
             ParallelModeControlPlaneAggregate::dispatch_readiness(false, false),
-            ParallelModeDispatchReadinessDecision::Deferred { .. }
-        ));
-        assert!(matches!(
+            ParallelModeDispatchReadinessDecision::Deferred {
+                reason: "entry loading or control-plane refresh is still in progress"
+            }
+        );
+        assert_eq!(
             ParallelModeControlPlaneAggregate::dispatch_readiness(true, true),
-            ParallelModeDispatchReadinessDecision::Deferred { .. }
-        ));
+            ParallelModeDispatchReadinessDecision::Deferred {
+                reason: "entry loading or control-plane refresh is still in progress"
+            }
+        );
         assert_eq!(
             ParallelModeControlPlaneAggregate::dispatch_readiness(true, false),
             ParallelModeDispatchReadinessDecision::Ready
@@ -422,6 +426,18 @@ mod tests {
     }
 
     #[test]
+    fn effect_completion_follow_up_prioritizes_pending_supervisor_refresh() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::effect_completion_follow_up(true),
+            ParallelModeControlPlaneEffectCompletionFollowUp::RefreshSupervisor
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::effect_completion_follow_up(false),
+            ParallelModeControlPlaneEffectCompletionFollowUp::DrainPendingWake
+        );
+    }
+
+    #[test]
     fn entry_completion_keeps_projection_and_initial_dispatch_policy_in_domain() {
         assert_eq!(
             ParallelModeControlPlaneAggregate::entry_completion(false, false, false, true),
@@ -438,6 +454,18 @@ mod tests {
         assert_eq!(
             ParallelModeControlPlaneAggregate::entry_completion(true, true, false, true),
             ParallelModeEntryCompletionDecision::ProjectionReady
+        );
+    }
+
+    #[test]
+    fn mode_completion_closes_epoch_only_when_mode_is_disabled() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::mode_completion(true),
+            ParallelModeModeCompletionDecision::KeepEpochOpen
+        );
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::mode_completion(false),
+            ParallelModeModeCompletionDecision::CloseEpoch
         );
     }
 
@@ -511,6 +539,25 @@ mod tests {
                 true, true, true, true
             ),
             ParallelModePendingDispatchPollDecision::Skip
+        );
+    }
+
+    #[test]
+    fn worker_event_decision_drops_events_for_different_workspace_before_epoch_checks() {
+        assert_eq!(
+            ParallelModeControlPlaneAggregate::worker_event_decision(
+                "/repo",
+                7,
+                ParallelModeControlPlaneWorkerEventKind::Completed,
+                Some("/other"),
+                Some(7),
+                true,
+            ),
+            ParallelModeControlPlaneWorkerEventDecision {
+                stale_drop_reason: Some("worker event targets a different workspace"),
+                refresh_supervisor: false,
+                wake_trigger: None,
+            }
         );
     }
 
