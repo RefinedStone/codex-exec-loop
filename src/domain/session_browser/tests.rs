@@ -34,6 +34,38 @@ fn move_page_clamps_to_available_range() {
 }
 
 #[test]
+fn state_noop_inputs_and_empty_page_navigation_keep_browser_stable() {
+    /*
+     * Reapplying the same normalized inputs should not move the operator away from
+     * the current page. Empty result pagination still needs explicit zero handling
+     * so PageDown/PageUp during a catalog refresh cannot leave a stale page index.
+     */
+    let mut state = SessionBrowserState::new(0);
+    assert_eq!(state.page_size, 1);
+
+    state.page_index = 3;
+    state.set_search_query("  ");
+    assert_eq!(state.search_query, "");
+    assert_eq!(state.page_index, 3);
+
+    state.set_search_query("docs");
+    state.page_index = 4;
+    state.set_search_query(" docs ");
+    assert_eq!(state.search_query, "docs");
+    assert_eq!(state.page_index, 4);
+
+    state.set_project_filter(SessionProjectFilter::AllProjects);
+    assert_eq!(state.page_index, 4);
+
+    state.move_page(1, 0);
+    assert_eq!(state.page_index, 0);
+
+    state.page_index = 2;
+    state.jump_to_first_page();
+    assert_eq!(state.page_index, 0);
+}
+
+#[test]
 fn clear_resets_query_filter_and_page_index() {
     /*
      * Clear is the "return to default browser" command. It intentionally leaves
@@ -245,6 +277,78 @@ fn project_recent_sessions_reports_visible_match_range_for_ranked_results() {
 }
 
 #[test]
+fn project_recent_sessions_reports_empty_page_without_selection_or_visible_range() {
+    /*
+     * Empty catalogs and no-match searches both produce a renderable empty page.
+     * Selection helpers intentionally return a neutral row/id pair so the TUI can
+     * keep key handling simple while rendering empty-state copy from the projection.
+     */
+    let recent_sessions = RecentSessions {
+        items: Vec::new(),
+        warnings: Vec::new(),
+        next_cursor: None,
+    };
+    let browser_state = SessionBrowserState {
+        search_query: "missing".to_string(),
+        page_index: 7,
+        page_size: 5,
+        project_filter: SessionProjectFilter::AllProjects,
+    };
+    let browser_page =
+        build_session_browser_page(&recent_sessions, &browser_state, None, Some("thread-1"), 3);
+
+    assert_eq!(browser_page.projection.total_pages, 0);
+    assert_eq!(browser_page.projection.page_index, 0);
+    assert_eq!(browser_page.projection.visible_session_range, None);
+    assert_eq!(browser_page.selected_index, None);
+    assert_eq!(browser_page.selected_session(), None);
+    assert_eq!(
+        browser_page.first_selection(),
+        SessionBrowserSelection {
+            index: 0,
+            session_id: None,
+        }
+    );
+    assert_eq!(
+        browser_page.last_selection(),
+        SessionBrowserSelection {
+            index: 0,
+            session_id: None,
+        }
+    );
+    assert_eq!(
+        browser_page.selection_after_delta(1),
+        SessionBrowserSelection {
+            index: 0,
+            session_id: None,
+        }
+    );
+}
+
+#[test]
+fn project_recent_sessions_preserves_original_order_for_exact_search_ties() {
+    /*
+     * When search score and update time are identical, stable catalog ordering is
+     * the last tie-breaker. That avoids visible row shuffling for indistinguishable
+     * matches returned by the provider.
+     */
+    let recent_sessions = RecentSessions {
+        items: vec![
+            sample_named_session("thread-1", "/tmp/root-a", "release", None, None, 1),
+            sample_named_session("thread-2", "/tmp/root-b", "release", None, None, 1),
+            sample_named_session("thread-3", "/tmp/root-c", "release", None, None, 1),
+        ],
+        warnings: Vec::new(),
+        next_cursor: None,
+    };
+    let mut browser_state = SessionBrowserState::new(10);
+    browser_state.set_search_query("release");
+    let projection = project_recent_sessions(&recent_sessions, &browser_state, None);
+
+    assert_eq!(projection.page_session_indexes, vec![0, 1, 2]);
+}
+
+#[test]
 fn project_recent_sessions_marks_current_workspace_filter_context() {
     /*
      * Current-workspace context is an annotation on filter options, not an
@@ -328,6 +432,30 @@ fn cycled_project_filter_wraps_across_available_options() {
             workspace_directory: "/tmp/root-a".to_string(),
         })
     );
+}
+
+#[test]
+fn cycled_project_filter_and_active_option_handle_empty_option_lists() {
+    /*
+     * A manually constructed or future empty projection should still be safe for
+     * keyboard cycling and status lookup. Returning None is the only meaningful
+     * answer when there is no menu item to select.
+     */
+    let projection = SessionBrowserProjection {
+        active_project_filter: SessionProjectFilter::AllProjects,
+        project_filter_options: Vec::new(),
+        current_workspace_session_count: 0,
+        total_session_count: 0,
+        project_filtered_session_count: 0,
+        filtered_session_count: 0,
+        page_index: 0,
+        total_pages: 0,
+        visible_session_range: None,
+        page_session_indexes: Vec::new(),
+    };
+
+    assert_eq!(projection.cycled_project_filter(1), None);
+    assert_eq!(projection.active_project_filter_option(), None);
 }
 
 #[test]
