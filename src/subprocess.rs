@@ -80,10 +80,10 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SUBPROCESS_TIMEOUT_SECS, command_output_with_timeout, format_duration,
-        parse_subprocess_timeout_secs,
+        DEFAULT_SUBPROCESS_TIMEOUT_SECS, command_output, command_output_with_timeout,
+        format_duration, parse_subprocess_timeout_secs, wait_with_output,
     };
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -126,6 +126,36 @@ mod tests {
             started_at.elapsed() < Duration::from_secs(2),
             "timeout should return before the child process naturally exits"
         );
+    }
+
+    #[test]
+    fn command_output_uses_configured_timeout_and_captures_successful_output() {
+        let output = command_output(
+            Command::new("sh").args(["-c", "printf stdout; printf stderr >&2"]),
+            "sh -c printf",
+        )
+        .expect("command should complete before the default timeout");
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "stdout");
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "stderr");
+    }
+
+    #[test]
+    fn wait_with_output_uses_configured_timeout_for_existing_child() {
+        let child = Command::new("sh")
+            .args(["-c", "printf child-output"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("child should start");
+
+        let output = wait_with_output(child, "sh -c printf child-output")
+            .expect("child should complete before the default timeout");
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "child-output");
+        assert!(output.stderr.is_empty());
     }
 
     #[test]
