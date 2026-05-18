@@ -29,9 +29,9 @@ pub(super) fn parse_planning_reset_shell_argument(
         return Err(PlanningResetShellArgumentError::Missing);
     };
     let mut parts = argument.split_whitespace();
-    let Some(target) = parts.next() else {
-        return Err(PlanningResetShellArgumentError::Missing);
-    };
+    let target = parts
+        .next()
+        .expect("non-empty trimmed reset argument should contain a target token");
     let confirmation = parts.next();
     let confirmed = match confirmation {
         None => false,
@@ -87,6 +87,10 @@ mod tests {
         );
         assert_eq!(
             parse_planning_reset_shell_argument(None),
+            Err(PlanningResetShellArgumentError::Missing)
+        );
+        assert_eq!(
+            parse_planning_reset_shell_argument(Some("  \t  ")),
             Err(PlanningResetShellArgumentError::Missing)
         );
     }
