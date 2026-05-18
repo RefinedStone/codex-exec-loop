@@ -255,7 +255,7 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
 }
 
 #[test]
-fn parallel_runtime_feed_primes_scrollback_without_replaying_old_events() {
+fn parallel_runtime_feed_primes_baseline_without_scrollback_duplication() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
@@ -310,12 +310,17 @@ fn parallel_runtime_feed_primes_scrollback_without_replaying_old_events() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        app_scrollback.contains("new runtime event three"),
-        "new runtime events should still append after the primed baseline:\n{app_scrollback}"
+        !app_scrollback.contains("new runtime event three"),
+        "new runtime events should not be duplicated into host scrollback above the live board:\n{app_scrollback}"
     );
     assert!(
         !app_scrollback.contains("seed runtime event one"),
         "primed runtime events must not be backfilled on later redraws:\n{app_scrollback}"
+    );
+    let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
+    assert!(
+        !terminal_scrollback.contains("new runtime event three"),
+        "new runtime events should stay out of durable host scrollback:\n{terminal_scrollback}"
     );
     let screen_text = tui_testkit::screen_text(&terminal);
     assert!(
@@ -774,6 +779,36 @@ fn hidden_inline_tail_skips_redundant_frame_draws() {
     assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
     assert!(inline_viewport.should_draw_inline_frame(&app, 96, 24));
 }
+
+#[test]
+fn parallel_runtime_live_event_invalidates_hidden_frame_cache() {
+    let mut app = make_test_app();
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
+        vec![inline_runtime_feed_entry(1, "seed runtime event one")],
+    )));
+    let mut inline_viewport = InlineTerminalState::default();
+
+    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
+
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
+        vec![
+            inline_runtime_feed_entry(2, "new runtime event two"),
+            inline_runtime_feed_entry(1, "seed runtime event one"),
+        ],
+    )));
+    let live_events = app
+        .parallel_supervisor_event_lines()
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(live_events.contains("new runtime event two"));
+    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+}
+
 #[test]
 fn overlay_cycle_resets_hidden_tail_redraw_cache() {
     let mut app = make_test_app();

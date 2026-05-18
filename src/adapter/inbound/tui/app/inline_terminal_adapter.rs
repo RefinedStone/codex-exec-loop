@@ -455,6 +455,11 @@ impl FrameCacheState {
             terminal_width,
             terminal_height,
             lines: build_inline_tail_view(app, terminal_width).lines,
+            parallel_supervisor_events: if app.parallel_mode_enabled() {
+                app.parallel_supervisor_event_lines()
+            } else {
+                Vec::new()
+            },
         };
         let should_draw = !viewport.back_buffer_trustworthy
             || self.last_tail_frame.as_ref() != Some(&next_signature);
@@ -468,6 +473,7 @@ struct InlineTailFrameSignature {
     terminal_width: u16,
     terminal_height: u16,
     lines: Vec<Line<'static>>,
+    parallel_supervisor_events: Vec<Line<'static>>,
 }
 
 #[cfg(test)]

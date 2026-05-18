@@ -42,6 +42,16 @@ impl ParallelSupervisorEventLog {
         };
         self.scrollback_entries.push_back(entry.clone());
         self.trim_scrollback_entries();
+        self.push_live_entry(entry);
+    }
+
+    fn push_live_only(&mut self, timestamp_label: String, actor: String, body: String) {
+        self.push_live_entry(ParallelSupervisorEventEntry {
+            line: parallel_supervisor_event_line(&timestamp_label, &actor, &body),
+        });
+    }
+
+    fn push_live_entry(&mut self, entry: ParallelSupervisorEventEntry) {
         self.entries.push_back(entry);
         while self.entries.len() > MAX_PARALLEL_SUPERVISOR_EVENTS {
             self.entries.pop_front();
@@ -89,7 +99,7 @@ impl ParallelSupervisorEventLog {
             .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.sequence);
         for entry in entries {
-            self.push(
+            self.push_live_only(
                 compact_stream_timestamp_label(&entry.recorded_at),
                 "Supervisor".to_string(),
                 format!(
@@ -358,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn event_log_keeps_local_events_and_runtime_feed_append_only_with_cap() {
+    fn event_log_keeps_runtime_feed_live_only_after_baseline() {
         let mut log = ParallelSupervisorEventLog::default();
 
         log.push_for_test(
@@ -402,17 +412,10 @@ mod tests {
             .join("\n");
         assert_eq!(before_tail.matches("session detail:slot-1").count(), 0);
         assert_eq!(before_tail.matches("slot lease:slot-2").count(), 0);
-        assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 1);
+        assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 0);
         assert_eq!(live_tail.matches("session detail:slot-1").count(), 0);
         assert_eq!(live_tail.matches("slot lease:slot-2").count(), 0);
         assert_eq!(live_tail.matches("distributor queue:queue-1").count(), 1);
-        let operator_index = before_tail
-            .find("You: 안녕하세요?")
-            .expect("operator event should stay in scrollback");
-        let runtime_index = before_tail
-            .find("distributor queue:queue-1")
-            .expect("new runtime event should append");
-        assert!(operator_index < runtime_index);
         let live_operator_index = live_tail
             .find("You: 안녕하세요?")
             .expect("operator event should stay in live stream");
@@ -437,6 +440,7 @@ mod tests {
         );
         assert!(!rendered.contains("Parallel Event Stream"));
         assert!(!rendered.contains("slot lease:slot-2"));
+        assert!(!rendered.contains("distributor queue:queue-1"));
         assert!(rendered.contains("tail-000"));
         assert_eq!(rendered.matches("tail-511").count(), 1);
     }
