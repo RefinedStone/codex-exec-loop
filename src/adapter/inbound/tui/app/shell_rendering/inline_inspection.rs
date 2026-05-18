@@ -13,8 +13,8 @@ use super::super::{
     PlanningInitOverlayStep, ShellOverlay,
 };
 use super::inline_layout::{
-    inline_section_height, render_inline_scrolled_section, render_inline_section,
-    set_cursor_if_visible, split_inline_section, take_panel_body_lines,
+    count_rendered_inline_rows, inline_section_height, render_inline_scrolled_section,
+    render_inline_section, set_cursor_if_visible, split_inline_section, take_panel_body_lines,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -454,8 +454,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         false,
     );
     let stream_visible_rows = layout[3].height.saturating_sub(1) as usize;
-    let stream_scroll_offset = detail_lines
-        .len()
+    let stream_scroll_offset = count_rendered_inline_rows(&detail_lines, layout[3].width)
         .saturating_sub(stream_visible_rows)
         .min(u16::MAX as usize) as u16;
     render_inline_scrolled_section(
@@ -472,6 +471,29 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         key_lines,
         true,
     );
+}
+
+pub(super) fn parallel_event_stream_visible_rows(app: &NativeTuiApp, area: Rect) -> usize {
+    let overlay_view = build_supersession_overlay_view(app);
+    let SupersessionOverlayView {
+        header_lines,
+        summary_lines,
+        key_lines,
+        ..
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 7)),
+            Constraint::Length(10),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
+        ])
+        .split(area);
+
+    layout[3].height.saturating_sub(1) as usize
 }
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_queue_overlay_view(app);

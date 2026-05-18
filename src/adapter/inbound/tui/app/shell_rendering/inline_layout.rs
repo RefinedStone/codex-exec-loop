@@ -77,7 +77,7 @@ pub(super) fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
     Rect::new(area.x, y, area.width, body_height)
 }
 
-fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usize {
+pub(super) fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usize {
     if width == 0 {
         return 0;
     }

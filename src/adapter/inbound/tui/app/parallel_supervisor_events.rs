@@ -1,10 +1,11 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use chrono::Utc;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::domain::parallel_mode::{
+    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolSlotState,
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorSnapshot,
 };
 
@@ -19,12 +20,43 @@ struct ParallelSupervisorEventEntry {
     line: Line<'static>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ParallelSupervisorStreamEvent {
+    timestamp_label: String,
+    actor: String,
+    body: String,
+}
+
+impl ParallelSupervisorStreamEvent {
+    fn new(
+        timestamp_label: impl Into<String>,
+        actor: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            timestamp_label: timestamp_label.into(),
+            actor: actor.into(),
+            body: body.into(),
+        }
+    }
+
+    fn key(&self) -> String {
+        format!("{}|{}|{}", self.timestamp_label, self.actor, self.body)
+    }
+
+    fn into_line(self) -> Line<'static> {
+        parallel_supervisor_event_line(&self.timestamp_label, &self.actor, &self.body)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct ParallelSupervisorEventLog {
     entries: VecDeque<ParallelSupervisorEventEntry>,
     scrollback_entries: VecDeque<ParallelSupervisorEventEntry>,
     runtime_feed_workspace: Option<String>,
     last_runtime_sequence_seen: Option<i64>,
+    snapshot_stream_workspace: Option<String>,
+    seen_snapshot_stream_events: HashSet<String>,
 }
 
 impl ParallelSupervisorEventLog {
@@ -45,12 +77,6 @@ impl ParallelSupervisorEventLog {
         self.push_live_entry(entry);
     }
 
-    fn push_live_only(&mut self, timestamp_label: String, actor: String, body: String) {
-        self.push_live_entry(ParallelSupervisorEventEntry {
-            line: parallel_supervisor_event_line(&timestamp_label, &actor, &body),
-        });
-    }
-
     fn push_live_entry(&mut self, entry: ParallelSupervisorEventEntry) {
         self.entries.push_back(entry);
         while self.entries.len() > MAX_PARALLEL_SUPERVISOR_EVENTS {
@@ -65,11 +91,44 @@ impl ParallelSupervisorEventLog {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn scrollback_lines(&self) -> Vec<Line<'static>> {
         self.scrollback_entries
             .iter()
             .map(|entry| entry.line.clone())
             .collect()
+    }
+
+    pub(super) fn scrollback_lines_before_live_tail(
+        &self,
+        live_tail_lines: usize,
+    ) -> Vec<Line<'static>> {
+        let durable_len = self
+            .scrollback_entries
+            .len()
+            .saturating_sub(live_tail_lines);
+        self.scrollback_entries
+            .iter()
+            .take(durable_len)
+            .map(|entry| entry.line.clone())
+            .collect()
+    }
+
+    pub(super) fn record_snapshot_stream_from_supervisor_snapshot(
+        &mut self,
+        snapshot: &ParallelModeSupervisorSnapshot,
+    ) {
+        let workspace_path = snapshot.workspace_path.as_str();
+        if self.snapshot_stream_workspace.as_deref() != Some(workspace_path) {
+            self.snapshot_stream_workspace = Some(workspace_path.to_string());
+            self.seen_snapshot_stream_events.clear();
+        }
+        for event in parallel_supervisor_snapshot_stream_events(snapshot) {
+            let key = event.key();
+            if self.seen_snapshot_stream_events.insert(key) {
+                self.push(event.timestamp_label, event.actor, event.body);
+            }
+        }
     }
 
     pub(super) fn record_runtime_feed_from_supervisor_snapshot(
@@ -99,7 +158,7 @@ impl ParallelSupervisorEventLog {
             .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.sequence);
         for entry in entries {
-            self.push_live_only(
+            self.push(
                 compact_stream_timestamp_label(&entry.recorded_at),
                 "Supervisor".to_string(),
                 format!(
@@ -130,6 +189,135 @@ impl ParallelSupervisorEventLog {
     ) {
         self.push(timestamp_label.into(), actor.into(), body.into());
     }
+}
+
+pub(super) fn parallel_supervisor_snapshot_stream_lines(
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> Vec<Line<'static>> {
+    parallel_supervisor_snapshot_stream_events(snapshot)
+        .into_iter()
+        .map(ParallelSupervisorStreamEvent::into_line)
+        .collect()
+}
+
+fn parallel_supervisor_snapshot_stream_events(
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+) -> Vec<ParallelSupervisorStreamEvent> {
+    let mut events = Vec::new();
+
+    if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
+        events.push(ParallelSupervisorStreamEvent::new(
+            "--:--:--",
+            "Supervisor",
+            format!(
+                "parallel board 상태를 갱신했습니다. {}",
+                truncate_event_text(notice, 96)
+            ),
+        ));
+    }
+
+    for slot in &supervisor_snapshot.pool.slots {
+        if !matches!(
+            slot.state,
+            ParallelModePoolSlotState::Idle | ParallelModePoolSlotState::Missing
+        ) {
+            events.push(ParallelSupervisorStreamEvent::new(
+                "--:--:--",
+                "Pool",
+                format!(
+                    "{} 상태는 {}이며 owner는 {}입니다.",
+                    slot.slot_id,
+                    slot.state.label(),
+                    truncate_event_text(&slot.owner_label, 56)
+                ),
+            ));
+        }
+    }
+
+    for entry in &supervisor_snapshot.roster.entries {
+        events.push(ParallelSupervisorStreamEvent::new(
+            "--:--:--",
+            format!("Agent {}", entry.agent_id),
+            format!(
+                "{} 작업이 {}에서 {} 상태입니다. {}",
+                truncate_event_text(&entry.task_title, 52),
+                entry.slot_id,
+                display_supersession_state_label(&entry.state_label),
+                truncate_event_text(&entry.latest_summary, 72)
+            ),
+        ));
+    }
+
+    if let Some(detail) = supervisor_snapshot.detail.session.as_ref() {
+        for history in &detail.history {
+            events.push(ParallelSupervisorStreamEvent::new(
+                compact_stream_timestamp_label(&history.timestamp),
+                parallel_history_actor(&history.state_label, &detail.agent_id),
+                parallel_history_summary(detail, &history.state_label, &history.summary),
+            ));
+        }
+
+        let current_already_recorded = detail.history.last().is_some_and(|history| {
+            history.state_label == detail.state_label && history.timestamp == detail.updated_at
+        });
+        if !current_already_recorded {
+            events.push(ParallelSupervisorStreamEvent::new(
+                compact_stream_timestamp_label(&detail.updated_at),
+                parallel_history_actor(&detail.state_label, &detail.agent_id),
+                parallel_history_summary(detail, &detail.state_label, &detail.latest_summary),
+            ));
+        }
+    }
+
+    for item in &supervisor_snapshot.distributor.queue_items {
+        events.push(ParallelSupervisorStreamEvent::new(
+            "--:--:--",
+            "Distributor",
+            format!(
+                "{} 결과가 {} 상태로 대기 중입니다. branch {} / {}",
+                truncate_event_text(&item.task_title, 52),
+                item.queue_state.label(),
+                truncate_event_text(&item.branch_name, 40),
+                truncate_event_text(&item.integration_note, 72)
+            ),
+        ));
+    }
+
+    for entry in &supervisor_snapshot.distributor.completion_feed {
+        events.push(ParallelSupervisorStreamEvent::new(
+            "--:--:--",
+            "Ledger",
+            format!(
+                "{} 단계 기록: {}",
+                display_runtime_event_label(&entry.stage_label),
+                truncate_event_text(&entry.summary, 88)
+            ),
+        ));
+    }
+
+    let orchestrator = &supervisor_snapshot.distributor.orchestrator_status;
+    if let Some(reason) = orchestrator.blocked_reason.as_deref() {
+        events.push(ParallelSupervisorStreamEvent::new(
+            "--:--:--",
+            "Orchestrator",
+            format!(
+                "integration이 차단되었습니다. {}",
+                truncate_event_text(reason, 88)
+            ),
+        ));
+    }
+    if let Some(reason) = orchestrator.slot_return_wait_reason.as_deref() {
+        events.push(ParallelSupervisorStreamEvent::new(
+            "--:--:--",
+            "Orchestrator",
+            format!(
+                "slot 반환을 보류했습니다. {}",
+                truncate_event_text(reason, 88)
+            ),
+        ));
+    }
+
+    events
 }
 
 pub(super) fn parallel_supervisor_event_line(
@@ -201,6 +389,57 @@ fn display_runtime_event_label(label: &str) -> String {
     label.replace('_', " ")
 }
 
+fn display_supersession_state_label(state_label: &str) -> String {
+    match state_label {
+        "reported_complete" => "reported".to_string(),
+        "commit_ready" => "official".to_string(),
+        other => other.replace('_', " "),
+    }
+}
+
+fn parallel_history_actor(state_label: &str, agent_id: &str) -> String {
+    match state_label {
+        "assigned" | "starting" | "merge_queued" | "pushing" | "pr_pending" | "merge_pending"
+        | "integrating" | "merged" | "cleanup_pending" | "cleaned" => "Distributor".to_string(),
+        "ledger_refreshing" | "commit_ready" => "Ledger".to_string(),
+        "failed" | "official_refresh_recovery_needed" => "Supervisor".to_string(),
+        _ => format!("Agent {agent_id}"),
+    }
+}
+
+fn parallel_history_summary(
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+    state_label: &str,
+    fallback_summary: &str,
+) -> String {
+    let task_title = truncate_event_text(&detail.task_title, 52);
+    match state_label {
+        "assigned" | "starting" => {
+            format!(
+                "{}이 {}에게 대여되었습니다.",
+                detail.slot_id, detail.agent_id
+            )
+        }
+        "running" => format!("{task_title} 작업을 시작했습니다."),
+        "reported_complete" => format!("{task_title} 완료를 보고했습니다."),
+        "ledger_refreshing" => format!("{task_title} official completion을 확인하고 있습니다."),
+        "commit_ready" => format!("{task_title} 결과를 official completion으로 승인했습니다."),
+        "merge_queued" => format!("{task_title} 결과가 distributor queue에 등록되었습니다."),
+        "pushing" | "pr_pending" | "merge_pending" | "integrating" => format!(
+            "{task_title} delivery 단계가 {}입니다.",
+            display_supersession_state_label(state_label)
+        ),
+        "merged" | "cleanup_pending" | "cleaned" => {
+            format!("{task_title} 결과가 prerelease에 반영되었습니다.")
+        }
+        "failed" => format!("{task_title} 작업이 실패했습니다."),
+        "official_refresh_recovery_needed" => {
+            format!("{task_title} official completion 복구가 필요합니다.")
+        }
+        _ => truncate_event_text(fallback_summary, 96),
+    }
+}
+
 fn compact_stream_timestamp_label(timestamp: &str) -> String {
     let trimmed = timestamp.trim();
     if trimmed.is_empty() {
@@ -255,14 +494,25 @@ impl super::NativeTuiApp {
         self.parallel_supervisor_event_log.lines()
     }
 
+    #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_scrollback_lines(&self) -> Vec<Line<'static>> {
         self.parallel_supervisor_event_log.scrollback_lines()
     }
 
-    pub(super) fn record_parallel_supervisor_runtime_feed_for_scrollback(
+    pub(crate) fn parallel_supervisor_event_scrollback_lines_before_live_tail(
+        &self,
+        live_tail_lines: usize,
+    ) -> Vec<Line<'static>> {
+        self.parallel_supervisor_event_log
+            .scrollback_lines_before_live_tail(live_tail_lines)
+    }
+
+    pub(super) fn record_parallel_supervisor_snapshot_for_stream(
         &mut self,
         snapshot: &ParallelModeSupervisorSnapshot,
     ) {
+        self.parallel_supervisor_event_log
+            .record_snapshot_stream_from_supervisor_snapshot(snapshot);
         self.parallel_supervisor_event_log
             .record_runtime_feed_from_supervisor_snapshot(snapshot);
     }
@@ -368,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn event_log_keeps_runtime_feed_live_only_after_baseline() {
+    fn event_log_keeps_runtime_feed_append_only_after_baseline() {
         let mut log = ParallelSupervisorEventLog::default();
 
         log.push_for_test(
@@ -412,10 +662,17 @@ mod tests {
             .join("\n");
         assert_eq!(before_tail.matches("session detail:slot-1").count(), 0);
         assert_eq!(before_tail.matches("slot lease:slot-2").count(), 0);
-        assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 0);
+        assert_eq!(before_tail.matches("distributor queue:queue-1").count(), 1);
         assert_eq!(live_tail.matches("session detail:slot-1").count(), 0);
         assert_eq!(live_tail.matches("slot lease:slot-2").count(), 0);
         assert_eq!(live_tail.matches("distributor queue:queue-1").count(), 1);
+        let durable_operator_index = before_tail
+            .find("You: 안녕하세요?")
+            .expect("operator event should stay in durable stream history");
+        let durable_runtime_index = before_tail
+            .find("distributor queue:queue-1")
+            .expect("new runtime event should append to durable stream history");
+        assert!(durable_operator_index < durable_runtime_index);
         let live_operator_index = live_tail
             .find("You: 안녕하세요?")
             .expect("operator event should stay in live stream");
@@ -440,7 +697,6 @@ mod tests {
         );
         assert!(!rendered.contains("Parallel Event Stream"));
         assert!(!rendered.contains("slot lease:slot-2"));
-        assert!(!rendered.contains("distributor queue:queue-1"));
         assert!(rendered.contains("tail-000"));
         assert_eq!(rendered.matches("tail-511").count(), 1);
     }
