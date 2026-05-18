@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::orchestrator::ParallelModePostTurnQueueDecision;
+use super::orchestrator::{ParallelModeDispatchCommandKind, ParallelModePostTurnQueueDecision};
 use super::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -122,6 +122,68 @@ fn readiness_and_capability_labels_cover_parallel_diagnostics_vocabulary() {
     );
 
     assert_eq!(ParallelModeCapabilityState::Repairing.label(), "repairing");
+}
+
+#[test]
+fn orchestrator_labels_and_parsers_cover_control_plane_vocabulary() {
+    assert_eq!(ParallelModePoolResetScope::PoolOnly.label(), "pool_only");
+    assert_eq!(
+        ParallelModePoolResetScope::PoolOnly.status_detail(),
+        "pool-only reset; planning tasks preserved"
+    );
+
+    for (state, expected) in [
+        (ParallelModeOrchestratorState::Off, "off"),
+        (
+            ParallelModeOrchestratorState::ReadinessBlocked,
+            "readiness_blocked",
+        ),
+        (
+            ParallelModeOrchestratorState::PoolResetting,
+            "pool_resetting",
+        ),
+        (ParallelModeOrchestratorState::Dispatching, "dispatching"),
+        (ParallelModeOrchestratorState::Supervising, "supervising"),
+        (
+            ParallelModeOrchestratorState::IntegrationBlocked,
+            "integration_blocked",
+        ),
+    ] {
+        assert_eq!(state.label(), expected);
+    }
+
+    assert_eq!(
+        ParallelModeDispatchCommandKind::DispatchReadyQueue.label(),
+        "dispatch_ready_queue"
+    );
+    assert_eq!(
+        ParallelModeDispatchCommandKind::from_label("dispatch_ready_queue"),
+        Some(ParallelModeDispatchCommandKind::DispatchReadyQueue)
+    );
+    assert_eq!(ParallelModeDispatchCommandKind::from_label("unknown"), None);
+
+    for (state, expected) in [
+        (ParallelModeDispatchCommandState::Pending, "pending"),
+        (ParallelModeDispatchCommandState::Running, "running"),
+        (ParallelModeDispatchCommandState::Completed, "completed"),
+        (ParallelModeDispatchCommandState::Blocked, "blocked"),
+        (ParallelModeDispatchCommandState::Canceled, "canceled"),
+    ] {
+        assert_eq!(state.label(), expected);
+        assert_eq!(
+            ParallelModeDispatchCommandState::from_label(expected),
+            Some(state)
+        );
+    }
+    assert_eq!(
+        ParallelModeDispatchCommandState::from_label("unknown"),
+        None
+    );
+
+    assert_eq!(
+        ParallelModeDispatchBlockReason::RuntimeAlreadyOwnsTask.label(),
+        "runtime_already_owns_task"
+    );
 }
 
 #[test]
@@ -328,6 +390,8 @@ fn post_turn_queue_continuation_ignores_parallel_completion_without_ready_head()
     );
 
     assert_eq!(decision, ParallelModePostTurnQueueDecision::NoDispatch);
+    assert_eq!(decision.dispatch_trigger(), None);
+    assert!(!decision.should_consume_auto_follow_prompt());
     assert_eq!(disabled, ParallelModePostTurnQueueDecision::NoDispatch);
 }
 
@@ -351,6 +415,42 @@ fn runtime_dispatch_commands_are_emitted_from_central_parallel_events() {
     );
     assert_eq!(command.state, ParallelModeDispatchCommandState::Pending);
     assert_eq!(command.epoch_id, Some(7));
+
+    let auto_follow = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+        true,
+        ParallelModeRuntimeEvent::AutoFollowQueued,
+        false,
+        None,
+        Some(8),
+        "2026-05-08T00:00:01+00:00",
+    );
+    assert_eq!(auto_follow.len(), 1);
+    assert_eq!(
+        auto_follow[0].trigger,
+        ParallelModeAutomationTrigger::MainTurnPostEvaluation
+    );
+    assert_eq!(auto_follow[0].epoch_id, Some(8));
+
+    for event in [
+        ParallelModeRuntimeEvent::TaskIntakeCommitted,
+        ParallelModeRuntimeEvent::SlotCapacityAvailable,
+    ] {
+        let task_intake_commands = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+            true,
+            event,
+            true,
+            Some("queue-head-42".to_string()),
+            Some(9),
+            "2026-05-08T00:00:02+00:00",
+        );
+
+        assert_eq!(task_intake_commands.len(), 1);
+        assert_eq!(
+            task_intake_commands[0].trigger,
+            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
+        );
+        assert_eq!(task_intake_commands[0].epoch_id, Some(9));
+    }
 }
 
 #[test]
@@ -371,9 +471,18 @@ fn runtime_dispatch_commands_require_mode_and_actionable_head() {
         None,
         "2026-05-08T00:00:00+00:00",
     );
+    let mode_disabled = ParallelModeOrchestratorStateMachine::runtime_dispatch_commands(
+        true,
+        ParallelModeRuntimeEvent::ModeDisabled,
+        true,
+        Some("queue-head-42".to_string()),
+        None,
+        "2026-05-08T00:00:00+00:00",
+    );
 
     assert!(disabled.is_empty());
     assert!(missing_head.is_empty());
+    assert!(mode_disabled.is_empty());
 }
 
 #[test]
