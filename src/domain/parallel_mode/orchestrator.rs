@@ -95,21 +95,6 @@ pub enum ParallelModeRuntimeEvent {
     ModeDisabled,
 }
 
-impl ParallelModeRuntimeEvent {
-    fn dispatch_trigger(self) -> Option<ParallelModeAutomationTrigger> {
-        match self {
-            Self::AutoFollowQueued => Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation),
-            Self::ParallelCompletionFinalized => {
-                Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion)
-            }
-            Self::TaskIntakeCommitted | Self::SlotCapacityAvailable => {
-                Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
-            }
-            Self::ModeDisabled => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelModeDispatchCommandKind {
@@ -563,14 +548,26 @@ impl ParallelModeOrchestratorStateMachine {
         epoch_id: Option<u64>,
         timestamp: impl Into<String>,
     ) -> Vec<ParallelModeDispatchCommandSnapshot> {
-        if !parallel_mode_enabled || event == ParallelModeRuntimeEvent::ModeDisabled {
+        if !parallel_mode_enabled {
             return Vec::new();
         }
         if !has_actionable_queue_head && event != ParallelModeRuntimeEvent::AutoFollowQueued {
             return Vec::new();
         }
-        let Some(trigger) = event.dispatch_trigger() else {
-            return Vec::new();
+        let trigger = match event {
+            ParallelModeRuntimeEvent::AutoFollowQueued => {
+                ParallelModeAutomationTrigger::MainTurnPostEvaluation
+            }
+            ParallelModeRuntimeEvent::ParallelCompletionFinalized => {
+                ParallelModeAutomationTrigger::ParallelOfficialCompletion
+            }
+            ParallelModeRuntimeEvent::TaskIntakeCommitted
+            | ParallelModeRuntimeEvent::SlotCapacityAvailable => {
+                ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
+            }
+            ParallelModeRuntimeEvent::ModeDisabled => {
+                return Vec::new();
+            }
         };
         vec![ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
             trigger,
