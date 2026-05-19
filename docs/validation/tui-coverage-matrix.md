@@ -30,6 +30,74 @@ native TUI behavior.
 | Startup, session, conversation, auto-follow, planning control state | `app.rs`, `app/app_runtime.rs`, `app/auto_follow/**`, `app/auto_follow_controls.rs`, `app/conversation/**`, `app/conversation_*`, `app/github_polling/**`, `app/post_turn_continuation.rs`, `app/turn_submission_runtime/**` | `app.rs`, `app/auto_follow_controls.rs`, `app/auto_follow_overlay_ui.rs`, `app/conversation_model_tests.rs`, `app/conversation_runtime.rs`, `app/github_polling/tests.rs`, `app/turn_submission_runtime.rs`, `app/shell_entrypoint.rs` | App state transitions, runtime effects, conversation lifecycle, auto-follow controls, GitHub polling state, turn submission, manual prompt preparation. | Add reducer tests before introducing new runtime state that can affect render output. |
 | TUI support and validation devices | `app/tui_testkit.rs`, `app/test_helpers.rs`, `tests/architecture_boundaries.rs`, `tests/native_validation_scripts.rs` | `app/tui_testkit.rs`, `tests/architecture_boundaries.rs`, `tests/native_validation_scripts.rs`, this matrix | Shared render helpers, Ratatui backends, vt100 backend, frame recorder, native validation script contracts, static coverage guards. | Extend shared helpers here first when multiple TUI tests need the same device. |
 
+## Test Entry Point Inventory
+
+`tests/architecture_boundaries.rs` reads this section and compares it with the
+actual Rust files under `src/adapter/inbound/tui/**` that contain TUI tests or
+snapshot assertions. Add a path here whenever a new TUI test entrypoint is added,
+and remove it when the corresponding tests move or disappear.
+
+- `src/adapter/inbound/tui/app.rs`
+- `src/adapter/inbound/tui/app/auto_follow_controls.rs`
+- `src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/conversation_input.rs`
+- `src/adapter/inbound/tui/app/conversation_intents.rs`
+- `src/adapter/inbound/tui/app/conversation_lifecycle.rs`
+- `src/adapter/inbound/tui/app/conversation_model/auto_follow_decision.rs`
+- `src/adapter/inbound/tui/app/conversation_model_tests.rs`
+- `src/adapter/inbound/tui/app/conversation_runtime.rs`
+- `src/adapter/inbound/tui/app/github_polling/tests.rs`
+- `src/adapter/inbound/tui/app/history_insertion.rs`
+- `src/adapter/inbound/tui/app/inline_shell_commands/tests.rs`
+- `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs`
+- `src/adapter/inbound/tui/app/inline_terminal_adapter/tests/history_flush.rs`
+- `src/adapter/inbound/tui/app/model_selection_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/parallel_mode.rs`
+- `src/adapter/inbound/tui/app/parallel_mode/panel_controller.rs`
+- `src/adapter/inbound/tui/app/parallel_mode/presentation_bridge.rs`
+- `src/adapter/inbound/tui/app/parallel_mode_shell_command.rs`
+- `src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/parallel_supervisor_events.rs`
+- `src/adapter/inbound/tui/app/planning/controller.rs`
+- `src/adapter/inbound/tui/app/planning/status_projection.rs`
+- `src/adapter/inbound/tui/app/planning_draft_editor_ui/tests.rs`
+- `src/adapter/inbound/tui/app/planning_init_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/planning_overlay_shell_command.rs`
+- `src/adapter/inbound/tui/app/planning_reset_shell_command.rs`
+- `src/adapter/inbound/tui/app/planning_shell_command.rs`
+- `src/adapter/inbound/tui/app/planning_worker_debug_preview.rs`
+- `src/adapter/inbound/tui/app/session_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/shell_entrypoint.rs`
+- `src/adapter/inbound/tui/app/shell_frontend.rs`
+- `src/adapter/inbound/tui/app/shell_layout.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_editor_inputs.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_existing_workspace.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_existing_workspace_inputs.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_runtime.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_session.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession/tests.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/prompt_composer.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/runtime_status_copy.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/session_browser.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/session_browser/empty_state.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/startup_banner.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/status_panels/parallel_working_copy.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/status_panels/plan_indicator.rs`
+- `src/adapter/inbound/tui/app/shell_rendering/inline_layout.rs`
+- `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs`
+- `src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs`
+- `src/adapter/inbound/tui/app/shell_rendering_tests.rs`
+- `src/adapter/inbound/tui/app/shell_runtime/tests.rs`
+- `src/adapter/inbound/tui/app/shell_runtime/tests/flows.rs`
+- `src/adapter/inbound/tui/app/shell_runtime/tests/input.rs`
+- `src/adapter/inbound/tui/app/shell_runtime/tests/scheduler.rs`
+- `src/adapter/inbound/tui/app/tui_testkit.rs`
+- `src/adapter/inbound/tui/app/turn_submission_runtime.rs`
+- `src/adapter/inbound/tui/app/view_selection_overlay_ui.rs`
+- `src/adapter/inbound/tui/conversation_text.rs`
+- `src/adapter/inbound/tui/shell_chrome.rs`
+- `src/adapter/inbound/tui/supersession_mud.rs`
+
 ## Explicit Exceptions
 
 The architecture guard owns the source allowlist. Exceptions must stay narrow and documented there.
@@ -45,8 +113,8 @@ Run these for TUI coverage changes:
 cargo fmt --all -- --check
 cargo test --test architecture_boundaries
 cargo test inline_terminal_adapter::tests
-cargo test shell_rendering_contract_tests
-cargo test shell_rendering_tests
+cargo test shell_rendering::contract_tests
+cargo test shell_rendering::tests
 cargo test shell_runtime::tests
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
