@@ -1084,6 +1084,71 @@ fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
 }
 
 #[test]
+fn tui_coverage_matrix_lists_existing_tui_test_entrypoints() {
+    // Static guard: the matrix is the TUI testing inventory, so every Rust file
+    // that owns TUI tests must be listed there explicitly.
+    let repo_root = repo_root();
+    let matrix_path = repo_root.join("docs/validation/tui-coverage-matrix.md");
+    let matrix = fs::read_to_string(&matrix_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", matrix_path.display());
+    });
+
+    let documented = tui_test_entrypoint_paths_from_matrix(&matrix);
+    assert!(
+        !documented.is_empty(),
+        "TUI coverage matrix must list existing TUI test entrypoints"
+    );
+
+    let mut sorted_documented = documented.clone();
+    sorted_documented.sort();
+    assert_eq!(
+        documented, sorted_documented,
+        "TUI test entrypoint inventory must stay sorted by path"
+    );
+
+    let mut unique_documented = sorted_documented.clone();
+    unique_documented.dedup();
+    assert_eq!(
+        sorted_documented, unique_documented,
+        "TUI test entrypoint inventory must not contain duplicate paths"
+    );
+
+    let tui_root = repo_root.join("src/adapter/inbound/tui");
+    let mut actual = Vec::new();
+    for path in rust_files_under(&tui_root) {
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        if is_tui_test_entrypoint_source(&source) {
+            actual.push(relative_path(&repo_root, &path));
+        }
+    }
+    actual.sort();
+
+    let missing = actual
+        .iter()
+        .filter(|path| !documented.contains(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "TUI test entrypoints must be listed in docs/validation/tui-coverage-matrix.md:\n{}",
+        missing.join("\n")
+    );
+
+    let stale = documented
+        .iter()
+        .filter(|path| !actual.contains(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        stale.is_empty(),
+        "TUI coverage matrix lists stale or missing TUI test entrypoints:\n{}",
+        stale.join("\n")
+    );
+}
+
+#[test]
 fn tui_shared_test_devices_stay_in_tui_testkit() {
     // Static guard: reusable temporal/terminal devices belong in tui_testkit so
     // TUI tests share the same frame and backend contracts.
@@ -1147,6 +1212,33 @@ fn assert_tui_test_entrypoint_has_coverage(repo_root: &Path, surface_name: &str,
         has_coverage_marker,
         "TUI coverage surface `{surface_name}` entrypoint must contain tests, snapshots, or matrix text: {entrypoint}"
     );
+}
+
+fn tui_test_entrypoint_paths_from_matrix(matrix: &str) -> Vec<String> {
+    let marker = "## Test Entry Point Inventory";
+    let section = matrix
+        .split_once(marker)
+        .unwrap_or_else(|| panic!("TUI coverage matrix must contain `{marker}`"))
+        .1;
+    let section = section
+        .split_once("\n## ")
+        .map_or(section, |(section, _)| section);
+    section
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let path = trimmed.strip_prefix("- `")?;
+            let path = path.split_once('`')?.0;
+            path.starts_with("src/adapter/inbound/tui/")
+                .then(|| path.to_string())
+        })
+        .collect()
+}
+
+fn is_tui_test_entrypoint_source(source: &str) -> bool {
+    source.contains("#[test]")
+        || source.contains("#[tokio::test]")
+        || source.contains("assert_snapshot!")
 }
 
 fn assert_no_forbidden_references(rule: BoundaryRule) {
