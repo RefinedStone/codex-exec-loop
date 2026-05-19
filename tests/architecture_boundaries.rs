@@ -1148,6 +1148,8 @@ fn tui_system_korean_copy_is_localized_through_language_module() {
         "LANGUAGE_SELECTION_OPTIONS",
         "parallel_board_refreshed",
         "parallel_history_summary",
+        "startup_axis_row",
+        "startup_diagnostics_summary_line",
         "LanguageSelectionOverlayUiState",
     ] {
         assert!(

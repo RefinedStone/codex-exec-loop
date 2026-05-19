@@ -3,6 +3,8 @@ use ratatui::text::Line;
 use crate::core::app::{StartupAttachmentSnapshot, StartupReadySnapshot};
 use crate::domain::recent_sessions::SessionCatalogTier;
 
+use super::TuiLanguage;
+
 /*
  * capability_copy.rs는 capability_projection, session_browser, tail/status panel이 공유하는
  * operator-facing 문구 registry다. StartupReadySnapshot과 SessionCatalog는 app capability 상태를 소유하고,
@@ -76,70 +78,40 @@ pub(super) fn startup_check_loading_lines() -> Vec<Line<'static>> {
     ]
 }
 
-pub(super) fn startup_diagnostics_summary_line(startup: &StartupReadySnapshot) -> String {
+pub(super) fn startup_diagnostics_summary_line(
+    startup: &StartupReadySnapshot,
+    language: TuiLanguage,
+) -> String {
     /*
      * inline tail은 full startup check list를 반복할 공간이 없다. 여기서는 prompt submission에 직접
      * 영향을 주는 codex/app-server/account gate만 한 줄로 압축해, 사용자가 현재 막힌 축을 빠르게
      * 비교할 수 있게 한다.
      */
-    format!(
-        "diagnostics: codex {}  |  app-server {}  |  account {}",
-        inline_diagnostic_status(startup.codex_binary.ok, "ok", "check"),
-        inline_diagnostic_status(startup.app_server_initialize.ok, "ok", "check"),
-        inline_diagnostic_status(startup.account.ok, "ok", "attention"),
+    language.startup_diagnostics_summary_line(
+        language.inline_diagnostic_status(startup.codex_binary.ok, "check"),
+        language.inline_diagnostic_status(startup.app_server_initialize.ok, "check"),
+        language.inline_diagnostic_status(startup.account.ok, "attention"),
     )
 }
 
-pub(super) fn startup_attachment_summary_line(startup: &StartupReadySnapshot) -> String {
-    attachment_profile_summary_line(&startup.attachment)
+pub(super) fn startup_attachment_summary_line(
+    startup: &StartupReadySnapshot,
+    language: TuiLanguage,
+) -> String {
+    attachment_profile_summary_line(&startup.attachment, language)
 }
 
-pub(super) fn attachment_profile_summary_line(attachment: &StartupAttachmentSnapshot) -> String {
+pub(super) fn attachment_profile_summary_line(
+    attachment: &StartupAttachmentSnapshot,
+    language: TuiLanguage,
+) -> String {
     /*
      * attachment/recovery는 pass/fail readiness가 아니라 현재 terminal bridge가 어떤 방식으로
      * 붙었고 다시 붙을 수 있는지를 설명하는 capability다. startup summary에 같이 두면 launch profile과
      * session recovery expectation을 한 줄에서 확인할 수 있다.
      */
-    format!(
-        "attachment: {}  |  recovery: {}",
-        attachment.mode_label, attachment.recovery_anchor_label
-    )
-}
-
-pub(super) fn recent_session_status_waiting_for_startup() -> &'static str {
-    "waiting for startup checks"
-}
-
-pub(super) fn recent_session_status_blocked_by_startup() -> &'static str {
-    "blocked by startup diagnostics"
-}
-
-pub(super) fn recent_session_status_not_requested() -> &'static str {
-    "not requested yet"
-}
-
-pub(super) fn recent_session_status_ready_to_load() -> &'static str {
-    "ready to load"
-}
-
-pub(super) fn recent_session_status_loading() -> &'static str {
-    "loading from codex app-server"
-}
-
-pub(super) fn recent_session_status_load_failed() -> &'static str {
-    "load failed"
-}
-
-pub(super) fn recent_session_status_unsupported(tier: SessionCatalogTier) -> String {
-    format!("{}: catalog unsupported", tier.label())
-}
-
-pub(super) fn recent_session_status_partial(tier: SessionCatalogTier) -> String {
-    format!("{}: partial catalog", tier.label())
-}
-
-pub(super) fn recent_session_status_loaded(tier: SessionCatalogTier, count: usize) -> String {
-    format!("{}: {} loaded", tier.label(), count)
+    language
+        .startup_attachment_summary_line(&attachment.mode_label, &attachment.recovery_anchor_label)
 }
 
 pub(super) fn session_catalog_empty_message_line() -> &'static str {
@@ -247,12 +219,4 @@ pub(super) fn session_catalog_partial_detail_line(detail: &str) -> String {
      * 다시 요약하면 operator가 필요한 원인 문자열을 잃을 수 있어 원문을 그대로 보존한다.
      */
     detail.to_string()
-}
-
-fn inline_diagnostic_status(
-    ok: bool,
-    ready_label: &'static str,
-    blocked_label: &'static str,
-) -> &'static str {
-    if ok { ready_label } else { blocked_label }
 }

@@ -232,13 +232,33 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
 
     assert!(!rendered.contains(".:  .::    .::  .::.: .:::   .::"));
     assert!(!rendered.contains(".::.::  .::   .::    .::  .::   .::"));
+    assert!(rendered.contains("Akra  |  워크플로: 준비됨"));
+    assert!(rendered.contains("작업공간: /tmp/root"));
+    assert!(rendered.contains("진단: codex 정상  |  app-server 정상  |  계정 정상"));
+    assert!(rendered.contains("연결: provider-launched  |  복구: provider-thread-id"));
+    assert!(rendered.contains("대화"));
+    assert!(rendered.contains("첫 응답은 프롬프트 전송 후 표시됩니다"));
+    assert!(rendered.contains("prompt: new thread ready"));
+}
+
+#[test]
+fn inline_startup_screen_uses_selected_english_language() {
+    let mut terminal = tui_testkit::inline_terminal(80, 24);
+    let mut app = make_test_app();
+    app.tui_language = TuiLanguage::English;
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline startup render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
     assert!(rendered.contains("Akra  |  Workflows: ready"));
     assert!(rendered.contains("workspace: /tmp/root"));
     assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
     assert!(rendered.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
     assert!(rendered.contains("conversation"));
     assert!(rendered.contains("first reply appears here after you send the opening prompt"));
-    assert!(rendered.contains("prompt: new thread ready"));
 }
 #[test]
 fn startup_prompt_command_palette_remains_visible_after_colon_input() {
@@ -1340,7 +1360,7 @@ fn inline_tail_reports_partial_handle_based_session_catalog_status() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("handle-based reattach: partial catalog"));
+    assert!(rendered.contains("handle 기반 reattach: 부분 카탈로그"));
 }
 
 // Shared chrome tests keep overlay titles and confirmation styling aligned
@@ -1422,7 +1442,7 @@ fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(summary.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
+    assert!(summary.contains("연결: provider-launched  |  복구: provider-thread-id"));
     assert!(checks.contains("[ok] attachment mode: provider-launched"));
     assert!(checks.contains("[ok] recovery anchor: provider-thread-id"));
 }

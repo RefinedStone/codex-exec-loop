@@ -8,6 +8,7 @@
 use super::capability_projection::recent_session_status_label;
 use super::{
     ConversationState, ConversationViewModel, NativeTuiApp, ShellActionAvailability, StartupState,
+    TuiLanguage,
 };
 
 #[derive(Clone, Copy)]
@@ -40,6 +41,8 @@ pub(super) struct ShellCorePresentationContext<'a> {
     pub(super) recent_session_status_label: String,
     // GitHub review polling state projected to display copy before entering footer builders.
     pub(super) github_review_polling_status_label: String,
+    // Current TUI copy language, projected once so startup chrome does not reread app state.
+    pub(super) tui_language: TuiLanguage,
     // Parallel mode replaces the empty draft startup screen with the supervisor board.
     pub(super) parallel_mode_enabled: bool,
     // Loading/failed/ready conversation projection used consistently by shell copy and transcript/status helpers.
@@ -62,9 +65,10 @@ impl<'a> ShellCorePresentationContext<'a> {
             // Availability calculation stays encapsulated on NativeTuiApp; presentation sees only the result.
             shell_action_availability: app.shell_action_availability(),
             // Capability projection hides session-loader internals from shell copy/status panels.
-            recent_session_status_label: recent_session_status_label(app),
+            recent_session_status_label: recent_session_status_label(app, app.tui_language),
             // GitHub polling adapters remain outside presentation; this context carries their display label.
             github_review_polling_status_label: app.github_review_polling_status_label(),
+            tui_language: app.tui_language,
             parallel_mode_enabled: app.parallel_mode_enabled(),
             /*
              * Ready borrows the view model because downstream presentation

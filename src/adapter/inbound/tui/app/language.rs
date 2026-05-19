@@ -1,3 +1,7 @@
+use crate::domain::recent_sessions::SessionCatalogTier;
+
+use super::ShellActionAvailability;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum TuiLanguage {
     English,
@@ -61,6 +65,232 @@ impl TuiLanguage {
         match self {
             Self::English => "language set to English",
             Self::Korean => "언어가 한국어로 설정되었습니다.",
+        }
+    }
+
+    pub(super) fn startup_axis_row(
+        self,
+        workflow_status: &str,
+        queue_status: &str,
+        observability_status: &str,
+    ) -> String {
+        match self {
+            Self::English => {
+                format!(
+                    "  |  Workflows: {workflow_status}  |  Queues: {queue_status}  |  Observability: {observability_status}"
+                )
+            }
+            Self::Korean => {
+                format!(
+                    "  |  워크플로: {workflow_status}  |  큐: {queue_status}  |  관찰: {observability_status}"
+                )
+            }
+        }
+    }
+
+    pub(super) const fn startup_axis_status(
+        self,
+        shell_action_availability: ShellActionAvailability,
+    ) -> &'static str {
+        match (self, shell_action_availability) {
+            (Self::English, ShellActionAvailability::Ready) => "ready",
+            (Self::English, ShellActionAvailability::Pending) => "pending",
+            (Self::English, ShellActionAvailability::Blocked) => "blocked",
+            (Self::Korean, ShellActionAvailability::Ready) => "준비됨",
+            (Self::Korean, ShellActionAvailability::Pending) => "대기 중",
+            (Self::Korean, ShellActionAvailability::Blocked) => "차단됨",
+        }
+    }
+
+    pub(super) fn github_review_polling_status(self, status: &str) -> String {
+        match (self, status) {
+            (Self::Korean, "off") => "꺼짐".to_string(),
+            _ => status.to_string(),
+        }
+    }
+
+    pub(super) fn startup_workspace_line(self, workspace_path: &str) -> String {
+        match self {
+            Self::English => format!("workspace: {workspace_path}"),
+            Self::Korean => format!("작업공간: {workspace_path}"),
+        }
+    }
+
+    pub(super) fn startup_status_line(self, status: &str) -> String {
+        match self {
+            Self::English => format!("status: {status}"),
+            Self::Korean => format!("상태: {status}"),
+        }
+    }
+
+    pub(super) fn startup_warning_line(self, warning: &str) -> String {
+        match self {
+            Self::English => format!("warning: {warning}"),
+            Self::Korean => format!("경고: {warning}"),
+        }
+    }
+
+    pub(super) const fn startup_conversation_label(self) -> &'static str {
+        match self {
+            Self::English => "conversation",
+            Self::Korean => "대화",
+        }
+    }
+
+    pub(super) const fn startup_first_reply_hint(self) -> &'static str {
+        match self {
+            Self::English => "first reply appears here after you send the opening prompt",
+            Self::Korean => "첫 응답은 프롬프트 전송 후 표시됩니다",
+        }
+    }
+
+    pub(super) fn startup_starter_line(self, starter_copy: &str) -> String {
+        match self {
+            Self::English => format!("starter: {starter_copy}"),
+            Self::Korean => format!("시작: {starter_copy}"),
+        }
+    }
+
+    pub(super) const fn startup_empty_starter_copy(self) -> &'static str {
+        match self {
+            Self::English => "start with a task, file path, or bug summary",
+            Self::Korean => "작업, 파일, 버그 요약으로 시작",
+        }
+    }
+
+    pub(super) const fn startup_buffered_starter_copy(self) -> &'static str {
+        match self {
+            Self::English => "opening prompt buffered below",
+            Self::Korean => "아래에 시작 프롬프트 입력됨",
+        }
+    }
+
+    pub(super) fn startup_diagnostics_summary_line(
+        self,
+        codex_status: &str,
+        app_server_status: &str,
+        account_status: &str,
+    ) -> String {
+        match self {
+            Self::English => {
+                format!(
+                    "diagnostics: codex {codex_status}  |  app-server {app_server_status}  |  account {account_status}"
+                )
+            }
+            Self::Korean => {
+                format!(
+                    "진단: codex {codex_status}  |  app-server {app_server_status}  |  계정 {account_status}"
+                )
+            }
+        }
+    }
+
+    pub(super) fn inline_diagnostic_status(
+        self,
+        ok: bool,
+        failed_status: &'static str,
+    ) -> &'static str {
+        match (self, ok, failed_status) {
+            (Self::English, true, _) => "ok",
+            (Self::English, false, "attention") => "attention",
+            (Self::English, false, _) => "check",
+            (Self::Korean, true, _) => "정상",
+            (Self::Korean, false, "attention") => "확인 필요",
+            (Self::Korean, false, _) => "점검 필요",
+        }
+    }
+
+    pub(super) fn startup_attachment_summary_line(
+        self,
+        mode_label: &str,
+        recovery_anchor_label: &str,
+    ) -> String {
+        match self {
+            Self::English => {
+                format!("attachment: {mode_label}  |  recovery: {recovery_anchor_label}")
+            }
+            Self::Korean => {
+                format!("연결: {mode_label}  |  복구: {recovery_anchor_label}")
+            }
+        }
+    }
+
+    pub(super) const fn recent_session_status_waiting_for_startup(self) -> &'static str {
+        match self {
+            Self::English => "waiting for startup checks",
+            Self::Korean => "startup 검사 대기 중",
+        }
+    }
+
+    pub(super) const fn recent_session_status_blocked_by_startup(self) -> &'static str {
+        match self {
+            Self::English => "blocked by startup diagnostics",
+            Self::Korean => "startup 진단으로 차단됨",
+        }
+    }
+
+    pub(super) const fn recent_session_status_not_requested(self) -> &'static str {
+        match self {
+            Self::English => "not requested yet",
+            Self::Korean => "아직 요청 안 함",
+        }
+    }
+
+    pub(super) const fn recent_session_status_ready_to_load(self) -> &'static str {
+        match self {
+            Self::English => "ready to load",
+            Self::Korean => "로드 준비됨",
+        }
+    }
+
+    pub(super) const fn recent_session_status_loading(self) -> &'static str {
+        match self {
+            Self::English => "loading from codex app-server",
+            Self::Korean => "codex app-server에서 로드 중",
+        }
+    }
+
+    pub(super) const fn recent_session_status_load_failed(self) -> &'static str {
+        match self {
+            Self::English => "load failed",
+            Self::Korean => "로드 실패",
+        }
+    }
+
+    pub(super) fn recent_session_status_unsupported(self, tier: SessionCatalogTier) -> String {
+        match self {
+            Self::English => format!("{}: catalog unsupported", tier.label()),
+            Self::Korean => format!("{}: 카탈로그 미지원", self.session_catalog_tier_label(tier)),
+        }
+    }
+
+    pub(super) fn recent_session_status_partial(self, tier: SessionCatalogTier) -> String {
+        match self {
+            Self::English => format!("{}: partial catalog", tier.label()),
+            Self::Korean => format!("{}: 부분 카탈로그", self.session_catalog_tier_label(tier)),
+        }
+    }
+
+    pub(super) fn recent_session_status_loaded(
+        self,
+        tier: SessionCatalogTier,
+        count: usize,
+    ) -> String {
+        match self {
+            Self::English => format!("{}: {count} loaded", tier.label()),
+            Self::Korean => format!(
+                "{}: {count}개 로드됨",
+                self.session_catalog_tier_label(tier)
+            ),
+        }
+    }
+
+    fn session_catalog_tier_label(self, tier: SessionCatalogTier) -> &'static str {
+        match (self, tier) {
+            (Self::English, _) => tier.label(),
+            (Self::Korean, SessionCatalogTier::AttachOnly) => "attach-only 카탈로그",
+            (Self::Korean, SessionCatalogTier::HandleBasedReattach) => "handle 기반 reattach",
+            (Self::Korean, SessionCatalogTier::ProviderBackedCatalog) => "provider-backed 카탈로그",
         }
     }
 
