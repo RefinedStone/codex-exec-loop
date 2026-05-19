@@ -275,7 +275,10 @@ fn current_inline_history_lines_for_viewport(
          * live panel title or footer chrome.
          */
         let live_tail_lines = inline_parallel_event_stream_visible_rows(app, viewport_area);
-        return app.parallel_supervisor_event_scrollback_lines_before_live_tail(live_tail_lines);
+        return app.parallel_supervisor_event_scrollback_lines_before_live_tail(
+            live_tail_lines,
+            viewport_area.width,
+        );
     }
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
         /*
