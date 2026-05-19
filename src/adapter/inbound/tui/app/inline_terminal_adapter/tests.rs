@@ -10,8 +10,10 @@ use crate::adapter::inbound::tui::app::{
 };
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentRosterSnapshot, ParallelModeCompletionFeedEntry,
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
+    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
+    ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
@@ -589,6 +591,67 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
 }
 
 #[test]
+fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
+        ParallelModePoolSlotState::Leased,
+        "starting",
+        vec![long_runtime_feed_entry(1, "seed runtime event one")],
+    )));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frame_recorder = InlineFrameRecorder::default();
+
+    frame_recorder.draw_and_record("leased", &mut terminal, &mut runtime, &mut inline_terminal);
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(active_runtime_feed_snapshot(
+            ParallelModePoolSlotState::Running,
+            "running",
+            (1..=12)
+                .map(|sequence| {
+                    long_runtime_feed_entry(
+                        sequence,
+                        format!("session detail runtime write marker {sequence:02}"),
+                    )
+                })
+                .collect(),
+        )));
+    frame_recorder.draw_and_record(
+        "running-runtime-tail",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    let runtime_tail_frame = frame_recorder.frame("running-runtime-tail");
+    let body_rows = parallel_event_stream_body_rows(&runtime_tail_frame.screen_text);
+    let first_body_row = body_rows.first().unwrap_or_else(|| {
+        panic!(
+            "parallel stream body should have rows:\n{}",
+            runtime_tail_frame.screen_text
+        )
+    });
+    assert!(
+        first_body_row.trim_start().starts_with('['),
+        "the live stream must not start in the middle of a wrapped runtime row:\n{}",
+        runtime_tail_frame.screen_text
+    );
+    assert!(
+        !runtime_tail_frame
+            .host_scrollback_text
+            .contains("Parallel Event Stream"),
+        "host scrollback should never receive live panel chrome:\n{}",
+        runtime_tail_frame.host_scrollback_text
+    );
+}
+
+#[test]
 fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
@@ -675,6 +738,97 @@ fn status_runtime_feed_supervisor_snapshot(
     )
 }
 
+fn active_runtime_feed_snapshot(
+    slot_state: ParallelModePoolSlotState,
+    detail_state: &'static str,
+    runtime_event_feed: Vec<ParallelModeRuntimeEventFeedEntry>,
+) -> ParallelModeSupervisorSnapshot {
+    ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(
+            3,
+            "/tmp/pool",
+            "idle",
+            vec![ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                slot_state,
+                "akra-agent/slot-1/task-user-20260518T062218Z-398bb0bebece",
+                "/tmp/pool/slot-1",
+                "agent-artificer / task-user-20260518T062218Z-398bb0bebece",
+            )],
+        ),
+        ParallelModeAgentRosterSnapshot::new(
+            vec![ParallelModeAgentRosterEntry::new(
+                "agent-artificer",
+                "안녕하세요",
+                "slot-1",
+                "akra-agent/slot-1/task-user-20260518T062218Z-398bb0bebece",
+                detail_state,
+                detail_state,
+                "agent session entered the running state",
+            )],
+            "no active agents",
+        ),
+        ParallelModeSupervisorDetailSnapshot::new(
+            Some(ParallelModeAgentSessionDetailSnapshot::new(
+                "slot-1@2026-05-19T02:30:35.874316+00:00",
+                "agent-artificer",
+                "task-user-20260518T062218Z-398bb0bebece",
+                "안녕하세요",
+                "slot-1",
+                Some("019e3e12-224e-71f0-b...".to_string()),
+                "/tmp/pool/slot-1",
+                "akra-agent/slot-1/task-user-20260518T062218Z-398bb0bebece",
+                "2026-05-19T02:30:35.874316+00:00",
+                detail_state,
+                "in_progress",
+                "agent session entered the running state",
+                "not reported yet",
+                "not refreshed yet",
+                None,
+                vec![
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "assigned",
+                        "2026-05-19T02:30:35.874316+00:00",
+                        "slot lease acquired and branch reserved for launch",
+                    ),
+                    ParallelModeAgentSessionHistoryEntry::new(
+                        "starting",
+                        "2026-05-19T02:30:36.131687+00:00",
+                        "thread prepared for the leased session",
+                    ),
+                ],
+                "2026-05-19T02:30:37.131687+00:00",
+            )),
+            "no detail",
+        ),
+        ParallelModeDistributorSnapshot::new(
+            Vec::new(),
+            vec![
+                ParallelModeCompletionFeedEntry::new("reported", "no agent results reported yet"),
+                ParallelModeCompletionFeedEntry::new(
+                    "ledger refreshing",
+                    "no official refresh workers are active",
+                ),
+                ParallelModeCompletionFeedEntry::new("official", "nothing is queued for merge"),
+                ParallelModeCompletionFeedEntry::new(
+                    "merge queued",
+                    "no distributor queue items are waiting",
+                ),
+                ParallelModeCompletionFeedEntry::new(
+                    "merged",
+                    "nothing has been integrated into prerelease yet",
+                ),
+            ],
+            "idle",
+            "queue idle",
+        )
+        .with_runtime_event_feed(runtime_event_feed),
+        Some("control tower is live in read-only supervisor mode".to_string()),
+    )
+}
+
 fn inline_runtime_feed_entry(
     sequence: i64,
     summary: impl Into<String>,
@@ -688,6 +842,41 @@ fn inline_runtime_feed_entry(
         summary,
         format!("2026-05-13T11:45:{sequence:02}+00:00"),
     )
+}
+
+fn long_runtime_feed_entry(
+    sequence: i64,
+    summary: impl Into<String>,
+) -> ParallelModeRuntimeEventFeedEntry {
+    ParallelModeRuntimeEventFeedEntry::new(
+        sequence,
+        "session_detail_upsert",
+        "session_detail",
+        "slot-1@2026-05-19T02:30:35.874316+00:00",
+        61,
+        format!(
+            "runtime session detail stored / session: slot-1@2026-05-19T02:30:35.874316+00:00 / {}",
+            summary.into()
+        ),
+        format!("2026-05-19T02:30:{sequence:02}+00:00"),
+    )
+}
+
+fn parallel_event_stream_body_rows(screen_text: &str) -> Vec<String> {
+    screen_text
+        .lines()
+        .skip_while(|line| !line.contains("Parallel Event Stream"))
+        .skip(1)
+        .take_while(|line| !line.contains("Command Hints"))
+        .map(|line| {
+            line.trim_end()
+                .trim_start()
+                .trim_start_matches('"')
+                .trim_start()
+                .to_string()
+        })
+        .filter(|line| !line.trim().is_empty())
+        .collect()
 }
 
 #[test]

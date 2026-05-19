@@ -99,14 +99,13 @@ impl ParallelSupervisorEventLog {
             .collect()
     }
 
-    pub(super) fn scrollback_lines_before_live_tail(
+    pub(super) fn scrollback_lines_before_rendered_live_tail(
         &self,
-        live_tail_lines: usize,
+        live_tail_rows: usize,
+        width: u16,
     ) -> Vec<Line<'static>> {
-        let durable_len = self
-            .scrollback_entries
-            .len()
-            .saturating_sub(live_tail_lines);
+        let durable_len =
+            rendered_tail_start_index(&self.scrollback_entries, live_tail_rows, width);
         self.scrollback_entries
             .iter()
             .take(durable_len)
@@ -469,6 +468,47 @@ fn compact_stream_timestamp_label(timestamp: &str) -> String {
     format!("{hour}:{minute}:{second}")
 }
 
+fn rendered_tail_start_index(
+    entries: &VecDeque<ParallelSupervisorEventEntry>,
+    live_tail_rows: usize,
+    width: u16,
+) -> usize {
+    if entries.is_empty() {
+        return 0;
+    }
+    if live_tail_rows == 0 || width == 0 {
+        return entries.len();
+    }
+
+    let total_rendered_rows = entries
+        .iter()
+        .map(|entry| rendered_line_rows(&entry.line, width))
+        .sum::<usize>();
+    let minimum_scroll_offset = total_rendered_rows.saturating_sub(live_tail_rows);
+    if minimum_scroll_offset == 0 {
+        return 0;
+    }
+
+    let mut rendered_rows_before_entry = 0usize;
+    for (index, entry) in entries.iter().enumerate() {
+        if rendered_rows_before_entry >= minimum_scroll_offset {
+            return index;
+        }
+        rendered_rows_before_entry += rendered_line_rows(&entry.line, width);
+    }
+
+    entries.len().saturating_sub(1)
+}
+
+fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
+    let line_width = line.width();
+    if line_width == 0 {
+        1
+    } else {
+        line_width.div_ceil(width as usize)
+    }
+}
+
 fn truncate_event_text(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= max_chars {
@@ -501,10 +541,11 @@ impl super::NativeTuiApp {
 
     pub(crate) fn parallel_supervisor_event_scrollback_lines_before_live_tail(
         &self,
-        live_tail_lines: usize,
+        live_tail_rows: usize,
+        width: u16,
     ) -> Vec<Line<'static>> {
         self.parallel_supervisor_event_log
-            .scrollback_lines_before_live_tail(live_tail_lines)
+            .scrollback_lines_before_rendered_live_tail(live_tail_rows, width)
     }
 
     pub(super) fn record_parallel_supervisor_snapshot_for_stream(

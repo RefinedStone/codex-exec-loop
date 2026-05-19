@@ -454,9 +454,8 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         false,
     );
     let stream_visible_rows = layout[3].height.saturating_sub(1) as usize;
-    let stream_scroll_offset = count_rendered_inline_rows(&detail_lines, layout[3].width)
-        .saturating_sub(stream_visible_rows)
-        .min(u16::MAX as usize) as u16;
+    let stream_scroll_offset =
+        event_boundary_scroll_offset(&detail_lines, layout[3].width, stream_visible_rows);
     render_inline_scrolled_section(
         frame,
         layout[3],
@@ -471,6 +470,42 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         key_lines,
         true,
     );
+}
+
+fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_rows: usize) -> u16 {
+    if lines.is_empty() || visible_rows == 0 || width == 0 {
+        return 0;
+    }
+
+    let total_rendered_rows = count_rendered_inline_rows(lines, width);
+    let minimum_scroll_offset = total_rendered_rows.saturating_sub(visible_rows);
+    if minimum_scroll_offset == 0 {
+        return 0;
+    }
+
+    let mut rendered_rows_before_line = 0usize;
+    for line in lines {
+        if rendered_rows_before_line >= minimum_scroll_offset {
+            return rendered_rows_before_line.min(u16::MAX as usize) as u16;
+        }
+        rendered_rows_before_line += rendered_line_rows(line, width);
+    }
+
+    total_rendered_rows
+        .saturating_sub(rendered_line_rows(
+            lines.last().expect("non-empty lines"),
+            width,
+        ))
+        .min(u16::MAX as usize) as u16
+}
+
+fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
+    let line_width = line.width();
+    if line_width == 0 {
+        1
+    } else {
+        line_width.div_ceil(width as usize)
+    }
 }
 
 pub(super) fn parallel_event_stream_visible_rows(app: &NativeTuiApp, area: Rect) -> usize {
