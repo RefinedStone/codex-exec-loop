@@ -34,62 +34,6 @@ mod fixtures;
 mod history_flush;
 use self::fixtures::make_test_app;
 
-#[derive(Debug)]
-struct RecordedInlineFrame {
-    label: &'static str,
-    screen_text: String,
-    host_scrollback_text: String,
-    terminal_history_text: String,
-    app_event_stream_text: String,
-}
-
-#[derive(Default)]
-struct InlineFrameRecorder {
-    frames: Vec<RecordedInlineFrame>,
-}
-
-impl InlineFrameRecorder {
-    fn draw_and_record(
-        &mut self,
-        label: &'static str,
-        terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
-        runtime: &mut ShellRuntime,
-        inline_terminal: &mut InlineTerminalState,
-    ) {
-        draw_inline_transaction(terminal, runtime, inline_terminal)
-            .expect("recorded inline draw transaction");
-        self.record(label, terminal, runtime);
-    }
-
-    fn record(
-        &mut self,
-        label: &'static str,
-        terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
-        runtime: &ShellRuntime,
-    ) {
-        self.frames.push(RecordedInlineFrame {
-            label,
-            screen_text: tui_testkit::screen_text(terminal),
-            host_scrollback_text: tui_testkit::inline_scrollback_text(terminal),
-            terminal_history_text: tui_testkit::inline_terminal_history_text(terminal),
-            app_event_stream_text: runtime
-                .app()
-                .parallel_supervisor_event_lines()
-                .into_iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        });
-    }
-
-    fn frame(&self, label: &str) -> &RecordedInlineFrame {
-        self.frames
-            .iter()
-            .find(|frame| frame.label == label)
-            .unwrap_or_else(|| panic!("recorded frame {label} should exist"))
-    }
-}
-
 // Host history sync must insert only committed transcript rows; live agent
 // deltas stay in the active tail until the turn is completed.
 #[test]
@@ -488,7 +432,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     ));
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
-    let mut frame_recorder = InlineFrameRecorder::default();
+    let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
 
     frame_recorder.draw_and_record(
         "initial-status",
@@ -605,7 +549,7 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
     )));
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
-    let mut frame_recorder = InlineFrameRecorder::default();
+    let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
 
     frame_recorder.draw_and_record("leased", &mut terminal, &mut runtime, &mut inline_terminal);
     runtime

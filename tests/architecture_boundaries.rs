@@ -748,6 +748,72 @@ fn temporary_parallel_control_surfaces_no_longer_bypass_control_plane_gate() {
     );
 }
 
+#[test]
+fn tui_temporal_regressions_use_shared_frame_recorder_contract() {
+    // Static guard: redraw-order regressions need temporal evidence. Keep the
+    // recorder in the shared TUI testkit so future TUI tests do not re-create
+    // weaker one-off final-screen checks.
+    let repo_root = repo_root();
+    let docs_path = repo_root.join("docs/validation/terminal-ui-testing-methodology.md");
+    let testkit_path = repo_root.join("src/adapter/inbound/tui/app/tui_testkit.rs");
+    let inline_tests_path =
+        repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs");
+    let docs = fs::read_to_string(&docs_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", docs_path.display());
+    });
+    let testkit = fs::read_to_string(&testkit_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", testkit_path.display());
+    });
+    let inline_tests = fs::read_to_string(&inline_tests_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", inline_tests_path.display());
+    });
+
+    for required_doc_text in [
+        "direct frame recorder: store every rendered buffer",
+        "Frame recorder assertions should include",
+        "Parallel event stream | frame recorder proves",
+    ] {
+        assert!(
+            docs.contains(required_doc_text),
+            "TUI methodology must require frame-recorder coverage for redraw-order regressions: {required_doc_text}"
+        );
+    }
+
+    for required_testkit_text in [
+        "pub(super) struct InlineFrameRecorder",
+        "pub(super) struct RecordedInlineFrame",
+        "pub(super) fn draw_and_record",
+        "pub(super) fn record_inline",
+        "screen_text",
+        "host_scrollback_text",
+        "terminal_history_text",
+        "app_event_stream_text",
+    ] {
+        assert!(
+            testkit.contains(required_testkit_text),
+            "shared TUI testkit must expose the direct frame-recorder contract: {required_testkit_text}"
+        );
+    }
+
+    assert!(
+        !inline_tests.contains("struct InlineFrameRecorder"),
+        "inline terminal tests must use the shared tui_testkit recorder instead of a local one-off recorder"
+    );
+    assert!(
+        inline_tests.contains("tui_testkit::InlineFrameRecorder::default()"),
+        "inline terminal frame-recorder regressions must instantiate the shared tui_testkit recorder"
+    );
+    for required_regression in [
+        "direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw",
+        "direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary",
+    ] {
+        assert!(
+            inline_tests.contains(required_regression),
+            "parallel stream redraw regression must stay covered by a direct frame-recorder test: {required_regression}"
+        );
+    }
+}
+
 fn assert_no_forbidden_references(rule: BoundaryRule) {
     let repo_root = repo_root();
     let root = repo_root.join(rule.root);
