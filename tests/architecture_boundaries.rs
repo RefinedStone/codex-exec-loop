@@ -1009,6 +1009,8 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
     let matrix_path = repo_root.join("docs/validation/tui-coverage-matrix.md");
     let renderer_path =
         repo_root.join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs");
+    let layout_path =
+        repo_root.join("src/adapter/inbound/tui/app/shell_rendering/inline_layout.rs");
     let inline_tests_path =
         repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs");
     let methodology = fs::read_to_string(&methodology_path).unwrap_or_else(|error| {
@@ -1023,6 +1025,9 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
     let renderer = fs::read_to_string(&renderer_path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", renderer_path.display());
     });
+    let layout = fs::read_to_string(&layout_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", layout_path.display());
+    });
     let inline_tests = fs::read_to_string(&inline_tests_path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", inline_tests_path.display());
     });
@@ -1031,6 +1036,8 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         "Architectural Guardrails",
         "no panel title may be inserted between durable scrollback rows and live rows",
         "dedicated stream renderer",
+        "typed render surface API",
+        "InlineAppendOnlyStream",
         "titleless live tail",
     ] {
         assert!(
@@ -1043,6 +1050,10 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         "Append-only Stream Surfaces",
         "No panel title may be inserted between durable scrollback rows and live rows",
         "titleless live tail data only",
+        "explicit render surface type",
+        "InlineTitledPanel",
+        "InlineScrolledPanel",
+        "InlineAppendOnlyStream",
         "named stream renderer",
     ] {
         assert!(
@@ -1055,21 +1066,58 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         matrix.contains("split scrollback/live-tail streams render as a titleless live tail"),
         "TUI coverage matrix must name split-stream titleless live-tail behavior"
     );
+    assert!(
+        matrix.contains("typed render surface routing"),
+        "TUI coverage matrix must name typed render surface routing"
+    );
 
     for required_renderer_text in [
         "fn render_inline_parallel_event_stream",
         "Architecture contract: a split event stream is not a titled panel.",
-        "render_inline_scrolled_body(frame, area, lines, stream_scroll_offset)",
+        "InlineAppendOnlyStreamTitle::Hidden",
+        "InlineAppendOnlyStream::new(title, lines, stream_scroll_offset).render(frame, area)",
     ] {
         assert!(
             renderer.contains(required_renderer_text),
             "parallel event stream renderer must keep titleless split-stream contract: {required_renderer_text}"
         );
     }
+    for forbidden_renderer_text in [
+        "render_inline_section(",
+        "render_inline_scrolled_section(",
+        "render_inline_scrolled_body(",
+    ] {
+        assert!(
+            !renderer.contains(forbidden_renderer_text),
+            "inline inspection must route through typed render surfaces instead of low-level helper: {forbidden_renderer_text}"
+        );
+    }
     assert!(
         !renderer.contains("Recent Parallel Events"),
         "parallel event stream renderer must not replace one misplaced stream title with another"
     );
+
+    for required_layout_text in [
+        "pub(super) struct InlineTitledPanel",
+        "pub(super) struct InlineScrolledPanel",
+        "pub(super) enum InlineAppendOnlyStreamTitle",
+        "pub(super) struct InlineAppendOnlyStream",
+    ] {
+        assert!(
+            layout.contains(required_layout_text),
+            "inline layout must expose the typed render surface API: {required_layout_text}"
+        );
+    }
+    for forbidden_layout_text in [
+        "pub(super) fn render_inline_section(",
+        "pub(super) fn render_inline_scrolled_section(",
+        "pub(super) fn render_inline_scrolled_body(",
+    ] {
+        assert!(
+            !layout.contains(forbidden_layout_text),
+            "low-level inline layout helper must stay private behind typed render surfaces: {forbidden_layout_text}"
+        );
+    }
 
     for required_regression in [
         "parallel_live_tail_continues_scrollback_without_inline_title",

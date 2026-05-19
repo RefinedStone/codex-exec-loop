@@ -13,9 +13,9 @@ use super::super::{
     PlanningInitOverlayStep, ShellOverlay,
 };
 use super::inline_layout::{
-    count_rendered_inline_rows, inline_section_height, render_inline_scrolled_body,
-    render_inline_scrolled_section, render_inline_section, set_cursor_if_visible,
-    split_inline_section, take_panel_body_lines,
+    InlineAppendOnlyStream, InlineAppendOnlyStreamTitle, InlineScrolledPanel, InlineTitledPanel,
+    count_rendered_inline_rows, inline_section_height, set_cursor_if_visible, split_inline_section,
+    take_panel_body_lines,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -29,6 +29,26 @@ const PARALLEL_EVENT_STREAM_TITLE: &str = "Parallel Event Stream";
 // frameless sections that can replace the transcript area without popup chrome.
 fn inline_overlay_title(name: &'static str) -> Line<'static> {
     AkraTheme::title_line(name, " / inline inspection")
+}
+
+fn render_inline_titled_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+    trim: bool,
+) {
+    InlineTitledPanel::new(title, lines, trim).render(frame, area);
+}
+
+fn render_inline_scrolled_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+    scroll_offset: u16,
+) {
+    InlineScrolledPanel::new(title, lines, scroll_offset).render(frame, area);
 }
 
 pub(super) fn draw_inline_shell_inspection(
@@ -95,7 +115,7 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Parallel Peek"),
@@ -103,7 +123,7 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
         true,
     );
     match step {
-        ParallelPeekOverlayStep::AgentList => render_inline_scrolled_section(
+        ParallelPeekOverlayStep::AgentList => render_inline_scrolled_panel(
             frame,
             layout[1],
             Line::from("Active Agents"),
@@ -117,7 +137,7 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
                 app.parallel_peek_overlay_ui_state
                     .conversation_scroll_from_bottom(),
             );
-            render_inline_scrolled_section(
+            render_inline_scrolled_panel(
                 frame,
                 layout[1],
                 Line::from("Conversation Preview"),
@@ -126,8 +146,8 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
             );
         }
     }
-    render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 
 fn inline_preview_scroll_offset(area: Rect, line_count: usize, scroll_from_bottom: usize) -> u16 {
@@ -157,21 +177,21 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Shell Commands"),
         body_lines,
         true,
     );
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[1],
         Line::from("Commands"),
         command_lines,
         false,
     );
-    render_inline_section(frame, layout[2], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_directions_maintenance_inspection(
     frame: &mut Frame<'_>,
@@ -206,17 +226,17 @@ fn draw_inline_directions_maintenance_inspection(
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Directions"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_startup_overlay_view(app);
@@ -240,23 +260,23 @@ fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Diagnostics"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Startup"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Checks"), check_lines, false);
-    render_inline_section(
+    render_inline_titled_panel(frame, layout[1], Line::from("Startup"), summary_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Checks"), check_lines, false);
+    render_inline_titled_panel(
         frame,
         layout[3],
         Line::from("Warnings"),
         warning_lines,
         true,
     );
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let overlay_view = build_session_overlay_view(app);
@@ -278,7 +298,7 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Recent Sessions"),
@@ -293,7 +313,7 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         .split(layout[1]);
 
     draw_inline_session_list_panel(frame, content_layout[0], app, list_view);
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         content_layout[1],
         Line::from("Selected Session"),
@@ -301,14 +321,14 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         false,
     );
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[2],
         Line::from("Session Warnings"),
         warning_lines,
         true,
     );
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_model_selection_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_model_selection_overlay_view(app);
@@ -330,7 +350,7 @@ fn draw_inline_model_selection_inspection(frame: &mut Frame<'_>, area: Rect, app
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Select Model and Effort"),
@@ -341,22 +361,22 @@ fn draw_inline_model_selection_inspection(frame: &mut Frame<'_>, area: Rect, app
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(layout[1]);
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         picker_layout[0],
         Line::from("Models"),
         model_lines,
         false,
     );
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         picker_layout[1],
         Line::from("Think Level"),
         effort_lines,
         false,
     );
-    render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_view_selection_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_view_selection_overlay_view(app);
@@ -377,16 +397,16 @@ fn draw_inline_view_selection_inspection(frame: &mut Frame<'_>, area: Rect, app:
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Select Conversation View"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Views"), mode_lines, false);
-    render_inline_section(frame, layout[2], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[1], Line::from("Views"), mode_lines, false);
+    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_supersession_overlay_view(app);
@@ -412,14 +432,14 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Parallel Mode"),
         body_lines,
         true,
     );
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[1],
         Line::from("Basic Info"),
@@ -435,21 +455,21 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         ])
         .split(layout[2]);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         status_layout[0],
         Line::from("Distributor"),
         capability_lines,
         false,
     );
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         status_layout[1],
         Line::from("Pool"),
         pool_lines,
         false,
     );
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         status_layout[2],
         Line::from("Orchestrator"),
@@ -457,7 +477,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         false,
     );
     render_inline_parallel_event_stream(frame, layout[3], detail_lines);
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[4],
         Line::from("Command Hints"),
@@ -475,14 +495,8 @@ fn render_inline_parallel_event_stream(
         parallel_event_stream_visible_rows_for_lines(&lines, area.width, area);
     let stream_scroll_offset =
         event_boundary_scroll_offset(&lines, area.width, stream_visible_rows);
-    if parallel_event_stream_title_visible(&lines, area.width, area) {
-        render_inline_scrolled_section(
-            frame,
-            area,
-            Line::from(PARALLEL_EVENT_STREAM_TITLE),
-            lines,
-            stream_scroll_offset,
-        );
+    let title = if parallel_event_stream_title_visible(&lines, area.width, area) {
+        InlineAppendOnlyStreamTitle::Visible(Line::from(PARALLEL_EVENT_STREAM_TITLE))
     } else {
         /*
          * Architecture contract: a split event stream is not a titled panel.
@@ -491,8 +505,9 @@ fn render_inline_parallel_event_stream(
          * non-event row between two chunks of the same stream, so the live tail
          * must stay data-only.
          */
-        render_inline_scrolled_body(frame, area, lines, stream_scroll_offset);
-    }
+        InlineAppendOnlyStreamTitle::Hidden
+    };
+    InlineAppendOnlyStream::new(title, lines, stream_scroll_offset).render(frame, area);
 }
 
 fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_rows: usize) -> u16 {
@@ -604,16 +619,16 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Planning Queue"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Queue"), content_lines, false);
-    render_inline_section(frame, layout[3], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Queue"), content_lines, false);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     // The planning init flow becomes the same file editor used by directions
@@ -642,17 +657,17 @@ fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: 
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title("Planning"),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_section(frame, layout[2], Line::from("Options"), option_lines, false);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    render_inline_titled_panel(frame, layout[2], Line::from("Options"), option_lines, false);
+    render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_planning_draft_editor_inspection(
     frame: &mut Frame<'_>,
@@ -697,15 +712,15 @@ fn draw_inline_draft_editor_inspection(
         ])
         .split(area);
 
-    render_inline_section(
+    render_inline_titled_panel(
         frame,
         layout[0],
         inline_overlay_title(title),
         body_lines,
         true,
     );
-    render_inline_section(frame, layout[1], Line::from("Files"), file_lines, true);
-    render_inline_scrolled_section(
+    render_inline_titled_panel(frame, layout[1], Line::from("Files"), file_lines, true);
+    render_inline_scrolled_panel(
         frame,
         layout[2],
         Line::from(editor_title),
@@ -716,8 +731,8 @@ fn draw_inline_draft_editor_inspection(
     // consumes the first row of the split section.
     let editor_content_area = split_inline_section(layout[2])[1];
     set_cursor_if_visible(frame, editor_content_area, editor_cursor_offset);
-    render_inline_section(frame, layout[3], Line::from("Status"), status_lines, true);
-    render_inline_section(frame, layout[4], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_directions_draft_editor_inspection(
     frame: &mut Frame<'_>,

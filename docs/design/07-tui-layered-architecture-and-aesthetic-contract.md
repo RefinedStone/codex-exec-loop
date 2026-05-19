@@ -63,8 +63,11 @@ the fixed Akra theme.
 - No panel title may be inserted between durable scrollback rows and live rows. If the whole stream
   fits, the renderer may show the normal section title; if the stream overflows, the live tail must
   be titleless live tail data only.
-- Parallel event stream rendering must enter through the named stream renderer instead of calling a
-  generic titled section helper with ad hoc title copy.
+- Inline inspection rendering must choose an explicit render surface type: `InlineTitledPanel` for
+  ordinary titled sections, `InlineScrolledPanel` for ordinary scrolled sections, and
+  `InlineAppendOnlyStream` for rows that can be split across host scrollback and the live viewport.
+- Parallel event stream rendering must enter through the named stream renderer and
+  `InlineAppendOnlyStream` instead of calling a generic titled section helper with ad hoc title copy.
 - Any change to stream row retention, scroll offset, title visibility, or live-tail chrome must add
   a frame-recorder regression for the exact before/after redraw sequence.
 

@@ -103,7 +103,79 @@ pub(super) fn split_inline_section(area: Rect) -> Rc<[Rect]> {
         .split(area)
 }
 
-pub(super) fn render_inline_section(
+pub(super) struct InlineTitledPanel {
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+    trim: bool,
+}
+
+impl InlineTitledPanel {
+    pub(super) fn new(title: Line<'static>, lines: Vec<Line<'static>>, trim: bool) -> Self {
+        Self { title, lines, trim }
+    }
+
+    pub(super) fn render(self, frame: &mut Frame<'_>, area: Rect) {
+        render_inline_section(frame, area, self.title, self.lines, self.trim);
+    }
+}
+
+pub(super) struct InlineScrolledPanel {
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+    scroll_offset: u16,
+}
+
+impl InlineScrolledPanel {
+    pub(super) fn new(title: Line<'static>, lines: Vec<Line<'static>>, scroll_offset: u16) -> Self {
+        Self {
+            title,
+            lines,
+            scroll_offset,
+        }
+    }
+
+    pub(super) fn render(self, frame: &mut Frame<'_>, area: Rect) {
+        render_inline_scrolled_section(frame, area, self.title, self.lines, self.scroll_offset);
+    }
+}
+
+pub(super) enum InlineAppendOnlyStreamTitle {
+    Visible(Line<'static>),
+    Hidden,
+}
+
+pub(super) struct InlineAppendOnlyStream {
+    title: InlineAppendOnlyStreamTitle,
+    lines: Vec<Line<'static>>,
+    scroll_offset: u16,
+}
+
+impl InlineAppendOnlyStream {
+    pub(super) fn new(
+        title: InlineAppendOnlyStreamTitle,
+        lines: Vec<Line<'static>>,
+        scroll_offset: u16,
+    ) -> Self {
+        Self {
+            title,
+            lines,
+            scroll_offset,
+        }
+    }
+
+    pub(super) fn render(self, frame: &mut Frame<'_>, area: Rect) {
+        match self.title {
+            InlineAppendOnlyStreamTitle::Visible(title) => {
+                render_inline_scrolled_section(frame, area, title, self.lines, self.scroll_offset);
+            }
+            InlineAppendOnlyStreamTitle::Hidden => {
+                render_inline_scrolled_body(frame, area, self.lines, self.scroll_offset);
+            }
+        }
+    }
+}
+
+fn render_inline_section(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
@@ -155,7 +227,7 @@ pub(super) fn set_cursor_if_visible(frame: &mut Frame<'_>, area: Rect, offset: O
     frame.set_cursor_position(Position::new(absolute_x, absolute_y));
 }
 
-pub(super) fn render_inline_scrolled_section(
+fn render_inline_scrolled_section(
     frame: &mut Frame<'_>,
     area: Rect,
     title: Line<'static>,
@@ -176,7 +248,7 @@ pub(super) fn render_inline_scrolled_section(
     );
 }
 
-pub(super) fn render_inline_scrolled_body(
+fn render_inline_scrolled_body(
     frame: &mut Frame<'_>,
     area: Rect,
     lines: Vec<Line<'static>>,
