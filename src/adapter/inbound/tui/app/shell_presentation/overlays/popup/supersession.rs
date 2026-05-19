@@ -50,20 +50,11 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let mut distributor_lines =
         build_roster_lines_with_mud(&supervisor_snapshot, activity_frame, &[]);
     distributor_lines.extend(build_detail_lines_with_mud(&supervisor_snapshot, &[]));
-    let mut key_lines = vec![AkraTheme::key_line("Ctrl+R: rerun readiness")];
-
-    if app.parallel_mode_enabled() {
-        key_lines.push(AkraTheme::key_line("Ctrl+P: parallel off"));
-    } else if readiness_snapshot_ref.is_some_and(|snapshot| snapshot.allows_parallel_mode()) {
-        key_lines.push(AkraTheme::key_line("next action: type :parallel"));
-    } else {
-        key_lines.push(AkraTheme::key_line(
-            "next action: fix readiness blockers, then type :parallel",
-        ));
-    }
-    key_lines.push(AkraTheme::key_line(
-        ":peek: inspect active agent conversations | Ctrl+O or Esc/Ctrl+C: close",
-    ));
+    let key_lines = build_command_hint_lines(
+        app.parallel_mode_enabled(),
+        app.parallel_mode_prompt_input_locked(),
+        readiness_snapshot_ref.is_some_and(|snapshot| snapshot.allows_parallel_mode()),
+    );
 
     SupersessionOverlayView {
         header_lines: vec![
@@ -85,6 +76,32 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         distributor_lines,
         key_lines,
     }
+}
+
+fn build_command_hint_lines(
+    parallel_mode_enabled: bool,
+    prompt_input_locked: bool,
+    readiness_allows_parallel_mode: bool,
+) -> Vec<Line<'static>> {
+    /*
+     * Inline command hints can be clipped to a single body row on compact terminals.
+     * Keep the board-level actions on the first row so the visible row never degrades
+     * to only "Ctrl+R" while off/close/peek remain hidden below it.
+     */
+    let primary = if parallel_mode_enabled {
+        "Ctrl+R refresh | Ctrl+P off | :peek agents | Ctrl+O/Esc/Ctrl+C close"
+    } else if readiness_allows_parallel_mode {
+        "Ctrl+R refresh | :parallel enable | Ctrl+O/Esc/Ctrl+C close"
+    } else {
+        "Ctrl+R refresh | fix readiness then :parallel | Ctrl+O/Esc/Ctrl+C close"
+    };
+    let secondary = if prompt_input_locked {
+        "Tab/arrows select | Enter/Space inspect"
+    } else {
+        "Tab/arrows select | Enter sends prompt when composer is active"
+    };
+
+    vec![AkraTheme::key_line(primary), AkraTheme::key_line(secondary)]
 }
 
 fn build_summary_lines(

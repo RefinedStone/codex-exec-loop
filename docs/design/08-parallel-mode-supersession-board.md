@@ -42,6 +42,9 @@ timeline for session transitions, and distributor corridor for serialized delive
 - `Tab`, arrows, `Enter`, and `Space` navigate and inspect selectable board rows.
 
 Displayed shortcut copy must match these implemented input paths.
+The first visible command-hint row must include the global board controls (`Ctrl+r`,
+`Ctrl+p` when enabled, `:peek`, and close shortcuts), because compact inline rendering can clip the
+hint panel to a single body row.
 
 ## Projection Rules
 
