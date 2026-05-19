@@ -13,8 +13,9 @@ use super::super::{
     PlanningInitOverlayStep, ShellOverlay,
 };
 use super::inline_layout::{
-    count_rendered_inline_rows, inline_section_height, render_inline_scrolled_section,
-    render_inline_section, set_cursor_if_visible, split_inline_section, take_panel_body_lines,
+    count_rendered_inline_rows, inline_section_height, render_inline_scrolled_body,
+    render_inline_scrolled_section, render_inline_section, set_cursor_if_visible,
+    split_inline_section, take_panel_body_lines,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -22,7 +23,6 @@ use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 const PARALLEL_EVENT_STREAM_TITLE: &str = "Parallel Event Stream";
-const RECENT_PARALLEL_EVENTS_TITLE: &str = "Recent Parallel Events";
 
 // Inline inspection renders shell overlays inside the app-server main buffer.
 // It reuses presentation view builders, then maps those view models into
@@ -456,16 +456,27 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         roster_lines,
         false,
     );
-    let stream_visible_rows = layout[3].height.saturating_sub(1) as usize;
+    let stream_visible_rows =
+        parallel_event_stream_visible_rows_for_lines(&detail_lines, layout[3].width, layout[3]);
     let stream_scroll_offset =
         event_boundary_scroll_offset(&detail_lines, layout[3].width, stream_visible_rows);
-    render_inline_scrolled_section(
-        frame,
-        layout[3],
-        parallel_event_stream_title(&detail_lines, layout[3].width, stream_visible_rows),
-        detail_lines,
-        stream_scroll_offset,
-    );
+    if parallel_event_stream_title_visible(&detail_lines, layout[3].width, layout[3]) {
+        render_inline_scrolled_section(
+            frame,
+            layout[3],
+            Line::from(PARALLEL_EVENT_STREAM_TITLE),
+            detail_lines,
+            stream_scroll_offset,
+        );
+    } else {
+        /*
+         * In host-scrollback mode, overflowed stream rows above this inline area
+         * are already durable terminal history. Rendering a panel title here puts
+         * chrome between two chunks of the same event stream, which looks like the
+         * header jumped into the log. Keep the live tail data-only instead.
+         */
+        render_inline_scrolled_body(frame, layout[3], detail_lines, stream_scroll_offset);
+    }
     render_inline_section(
         frame,
         layout[4],
@@ -502,31 +513,21 @@ fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_row
         .min(u16::MAX as usize) as u16
 }
 
-fn parallel_event_stream_title(
-    lines: &[Line<'static>],
-    width: u16,
-    visible_rows: usize,
-) -> Line<'static> {
-    let title = if count_rendered_inline_rows(lines, width) > visible_rows
-        && contains_clocked_parallel_activity(lines)
-    {
-        /*
-         * Older stream rows have already moved into durable host scrollback. The
-         * inline panel is now the live tail, so do not reuse the full-stream title
-         * at the scrollback/live boundary where it looks like a misplaced header.
-         */
-        RECENT_PARALLEL_EVENTS_TITLE
-    } else {
-        PARALLEL_EVENT_STREAM_TITLE
-    };
-    Line::from(title)
+fn parallel_event_stream_title_visible(lines: &[Line<'static>], width: u16, area: Rect) -> bool {
+    let titled_body_rows = area.height.saturating_sub(1) as usize;
+    count_rendered_inline_rows(lines, width) <= titled_body_rows
 }
 
-fn contains_clocked_parallel_activity(lines: &[Line<'static>]) -> bool {
-    lines.iter().any(|line| {
-        let text = line.to_string();
-        text.starts_with('[') && !text.starts_with("[--:--:--]")
-    })
+fn parallel_event_stream_visible_rows_for_lines(
+    lines: &[Line<'static>],
+    width: u16,
+    area: Rect,
+) -> usize {
+    if parallel_event_stream_title_visible(lines, width, area) {
+        area.height.saturating_sub(1) as usize
+    } else {
+        area.height as usize
+    }
 }
 
 fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
@@ -543,6 +544,7 @@ pub(super) fn parallel_event_stream_visible_rows(app: &NativeTuiApp, area: Rect)
     let SupersessionOverlayView {
         header_lines,
         summary_lines,
+        detail_lines,
         key_lines,
         ..
     } = overlay_view;
@@ -558,7 +560,7 @@ pub(super) fn parallel_event_stream_visible_rows(app: &NativeTuiApp, area: Rect)
         ])
         .split(area);
 
-    layout[3].height.saturating_sub(1) as usize
+    parallel_event_stream_visible_rows_for_lines(&detail_lines, layout[3].width, layout[3])
 }
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_queue_overlay_view(app);

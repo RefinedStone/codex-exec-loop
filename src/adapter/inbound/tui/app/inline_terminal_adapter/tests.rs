@@ -205,6 +205,10 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
         "the stream title belongs to the live inline section, not durable host scrollback:\n{terminal_scrollback}"
     );
     assert!(
+        !terminal_scrollback.contains("Recent Parallel Events"),
+        "the live-tail title must never be persisted into durable host scrollback:\n{terminal_scrollback}"
+    );
+    assert!(
         terminal_scrollback.contains("parallel-event-00"),
         "parallel board events should be written into host scrollback for operator scrollback:\n{terminal_scrollback}"
     );
@@ -213,10 +217,10 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
         "parallel mode should suppress the hidden single-mode transcript:\n{terminal_scrollback}"
     );
     let screen_text = tui_testkit::screen_text(&terminal);
-    assert!(screen_text.contains("Recent Parallel Events"));
     assert!(
-        !screen_text.contains("Parallel Event Stream"),
-        "overflowed stream rows should label the live viewport as a recent tail, not as the full stream:\n{screen_text}"
+        !screen_text.contains("Parallel Event Stream")
+            && !screen_text.contains("Recent Parallel Events"),
+        "overflowed stream rows should continue without inline panel titles between scrollback and live tail:\n{screen_text}"
     );
     assert!(
         [
@@ -245,7 +249,8 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
 
     let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
     assert!(
-        !terminal_scrollback.contains("Parallel Event Stream"),
+        !terminal_scrollback.contains("Parallel Event Stream")
+            && !terminal_scrollback.contains("Recent Parallel Events"),
         "redraws must not replay the live section title into host scrollback:\n{terminal_scrollback}"
     );
     assert_eq!(
@@ -261,7 +266,7 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
 }
 
 #[test]
-fn parallel_live_tail_title_distinguishes_scrollback_boundary() {
+fn parallel_live_tail_continues_scrollback_without_inline_title() {
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
     let mut app = make_test_app();
@@ -288,8 +293,8 @@ fn parallel_live_tail_title_distinguishes_scrollback_boundary() {
 
     let frame = frame_recorder.frame("overflowed-tail");
     assert!(
-        frame.screen_text.contains("Recent Parallel Events"),
-        "overflowed stream should name the inline viewport as the recent live tail:\n{}",
+        !frame.screen_text.contains("Recent Parallel Events"),
+        "overflowed stream must not insert a live-tail title between durable history and current rows:\n{}",
         frame.screen_text
     );
     assert!(
@@ -309,14 +314,70 @@ fn parallel_live_tail_title_distinguishes_scrollback_boundary() {
         .terminal_history_text
         .find("tail-title-event-00")
         .expect("old stream event should be retained in terminal history");
-    let live_title_index = frame
+    let recent_event_index = frame
         .terminal_history_text
-        .find("Recent Parallel Events")
-        .expect("live tail title should be present in terminal history view");
+        .find("tail-title-event-47")
+        .expect("recent stream event should be present in terminal history view");
     assert!(
-        old_event_index < live_title_index,
-        "the live tail title should mark the boundary after durable stream rows, not pretend to start the full stream:\n{}",
+        old_event_index < recent_event_index,
+        "the terminal history should read as one continuous event stream without an inserted title:\n{}",
         frame.terminal_history_text
+    );
+}
+
+#[test]
+fn parallel_bootstrap_and_task_intake_stream_does_not_insert_tail_title() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = true;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(
+        status_runtime_feed_supervisor_snapshot(Vec::new()),
+    ));
+    app.push_parallel_supervisor_event_for_test("05:58:04", "You", "안녕하세요");
+    app.push_parallel_supervisor_event_for_test(
+        "05:58:04",
+        "Task Intake",
+        "task generation started from the operator prompt.",
+    );
+    app.push_parallel_supervisor_event_for_test(
+        "05:58:04",
+        "Task Intake",
+        "committed task task-user-20260519T055804Z-398bb0bebece / rev 63 / 안녕하세요",
+    );
+    app.push_parallel_supervisor_event_for_test(
+        "05:58:04",
+        "Orchestrator",
+        "task intake dispatch requested for the parallel pool.",
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
+
+    frame_recorder.draw_and_record(
+        "bootstrap-task-intake",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    let frame = frame_recorder.frame("bootstrap-task-intake");
+    assert!(
+        frame.screen_text.contains("control tower is live")
+            && frame.screen_text.contains("You: 안녕하세요")
+            && frame
+                .screen_text
+                .contains("task generation started from the operator prompt"),
+        "the regression fixture should match the mixed bootstrap and task-intake stream:\n{}",
+        frame.screen_text
+    );
+    assert!(
+        !frame.screen_text.contains("Parallel Event Stream")
+            && !frame.screen_text.contains("Recent Parallel Events"),
+        "no stream title should be inserted between bootstrap rows and task-intake rows:\n{}",
+        frame.screen_text
     );
 }
 
@@ -475,7 +536,8 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
         "snapshot status rows should not be replayed on every redraw:\n{terminal_scrollback}"
     );
     assert!(
-        !terminal_scrollback.contains("Parallel Event Stream"),
+        !terminal_scrollback.contains("Parallel Event Stream")
+            && !terminal_scrollback.contains("Recent Parallel Events"),
         "durable stream history must not include live panel chrome:\n{terminal_scrollback}"
     );
 }
@@ -506,8 +568,9 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     );
     let initial_frame = frame_recorder.frame("initial-status");
     assert!(
-        initial_frame.screen_text.contains("Parallel Event Stream"),
-        "initial frame should render the live parallel stream panel:\n{}",
+        !initial_frame.screen_text.contains("Parallel Event Stream")
+            && !initial_frame.screen_text.contains("Recent Parallel Events"),
+        "overflowed initial status stream should render without panel title chrome:\n{}",
         initial_frame.screen_text
     );
     assert!(
@@ -554,10 +617,13 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
         runtime_tail_frame.screen_text
     );
     assert!(
-        runtime_tail_frame
+        !runtime_tail_frame
             .screen_text
-            .contains("Recent Parallel Events"),
-        "redraw with durable scrollback prefix should label the inline panel as recent events:\n{}",
+            .contains("Recent Parallel Events")
+            && !runtime_tail_frame
+                .screen_text
+                .contains("Parallel Event Stream"),
+        "redraw with durable scrollback prefix should keep the visible tail data-only:\n{}",
         runtime_tail_frame.screen_text
     );
     assert!(
@@ -589,7 +655,10 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     assert!(
         !runtime_tail_frame
             .host_scrollback_text
-            .contains("Parallel Event Stream"),
+            .contains("Parallel Event Stream")
+            && !runtime_tail_frame
+                .host_scrollback_text
+                .contains("Recent Parallel Events"),
         "host scrollback should persist stream rows but not live panel chrome:\n{}",
         runtime_tail_frame.host_scrollback_text
     );
@@ -660,7 +729,10 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
     assert!(
         !runtime_tail_frame
             .host_scrollback_text
-            .contains("Parallel Event Stream"),
+            .contains("Parallel Event Stream")
+            && !runtime_tail_frame
+                .host_scrollback_text
+                .contains("Recent Parallel Events"),
         "host scrollback should never receive live panel chrome:\n{}",
         runtime_tail_frame.host_scrollback_text
     );
@@ -686,7 +758,12 @@ fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
 
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("initial parallel event draw transaction");
-    assert!(tui_testkit::screen_text(&terminal).contains("Recent Parallel Events"));
+    let screen_text = tui_testkit::screen_text(&terminal);
+    assert!(
+        !screen_text.contains("Parallel Event Stream")
+            && !screen_text.contains("Recent Parallel Events"),
+        "overflowed stream should not insert a title between durable history and visible rows:\n{screen_text}"
+    );
 
     let viewport_top = terminal.get_frame().area().top();
     inline_terminal.history_flush.visible_history_rows = viewport_top.saturating_add(2);
@@ -694,7 +771,8 @@ fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
 
     let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
     assert!(
-        !terminal_scrollback.contains("Parallel Event Stream"),
+        !terminal_scrollback.contains("Parallel Event Stream")
+            && !terminal_scrollback.contains("Recent Parallel Events"),
         "viewport fitting must not push the live stream title into host scrollback:\n{terminal_scrollback}"
     );
     assert!(
@@ -878,12 +956,29 @@ fn long_runtime_feed_entry(
 }
 
 fn parallel_event_stream_body_rows(screen_text: &str) -> Vec<String> {
-    screen_text
-        .lines()
-        .skip_while(|line| {
-            !line.contains("Parallel Event Stream") && !line.contains("Recent Parallel Events")
+    let lines: Vec<&str> = screen_text.lines().collect();
+    let start_index = lines
+        .iter()
+        .position(|line| {
+            let row = line.trim_start().trim_start_matches('"').trim_start();
+            line.contains("Parallel Event Stream")
+                || line.contains("Recent Parallel Events")
+                || row.starts_with('[')
         })
-        .skip(1)
+        .map(|index| {
+            if lines[index].contains("Parallel Event Stream")
+                || lines[index].contains("Recent Parallel Events")
+            {
+                index + 1
+            } else {
+                index
+            }
+        })
+        .unwrap_or(lines.len());
+
+    lines
+        .into_iter()
+        .skip(start_index)
         .take_while(|line| !line.contains("Command Hints"))
         .map(|line| {
             line.trim_end()
@@ -923,7 +1018,8 @@ fn vt100_parallel_history_fit_does_not_push_live_panel_chrome() {
 
     let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
     assert!(
-        !host_scrollback.contains("Parallel Event Stream"),
+        !host_scrollback.contains("Parallel Event Stream")
+            && !host_scrollback.contains("Recent Parallel Events"),
         "vt100 viewport fitting must not push the live stream title into host scrollback:\n{host_scrollback}"
     );
     assert!(
@@ -973,7 +1069,8 @@ fn vt100_newline_fallback_parallel_delta_keeps_chrome_out_of_host_scrollback() {
         "fallback insertion should append delta event rows:\n{host_scrollback}"
     );
     assert!(
-        !host_scrollback.contains("Parallel Event Stream"),
+        !host_scrollback.contains("Parallel Event Stream")
+            && !host_scrollback.contains("Recent Parallel Events"),
         "fallback insertion must not push live stream title into host scrollback:\n{host_scrollback}"
     );
     assert!(
