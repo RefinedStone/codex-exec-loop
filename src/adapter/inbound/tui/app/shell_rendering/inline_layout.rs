@@ -176,6 +176,20 @@ pub(super) fn render_inline_scrolled_section(
     );
 }
 
+pub(super) fn render_inline_scrolled_body(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    scroll_offset: u16,
+) {
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_offset, 0))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
 pub(super) fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     // 일부 presentation builder는 title과 body를 함께 반환하므로 layout caller는 body row만 꺼내 쓴다.
     if !header_lines.is_empty() {

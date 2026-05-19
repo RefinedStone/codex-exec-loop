@@ -944,7 +944,8 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
         .expect("inline supersession timeline render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Recent Parallel Events"));
+    assert!(!rendered.contains("Parallel Event Stream"));
+    assert!(!rendered.contains("Recent Parallel Events"));
     assert!(rendered.contains("Distributor: slot-1"));
     assert!(rendered.contains("Agent agent-1: Timeline UI"));
     assert!(rendered.contains("Ledger: Timeline UI"));
