@@ -21,6 +21,9 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
+const PARALLEL_EVENT_STREAM_TITLE: &str = "Parallel Event Stream";
+const RECENT_PARALLEL_EVENTS_TITLE: &str = "Recent Parallel Events";
+
 // Inline inspection renders shell overlays inside the app-server main buffer.
 // It reuses presentation view builders, then maps those view models into
 // frameless sections that can replace the transcript area without popup chrome.
@@ -459,7 +462,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_scrolled_section(
         frame,
         layout[3],
-        Line::from("Parallel Event Stream"),
+        parallel_event_stream_title(&detail_lines, layout[3].width, stream_visible_rows),
         detail_lines,
         stream_scroll_offset,
     );
@@ -497,6 +500,33 @@ fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_row
             width,
         ))
         .min(u16::MAX as usize) as u16
+}
+
+fn parallel_event_stream_title(
+    lines: &[Line<'static>],
+    width: u16,
+    visible_rows: usize,
+) -> Line<'static> {
+    let title = if count_rendered_inline_rows(lines, width) > visible_rows
+        && contains_clocked_parallel_activity(lines)
+    {
+        /*
+         * Older stream rows have already moved into durable host scrollback. The
+         * inline panel is now the live tail, so do not reuse the full-stream title
+         * at the scrollback/live boundary where it looks like a misplaced header.
+         */
+        RECENT_PARALLEL_EVENTS_TITLE
+    } else {
+        PARALLEL_EVENT_STREAM_TITLE
+    };
+    Line::from(title)
+}
+
+fn contains_clocked_parallel_activity(lines: &[Line<'static>]) -> bool {
+    lines.iter().any(|line| {
+        let text = line.to_string();
+        text.starts_with('[') && !text.starts_with("[--:--:--]")
+    })
 }
 
 fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {

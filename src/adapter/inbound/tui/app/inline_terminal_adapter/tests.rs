@@ -213,7 +213,11 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
         "parallel mode should suppress the hidden single-mode transcript:\n{terminal_scrollback}"
     );
     let screen_text = tui_testkit::screen_text(&terminal);
-    assert!(screen_text.contains("Parallel Event Stream"));
+    assert!(screen_text.contains("Recent Parallel Events"));
+    assert!(
+        !screen_text.contains("Parallel Event Stream"),
+        "overflowed stream rows should label the live viewport as a recent tail, not as the full stream:\n{screen_text}"
+    );
     assert!(
         [
             "parallel-event-37",
@@ -253,6 +257,66 @@ fn parallel_event_stream_flushes_rows_without_live_panel_chrome() {
         terminal_scrollback.matches("parallel-event-40").count(),
         1,
         "new parallel events should append into host scrollback exactly once:\n{terminal_scrollback}"
+    );
+}
+
+#[test]
+fn parallel_live_tail_title_distinguishes_scrollback_boundary() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.set_parallel_mode_enabled_for_test(true);
+    for index in 0..48 {
+        app.push_parallel_supervisor_event_for_test(
+            "11:45:02",
+            "Task Intake",
+            format!("tail-title-event-{index:02}"),
+        );
+    }
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frame_recorder = tui_testkit::InlineFrameRecorder::default();
+
+    frame_recorder.draw_and_record(
+        "overflowed-tail",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    let frame = frame_recorder.frame("overflowed-tail");
+    assert!(
+        frame.screen_text.contains("Recent Parallel Events"),
+        "overflowed stream should name the inline viewport as the recent live tail:\n{}",
+        frame.screen_text
+    );
+    assert!(
+        !frame.screen_text.contains("Parallel Event Stream"),
+        "overflowed stream must not draw the full-stream title at the scrollback/live boundary:\n{}",
+        frame.screen_text
+    );
+    assert!(
+        !frame
+            .host_scrollback_text
+            .contains("Recent Parallel Events")
+            && !frame.host_scrollback_text.contains("Parallel Event Stream"),
+        "durable stream rows should stay data-only without live panel titles:\n{}",
+        frame.host_scrollback_text
+    );
+    let old_event_index = frame
+        .terminal_history_text
+        .find("tail-title-event-00")
+        .expect("old stream event should be retained in terminal history");
+    let live_title_index = frame
+        .terminal_history_text
+        .find("Recent Parallel Events")
+        .expect("live tail title should be present in terminal history view");
+    assert!(
+        old_event_index < live_title_index,
+        "the live tail title should mark the boundary after durable stream rows, not pretend to start the full stream:\n{}",
+        frame.terminal_history_text
     );
 }
 
@@ -491,6 +555,13 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     );
     assert!(
         runtime_tail_frame
+            .screen_text
+            .contains("Recent Parallel Events"),
+        "redraw with durable scrollback prefix should label the inline panel as recent events:\n{}",
+        runtime_tail_frame.screen_text
+    );
+    assert!(
+        runtime_tail_frame
             .terminal_history_text
             .contains("control tower is live")
             && runtime_tail_frame
@@ -615,7 +686,7 @@ fn parallel_history_fit_clears_live_panel_before_scrollback_adjustment() {
 
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("initial parallel event draw transaction");
-    assert!(tui_testkit::screen_text(&terminal).contains("Parallel Event Stream"));
+    assert!(tui_testkit::screen_text(&terminal).contains("Recent Parallel Events"));
 
     let viewport_top = terminal.get_frame().area().top();
     inline_terminal.history_flush.visible_history_rows = viewport_top.saturating_add(2);
@@ -809,7 +880,9 @@ fn long_runtime_feed_entry(
 fn parallel_event_stream_body_rows(screen_text: &str) -> Vec<String> {
     screen_text
         .lines()
-        .skip_while(|line| !line.contains("Parallel Event Stream"))
+        .skip_while(|line| {
+            !line.contains("Parallel Event Stream") && !line.contains("Recent Parallel Events")
+        })
         .skip(1)
         .take_while(|line| !line.contains("Command Hints"))
         .map(|line| {
