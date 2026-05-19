@@ -114,6 +114,10 @@ impl NativeTuiApp {
             ShellOverlay::ViewSelection => {
                 self.view_selection_overlay_ui_state = ViewSelectionOverlayUiState::default();
             }
+            ShellOverlay::LanguageSelection => {
+                self.language_selection_overlay_ui_state =
+                    LanguageSelectionOverlayUiState::default();
+            }
             ShellOverlay::ParallelPeek => {
                 self.parallel_peek_overlay_ui_state.reset();
             }
@@ -145,6 +149,9 @@ impl NativeTuiApp {
             InlineShellCommand::Stop => self.handle_stop_shell_command(),
             InlineShellCommand::Model => self.handle_model_shell_command(command_input.argument()),
             InlineShellCommand::View => self.handle_view_shell_command(command_input.argument()),
+            InlineShellCommand::Language => {
+                self.handle_language_shell_command(command_input.argument())
+            }
             InlineShellCommand::Think => self.handle_think_shell_command(command_input.argument()),
             InlineShellCommand::Doctor => self.run_planning_doctor(),
             InlineShellCommand::PlanningInit => {
@@ -183,6 +190,11 @@ impl NativeTuiApp {
             .reset_from_mode(self.conversation_view_mode);
         self.dispatch_shell_chrome(ShellChromeEvent::ViewSelectionOverlayShown);
     }
+    pub(super) fn show_language_selection_overlay(&mut self) {
+        self.language_selection_overlay_ui_state
+            .reset_from_language(self.tui_language);
+        self.dispatch_shell_chrome(ShellChromeEvent::LanguageSelectionOverlayShown);
+    }
     fn handle_turns_shell_command(&mut self, argument: Option<&str>) {
         self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: argument.unwrap_or_default().to_string(),
@@ -218,6 +230,25 @@ impl NativeTuiApp {
                     status_text: format!(
                         "view unchanged; supported values: {}",
                         ConversationViewMode::SUPPORTED_LABELS
+                    ),
+                });
+            }
+        }
+    }
+    fn handle_language_shell_command(&mut self, argument: Option<&str>) {
+        let Some(argument) = argument else {
+            self.show_language_selection_overlay();
+            return;
+        };
+
+        match TuiLanguage::parse(argument) {
+            Some(language) => self.apply_tui_language(language),
+            None => {
+                self.show_language_selection_overlay();
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!(
+                        "language unchanged; supported values: {}",
+                        TuiLanguage::SUPPORTED_LABELS
                     ),
                 });
             }
@@ -446,6 +477,9 @@ impl NativeTuiApp {
         if self.shell_overlay == ShellOverlay::ViewSelection {
             return self.handle_view_selection_overlay_key(key);
         }
+        if self.shell_overlay == ShellOverlay::LanguageSelection {
+            return self.handle_language_selection_overlay_key(key);
+        }
         if self.shell_overlay == ShellOverlay::DirectionsMaintenance {
             return self.handle_directions_overlay_key(key);
         }
@@ -531,6 +565,32 @@ impl NativeTuiApp {
         true
     }
 
+    pub(super) fn handle_language_selection_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::LanguageSelection {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                self.language_selection_overlay_ui_state.move_selection(-1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                self.language_selection_overlay_ui_state.move_selection(1);
+            }
+            KeyCode::Char(number)
+                if key.modifiers.is_empty() && number.is_ascii_digit() && number != '0' =>
+            {
+                let index = number.to_digit(10).unwrap_or(0).saturating_sub(1) as usize;
+                if self.language_selection_overlay_ui_state.select_index(index) {
+                    self.apply_language_selection_overlay();
+                }
+            }
+            KeyCode::Enter if key.modifiers.is_empty() => self.apply_language_selection_overlay(),
+            _ => {}
+        }
+        true
+    }
+
     fn confirm_model_selection_overlay_step(&mut self) {
         match self.model_selection_overlay_ui_state.step() {
             ModelSelectionStep::Model => {
@@ -560,11 +620,24 @@ impl NativeTuiApp {
         self.apply_conversation_view_mode(mode);
     }
 
+    fn apply_language_selection_overlay(&mut self) {
+        let language = self.language_selection_overlay_ui_state.selected_language();
+        self.apply_tui_language(language);
+    }
+
     fn apply_conversation_view_mode(&mut self, mode: ConversationViewMode) {
         self.conversation_view_mode = mode;
         self.close_shell_overlay();
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text: format!("conversation view set to {}", mode.label()),
+        });
+    }
+
+    fn apply_tui_language(&mut self, language: TuiLanguage) {
+        self.tui_language = language;
+        self.close_shell_overlay();
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: language.language_set_status().to_string(),
         });
     }
 }

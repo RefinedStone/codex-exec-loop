@@ -14,6 +14,7 @@ pub enum ShellOverlay {
     Sessions,
     ModelSelection,
     ViewSelection,
+    LanguageSelection,
     Supersession,
     ParallelPeek,
     Help,
@@ -104,6 +105,7 @@ pub enum ShellChromeEvent {
     },
     ModelSelectionOverlayShown,
     ViewSelectionOverlayShown,
+    LanguageSelectionOverlayShown,
     SupersessionOverlayShown,
     ParallelPeekOverlayShown,
     HelpOverlayShown,
@@ -205,6 +207,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::ViewSelectionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::ViewSelection;
+        }
+        ShellChromeEvent::LanguageSelectionOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::LanguageSelection;
         }
         ShellChromeEvent::SupersessionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -551,6 +557,20 @@ mod tests {
             ExitConfirmationState::Hidden
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::ViewSelection);
+        assert!(reduced.effects.is_empty());
+    }
+    #[test]
+    fn showing_language_selection_overlay_hides_exit_confirmation() {
+        // language selection도 TUI-local projection만 바꾸므로 shell focus owner 규칙을 따른다.
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        let reduced = reduce_shell_chrome(state, ShellChromeEvent::LanguageSelectionOverlayShown);
+
+        assert_eq!(
+            reduced.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+        assert_eq!(reduced.state.shell_overlay, ShellOverlay::LanguageSelection);
         assert!(reduced.effects.is_empty());
     }
     #[test]

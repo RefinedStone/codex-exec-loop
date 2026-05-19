@@ -320,6 +320,8 @@ impl NativeTuiApp {
             conversation_state: ConversationState::ready(initial_conversation),
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
+            tui_language: super::TuiLanguage::default(),
+            language_selection_overlay_ui_state: super::LanguageSelectionOverlayUiState::default(),
             model_selection_overlay_ui_state: super::ModelSelectionOverlayUiState::default(),
             view_selection_overlay_ui_state: super::ViewSelectionOverlayUiState::default(),
             auto_follow_overlay_ui_state: AutoFollowOverlayUiState::default(),

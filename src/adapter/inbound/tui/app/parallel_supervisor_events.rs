@@ -10,6 +10,7 @@ use crate::domain::parallel_mode::{
 };
 
 use super::AkraTheme;
+use super::language::{TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage};
 
 const MAX_PARALLEL_SUPERVISOR_EVENTS: usize = 96;
 const MAX_PARALLEL_SUPERVISOR_SCROLLBACK_EVENTS: usize = 512;
@@ -22,18 +23,21 @@ struct ParallelSupervisorEventEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParallelSupervisorStreamEvent {
+    key: String,
     timestamp_label: String,
     actor: String,
     body: String,
 }
 
 impl ParallelSupervisorStreamEvent {
-    fn new(
+    fn new_with_key(
+        key: impl Into<String>,
         timestamp_label: impl Into<String>,
         actor: impl Into<String>,
         body: impl Into<String>,
     ) -> Self {
         Self {
+            key: key.into(),
             timestamp_label: timestamp_label.into(),
             actor: actor.into(),
             body: body.into(),
@@ -41,7 +45,7 @@ impl ParallelSupervisorStreamEvent {
     }
 
     fn key(&self) -> String {
-        format!("{}|{}|{}", self.timestamp_label, self.actor, self.body)
+        self.key.clone()
     }
 
     fn into_line(self) -> Line<'static> {
@@ -116,13 +120,14 @@ impl ParallelSupervisorEventLog {
     pub(super) fn record_snapshot_stream_from_supervisor_snapshot(
         &mut self,
         snapshot: &ParallelModeSupervisorSnapshot,
+        language: TuiLanguage,
     ) {
         let workspace_path = snapshot.workspace_path.as_str();
         if self.snapshot_stream_workspace.as_deref() != Some(workspace_path) {
             self.snapshot_stream_workspace = Some(workspace_path.to_string());
             self.seen_snapshot_stream_events.clear();
         }
-        for event in parallel_supervisor_snapshot_stream_events(snapshot) {
+        for event in parallel_supervisor_snapshot_stream_events(snapshot, language) {
             let key = event.key();
             if self.seen_snapshot_stream_events.insert(key) {
                 self.push(event.timestamp_label, event.actor, event.body);
@@ -192,8 +197,9 @@ impl ParallelSupervisorEventLog {
 
 pub(super) fn parallel_supervisor_snapshot_stream_lines(
     snapshot: &ParallelModeSupervisorSnapshot,
+    language: TuiLanguage,
 ) -> Vec<Line<'static>> {
-    parallel_supervisor_snapshot_stream_events(snapshot)
+    parallel_supervisor_snapshot_stream_events(snapshot, language)
         .into_iter()
         .map(ParallelSupervisorStreamEvent::into_line)
         .collect()
@@ -201,17 +207,17 @@ pub(super) fn parallel_supervisor_snapshot_stream_lines(
 
 fn parallel_supervisor_snapshot_stream_events(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    language: TuiLanguage,
 ) -> Vec<ParallelSupervisorStreamEvent> {
     let mut events = Vec::new();
 
     if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
-        events.push(ParallelSupervisorStreamEvent::new(
+        let notice = truncate_event_text(notice, 96);
+        events.push(ParallelSupervisorStreamEvent::new_with_key(
+            format!("top_notice|{notice}"),
             "--:--:--",
             "Supervisor",
-            format!(
-                "parallel board 상태를 갱신했습니다. {}",
-                truncate_event_text(notice, 96)
-            ),
+            language.parallel_board_refreshed(&notice),
         ));
     }
 
@@ -220,39 +226,46 @@ fn parallel_supervisor_snapshot_stream_events(
             slot.state,
             ParallelModePoolSlotState::Idle | ParallelModePoolSlotState::Missing
         ) {
-            events.push(ParallelSupervisorStreamEvent::new(
-                "--:--:--",
-                "Pool",
+            let owner_label = truncate_event_text(&slot.owner_label, 56);
+            events.push(ParallelSupervisorStreamEvent::new_with_key(
                 format!(
-                    "{} 상태는 {}이며 owner는 {}입니다.",
+                    "slot|{}|{}|{}",
                     slot.slot_id,
                     slot.state.label(),
-                    truncate_event_text(&slot.owner_label, 56)
+                    owner_label
                 ),
+                "--:--:--",
+                "Pool",
+                language.pool_slot_state(&slot.slot_id, slot.state.label(), &owner_label),
             ));
         }
     }
 
     for entry in &supervisor_snapshot.roster.entries {
-        events.push(ParallelSupervisorStreamEvent::new(
+        let task_title = truncate_event_text(&entry.task_title, 52);
+        let state_label = display_supersession_state_label(&entry.state_label);
+        let summary = truncate_event_text(&entry.latest_summary, 72);
+        events.push(ParallelSupervisorStreamEvent::new_with_key(
+            format!(
+                "roster|{}|{}|{}|{}|{}",
+                entry.agent_id, task_title, entry.slot_id, state_label, summary
+            ),
             "--:--:--",
             format!("Agent {}", entry.agent_id),
-            format!(
-                "{} 작업이 {}에서 {} 상태입니다. {}",
-                truncate_event_text(&entry.task_title, 52),
-                entry.slot_id,
-                display_supersession_state_label(&entry.state_label),
-                truncate_event_text(&entry.latest_summary, 72)
-            ),
+            language.agent_roster_state(&task_title, &entry.slot_id, &state_label, &summary),
         ));
     }
 
     if let Some(detail) = supervisor_snapshot.detail.session.as_ref() {
         for history in &detail.history {
-            events.push(ParallelSupervisorStreamEvent::new(
+            events.push(ParallelSupervisorStreamEvent::new_with_key(
+                format!(
+                    "history|{}|{}|{}|{}",
+                    history.timestamp, detail.agent_id, history.state_label, history.summary
+                ),
                 compact_stream_timestamp_label(&history.timestamp),
                 parallel_history_actor(&history.state_label, &detail.agent_id),
-                parallel_history_summary(detail, &history.state_label, &history.summary),
+                parallel_history_summary(detail, &history.state_label, &history.summary, language),
             ));
         }
 
@@ -260,59 +273,74 @@ fn parallel_supervisor_snapshot_stream_events(
             history.state_label == detail.state_label && history.timestamp == detail.updated_at
         });
         if !current_already_recorded {
-            events.push(ParallelSupervisorStreamEvent::new(
+            events.push(ParallelSupervisorStreamEvent::new_with_key(
+                format!(
+                    "current|{}|{}|{}|{}",
+                    detail.updated_at, detail.agent_id, detail.state_label, detail.latest_summary
+                ),
                 compact_stream_timestamp_label(&detail.updated_at),
                 parallel_history_actor(&detail.state_label, &detail.agent_id),
-                parallel_history_summary(detail, &detail.state_label, &detail.latest_summary),
+                parallel_history_summary(
+                    detail,
+                    &detail.state_label,
+                    &detail.latest_summary,
+                    language,
+                ),
             ));
         }
     }
 
     for item in &supervisor_snapshot.distributor.queue_items {
-        events.push(ParallelSupervisorStreamEvent::new(
+        let task_title = truncate_event_text(&item.task_title, 52);
+        let branch_name = truncate_event_text(&item.branch_name, 40);
+        let integration_note = truncate_event_text(&item.integration_note, 72);
+        events.push(ParallelSupervisorStreamEvent::new_with_key(
+            format!(
+                "queue|{}|{}|{}|{}",
+                task_title,
+                item.queue_state.label(),
+                branch_name,
+                integration_note
+            ),
             "--:--:--",
             "Distributor",
-            format!(
-                "{} 결과가 {} 상태로 대기 중입니다. branch {} / {}",
-                truncate_event_text(&item.task_title, 52),
+            language.distributor_queue_item(
+                &task_title,
                 item.queue_state.label(),
-                truncate_event_text(&item.branch_name, 40),
-                truncate_event_text(&item.integration_note, 72)
+                &branch_name,
+                &integration_note,
             ),
         ));
     }
 
     for entry in &supervisor_snapshot.distributor.completion_feed {
-        events.push(ParallelSupervisorStreamEvent::new(
+        let stage_label = display_runtime_event_label(&entry.stage_label);
+        let summary = truncate_event_text(&entry.summary, 88);
+        events.push(ParallelSupervisorStreamEvent::new_with_key(
+            format!("completion|{stage_label}|{summary}"),
             "--:--:--",
             "Ledger",
-            format!(
-                "{} 단계 기록: {}",
-                display_runtime_event_label(&entry.stage_label),
-                truncate_event_text(&entry.summary, 88)
-            ),
+            language.ledger_stage_record(&stage_label, &summary),
         ));
     }
 
     let orchestrator = &supervisor_snapshot.distributor.orchestrator_status;
     if let Some(reason) = orchestrator.blocked_reason.as_deref() {
-        events.push(ParallelSupervisorStreamEvent::new(
+        let reason = truncate_event_text(reason, 88);
+        events.push(ParallelSupervisorStreamEvent::new_with_key(
+            format!("orchestrator_blocked|{reason}"),
             "--:--:--",
             "Orchestrator",
-            format!(
-                "integration이 차단되었습니다. {}",
-                truncate_event_text(reason, 88)
-            ),
+            language.integration_blocked(&reason),
         ));
     }
     if let Some(reason) = orchestrator.slot_return_wait_reason.as_deref() {
-        events.push(ParallelSupervisorStreamEvent::new(
+        let reason = truncate_event_text(reason, 88);
+        events.push(ParallelSupervisorStreamEvent::new_with_key(
+            format!("slot_return_wait|{reason}"),
             "--:--:--",
             "Orchestrator",
-            format!(
-                "slot 반환을 보류했습니다. {}",
-                truncate_event_text(reason, 88)
-            ),
+            language.slot_return_withheld(&reason),
         ));
     }
 
@@ -364,7 +392,7 @@ fn parallel_supervisor_body_style(actor: &str, body: &str) -> Style {
 }
 
 fn is_important_parallel_message(body: &str) -> bool {
-    const IMPORTANT_MARKERS: [&str; 14] = [
+    const IMPORTANT_MARKERS: [&str; 8] = [
         "blocked",
         "failed",
         "failure",
@@ -373,15 +401,12 @@ fn is_important_parallel_message(body: &str) -> bool {
         "complete",
         "merged",
         "official",
-        "차단",
-        "실패",
-        "오류",
-        "완료",
-        "병합",
-        "보류",
     ];
     let body = body.to_ascii_lowercase();
     IMPORTANT_MARKERS.iter().any(|marker| body.contains(marker))
+        || TUI_LOCALIZED_IMPORTANT_MARKERS
+            .iter()
+            .any(|marker| body.contains(marker))
 }
 
 fn display_runtime_event_label(label: &str) -> String {
@@ -410,33 +435,17 @@ fn parallel_history_summary(
     detail: &ParallelModeAgentSessionDetailSnapshot,
     state_label: &str,
     fallback_summary: &str,
+    language: TuiLanguage,
 ) -> String {
     let task_title = truncate_event_text(&detail.task_title, 52);
-    match state_label {
-        "assigned" | "starting" => {
-            format!(
-                "{}이 {}에게 대여되었습니다.",
-                detail.slot_id, detail.agent_id
-            )
-        }
-        "running" => format!("{task_title} 작업을 시작했습니다."),
-        "reported_complete" => format!("{task_title} 완료를 보고했습니다."),
-        "ledger_refreshing" => format!("{task_title} official completion을 확인하고 있습니다."),
-        "commit_ready" => format!("{task_title} 결과를 official completion으로 승인했습니다."),
-        "merge_queued" => format!("{task_title} 결과가 distributor queue에 등록되었습니다."),
-        "pushing" | "pr_pending" | "merge_pending" | "integrating" => format!(
-            "{task_title} delivery 단계가 {}입니다.",
-            display_supersession_state_label(state_label)
-        ),
-        "merged" | "cleanup_pending" | "cleaned" => {
-            format!("{task_title} 결과가 prerelease에 반영되었습니다.")
-        }
-        "failed" => format!("{task_title} 작업이 실패했습니다."),
-        "official_refresh_recovery_needed" => {
-            format!("{task_title} official completion 복구가 필요합니다.")
-        }
-        _ => truncate_event_text(fallback_summary, 96),
-    }
+    let fallback_summary = truncate_event_text(fallback_summary, 96);
+    language.parallel_history_summary(
+        state_label,
+        &task_title,
+        &detail.slot_id,
+        &detail.agent_id,
+        &fallback_summary,
+    )
 }
 
 fn compact_stream_timestamp_label(timestamp: &str) -> String {
@@ -553,7 +562,7 @@ impl super::NativeTuiApp {
         snapshot: &ParallelModeSupervisorSnapshot,
     ) {
         self.parallel_supervisor_event_log
-            .record_snapshot_stream_from_supervisor_snapshot(snapshot);
+            .record_snapshot_stream_from_supervisor_snapshot(snapshot, self.tui_language);
         self.parallel_supervisor_event_log
             .record_runtime_feed_from_supervisor_snapshot(snapshot);
     }
@@ -575,6 +584,11 @@ mod tests {
     use ratatui::style::{Modifier, Style};
 
     use super::*;
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterSnapshot, ParallelModeCompletionFeedEntry,
+        ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
+        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
+    };
 
     #[test]
     fn user_prompt_line_uses_you_label_with_user_emphasis() {
@@ -742,6 +756,46 @@ mod tests {
         assert_eq!(rendered.matches("tail-511").count(), 1);
     }
 
+    #[test]
+    fn snapshot_stream_uses_selected_language_for_system_copy() {
+        let snapshot = localized_snapshot();
+
+        let english = parallel_supervisor_snapshot_stream_lines(&snapshot, TuiLanguage::English)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let korean = parallel_supervisor_snapshot_stream_lines(&snapshot, TuiLanguage::Korean)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(english.contains("parallel board refreshed. control tower is live"));
+        assert!(english.contains("reported stage record: no agent results reported yet"));
+        assert!(!english.contains("상태를 갱신했습니다"));
+        assert!(korean.contains("parallel board 상태를 갱신했습니다. control tower is live"));
+        assert!(korean.contains("reported 단계 기록: no agent results reported yet"));
+    }
+
+    #[test]
+    fn localized_snapshot_stream_dedupes_with_language_independent_keys() {
+        let snapshot = localized_snapshot();
+        let mut log = ParallelSupervisorEventLog::default();
+
+        log.record_snapshot_stream_from_supervisor_snapshot(&snapshot, TuiLanguage::Korean);
+        log.record_snapshot_stream_from_supervisor_snapshot(&snapshot, TuiLanguage::English);
+
+        let rendered = log
+            .scrollback_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered.matches("control tower is live").count(), 1);
+        assert_eq!(rendered.matches("no agent results reported yet").count(), 1);
+    }
+
     fn runtime_feed_entry(
         sequence: i64,
         projection_kind: &str,
@@ -756,6 +810,26 @@ mod tests {
             238,
             format!("runtime {projection_kind} stored"),
             "2026-05-13T11:45:05.330826165+00:00",
+        )
+    }
+
+    fn localized_snapshot() -> ParallelModeSupervisorSnapshot {
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/root",
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(
+                Vec::new(),
+                vec![ParallelModeCompletionFeedEntry::new(
+                    "reported",
+                    "no agent results reported yet",
+                )],
+                "idle",
+                "queue idle",
+            ),
+            Some("control tower is live".to_string()),
         )
     }
 }

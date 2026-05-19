@@ -212,9 +212,10 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
         ],
     },
     TuiCoverageSurface {
-        name: "Overlay surfaces: help, session, planning, model/view selection, parallel peek",
-        doc_marker: "| Overlay surfaces: help, session, planning, model/view selection, parallel peek |",
+        name: "Overlay surfaces: help, session, planning, model/view/language selection, parallel peek",
+        doc_marker: "| Overlay surfaces: help, session, planning, model/view/language selection, parallel peek |",
         source_prefixes: &[
+            "src/adapter/inbound/tui/app/language.rs",
             "src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs",
             "src/adapter/inbound/tui/app/directions_maintenance_ui.rs",
             "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
@@ -229,6 +230,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
             "src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs",
             "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/language.rs",
             "src/adapter/inbound/tui/app/planning_draft_editor_ui/tests.rs",
             "src/adapter/inbound/tui/app/planning/controller.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
@@ -1132,6 +1134,55 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
 }
 
 #[test]
+fn tui_system_korean_copy_is_localized_through_language_module() {
+    // Static guard: production TUI Korean copy should be centralized so a new
+    // localized row cannot bypass `:language` by embedding Hangul at a call site.
+    let repo_root = repo_root();
+    let language_path = repo_root.join("src/adapter/inbound/tui/app/language.rs");
+    let language_source = fs::read_to_string(&language_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", language_path.display());
+    });
+
+    for required_text in [
+        "pub(super) enum TuiLanguage",
+        "LANGUAGE_SELECTION_OPTIONS",
+        "parallel_board_refreshed",
+        "parallel_history_summary",
+        "LanguageSelectionOverlayUiState",
+    ] {
+        assert!(
+            language_source.contains(required_text),
+            "TUI localization module must own language copy and selection state: {required_text}"
+        );
+    }
+
+    let tui_root = repo_root.join("src/adapter/inbound/tui");
+    let mut violations = Vec::new();
+    for path in rust_files_under(&tui_root) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let relative = relative_path(&repo_root, &path);
+        if relative == "src/adapter/inbound/tui/app/language.rs" {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        let production_source = production_source_before_inline_tests(&source);
+        for literal in korean_string_literals(&production_source) {
+            violations.push(format!("{relative}: \"{literal}\""));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "TUI production Korean string literals must go through app/language.rs:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
     // Static guard: existing TUI code should not rely on tribal memory for test
     // coverage. Each production source file must belong to a documented surface
@@ -1374,6 +1425,113 @@ fn is_tui_test_entrypoint_source(source: &str) -> bool {
     source.contains("#[test]")
         || source.contains("#[tokio::test]")
         || source.contains("assert_snapshot!")
+}
+
+fn production_source_before_inline_tests(source: &str) -> String {
+    let test_module_index = source
+        .find("#[cfg(test)]\nmod tests")
+        .or_else(|| source.find("#[cfg(test)]\r\nmod tests"))
+        .unwrap_or(source.len());
+    source[..test_module_index].to_string()
+}
+
+fn korean_string_literals(source: &str) -> Vec<String> {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut literals = Vec::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+            index += 2;
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+            index += 2;
+            while index + 1 < chars.len() && !(chars[index] == '*' && chars[index + 1] == '/') {
+                index += 1;
+            }
+            index = (index + 2).min(chars.len());
+            continue;
+        }
+        if chars[index] == 'r'
+            && let Some((literal, next_index)) = parse_raw_rust_string_literal(&chars, index)
+        {
+            if contains_korean(&literal) {
+                literals.push(literal);
+            }
+            index = next_index;
+            continue;
+        }
+        if chars[index] == '"' {
+            let (literal, next_index) = parse_quoted_rust_string_literal(&chars, index);
+            if contains_korean(&literal) {
+                literals.push(literal);
+            }
+            index = next_index;
+            continue;
+        }
+        index += 1;
+    }
+    literals
+}
+
+fn parse_quoted_rust_string_literal(chars: &[char], start: usize) -> (String, usize) {
+    let mut literal = String::new();
+    let mut escaped = false;
+    let mut index = start + 1;
+    while index < chars.len() {
+        let ch = chars[index];
+        if escaped {
+            literal.push(ch);
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if ch == '"' {
+            return (literal, index + 1);
+        }
+        literal.push(ch);
+        index += 1;
+    }
+    (literal, index)
+}
+
+fn parse_raw_rust_string_literal(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let mut index = start + 1;
+    let mut hashes = 0usize;
+    while chars.get(index) == Some(&'#') {
+        hashes += 1;
+        index += 1;
+    }
+    if chars.get(index) != Some(&'"') {
+        return None;
+    }
+    index += 1;
+    let content_start = index;
+    while index < chars.len() {
+        if chars[index] == '"' && raw_string_hashes_match(chars, index + 1, hashes) {
+            let literal = chars[content_start..index].iter().collect::<String>();
+            return Some((literal, index + 1 + hashes));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn raw_string_hashes_match(chars: &[char], start: usize, hashes: usize) -> bool {
+    (0..hashes).all(|offset| chars.get(start + offset) == Some(&'#'))
+}
+
+fn contains_korean(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{AC00}'..='\u{D7A3}').contains(&ch))
 }
 
 fn assert_no_forbidden_references(rule: BoundaryRule) {

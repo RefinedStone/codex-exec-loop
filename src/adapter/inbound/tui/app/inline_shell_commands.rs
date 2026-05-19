@@ -1,3 +1,4 @@
+use super::language::TuiLanguage;
 use super::parallel_mode_shell_command::{
     ParsedParallelModeShellCommand, parse_parallel_mode_shell_argument,
 };
@@ -22,6 +23,7 @@ pub(crate) enum InlineShellCommand {
     Stop,
     Model,
     View,
+    Language,
     Think,
     Doctor,
     PlanningInit,
@@ -63,11 +65,13 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model [default]  :view [simple|medium|detail]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
 const VIEW_USAGE: &str = "Type `:view` to choose transcript visibility for tool/status rows.";
+const LANGUAGE_USAGE: &str =
+    "Type `:language` to choose the TUI language, or `:language english|korean`.";
 const THINK_USAGE: &str =
     "Type `:think <none|minimal|low|medium|high|xhigh|default>` to choose reasoning effort.";
 const THINK_SUPPORTED_VALUES: &str = ConversationReasoningEffort::SUPPORTED_LABELS;
@@ -164,6 +168,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         requires_argument: false,
     },
     InlineShellCommandSpec {
+        command: InlineShellCommand::Language,
+        primary_name: ":language",
+        aliases: &[":language", ":lang"],
+        suggestion_detail: "TUI language",
+        buffered_hint: LANGUAGE_USAGE,
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
         command: InlineShellCommand::Think,
         primary_name: ":think",
         aliases: &[":think"],
@@ -249,6 +262,7 @@ impl InlineShellCommandInput {
             },
             InlineShellCommand::Model => model_argument_hint(self.argument()),
             InlineShellCommand::View => view_argument_hint(self.argument()),
+            InlineShellCommand::Language => language_argument_hint(self.argument()),
             InlineShellCommand::Think => think_argument_hint(self.argument()),
             InlineShellCommand::Queue => {
                 planning_overlay_argument_hint(self.argument(), InlineShellCommand::Queue, "queue")
@@ -269,6 +283,7 @@ impl InlineShellCommandInput {
             InlineShellCommand::Stop => None,
             InlineShellCommand::Model => None,
             InlineShellCommand::View => None,
+            InlineShellCommand::Language => None,
             InlineShellCommand::Think => None,
             _ => self.command.spec().execution_status.map(str::to_string),
         }
@@ -388,6 +403,7 @@ impl InlineShellCommand {
             InlineShellCommand::Turns => ":turns ",
             InlineShellCommand::Model => ":model",
             InlineShellCommand::View => ":view",
+            InlineShellCommand::Language => ":language",
             InlineShellCommand::Think => ":think ",
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
@@ -421,6 +437,7 @@ impl InlineShellCommand {
             InlineShellCommand::Stop => ":stop",
             InlineShellCommand::Model => ":model",
             InlineShellCommand::View => ":view [simple|medium|detail]",
+            InlineShellCommand::Language => ":language [english|korean]",
             InlineShellCommand::Think => ":think <none|minimal|low|medium|high|xhigh|default>",
             InlineShellCommand::PlanningInit => ":planning [doctor]",
             InlineShellCommand::Reset => ":reset <queue|directions|all>",
@@ -513,6 +530,22 @@ fn view_argument_hint(argument: Option<&str>) -> String {
             "Press Enter to apply `:view {}`. Supported values: {}.",
             argument.trim(),
             ConversationViewMode::SUPPORTED_LABELS
+        ),
+    }
+}
+fn language_argument_hint(argument: Option<&str>) -> String {
+    let Some(argument) = argument else {
+        return LANGUAGE_USAGE.to_string();
+    };
+    match TuiLanguage::parse(argument) {
+        Some(language) => format!(
+            "Press Enter to set TUI language to {}.",
+            language.status_label()
+        ),
+        None => format!(
+            "Press Enter to apply `:language {}`. Supported values: {}.",
+            argument.trim(),
+            TuiLanguage::SUPPORTED_LABELS
         ),
     }
 }

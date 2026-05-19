@@ -9,7 +9,7 @@ use crate::domain::parallel_mode::{
 };
 
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
-use super::super::super::super::{AkraTheme, NativeTuiApp};
+use super::super::super::super::{AkraTheme, NativeTuiApp, TuiLanguage};
 use super::SupersessionOverlayView;
 
 /* Supersession is the operator board for parallel mode. It intentionally keeps
@@ -46,6 +46,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let detail_lines = build_parallel_event_stream_lines(
         &supervisor_snapshot,
         app.parallel_supervisor_event_lines(),
+        app.tui_language,
     );
     let mut distributor_lines =
         build_roster_lines_with_mud(&supervisor_snapshot, activity_frame, &[]);
@@ -452,17 +453,16 @@ fn build_detail_lines_with_mud(
 fn build_parallel_event_stream_lines(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     local_event_lines: Vec<Line<'static>>,
+    language: TuiLanguage,
 ) -> Vec<Line<'static>> {
     let mut events = if local_event_lines.is_empty() {
-        parallel_supervisor_snapshot_stream_lines(supervisor_snapshot)
+        parallel_supervisor_snapshot_stream_lines(supervisor_snapshot, language)
     } else {
         local_event_lines
     };
 
     if events.is_empty() {
-        return vec![Line::from(
-            "[--:--:--] Supervisor: 아직 parallel 이벤트가 없습니다.",
-        )];
+        return vec![Line::from(language.no_parallel_events())];
     }
 
     const MAX_STREAM_EVENTS: usize = 96;
