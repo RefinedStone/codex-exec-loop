@@ -56,6 +56,18 @@ the fixed Akra theme.
 - It must support Korean and wide-character prompt text without changing the surrounding layout
   contract.
 
+### Append-only Stream Surfaces
+
+- A stream surface is not a titled panel once its rows can be split across durable host scrollback
+  and the live inline viewport.
+- No panel title may be inserted between durable scrollback rows and live rows. If the whole stream
+  fits, the renderer may show the normal section title; if the stream overflows, the live tail must
+  be titleless live tail data only.
+- Parallel event stream rendering must enter through the named stream renderer instead of calling a
+  generic titled section helper with ad hoc title copy.
+- Any change to stream row retention, scroll offset, title visibility, or live-tail chrome must add
+  a frame-recorder regression for the exact before/after redraw sequence.
+
 ### Popup And Inspection Overlays
 
 - Popup overlays must use the shared Akra panel frame from `AkraTheme::panel_block`.
