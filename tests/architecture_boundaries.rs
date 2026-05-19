@@ -43,6 +43,20 @@ struct PatternDebtRule {
     reason: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct TuiCoverageSurface {
+    name: &'static str,
+    doc_marker: &'static str,
+    source_prefixes: &'static [&'static str],
+    test_entrypoints: &'static [&'static str],
+}
+
+#[derive(Clone, Copy)]
+struct TuiCoverageSourceException {
+    path: &'static str,
+    reason: &'static str,
+}
+
 const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     PatternDebtRule {
         path_suffix: "src/application/service/parallel_mode/control_plane/composition.rs",
@@ -163,6 +177,174 @@ const CORE_RUNTIME_RAW_APPLICATION_SERVICE_FORBIDDEN_PATTERNS: &[&str] = &[
     ".start_stream(",
     ".prepare(",
     ".evaluate_with_timeout(",
+];
+
+const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
+    TuiCoverageSurface {
+        name: "Inline terminal, host scrollback, viewport, resize, redraw transaction",
+        doc_marker: "| Inline terminal, host scrollback, viewport, resize, redraw transaction |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/inline_terminal_adapter",
+            "src/adapter/inbound/tui/app/history_insertion.rs",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
+            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests/history_flush.rs",
+            "src/adapter/inbound/tui/app/history_insertion.rs",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "Parallel event stream, live-tail, prompt position, command hints",
+        doc_marker: "| Parallel event stream, live-tail, prompt position, command hints |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/parallel_",
+            "src/adapter/inbound/tui/app/parallel_mode",
+            "src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession",
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels",
+            "src/adapter/inbound/tui/supersession_mud.rs",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
+            "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
+            "src/adapter/inbound/tui/app/shell_runtime/tests/flows.rs",
+            "src/adapter/inbound/tui/app/shell_runtime/tests/input.rs",
+            "src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "Overlay surfaces: help, session, planning, model/view selection, parallel peek",
+        doc_marker: "| Overlay surfaces: help, session, planning, model/view selection, parallel peek |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/directions_maintenance_ui.rs",
+            "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/planning",
+            "src/adapter/inbound/tui/app/planning_",
+            "src/adapter/inbound/tui/app/session_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/shell_presentation/overlays",
+            "src/adapter/inbound/tui/app/view_selection_overlay_ui.rs",
+            "src/adapter/inbound/tui/shell_chrome.rs",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
+            "src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs",
+            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/planning_draft_editor_ui/tests.rs",
+            "src/adapter/inbound/tui/app/planning/controller.rs",
+            "src/adapter/inbound/tui/app/session_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/view_selection_overlay_ui.rs",
+            "src/adapter/inbound/tui/shell_chrome.rs",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "Shell runtime input flow: key events, command palette, submit, escape/cancel",
+        doc_marker: "| Shell runtime input flow: key events, command palette, submit, escape/cancel |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/conversation",
+            "src/adapter/inbound/tui/app/inline_shell_commands",
+            "src/adapter/inbound/tui/app/parallel_mode_shell_command.rs",
+            "src/adapter/inbound/tui/app/planning_overlay_shell_command.rs",
+            "src/adapter/inbound/tui/app/planning_reset_shell_command.rs",
+            "src/adapter/inbound/tui/app/planning_shell_command.rs",
+            "src/adapter/inbound/tui/app/shell_runtime",
+            "src/adapter/inbound/tui/app/turn_submission_runtime",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/shell_runtime/tests/input.rs",
+            "src/adapter/inbound/tui/app/shell_runtime/tests/flows.rs",
+            "src/adapter/inbound/tui/app/shell_runtime/tests/scheduler.rs",
+            "src/adapter/inbound/tui/app/conversation_input.rs",
+            "src/adapter/inbound/tui/app/conversation_intents.rs",
+            "src/adapter/inbound/tui/app/inline_shell_commands/tests.rs",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "Shell rendering snapshots plus targeted assertions",
+        doc_marker: "| Shell rendering snapshots plus targeted assertions |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/shell_rendering",
+            "src/adapter/inbound/tui/app/shell_layout.rs",
+            "src/adapter/inbound/tui/app/shell_presentation.rs",
+            "src/adapter/inbound/tui/app/shell_presentation",
+            "src/adapter/inbound/tui/app/theme.rs",
+            "src/adapter/inbound/tui/conversation_text.rs",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+            "src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs",
+            "src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs",
+            "src/adapter/inbound/tui/app/snapshots",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "vt100 terminal path",
+        doc_marker: "| vt100 terminal path |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/tui_testkit.rs",
+            "src/adapter/inbound/tui/app/history_insertion.rs",
+            "src/adapter/inbound/tui/app/inline_terminal_adapter",
+            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/tui_testkit.rs",
+            "src/adapter/inbound/tui/app/history_insertion.rs",
+            "src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs",
+            "src/adapter/inbound/tui/app/shell_rendering_tests.rs",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "Startup, session, conversation, auto-follow, planning control state",
+        doc_marker: "| Startup, session, conversation, auto-follow, planning control state |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app.rs",
+            "src/adapter/inbound/tui/app/app_runtime.rs",
+            "src/adapter/inbound/tui/app/auto_follow",
+            "src/adapter/inbound/tui/app/auto_follow_controls.rs",
+            "src/adapter/inbound/tui/app/conversation",
+            "src/adapter/inbound/tui/app/github_polling",
+            "src/adapter/inbound/tui/app/post_turn_continuation.rs",
+            "src/adapter/inbound/tui/app/shell_controller.rs",
+            "src/adapter/inbound/tui/app/shell_entrypoint.rs",
+            "src/adapter/inbound/tui/app/shell_frontend.rs",
+            "src/adapter/inbound/tui/app/ratatui_frontend.rs",
+            "src/adapter/inbound/tui/app/session_shell_controller.rs",
+            "src/adapter/inbound/tui/app/turn_submission_runtime",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app.rs",
+            "src/adapter/inbound/tui/app/auto_follow_controls.rs",
+            "src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/conversation_model_tests.rs",
+            "src/adapter/inbound/tui/app/conversation_runtime.rs",
+            "src/adapter/inbound/tui/app/github_polling/tests.rs",
+            "src/adapter/inbound/tui/app/turn_submission_runtime.rs",
+            "src/adapter/inbound/tui/app/shell_entrypoint.rs",
+        ],
+    },
+    TuiCoverageSurface {
+        name: "TUI support and validation devices",
+        doc_marker: "| TUI support and validation devices |",
+        source_prefixes: &[
+            "src/adapter/inbound/tui/app/test_helpers.rs",
+            "src/adapter/inbound/tui/app/tui_testkit.rs",
+            "tests/architecture_boundaries.rs",
+            "tests/native_validation_scripts.rs",
+        ],
+        test_entrypoints: &[
+            "src/adapter/inbound/tui/app/tui_testkit.rs",
+            "tests/architecture_boundaries.rs",
+            "tests/native_validation_scripts.rs",
+            "docs/validation/tui-coverage-matrix.md",
+        ],
+    },
+];
+
+const TUI_COVERAGE_SOURCE_EXCEPTIONS: &[TuiCoverageSourceException] = &[
+    TuiCoverageSourceException {
+        path: "src/adapter/inbound/tui/mod.rs",
+        reason: "module declaration glue only; behavior is covered by the mapped child TUI surfaces.",
+    },
 ];
 
 #[test]
@@ -814,6 +996,159 @@ fn tui_temporal_regressions_use_shared_frame_recorder_contract() {
     }
 }
 
+#[test]
+fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
+    // Static guard: existing TUI code should not rely on tribal memory for test
+    // coverage. Each production source file must belong to a documented surface
+    // with at least one automated test entrypoint, or have a narrow exception.
+    let repo_root = repo_root();
+    let matrix_path = repo_root.join("docs/validation/tui-coverage-matrix.md");
+    let methodology_path = repo_root.join("docs/validation/terminal-ui-testing-methodology.md");
+    let matrix = fs::read_to_string(&matrix_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", matrix_path.display());
+    });
+    let methodology = fs::read_to_string(&methodology_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", methodology_path.display());
+    });
+
+    for required_text in [
+        "terminal-ui-testing-methodology.md",
+        "tui_testkit::InlineFrameRecorder",
+        "Ratatui `TestBackend`",
+        "vt100-backed tests",
+        "architecture-test exception",
+    ] {
+        assert!(
+            matrix.contains(required_text),
+            "TUI coverage matrix must document the project-wide TUI testing rule: {required_text}"
+        );
+    }
+    assert!(
+        methodology.contains("docs/validation/tui-coverage-matrix.md"),
+        "TUI methodology must link to the project-wide coverage matrix"
+    );
+
+    for surface in TUI_COVERAGE_SURFACES {
+        assert!(
+            matrix.contains(surface.doc_marker),
+            "TUI coverage matrix must contain surface row: {}",
+            surface.name
+        );
+        for entrypoint in surface.test_entrypoints {
+            assert_tui_test_entrypoint_has_coverage(&repo_root, surface.name, entrypoint);
+        }
+    }
+
+    let tui_root = repo_root.join("src/adapter/inbound/tui");
+    let mut unmapped_sources = Vec::new();
+    for path in rust_files_under(&tui_root) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let relative = relative_path(&repo_root, &path);
+        if TUI_COVERAGE_SOURCE_EXCEPTIONS
+            .iter()
+            .any(|exception| exception.path == relative)
+        {
+            continue;
+        }
+        if TUI_COVERAGE_SURFACES.iter().any(|surface| {
+            surface
+                .source_prefixes
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
+        }) {
+            continue;
+        }
+        unmapped_sources.push(relative);
+    }
+
+    assert!(
+        unmapped_sources.is_empty(),
+        "TUI source files must be mapped to the coverage matrix or an explicit exception:\n{}",
+        unmapped_sources.join("\n")
+    );
+
+    for exception in TUI_COVERAGE_SOURCE_EXCEPTIONS {
+        assert!(
+            !exception.reason.trim().is_empty(),
+            "TUI coverage exception must explain why {} is exempt",
+            exception.path
+        );
+        assert!(
+            repo_root.join(exception.path).exists(),
+            "TUI coverage exception points at a missing path: {}",
+            exception.path
+        );
+    }
+}
+
+#[test]
+fn tui_shared_test_devices_stay_in_tui_testkit() {
+    // Static guard: reusable temporal/terminal devices belong in tui_testkit so
+    // TUI tests share the same frame and backend contracts.
+    let repo_root = repo_root();
+    let tui_root = repo_root.join("src/adapter/inbound/tui");
+    let mut violations = Vec::new();
+
+    for path in rust_files_under(&tui_root) {
+        let relative = relative_path(&repo_root, &path);
+        if relative == "src/adapter/inbound/tui/app/tui_testkit.rs" {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", path.display());
+        });
+        for forbidden in [
+            "struct InlineFrameRecorder",
+            "struct RecordedInlineFrame",
+            "struct Vt100Backend",
+            "struct Vt100Screen",
+        ] {
+            if source.contains(forbidden) {
+                violations.push(format!(
+                    "{relative}: local reusable TUI device `{forbidden}`"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "reusable TUI test devices must stay centralized in tui_testkit:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn assert_tui_test_entrypoint_has_coverage(repo_root: &Path, surface_name: &str, entrypoint: &str) {
+    let path = repo_root.join(entrypoint);
+    assert!(
+        path.exists(),
+        "TUI coverage surface `{surface_name}` references missing entrypoint: {entrypoint}"
+    );
+
+    if path.is_dir() {
+        let mut covered_files = Vec::new();
+        collect_files_with_extension(&path, "snap", &mut covered_files);
+        assert!(
+            !covered_files.is_empty(),
+            "TUI coverage surface `{surface_name}` directory entrypoint has no snapshots: {entrypoint}"
+        );
+        return;
+    }
+
+    let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", path.display());
+    });
+    let has_coverage_marker = source.contains("#[test]")
+        || source.contains("assert_snapshot!")
+        || source.contains("# TUI Coverage Matrix");
+    assert!(
+        has_coverage_marker,
+        "TUI coverage surface `{surface_name}` entrypoint must contain tests, snapshots, or matrix text: {entrypoint}"
+    );
+}
+
 fn assert_no_forbidden_references(rule: BoundaryRule) {
     let repo_root = repo_root();
     let root = repo_root.join(rule.root);
@@ -1197,6 +1532,31 @@ fn collect_rust_files(path: &Path, files: &mut Vec<PathBuf>) {
             );
         });
         collect_rust_files(&entry.path(), files);
+    }
+}
+
+fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<PathBuf>) {
+    if !path.exists() {
+        return;
+    }
+
+    if path.is_file() {
+        if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+            files.push(path.to_path_buf());
+        }
+        return;
+    }
+
+    for entry in fs::read_dir(path).unwrap_or_else(|error| {
+        panic!("failed to read directory {}: {error}", path.display());
+    }) {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!(
+                "failed to read directory entry in {}: {error}",
+                path.display()
+            );
+        });
+        collect_files_with_extension(&entry.path(), extension, files);
     }
 }
 

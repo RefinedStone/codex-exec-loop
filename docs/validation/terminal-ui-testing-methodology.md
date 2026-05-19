@@ -133,6 +133,7 @@ Every TUI rendering PR should state which rows it touches.
 
 ## Current Automated Entry Points
 
+- `docs/validation/tui-coverage-matrix.md`
 - `src/adapter/inbound/tui/app/shell_rendering_tests.rs`
 - `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs`
 - `src/adapter/inbound/tui/app/inline_terminal_adapter/tests/`

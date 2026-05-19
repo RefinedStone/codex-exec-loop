@@ -109,3 +109,91 @@ impl ParallelPeekOverlayUiState {
         self.conversation_scroll_from_bottom = usize::MAX;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preview() -> ParallelPeekConversationPreview {
+        ParallelPeekConversationPreview {
+            agent_id: "agent-peek".to_string(),
+            slot_id: "slot-2".to_string(),
+            task_title: "Inspect parallel transcript".to_string(),
+            thread_id: Some("thread-peek".to_string()),
+            snapshot: None,
+            status_text: "conversation snapshot pending".to_string(),
+        }
+    }
+
+    #[test]
+    fn selection_clamps_to_active_agents_and_empty_roster() {
+        /*
+         * The picker selection is reused by rendering and Enter dispatch. It
+         * must never point past the active roster, even when the roster shrinks
+         * while the overlay remains open.
+         */
+        let mut state = ParallelPeekOverlayUiState::default();
+
+        state.move_selection(3, 5);
+        assert_eq!(state.selected_agent_index(), 2);
+
+        state.clamp_selection(2);
+        assert_eq!(state.selected_agent_index(), 1);
+
+        state.move_selection(2, -5);
+        assert_eq!(state.selected_agent_index(), 0);
+
+        state.move_selection(0, 1);
+        assert_eq!(state.selected_agent_index(), 0);
+        state.clamp_selection(0);
+        assert_eq!(state.selected_agent_index(), 0);
+    }
+
+    #[test]
+    fn preview_navigation_resets_conversation_state_when_returning_to_picker() {
+        /*
+         * Esc/Left from the preview returns to the agent picker. The preview
+         * payload and scroll position must be dropped together so a later agent
+         * selection cannot inherit stale transcript state.
+         */
+        let mut state = ParallelPeekOverlayUiState::default();
+
+        state.open_preview(preview());
+        state.scroll_conversation_older(12);
+
+        assert_eq!(state.step(), ParallelPeekOverlayStep::ConversationPreview);
+        assert!(state.preview().is_some());
+        assert_eq!(state.conversation_scroll_from_bottom(), 12);
+
+        state.back_to_agent_list();
+
+        assert_eq!(state.step(), ParallelPeekOverlayStep::AgentList);
+        assert!(state.preview().is_none());
+        assert_eq!(state.conversation_scroll_from_bottom(), 0);
+    }
+
+    #[test]
+    fn conversation_scroll_controls_saturate_and_support_edge_jumps() {
+        /*
+         * Runtime key handling maps PageUp/PageDown/Home/End to these helpers.
+         * Saturating math keeps repeated key presses from underflowing or
+         * wrapping the preview scroll state.
+         */
+        let mut state = ParallelPeekOverlayUiState::default();
+        state.open_preview(preview());
+
+        state.scroll_conversation_older(10);
+        state.scroll_conversation_newer(3);
+        assert_eq!(state.conversation_scroll_from_bottom(), 7);
+
+        state.scroll_conversation_newer(20);
+        assert_eq!(state.conversation_scroll_from_bottom(), 0);
+
+        state.scroll_conversation_older(1);
+        state.scroll_conversation_to_latest();
+        assert_eq!(state.conversation_scroll_from_bottom(), 0);
+
+        state.scroll_conversation_to_oldest();
+        assert_eq!(state.conversation_scroll_from_bottom(), usize::MAX);
+    }
+}
