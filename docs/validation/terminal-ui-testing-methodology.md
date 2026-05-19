@@ -135,8 +135,11 @@ Every TUI rendering PR should state which rows it touches.
 
 - Stream surfaces that can span host scrollback and the live viewport must preserve row continuity:
   no panel title may be inserted between durable scrollback rows and live rows.
-- Parallel event stream rendering must use the dedicated stream renderer, not a generic titled
-  scrolled section with new ad hoc copy.
+- Inline inspection code must use the typed render surface API: `InlineTitledPanel` for ordinary
+  titled panels, `InlineScrolledPanel` for ordinary scrolled panels, and `InlineAppendOnlyStream`
+  for append-only stream rows.
+- Parallel event stream rendering must use the dedicated stream renderer and
+  `InlineAppendOnlyStream`, not a generic titled scrolled section with new ad hoc copy.
 - A TUI PR that changes stream row retention, scroll offset, title visibility, host scrollback, or
   live-tail chrome must include `tui_testkit::InlineFrameRecorder` coverage for the exact failing
   redraw sequence.
