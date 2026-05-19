@@ -2,17 +2,12 @@ use crate::adapter::inbound::tui::shell_chrome::SessionState;
 use crate::domain::recent_sessions::SessionCatalog;
 
 use super::capability_copy::{
-    attachment_profile_summary_line, recent_session_status_blocked_by_startup,
-    recent_session_status_load_failed, recent_session_status_loaded, recent_session_status_loading,
-    recent_session_status_not_requested, recent_session_status_partial,
-    recent_session_status_ready_to_load, recent_session_status_unsupported,
-    recent_session_status_waiting_for_startup, startup_check_loading_lines,
-    startup_check_not_started_line, startup_diagnostic_marker, startup_overlay_failed_label,
-    startup_overlay_idle_status_line, startup_overlay_readiness_label,
-    startup_overlay_running_checks_label, startup_probe_loading_summary_line,
-    startup_probe_not_started_line,
+    attachment_profile_summary_line, startup_check_loading_lines, startup_check_not_started_line,
+    startup_diagnostic_marker, startup_overlay_failed_label, startup_overlay_idle_status_line,
+    startup_overlay_readiness_label, startup_overlay_running_checks_label,
+    startup_probe_loading_summary_line, startup_probe_not_started_line,
 };
-use super::{AkraTheme, Line, NativeTuiApp, Span, StartupState};
+use super::{AkraTheme, Line, NativeTuiApp, Span, StartupState, TuiLanguage};
 
 /*
  * capability_projection은 NativeTuiApp의 runtime capability 상태를 renderer-ready Line/String으로
@@ -55,7 +50,10 @@ pub(super) fn build_startup_overlay_summary_lines(app: &NativeTuiApp) -> Vec<Lin
              * 세부 diagnostics list와 별개로 상단에 고정해 operator가 현재 thread 연결 방식을 빠르게 확인한다.
              */
             Line::from(format!("cwd: {}", ready.cwd)),
-            Line::from(attachment_profile_summary_line(&ready.attachment)),
+            Line::from(attachment_profile_summary_line(
+                &ready.attachment,
+                app.tui_language,
+            )),
         ],
         StartupState::Failed(message) => vec![
             Line::from(vec![
@@ -141,7 +139,7 @@ pub(super) fn build_startup_warning_lines_from_state(
     }
 }
 
-pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
+pub(super) fn recent_session_status_label(app: &NativeTuiApp, language: TuiLanguage) -> String {
     /*
      * recent session status는 startup gate와 session loader state가 함께 결정한다.
      * shell header는 긴 SessionCatalog enum을 직접 알 필요 없이 이 label 하나만 받아 표시한다.
@@ -152,11 +150,13 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
          * Loading은 기다리는 중, Ready/Failed인데 열 수 없으면 blocked, Idle은 아직 probe 전으로 구분한다.
          */
         return match &app.startup_state {
-            StartupState::Loading => recent_session_status_waiting_for_startup().to_string(),
-            StartupState::Ready(_) | StartupState::Failed(_) => {
-                recent_session_status_blocked_by_startup().to_string()
-            }
-            StartupState::Idle => recent_session_status_not_requested().to_string(),
+            StartupState::Loading => language
+                .recent_session_status_waiting_for_startup()
+                .to_string(),
+            StartupState::Ready(_) | StartupState::Failed(_) => language
+                .recent_session_status_blocked_by_startup()
+                .to_string(),
+            StartupState::Idle => language.recent_session_status_not_requested().to_string(),
         };
     }
 
@@ -166,16 +166,18 @@ pub(super) fn recent_session_status_label(app: &NativeTuiApp) -> String {
      * tier-aware 문구를 사용한다.
      */
     match &app.session_state {
-        SessionState::Idle => recent_session_status_ready_to_load().to_string(),
-        SessionState::Loading => recent_session_status_loading().to_string(),
-        SessionState::Failed(_) => recent_session_status_load_failed().to_string(),
+        SessionState::Idle => language.recent_session_status_ready_to_load().to_string(),
+        SessionState::Loading => language.recent_session_status_loading().to_string(),
+        SessionState::Failed(_) => language.recent_session_status_load_failed().to_string(),
         SessionState::Ready(catalog) => match catalog {
-            SessionCatalog::Unsupported(status) => recent_session_status_unsupported(status.tier),
-            SessionCatalog::Partial(status) => recent_session_status_partial(status.tier),
+            SessionCatalog::Unsupported(status) => {
+                language.recent_session_status_unsupported(status.tier)
+            }
+            SessionCatalog::Partial(status) => language.recent_session_status_partial(status.tier),
             SessionCatalog::Ready {
                 tier,
                 recent_sessions,
-            } => recent_session_status_loaded(*tier, recent_sessions.items.len()),
+            } => language.recent_session_status_loaded(*tier, recent_sessions.items.len()),
         },
     }
 }

@@ -368,18 +368,27 @@ fn build_inline_startup_screen_lines_with_context(
     let mut lines = startup_masthead_lines();
     lines.push(Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
-        ratatui::text::Span::raw(format!(
-            "  |  Workflows: {}  |  Queues: {}  |  Observability: {}",
-            startup_axis_status(context.shell_action_availability),
-            context.recent_session_status_label.as_str(),
-            context.github_review_polling_status_label.as_str(),
-        )),
+        ratatui::text::Span::raw(
+            context.tui_language.startup_axis_row(
+                context
+                    .tui_language
+                    .startup_axis_status(context.shell_action_availability),
+                context.recent_session_status_label.as_str(),
+                &context
+                    .tui_language
+                    .github_review_polling_status(&context.github_review_polling_status_label),
+            ),
+        ),
     ]));
     match context.startup_state {
         StartupState::Idle => {
             lines.push(Line::from(startup_preparing_status_line()));
             if let Some(conversation) = context.ready_conversation() {
-                lines.push(Line::from(format!("workspace: {}", conversation.cwd)));
+                lines.push(Line::from(
+                    context
+                        .tui_language
+                        .startup_workspace_line(&conversation.cwd),
+                ));
             }
         }
         StartupState::Loading => {
@@ -389,37 +398,46 @@ fn build_inline_startup_screen_lines_with_context(
             ));
         }
         StartupState::Ready(ready) => {
-            lines.push(Line::from(format!("workspace: {}", ready.cwd)));
-            lines.push(Line::from(startup_diagnostics_summary_line(ready)));
-            lines.push(Line::from(startup_attachment_summary_line(ready)));
+            lines.push(Line::from(
+                context.tui_language.startup_workspace_line(&ready.cwd),
+            ));
+            lines.push(Line::from(startup_diagnostics_summary_line(
+                ready,
+                context.tui_language,
+            )));
+            lines.push(Line::from(startup_attachment_summary_line(
+                ready,
+                context.tui_language,
+            )));
             if let Some(first_warning) = ready.warnings.first() {
-                lines.push(Line::from(format!(
-                    "warning: {}",
-                    compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT)
+                lines.push(Line::from(context.tui_language.startup_warning_line(
+                    &compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT),
                 )));
             }
-            lines.push(Line::from("conversation"));
             lines.push(Line::from(
-                "first reply appears here after you send the opening prompt",
+                context.tui_language.startup_conversation_label(),
             ));
-            lines.push(Line::from(format!(
-                "starter: {}",
-                inline_starter_copy_in_context(context)
-            )));
+            lines.push(Line::from(context.tui_language.startup_first_reply_hint()));
+            lines.push(Line::from(
+                context
+                    .tui_language
+                    .startup_starter_line(inline_starter_copy_in_context(context)),
+            ));
         }
         StartupState::Failed(message) => {
-            lines.push(Line::from(format!("status: {message}")));
+            lines.push(Line::from(
+                context.tui_language.startup_status_line(message),
+            ));
             for warning_line in
                 super::super::build_startup_warning_lines_from_state(context.startup_state)
                     .into_iter()
                     .filter(|line| !line.to_string().eq_ignore_ascii_case("no warnings"))
             {
-                lines.push(Line::from(format!(
-                    "warning: {}",
-                    compact_inline_detail(
+                lines.push(Line::from(context.tui_language.startup_warning_line(
+                    &compact_inline_detail(
                         &warning_line.to_string(),
-                        INLINE_TAIL_NOTICE_DETAIL_LIMIT
-                    )
+                        INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+                    ),
                 )));
             }
         }
@@ -439,12 +457,17 @@ fn build_inline_startup_overlay_tail_lines_with_context(
     */
     vec![Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
-        ratatui::text::Span::raw(format!(
-            "  |  Workflows: {}  |  Queues: {}  |  Observability: {}",
-            startup_axis_status(context.shell_action_availability),
-            context.recent_session_status_label.as_str(),
-            context.github_review_polling_status_label.as_str(),
-        )),
+        ratatui::text::Span::raw(
+            context.tui_language.startup_axis_row(
+                context
+                    .tui_language
+                    .startup_axis_status(context.shell_action_availability),
+                context.recent_session_status_label.as_str(),
+                &context
+                    .tui_language
+                    .github_review_polling_status(&context.github_review_polling_status_label),
+            ),
+        ),
     ])]
 }
 
@@ -477,26 +500,18 @@ fn startup_masthead_lines() -> Vec<Line<'static>> {
     ]
 }
 
-fn startup_axis_status(shell_action_availability: ShellActionAvailability) -> &'static str {
-    match shell_action_availability {
-        ShellActionAvailability::Ready => "ready",
-        ShellActionAvailability::Pending => "pending",
-        ShellActionAvailability::Blocked => "blocked",
-    }
-}
-
 fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {
     let Some(conversation) = context.ready_conversation() else {
         /*
         Without a ready conversation there is no input buffer to inspect, so the
         starter copy must be generic and safe for loading/failed startup states.
         */
-        return "start with a task, file path, or bug summary";
+        return context.tui_language.startup_empty_starter_copy();
     };
     if conversation.input_buffer.trim().is_empty() {
-        "start with a task, file path, or bug summary"
+        context.tui_language.startup_empty_starter_copy()
     } else {
-        "opening prompt buffered below"
+        context.tui_language.startup_buffered_starter_copy()
     }
 }
 

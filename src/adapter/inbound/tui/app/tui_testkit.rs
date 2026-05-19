@@ -238,8 +238,18 @@ pub(super) fn vt100_contents_from_buffer(buffer: &Buffer) -> String {
         .chunks(buffer.area.width as usize)
         .enumerate()
     {
+        let mut trailing_wide_cells_to_skip = 0usize;
         for cell in row {
-            screen.process(cell.symbol().as_bytes());
+            if trailing_wide_cells_to_skip > 0 {
+                trailing_wide_cells_to_skip -= 1;
+                continue;
+            }
+            if cell.skip {
+                continue;
+            }
+            let symbol = cell.symbol();
+            screen.process(symbol.as_bytes());
+            trailing_wide_cells_to_skip = terminal_symbol_width(symbol).saturating_sub(1);
         }
         if index + 1 < buffer.area.height as usize {
             screen.process(b"\r\n");
@@ -252,6 +262,30 @@ fn trim_line_end_padding(text: &str) -> String {
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n")
+}
+fn terminal_symbol_width(symbol: &str) -> usize {
+    symbol
+        .chars()
+        .map(terminal_char_width)
+        .sum::<usize>()
+        .max(1)
+}
+fn terminal_char_width(character: char) -> usize {
+    if is_cjk_wide(character) { 2 } else { 1 }
+}
+fn is_cjk_wide(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x1100..=0x115F
+            | 0x2329..=0x232A
+            | 0x2E80..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE19
+            | 0xFE30..=0xFE6F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+    )
 }
 pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
     // History injection keeps fixtures small while still rebuilding the cached
@@ -478,12 +512,22 @@ impl Backend for Vt100Backend {
 }
 #[cfg(test)]
 mod tests {
-    use super::{Vt100Backend, Vt100Screen, resize_terminal, shell_terminal, vt100_contents};
+    use super::{
+        Vt100Backend, Vt100Screen, resize_terminal, shell_terminal, vt100_contents,
+        vt100_contents_from_buffer,
+    };
     use ratatui::backend::Backend;
+    use ratatui::buffer::Buffer;
     use std::io::Write;
     #[test]
     fn vt100_contents_tracks_visible_screen_text() {
         assert_eq!(vt100_contents(12, 3, b"ready\nshell"), "ready\n     shell");
+    }
+    #[test]
+    fn vt100_contents_from_buffer_skips_trailing_wide_cells() {
+        let buffer = Buffer::with_lines(["한글"]);
+
+        assert_eq!(vt100_contents_from_buffer(&buffer), "한글");
     }
     #[test]
     fn vt100_screen_can_resize_between_frames() {
