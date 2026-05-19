@@ -523,7 +523,10 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(rendered.contains("Parallel Event Stream"));
     assert!(rendered.contains("loading pool board"));
     assert!(rendered.contains("loading distributor board"));
-    assert!(rendered.contains(":peek: inspect active agent conversations"));
+    assert!(rendered.contains("Ctrl+R refresh"));
+    assert!(rendered.contains("Ctrl+P off"));
+    assert!(rendered.contains(":peek agents"));
+    assert!(rendered.contains("Ctrl+O/Esc/Ctrl+C close"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
 }
@@ -855,6 +858,52 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
         "planning detail rows should be clipped before they can hide the prompt:\n{rendered}"
     );
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_supersession_command_hints_keep_controls_visible_when_compact() {
+    /*
+     * The command-hint panel often receives only one body row after the parallel
+     * event stream takes the remaining live viewport. That visible row must carry
+     * the real board controls, not just the first "refresh" hint.
+     */
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    )));
+    app.shell_overlay = ShellOverlay::Supersession;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession command hint render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Command Hints"));
+    assert!(rendered.contains("Ctrl+R refresh"));
+    assert!(
+        rendered.contains("Ctrl+P off"),
+        "parallel off shortcut must stay visible in compact command hints:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(":peek agents"),
+        "agent inspection command must stay visible in compact command hints:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Ctrl+O/Esc/Ctrl+C close"),
+        "close shortcuts must stay visible in compact command hints:\n{rendered}"
+    );
 }
 
 #[test]
