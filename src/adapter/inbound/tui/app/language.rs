@@ -4,8 +4,8 @@ use super::ShellActionAvailability;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum TuiLanguage {
-    English,
     #[default]
+    English,
     Korean,
 }
 
@@ -528,6 +528,15 @@ mod tests {
         assert_eq!(TuiLanguage::parse("한국어"), Some(TuiLanguage::Korean));
         assert_eq!(TuiLanguage::parse("한글"), Some(TuiLanguage::Korean));
         assert_eq!(TuiLanguage::parse("spanish"), None);
+    }
+
+    #[test]
+    fn default_language_is_english() {
+        assert_eq!(TuiLanguage::default(), TuiLanguage::English);
+        assert_eq!(
+            LanguageSelectionOverlayUiState::default().selected_language(),
+            TuiLanguage::English
+        );
     }
 
     #[test]

@@ -1,6 +1,5 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
-assertion_line: 224
 expression: rendered
 ---
 Akra / Planning Queue / inline inspection
@@ -28,6 +27,6 @@ skipped tasks: 1 / blocked by tasks: task-2(in_progress)
 
 Keys
 Esc/Ctrl+C: close  |  :planning: update files
-Akra  |  워크플로: 준비됨  |  큐: 로드 준비됨  |  관찰: 꺼짐
+Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
 >
 prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help

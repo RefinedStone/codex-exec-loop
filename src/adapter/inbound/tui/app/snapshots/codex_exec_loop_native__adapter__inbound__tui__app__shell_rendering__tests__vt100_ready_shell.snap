@@ -1,6 +1,5 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
-assertion_line: 126
 expression: rendered
 ---
  █████╗ ██╗  ██╗██████╗  █████╗
@@ -9,13 +8,13 @@ expression: rendered
 ██╔══██║██╔═██╗ ██╔══██╗██╔══██║
 ██║  ██║██║  ██╗██║  ██║██║  ██║
 ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
-Akra  |  워크플로: 준비됨  |  큐: 로드 준비됨  |  관찰: 꺼짐
-작업공간: /tmp/root
-진단: codex 정상  |  app-server 정상  |  계정 정상
-연결: provider-launched  |  복구: provider-thread-id
-대화
-첫 응답은 프롬프트 전송 후 표시됩니다
-시작: 작업, 파일, 버그 요약으로 시작
+Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
+workspace: /tmp/root
+diagnostics: codex ok  |  app-server ok  |  account ok
+attachment: provider-launched  |  recovery: provider-thread-id
+conversation
+first reply appears here after you send the opening prompt
+starter: start with a task, file path, or bug summary
 
 >
 prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help
