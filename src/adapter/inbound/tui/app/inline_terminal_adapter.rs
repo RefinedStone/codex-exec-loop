@@ -67,7 +67,7 @@ impl<B: InlineResizeBackend> InlineTerminalAdapter<B> {
     }
 }
 
-fn draw_inline_transaction<B: InlineResizeBackend>(
+pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
@@ -307,7 +307,7 @@ fn current_inline_history_lines_for_viewport(
 }
 
 #[derive(Default)]
-struct InlineTerminalState {
+pub(super) struct InlineTerminalState {
     viewport: TerminalViewportState,
     history_flush: HistoryFlushState,
     frame_cache: FrameCacheState,

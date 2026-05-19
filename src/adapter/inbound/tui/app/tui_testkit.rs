@@ -1,5 +1,9 @@
-use super::inline_terminal_adapter::{InlineTerminalBackend, terminal_options_for_render_mode};
+use super::inline_terminal_adapter::{
+    InlineTerminalBackend, InlineTerminalState, draw_inline_transaction,
+    terminal_options_for_render_mode,
+};
 use super::shell_rendering::draw;
+use super::shell_runtime::ShellRuntime;
 use super::{
     ConversationInputState, ConversationMessage, ConversationMessageKind, ConversationState,
     INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, ShellFrontendMode,
@@ -130,6 +134,59 @@ pub(super) fn inline_terminal_history_text(
         screen
     } else {
         format!("{scrollback}\n{screen}")
+    }
+}
+#[derive(Debug)]
+pub(super) struct RecordedInlineFrame {
+    pub(super) label: &'static str,
+    pub(super) screen_text: String,
+    pub(super) host_scrollback_text: String,
+    pub(super) terminal_history_text: String,
+    pub(super) app_event_stream_text: String,
+}
+#[derive(Default)]
+pub(super) struct InlineFrameRecorder {
+    frames: Vec<RecordedInlineFrame>,
+}
+impl InlineFrameRecorder {
+    pub(super) fn draw_and_record(
+        &mut self,
+        label: &'static str,
+        terminal: &mut Terminal<InlineTerminalBackend<TestBackend>>,
+        runtime: &mut ShellRuntime,
+        inline_terminal: &mut InlineTerminalState,
+    ) {
+        draw_inline_transaction(terminal, runtime, inline_terminal)
+            .expect("recorded inline draw transaction");
+        self.record_inline(label, terminal, runtime);
+    }
+
+    pub(super) fn record_inline(
+        &mut self,
+        label: &'static str,
+        terminal: &Terminal<InlineTerminalBackend<TestBackend>>,
+        runtime: &ShellRuntime,
+    ) {
+        self.frames.push(RecordedInlineFrame {
+            label,
+            screen_text: screen_text(terminal),
+            host_scrollback_text: inline_scrollback_text(terminal),
+            terminal_history_text: inline_terminal_history_text(terminal),
+            app_event_stream_text: runtime
+                .app()
+                .parallel_supervisor_event_lines()
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        });
+    }
+
+    pub(super) fn frame(&self, label: &str) -> &RecordedInlineFrame {
+        self.frames
+            .iter()
+            .find(|frame| frame.label == label)
+            .unwrap_or_else(|| panic!("recorded frame {label} should exist"))
     }
 }
 pub(super) fn inline_vt100_scrollback_text(
