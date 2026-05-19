@@ -128,8 +128,21 @@ Every TUI rendering PR should state which rows it touches.
 | Thread/session switch | old transcript and deferred history cannot leak into new thread |
 | Streaming turn | active cell or live delta stays live, final output becomes committed history |
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
-| Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback |
+| Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback; split scrollback/live-tail streams render as a titleless live tail |
 | Terminal fallback | standard and fallback insertion modes each update viewport state correctly |
+
+## Architectural Guardrails
+
+- Stream surfaces that can span host scrollback and the live viewport must preserve row continuity:
+  no panel title may be inserted between durable scrollback rows and live rows.
+- Parallel event stream rendering must use the dedicated stream renderer, not a generic titled
+  scrolled section with new ad hoc copy.
+- A TUI PR that changes stream row retention, scroll offset, title visibility, host scrollback, or
+  live-tail chrome must include `tui_testkit::InlineFrameRecorder` coverage for the exact failing
+  redraw sequence.
+- The architecture tests intentionally check this methodology, the design contract, the shared
+  frame recorder, and the named parallel stream regression tests. Update the design first if the
+  contract itself changes.
 
 ## Current Automated Entry Points
 

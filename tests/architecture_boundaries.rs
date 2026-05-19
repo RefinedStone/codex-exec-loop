@@ -997,6 +997,93 @@ fn tui_temporal_regressions_use_shared_frame_recorder_contract() {
 }
 
 #[test]
+fn tui_parallel_stream_continuity_is_architecture_contract() {
+    // Static guard: append-only stream surfaces are more fragile than ordinary
+    // panels because the visible rows can be split between host scrollback and
+    // the live inline viewport. Keep the contract explicit so a future wording
+    // or layout tweak cannot reintroduce title chrome in the middle of a stream.
+    let repo_root = repo_root();
+    let methodology_path = repo_root.join("docs/validation/terminal-ui-testing-methodology.md");
+    let design_path =
+        repo_root.join("docs/design/07-tui-layered-architecture-and-aesthetic-contract.md");
+    let matrix_path = repo_root.join("docs/validation/tui-coverage-matrix.md");
+    let renderer_path =
+        repo_root.join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs");
+    let inline_tests_path =
+        repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs");
+    let methodology = fs::read_to_string(&methodology_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", methodology_path.display());
+    });
+    let design = fs::read_to_string(&design_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", design_path.display());
+    });
+    let matrix = fs::read_to_string(&matrix_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", matrix_path.display());
+    });
+    let renderer = fs::read_to_string(&renderer_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", renderer_path.display());
+    });
+    let inline_tests = fs::read_to_string(&inline_tests_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", inline_tests_path.display());
+    });
+
+    for required_text in [
+        "Architectural Guardrails",
+        "no panel title may be inserted between durable scrollback rows and live rows",
+        "dedicated stream renderer",
+        "titleless live tail",
+    ] {
+        assert!(
+            methodology.contains(required_text),
+            "TUI methodology must document stream-continuity guardrail: {required_text}"
+        );
+    }
+
+    for required_text in [
+        "Append-only Stream Surfaces",
+        "No panel title may be inserted between durable scrollback rows and live rows",
+        "titleless live tail data only",
+        "named stream renderer",
+    ] {
+        assert!(
+            design.contains(required_text),
+            "TUI design contract must document stream-continuity architecture: {required_text}"
+        );
+    }
+
+    assert!(
+        matrix.contains("split scrollback/live-tail streams render as a titleless live tail"),
+        "TUI coverage matrix must name split-stream titleless live-tail behavior"
+    );
+
+    for required_renderer_text in [
+        "fn render_inline_parallel_event_stream",
+        "Architecture contract: a split event stream is not a titled panel.",
+        "render_inline_scrolled_body(frame, area, lines, stream_scroll_offset)",
+    ] {
+        assert!(
+            renderer.contains(required_renderer_text),
+            "parallel event stream renderer must keep titleless split-stream contract: {required_renderer_text}"
+        );
+    }
+    assert!(
+        !renderer.contains("Recent Parallel Events"),
+        "parallel event stream renderer must not replace one misplaced stream title with another"
+    );
+
+    for required_regression in [
+        "parallel_live_tail_continues_scrollback_without_inline_title",
+        "parallel_bootstrap_and_task_intake_stream_does_not_insert_tail_title",
+        "direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw",
+    ] {
+        assert!(
+            inline_tests.contains(required_regression),
+            "parallel stream continuity must stay covered by a named frame-recorder regression: {required_regression}"
+        );
+    }
+}
+
+#[test]
 fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
     // Static guard: existing TUI code should not rely on tribal memory for test
     // coverage. Each production source file must belong to a documented surface

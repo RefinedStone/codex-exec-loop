@@ -456,27 +456,7 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         roster_lines,
         false,
     );
-    let stream_visible_rows =
-        parallel_event_stream_visible_rows_for_lines(&detail_lines, layout[3].width, layout[3]);
-    let stream_scroll_offset =
-        event_boundary_scroll_offset(&detail_lines, layout[3].width, stream_visible_rows);
-    if parallel_event_stream_title_visible(&detail_lines, layout[3].width, layout[3]) {
-        render_inline_scrolled_section(
-            frame,
-            layout[3],
-            Line::from(PARALLEL_EVENT_STREAM_TITLE),
-            detail_lines,
-            stream_scroll_offset,
-        );
-    } else {
-        /*
-         * In host-scrollback mode, overflowed stream rows above this inline area
-         * are already durable terminal history. Rendering a panel title here puts
-         * chrome between two chunks of the same event stream, which looks like the
-         * header jumped into the log. Keep the live tail data-only instead.
-         */
-        render_inline_scrolled_body(frame, layout[3], detail_lines, stream_scroll_offset);
-    }
+    render_inline_parallel_event_stream(frame, layout[3], detail_lines);
     render_inline_section(
         frame,
         layout[4],
@@ -484,6 +464,35 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         key_lines,
         true,
     );
+}
+
+fn render_inline_parallel_event_stream(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+) {
+    let stream_visible_rows =
+        parallel_event_stream_visible_rows_for_lines(&lines, area.width, area);
+    let stream_scroll_offset =
+        event_boundary_scroll_offset(&lines, area.width, stream_visible_rows);
+    if parallel_event_stream_title_visible(&lines, area.width, area) {
+        render_inline_scrolled_section(
+            frame,
+            area,
+            Line::from(PARALLEL_EVENT_STREAM_TITLE),
+            lines,
+            stream_scroll_offset,
+        );
+    } else {
+        /*
+         * Architecture contract: a split event stream is not a titled panel.
+         * In host-scrollback mode, overflowed rows above this inline area are
+         * already durable terminal history. Rendering title chrome here puts a
+         * non-event row between two chunks of the same stream, so the live tail
+         * must stay data-only.
+         */
+        render_inline_scrolled_body(frame, area, lines, stream_scroll_offset);
+    }
 }
 
 fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_rows: usize) -> u16 {
