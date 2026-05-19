@@ -1,12 +1,13 @@
 use super::super::shell_presentation::{
-    DirectionsMaintenanceOverlayView, HelpOverlayView, ModelSelectionOverlayView, OverlayListView,
-    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
-    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    ViewSelectionOverlayView, build_directions_maintenance_overlay_view, build_help_overlay_view,
-    build_model_selection_overlay_view, build_parallel_peek_overlay_view,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_overlay_view,
-    build_supersession_overlay_view, build_view_selection_overlay_view,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, LanguageSelectionOverlayView,
+    ModelSelectionOverlayView, OverlayListView, ParallelPeekOverlayView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_language_selection_overlay_view, build_model_selection_overlay_view,
+    build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
@@ -67,6 +68,9 @@ pub(super) fn draw_inline_shell_inspection(
         }
         ShellOverlay::ViewSelection => {
             draw_inline_view_selection_inspection(frame, inspection_area, app)
+        }
+        ShellOverlay::LanguageSelection => {
+            draw_inline_language_selection_inspection(frame, inspection_area, app)
         }
         ShellOverlay::Supersession => {
             draw_inline_supersession_inspection(frame, inspection_area, app)
@@ -405,6 +409,46 @@ fn draw_inline_view_selection_inspection(frame: &mut Frame<'_>, area: Rect, app:
         true,
     );
     render_inline_titled_panel(frame, layout[1], Line::from("Views"), mode_lines, false);
+    render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+fn draw_inline_language_selection_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+) {
+    let overlay_view = build_language_selection_overlay_view(app);
+    let LanguageSelectionOverlayView {
+        header_lines,
+        language_lines,
+        status_lines,
+        key_lines,
+    } = overlay_view;
+    let body_lines = take_panel_body_lines(header_lines);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Min(7),
+            Constraint::Length(inline_section_height(&status_lines, 4)),
+            Constraint::Length(inline_section_height(&key_lines, 3)),
+        ])
+        .split(area);
+
+    render_inline_titled_panel(
+        frame,
+        layout[0],
+        inline_overlay_title("Select Language"),
+        body_lines,
+        true,
+    );
+    render_inline_titled_panel(
+        frame,
+        layout[1],
+        Line::from("Languages"),
+        language_lines,
+        false,
+    );
     render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }

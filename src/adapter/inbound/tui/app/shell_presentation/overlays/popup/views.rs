@@ -77,6 +77,21 @@ pub(crate) struct ViewSelectionOverlayView {
 }
 
 /*
+ * Language selection controls the local TUI copy layer. Runtime payloads and
+ * user-authored text are intentionally not translated by this adapter.
+ */
+pub(crate) struct LanguageSelectionOverlayView {
+    // Picker title and localization boundary summary.
+    pub(crate) header_lines: Vec<Line<'static>>,
+    // Language rows with current and selected language styling already applied.
+    pub(crate) language_lines: Vec<Line<'static>>,
+    // Current language and non-translated content note.
+    pub(crate) status_lines: Vec<Line<'static>>,
+    // Navigation and close hints.
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
+/*
  * Supersession overlay flattens parallel-mode orchestration into independent panels.
  * Each section maps to a different operational concern: global mode, capability,
  * pool capacity, live roster, selected detail, distributor queue, and controls.

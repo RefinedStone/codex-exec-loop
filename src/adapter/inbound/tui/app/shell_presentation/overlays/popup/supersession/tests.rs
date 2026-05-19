@@ -2,6 +2,7 @@ use super::{
     build_detail_lines, build_distributor_lines, build_parallel_event_stream_lines,
     build_roster_lines,
 };
+use crate::adapter::inbound::tui::app::TuiLanguage;
 use crate::adapter::inbound::tui::app::parallel_supervisor_events::parallel_supervisor_event_line;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
@@ -250,6 +251,7 @@ fn parallel_event_stream_does_not_replay_raw_runtime_feed() {
             "You",
             "안녕하세요",
         )],
+        TuiLanguage::Korean,
     )
     .into_iter()
     .map(|line| line.to_string())

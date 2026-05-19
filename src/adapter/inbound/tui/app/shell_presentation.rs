@@ -49,14 +49,16 @@ mod status_panels;
 mod transcript_copy;
 
 pub(super) use overlays::{
-    DirectionsMaintenanceOverlayView, HelpOverlayView, ModelSelectionOverlayView, OverlayListView,
-    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
-    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    ViewSelectionOverlayView, build_directions_maintenance_overlay_view, build_help_overlay_view,
-    build_model_selection_overlay_view, build_parallel_peek_overlay_view,
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
-    build_queue_overlay_view, build_session_overlay_view, build_startup_banner_lines,
-    build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
+    DirectionsMaintenanceOverlayView, HelpOverlayView, LanguageSelectionOverlayView,
+    ModelSelectionOverlayView, OverlayListView, ParallelPeekOverlayView,
+    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
+    StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
+    build_directions_maintenance_overlay_view, build_help_overlay_view,
+    build_language_selection_overlay_view, build_model_selection_overlay_view,
+    build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
+    build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
+    build_view_selection_overlay_view,
 };
 use runtime_status_copy::{
     auto_follow_prompt_status_line, build_working_line, compact_inline_detail,

@@ -81,6 +81,8 @@ mod history_insertion;
 mod inline_shell_commands;
 #[path = "app/inline_terminal_adapter.rs"]
 mod inline_terminal_adapter;
+#[path = "app/language.rs"]
+mod language;
 #[path = "app/model_selection_overlay_ui.rs"]
 mod model_selection_overlay_ui;
 #[path = "app/parallel_mode.rs"]
@@ -187,6 +189,7 @@ use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{
     InlineShellCommand, InlineShellCommandInput, is_turn_option_clear_argument,
 };
+use language::{LANGUAGE_SELECTION_OPTIONS, LanguageSelectionOverlayUiState, TuiLanguage};
 use model_selection_overlay_ui::{
     MODEL_SELECTION_EFFORT_OPTIONS, MODEL_SELECTION_MODEL_OPTIONS, ModelSelectionOverlayUiState,
     ModelSelectionStep,
@@ -309,6 +312,8 @@ struct NativeTuiApp {
     conversation_state: ConversationState,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
+    tui_language: TuiLanguage,
+    language_selection_overlay_ui_state: LanguageSelectionOverlayUiState,
     model_selection_overlay_ui_state: ModelSelectionOverlayUiState,
     view_selection_overlay_ui_state: ViewSelectionOverlayUiState,
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,

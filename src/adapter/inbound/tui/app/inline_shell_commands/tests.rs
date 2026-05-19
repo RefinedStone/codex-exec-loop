@@ -63,6 +63,16 @@ fn parse_recognizes_supported_aliases() {
             ":view midium",
             Some((InlineShellCommand::View, Some("midium"))),
         ),
+        (":language", Some((InlineShellCommand::Language, None))),
+        (":lang", Some((InlineShellCommand::Language, None))),
+        (
+            ":language english",
+            Some((InlineShellCommand::Language, Some("english"))),
+        ),
+        (
+            ":lang 한국어",
+            Some((InlineShellCommand::Language, Some("한국어"))),
+        ),
         (
             ":think high",
             Some((InlineShellCommand::Think, Some("high"))),
@@ -127,6 +137,7 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Stop,
             InlineShellCommand::Model,
             InlineShellCommand::View,
+            InlineShellCommand::Language,
             InlineShellCommand::Think,
             InlineShellCommand::Doctor,
             InlineShellCommand::PlanningInit,
@@ -193,6 +204,10 @@ fn suggestions_filter_by_prefix() {
         InlineShellCommand::suggestions(":v"),
         vec![InlineShellCommand::View]
     );
+    assert_eq!(
+        InlineShellCommand::suggestions(":la"),
+        vec![InlineShellCommand::Language]
+    );
 }
 
 #[test]
@@ -222,7 +237,7 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(12));
+    assert!(state.move_selection(13));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -255,6 +270,7 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
     assert_eq!(InlineShellCommand::Model.completion_text(), ":model");
     assert_eq!(InlineShellCommand::View.completion_text(), ":view");
+    assert_eq!(InlineShellCommand::Language.completion_text(), ":language");
     assert_eq!(InlineShellCommand::Think.completion_text(), ":think ");
     assert_eq!(InlineShellCommand::Reset.completion_text(), ":reset ");
 }
@@ -290,6 +306,7 @@ fn help_entries_use_renderable_command_forms() {
     assert!(rendered.contains(":stop - stop active sessions"));
     assert!(rendered.contains(":model - model and think"));
     assert!(rendered.contains(":view [simple|medium|detail] - conversation view"));
+    assert!(rendered.contains(":language [english|korean] - TUI language"));
     assert!(
         rendered.contains(":think <none|minimal|low|medium|high|xhigh|default> - reasoning effort")
     );
@@ -393,7 +410,7 @@ fn parallel_command_hint_is_argument_aware() {
 }
 
 #[test]
-fn model_view_and_think_command_hints_are_argument_aware() {
+fn model_view_language_and_think_command_hints_are_argument_aware() {
     let model_plain = InlineShellCommandInput::parse(":model").expect("command should parse");
     let model_set = InlineShellCommandInput::parse(":model gpt-5.4").expect("command should parse");
     let model_clear =
@@ -405,6 +422,13 @@ fn model_view_and_think_command_hints_are_argument_aware() {
     let view_midium = InlineShellCommandInput::parse(":view midium").expect("command should parse");
     let view_detail = InlineShellCommandInput::parse(":view detail").expect("command should parse");
     let view_invalid = InlineShellCommandInput::parse(":view all").expect("command should parse");
+    let language_plain = InlineShellCommandInput::parse(":language").expect("command should parse");
+    let language_english =
+        InlineShellCommandInput::parse(":language english").expect("command should parse");
+    let language_korean =
+        InlineShellCommandInput::parse(":language 한국어").expect("command should parse");
+    let language_invalid =
+        InlineShellCommandInput::parse(":language spanish").expect("command should parse");
     let think_plain = InlineShellCommandInput::parse(":think").expect("command should parse");
     let think_high = InlineShellCommandInput::parse(":think high").expect("command should parse");
     let think_xhigh =
@@ -449,6 +473,22 @@ fn model_view_and_think_command_hints_are_argument_aware() {
     assert_eq!(
         view_invalid.buffered_hint(),
         "Press Enter to apply `:view all`. Supported values: simple, medium, detail."
+    );
+    assert_eq!(
+        language_plain.buffered_hint(),
+        "Type `:language` to choose the TUI language, or `:language english|korean`."
+    );
+    assert_eq!(
+        language_english.buffered_hint(),
+        "Press Enter to set TUI language to English."
+    );
+    assert_eq!(
+        language_korean.buffered_hint(),
+        "Press Enter to set TUI language to Korean."
+    );
+    assert_eq!(
+        language_invalid.buffered_hint(),
+        "Press Enter to apply `:language spanish`. Supported values: english, korean."
     );
     assert_eq!(
         think_plain.buffered_hint(),
@@ -539,6 +579,7 @@ fn execution_status_stays_alias_neutral() {
         (":stop", None),
         (":model gpt-5.4", None),
         (":view detail", None),
+        (":language english", None),
         (":think high", None),
         (":reset queue", None),
     ];

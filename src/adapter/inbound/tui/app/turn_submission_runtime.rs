@@ -687,7 +687,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::{
         AutoFollowSubmitContext, BackgroundMessage, ConversationInputEvent, ConversationState,
         ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep,
-        PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay, StartupState,
+        PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay, StartupState, TuiLanguage,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -1444,6 +1444,41 @@ mod tests {
         );
 
         assert_eq!(app.conversation_view_mode, ConversationViewMode::Medium);
+    }
+
+    #[test]
+    fn inline_language_picker_and_argument_update_tui_language() {
+        let workspace = TempWorkspace::new("language-command");
+        let mut app = make_test_app(&workspace);
+
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":language").expect("language command should parse"),
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::LanguageSelection);
+        app.handle_language_selection_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('1'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert_eq!(app.tui_language, TuiLanguage::English);
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("language set to English")
+        );
+
+        app.execute_inline_shell_command_input(
+            InlineShellCommandInput::parse(":language 한국어")
+                .expect("language command should parse"),
+        );
+
+        assert_eq!(app.tui_language, TuiLanguage::Korean);
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("언어가 한국어로 설정되었습니다.")
+        );
     }
 
     #[test]

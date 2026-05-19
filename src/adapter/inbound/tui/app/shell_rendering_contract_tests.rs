@@ -8,8 +8,9 @@ use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
-    ParallelModePoolSlotState, ParallelModeReadinessState, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
+    ParallelModeReadinessState, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
@@ -500,6 +501,30 @@ fn inline_view_selection_inspection_renders_visibility_picker() {
 }
 
 #[test]
+fn inline_language_selection_inspection_renders_language_picker() {
+    let mut terminal = Terminal::new(TestBackend::new(104, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_language_selection_overlay();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline language selection render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Select Language / inline inspection"));
+    assert!(rendered.contains("Languages"));
+    assert!(rendered.contains("English"));
+    assert!(rendered.contains("한국어"));
+    assert!(
+        rendered.contains("User prompts, task titles, and runtime payloads are kept as written.")
+    );
+    assert!(rendered.contains("Enter/1-2: apply"));
+    assert!(!rendered.contains(":language <"));
+    assert!(!rendered.contains("┌"));
+}
+
+#[test]
 fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
@@ -529,6 +554,42 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(rendered.contains("Ctrl+O/Esc/Ctrl+C close"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_parallel_event_stream_uses_selected_tui_language() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.tui_language = TuiLanguage::English;
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "idle", Vec::new()),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(
+            Vec::new(),
+            vec![ParallelModeCompletionFeedEntry::new(
+                "reported",
+                "no agent results reported yet",
+            )],
+            "idle",
+            "queue idle",
+        ),
+        Some("control tower is live".to_string()),
+    )));
+    app.shell_overlay = ShellOverlay::Supersession;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession language render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("parallel board refreshed. control tower is live"));
+    assert!(rendered.contains("reported stage record: no agent results reported yet"));
+    assert!(!rendered.contains("상태를 갱신했습니다"));
+    assert!(!rendered.contains("단계 기록"));
 }
 
 #[test]
@@ -1300,6 +1361,8 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     let model_selection = shell_presentation::build_model_selection_overlay_view(&app);
     app.show_view_selection_overlay();
     let view_selection = shell_presentation::build_view_selection_overlay_view(&app);
+    app.show_language_selection_overlay();
+    let language_selection = shell_presentation::build_language_selection_overlay_view(&app);
     let queue = shell_presentation::build_queue_overlay_view(&app);
     let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
     let supersession = shell_presentation::build_supersession_overlay_view(&app);
@@ -1311,6 +1374,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
         help.header_lines[0].to_string(),
         model_selection.header_lines[0].to_string(),
         view_selection.header_lines[0].to_string(),
+        language_selection.header_lines[0].to_string(),
         queue.header_lines[0].to_string(),
         directions.header_lines[0].to_string(),
         supersession.header_lines[0].to_string(),
