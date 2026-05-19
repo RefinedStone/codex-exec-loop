@@ -488,11 +488,11 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        initial_stream.contains("parallel board 상태를 갱신했습니다"),
+        initial_stream.contains("parallel board refreshed"),
         "initial board status should be recorded as stream history:\n{initial_stream}"
     );
     assert!(
-        initial_stream.contains("reported 단계 기록: no agent results reported yet"),
+        initial_stream.contains("reported stage record: no agent results reported yet"),
         "initial ledger status should be recorded as stream history:\n{initial_stream}"
     );
 
@@ -521,7 +521,7 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
     let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
     assert!(
         terminal_scrollback.contains("control tower is live")
-            && terminal_scrollback.contains("in read-only supervisor mode"),
+            && terminal_scrollback.contains("read-only supervisor mode"),
         "initial board status should move into durable terminal history instead of disappearing:\n{terminal_scrollback}"
     );
     assert!(
@@ -632,7 +632,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
             .contains("control tower is live")
             && runtime_tail_frame
                 .terminal_history_text
-                .contains("in read-only supervisor mode"),
+                .contains("read-only supervisor mode"),
         "initial board status should remain in terminal history after redraw:\n{}",
         runtime_tail_frame.terminal_history_text
     );

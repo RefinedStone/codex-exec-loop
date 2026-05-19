@@ -1,6 +1,5 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
-assertion_line: 246
 expression: rendered
 ---
 Akra / Planning Draft / inline inspection
@@ -28,6 +27,6 @@ controls: Tab/BackTab switches files  |  arrows move the cursor
 controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word
 controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning
 controls: Esc/Ctrl+C closes this surface
-Akra  |  워크플로: 준비됨  |  큐: 로드 준비됨  |  관찰: 꺼짐
+Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
 >
 prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help
