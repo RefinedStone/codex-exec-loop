@@ -63,6 +63,34 @@ impl AkraTheme {
         Style::default().fg(Color::Magenta)
     }
 
+    pub(super) fn markdown_heading() -> Style {
+        Self::brand()
+    }
+
+    pub(super) fn markdown_emphasis() -> Style {
+        Self::brand()
+    }
+
+    pub(super) fn markdown_inline_code() -> Style {
+        Self::tool().add_modifier(Modifier::BOLD)
+    }
+
+    pub(super) fn markdown_code_block() -> Style {
+        Self::tool()
+    }
+
+    pub(super) fn markdown_fence() -> Style {
+        Self::subtle()
+    }
+
+    pub(super) fn markdown_marker() -> Style {
+        Self::accent().add_modifier(Modifier::BOLD)
+    }
+
+    pub(super) fn markdown_quote() -> Style {
+        Self::muted().add_modifier(Modifier::ITALIC)
+    }
+
     // selection은 fg/bg를 모두 지정한다. terminal 기본 palette가 focus row를 애매하게 만들지 못하게 한다.
     pub(super) fn selected() -> Style {
         Style::default()

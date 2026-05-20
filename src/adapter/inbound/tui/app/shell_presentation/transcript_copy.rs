@@ -123,17 +123,16 @@ fn format_markdown_body_line(text: &str, in_markdown_code_fence: &mut bool) -> L
     let mut spans = vec![Span::raw("  ")];
     if is_markdown_code_fence(&expanded) {
         *in_markdown_code_fence = !*in_markdown_code_fence;
-        spans.push(Span::raw(expanded));
+        spans.push(Span::styled(expanded, AkraTheme::markdown_fence()));
         return Line::from(spans);
     }
     if *in_markdown_code_fence {
-        spans.push(Span::raw(expanded));
+        spans.push(Span::styled(expanded, AkraTheme::markdown_code_block()));
         return Line::from(spans);
     }
-    let (body, base_style) = markdown_heading_body(&expanded)
-        .map(|heading| (heading.to_string(), markdown_bold_style(Style::default())))
-        .unwrap_or((expanded, Style::default()));
-    spans.extend(format_markdown_inline_spans(&body, base_style));
+    let block = markdown_block_line(&expanded);
+    spans.extend(block.prefix_spans);
+    spans.extend(format_markdown_inline_spans(block.body, block.body_style));
     Line::from(spans)
 }
 
@@ -151,6 +150,89 @@ fn markdown_heading_body(text: &str) -> Option<&str> {
     text.get(marker_bytes..)
         .and_then(|tail| tail.strip_prefix(' '))
         .filter(|tail| !tail.trim().is_empty())
+}
+
+struct MarkdownBlockLine<'a> {
+    prefix_spans: Vec<Span<'static>>,
+    body: &'a str,
+    body_style: Style,
+}
+
+fn markdown_block_line(text: &str) -> MarkdownBlockLine<'_> {
+    if let Some(heading) = markdown_heading_body(text) {
+        return MarkdownBlockLine {
+            prefix_spans: Vec::new(),
+            body: heading,
+            body_style: AkraTheme::markdown_heading(),
+        };
+    }
+    if markdown_horizontal_rule(text) {
+        return MarkdownBlockLine {
+            prefix_spans: Vec::new(),
+            body: text,
+            body_style: AkraTheme::markdown_fence(),
+        };
+    }
+
+    let leading_len = text.len() - text.trim_start().len();
+    let leading = &text[..leading_len];
+    let tail = &text[leading_len..];
+    if let Some((marker, body)) = markdown_quote_parts(tail) {
+        return MarkdownBlockLine {
+            prefix_spans: markdown_prefix_spans(leading, marker, AkraTheme::markdown_quote()),
+            body,
+            body_style: AkraTheme::markdown_quote(),
+        };
+    }
+    if let Some((marker, body)) = markdown_list_parts(tail) {
+        return MarkdownBlockLine {
+            prefix_spans: markdown_prefix_spans(leading, marker, AkraTheme::markdown_marker()),
+            body,
+            body_style: Style::default(),
+        };
+    }
+
+    MarkdownBlockLine {
+        prefix_spans: Vec::new(),
+        body: text,
+        body_style: Style::default(),
+    }
+}
+
+fn markdown_horizontal_rule(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.len() >= 3 && trimmed.chars().all(|ch| matches!(ch, '-' | '*' | '_'))
+}
+
+fn markdown_quote_parts(text: &str) -> Option<(&str, &str)> {
+    text.strip_prefix("> ")
+        .map(|body| ("> ", body))
+        .or_else(|| text.strip_prefix('>').map(|body| (">", body)))
+}
+
+fn markdown_list_parts(text: &str) -> Option<(&str, &str)> {
+    if text.starts_with("- ") || text.starts_with("+ ") || text.starts_with("* ") {
+        return Some((&text[..2], &text[2..]));
+    }
+    let digit_count = text.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digit_count == 0 {
+        return None;
+    }
+    let marker_tail = &text[digit_count..];
+    if marker_tail.starts_with(". ") || marker_tail.starts_with(") ") {
+        let marker_len = digit_count + 2;
+        return Some((&text[..marker_len], &text[marker_len..]));
+    }
+    None
+}
+
+fn markdown_prefix_spans(leading: &str, marker: &str, marker_style: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if !leading.is_empty() {
+        spans.push(Span::raw(leading.to_string()));
+    }
+    spans.push(Span::styled(marker.to_string(), marker_style));
+    spans
 }
 
 fn format_markdown_inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
@@ -201,7 +283,7 @@ fn next_markdown_marker(text: &str, base_style: Style) -> Option<(&'static str, 
         return Some(("__", markdown_bold_style(base_style)));
     }
     if text.starts_with('`') {
-        return Some(("`", AkraTheme::tool()));
+        return Some(("`", AkraTheme::markdown_inline_code()));
     }
     None
 }
@@ -216,7 +298,11 @@ fn split_before_next_markdown_marker(text: &str) -> Option<(&str, usize)> {
 }
 
 fn markdown_bold_style(base_style: Style) -> Style {
-    base_style.add_modifier(Modifier::BOLD)
+    if base_style == Style::default() {
+        AkraTheme::markdown_emphasis()
+    } else {
+        base_style.add_modifier(Modifier::BOLD)
+    }
 }
 
 // Speaker labels keep the strongest style; body markdown uses smaller inline emphasis so prose and logs remain readable.
@@ -246,20 +332,38 @@ mod tests {
             format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
 
         assert_eq!(line_text(&lines[1]), "  Summary");
-        assert!(
-            lines[1].spans[1]
-                .style
-                .add_modifier
-                .contains(Modifier::BOLD)
-        );
+        assert_eq!(lines[1].spans[1].style, AkraTheme::markdown_heading());
         assert_eq!(line_text(&lines[2]), "  Changed and cargo test");
+        assert_eq!(lines[2].spans[1].style, AkraTheme::markdown_emphasis());
+        assert_eq!(lines[2].spans[3].style, AkraTheme::markdown_inline_code());
+    }
+
+    #[test]
+    fn transcript_body_colors_markdown_block_markers() {
+        let messages = vec![ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "**수정사항**\n- 변경한 파일 없음\n1. 다음 단계\n> 참고",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        )];
+
+        let lines =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
+
+        assert_eq!(line_text(&lines[1]), "  수정사항");
+        assert_eq!(lines[1].spans[1].style, AkraTheme::markdown_emphasis());
+        assert_eq!(line_text(&lines[2]), "  - 변경한 파일 없음");
+        assert_eq!(lines[2].spans[1].style, AkraTheme::markdown_marker());
+        assert_eq!(line_text(&lines[3]), "  1. 다음 단계");
+        assert_eq!(lines[3].spans[1].style, AkraTheme::markdown_marker());
+        assert_eq!(line_text(&lines[4]), "  > 참고");
+        assert_eq!(lines[4].spans[1].style, AkraTheme::markdown_quote());
         assert!(
-            lines[2].spans[1]
+            lines[4].spans[2]
                 .style
                 .add_modifier
-                .contains(Modifier::BOLD)
+                .contains(Modifier::ITALIC)
         );
-        assert_eq!(lines[2].spans[3].style, AkraTheme::tool());
     }
 
     #[test]
@@ -275,11 +379,14 @@ mod tests {
             format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
 
         assert_eq!(line_text(&lines[1]), "  ```rust");
+        assert_eq!(lines[1].spans[1].style, AkraTheme::markdown_fence());
         assert_eq!(
             line_text(&lines[2]),
             "  let literal = \"**keep markers**\";"
         );
+        assert_eq!(lines[2].spans[1].style, AkraTheme::markdown_code_block());
         assert_eq!(line_text(&lines[3]), "  ```");
+        assert_eq!(lines[3].spans[1].style, AkraTheme::markdown_fence());
     }
 
     fn line_text(line: &Line<'_>) -> String {
