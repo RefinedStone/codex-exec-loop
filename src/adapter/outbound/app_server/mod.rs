@@ -17,10 +17,13 @@ mod planning_worker_skill;
 pub(crate) mod protocol;
 pub(crate) mod runtime;
 
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, TryLockError};
+use std::thread;
 
 use anyhow::{Result, anyhow};
+use chrono::Utc;
 
 use self::connection::{
     AppServerConnection, AppServerConnectionConfig, AppServerTurnInterruptSignal,
@@ -37,6 +40,10 @@ use self::protocol::{
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
+};
+use crate::application::port::outbound::app_server_prompt_log_port::{
+    AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptLogPort,
+    AppServerPromptOutputRecord, NoopAppServerPromptLogPort,
 };
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
@@ -66,6 +73,7 @@ const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning
 Evaluate accepted DB direction authority, accepted DB task authority, and DB queue projection only.
 Do not edit planning files, source files, SQL, or JSON authority directly.
 Use the attached queue-mutation skill and `akra planning-tool run .` before falling back to final planning_task_commands."#;
+static NEXT_PROMPT_LOG_INTERACTION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct CodexAppServerAdapter {
@@ -81,6 +89,7 @@ pub struct CodexAppServerAdapter {
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
     turn_interrupt_signal: AppServerTurnInterruptSignal,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
+    prompt_log_port: Arc<dyn AppServerPromptLogPort>,
 }
 
 impl CodexAppServerAdapter {
@@ -92,24 +101,54 @@ impl CodexAppServerAdapter {
         client_name: impl Into<String>,
         client_version: impl Into<String>,
     ) -> Self {
+        Self::from_environment_with_prompt_log(
+            client_name,
+            client_version,
+            Arc::new(NoopAppServerPromptLogPort),
+        )
+    }
+
+    pub fn from_environment_with_prompt_log(
+        client_name: impl Into<String>,
+        client_version: impl Into<String>,
+        prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    ) -> Self {
         /*
          * Adapter construction snapshots env-driven timeout and execution policy once.
          * That keeps a single TUI process from changing approval/sandbox behavior in
          * the middle of shared runtime reuse or hidden worker launches.
          */
-        Self::with_configs(
+        Self::with_configs_and_prompt_log(
             client_name,
             client_version,
             AppServerConnectionConfig::from_environment(),
             AppServerExecutionPolicy::from_environment(),
+            prompt_log_port,
         )
     }
 
+    #[cfg(test)]
     fn with_configs(
         client_name: impl Into<String>,
         client_version: impl Into<String>,
         connection_config: AppServerConnectionConfig,
         execution_policy: AppServerExecutionPolicy,
+    ) -> Self {
+        Self::with_configs_and_prompt_log(
+            client_name,
+            client_version,
+            connection_config,
+            execution_policy,
+            Arc::new(NoopAppServerPromptLogPort),
+        )
+    }
+
+    fn with_configs_and_prompt_log(
+        client_name: impl Into<String>,
+        client_version: impl Into<String>,
+        connection_config: AppServerConnectionConfig,
+        execution_policy: AppServerExecutionPolicy,
+        prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     ) -> Self {
         Self {
             client_name: client_name.into(),
@@ -119,6 +158,7 @@ impl CodexAppServerAdapter {
             shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
             turn_interrupt_signal: AppServerTurnInterruptSignal::default(),
             planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
+            prompt_log_port,
         }
     }
 
@@ -167,11 +207,18 @@ impl CodexAppServerAdapter {
 
             self.start_turn_and_wait_for_stream(
                 connection,
-                &thread_id,
                 vec![TurnInputItem::text(prompt)],
                 model,
                 effort,
                 &event_sender,
+                AppServerPromptTraceContext {
+                    workspace_dir: cwd.to_string(),
+                    session_kind: "main".to_string(),
+                    operation: "new_thread_turn".to_string(),
+                    service_name: None,
+                    developer_instructions: None,
+                    thread_id: thread_id.clone(),
+                },
             )
         });
 
@@ -226,11 +273,20 @@ impl CodexAppServerAdapter {
 
             self.start_turn_and_wait_for_stream(
                 connection,
-                &thread_id,
                 self.planning_worker_turn_input(prompt),
                 Some(PLANNING_WORKER_MODEL),
                 Some(ReasoningEffortValue::Medium),
                 &event_sender,
+                AppServerPromptTraceContext {
+                    workspace_dir: workspace_directory.to_string(),
+                    session_kind: "planning-worker".to_string(),
+                    operation: "hidden_planning_thread".to_string(),
+                    service_name: Some(PLANNING_WORKER_SERVICE_NAME.to_string()),
+                    developer_instructions: Some(
+                        PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.to_string(),
+                    ),
+                    thread_id: thread_id.clone(),
+                },
             )
         });
         match &result {
@@ -442,11 +498,11 @@ impl CodexAppServerAdapter {
     fn start_turn_and_wait_for_stream(
         &self,
         connection: &mut AppServerConnection,
-        thread_id: &str,
         input: Vec<TurnInputItem>,
         model: Option<&str>,
         effort: Option<ReasoningEffortValue>,
         event_sender: &Sender<ConversationStreamEvent>,
+        prompt_trace_context: AppServerPromptTraceContext,
     ) -> Result<()> {
         /*
          * The interrupt generation is sampled before turn/start so a stale stop from a
@@ -455,27 +511,90 @@ impl CodexAppServerAdapter {
          * turn/interrupt.
          */
         let observed_interrupt_generation = self.turn_interrupt_signal.current_generation();
-        let turn_response = connection.start_turn(TurnStartParams {
-            thread_id: thread_id.to_string(),
+        let started_at = Utc::now().to_rfc3339();
+        let input_records = prompt_log_input_records(&input);
+        let trace_thread_id = prompt_trace_context.thread_id.clone();
+        let turn_response = match connection.start_turn(TurnStartParams {
+            thread_id: trace_thread_id.clone(),
             input,
             approval_policy: Some(self.execution_policy.approval_policy),
             approvals_reviewer: self.execution_policy.approvals_reviewer,
             sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
             model: model.map(str::to_string),
             effort,
-        })?;
+        }) {
+            Ok(response) => response,
+            Err(error) => {
+                self.record_prompt_interaction(AppServerPromptInteractionRecord {
+                    sequence: 0,
+                    interaction_id: next_prompt_log_interaction_id(),
+                    session_kind: prompt_trace_context.session_kind,
+                    operation: prompt_trace_context.operation,
+                    status: "failed".to_string(),
+                    workspace_dir: prompt_trace_context.workspace_dir,
+                    thread_id: Some(trace_thread_id),
+                    turn_id: None,
+                    service_name: prompt_trace_context.service_name,
+                    model: model.map(str::to_string),
+                    reasoning_effort: effort.map(reasoning_effort_label).map(str::to_string),
+                    developer_instructions: prompt_trace_context.developer_instructions,
+                    input_items: input_records,
+                    output_items: Vec::new(),
+                    error_message: Some(error.to_string()),
+                    started_at,
+                    completed_at: Utc::now().to_rfc3339(),
+                });
+                return Err(error);
+            }
+        };
 
         let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
             turn_id: turn_response.turn.id.clone(),
         });
 
-        connection.wait_for_turn_stream(
-            thread_id,
+        let output_capture = Arc::new(Mutex::new(AppServerPromptOutputCapture::default()));
+        let (stream_event_sender, forwarder) =
+            prompt_log_stream_forwarder(event_sender.clone(), output_capture.clone());
+        let stream_result = connection.wait_for_turn_stream(
+            &trace_thread_id,
             &turn_response.turn.id,
             &self.turn_interrupt_signal,
             observed_interrupt_generation,
-            event_sender,
-        )
+            &stream_event_sender,
+        );
+        drop(stream_event_sender);
+        if forwarder.join().is_err() {
+            tracing::warn!("app-server prompt log stream forwarder panicked");
+        }
+        let output_items = output_capture
+            .lock()
+            .map(|capture| capture.output_items.clone())
+            .unwrap_or_default();
+        self.record_prompt_interaction(AppServerPromptInteractionRecord {
+            sequence: 0,
+            interaction_id: next_prompt_log_interaction_id(),
+            session_kind: prompt_trace_context.session_kind,
+            operation: prompt_trace_context.operation,
+            status: if stream_result.is_ok() {
+                "completed".to_string()
+            } else {
+                "failed".to_string()
+            },
+            workspace_dir: prompt_trace_context.workspace_dir,
+            thread_id: Some(trace_thread_id),
+            turn_id: Some(turn_response.turn.id.clone()),
+            service_name: prompt_trace_context.service_name,
+            model: model.map(str::to_string),
+            reasoning_effort: effort.map(reasoning_effort_label).map(str::to_string),
+            developer_instructions: prompt_trace_context.developer_instructions,
+            input_items: input_records,
+            output_items,
+            error_message: stream_result.as_ref().err().map(ToString::to_string),
+            started_at,
+            completed_at: Utc::now().to_rfc3339(),
+        });
+
+        stream_result
     }
 
     fn planning_worker_turn_input(&self, prompt: &str) -> Vec<TurnInputItem> {
@@ -507,6 +626,16 @@ impl CodexAppServerAdapter {
 
     fn request_turn_interrupt_for_all_streams(&self) {
         self.turn_interrupt_signal.request_stop_all_sessions();
+    }
+
+    fn record_prompt_interaction(&self, record: AppServerPromptInteractionRecord) {
+        let workspace_dir = record.workspace_dir.clone();
+        if let Err(error) = self
+            .prompt_log_port
+            .append_app_server_prompt_interaction(&workspace_dir, record)
+        {
+            tracing::warn!(%workspace_dir, %error, "failed to record app-server prompt interaction");
+        }
     }
 }
 
@@ -626,7 +755,7 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         let result = self.with_streaming_runtime(|connection| {
             let model = options.model.as_deref();
             let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
-            connection.resume_thread(ThreadResumeParams {
+            let resume_response = connection.resume_thread(ThreadResumeParams {
                 thread_id: thread_id.to_string(),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
@@ -635,11 +764,18 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
             emit_codex_app_server_reattach_attachment(&event_sender);
             self.start_turn_and_wait_for_stream(
                 connection,
-                thread_id,
                 vec![TurnInputItem::text(prompt)],
                 model,
                 effort,
                 &event_sender,
+                AppServerPromptTraceContext {
+                    workspace_dir: resume_response.thread.cwd,
+                    session_kind: "main".to_string(),
+                    operation: "resumed_thread_turn".to_string(),
+                    service_name: None,
+                    developer_instructions: None,
+                    thread_id: thread_id.to_string(),
+                },
             )
         });
 
@@ -689,11 +825,18 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
 
             let stream_result = self.start_turn_and_wait_for_stream(
                 connection,
-                &thread_id,
                 vec![TurnInputItem::text(request.prompt)],
                 None,
                 None,
                 &event_sender,
+                AppServerPromptTraceContext {
+                    workspace_dir: request.cwd.to_string(),
+                    session_kind: "parallel-worker".to_string(),
+                    operation: "isolated_parallel_thread".to_string(),
+                    service_name: Some(request.service_name.to_string()),
+                    developer_instructions: Some(request.developer_instructions.to_string()),
+                    thread_id: thread_id.clone(),
+                },
             );
             if stream_result.is_ok()
                 && let Err(error) = connection.archive_thread(&thread_id)
@@ -709,6 +852,88 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
 
         finish_stream_result(result, &event_sender)
     }
+}
+
+#[derive(Debug, Clone)]
+struct AppServerPromptTraceContext {
+    workspace_dir: String,
+    session_kind: String,
+    operation: String,
+    service_name: Option<String>,
+    developer_instructions: Option<String>,
+    thread_id: String,
+}
+
+#[derive(Debug, Default)]
+struct AppServerPromptOutputCapture {
+    output_items: Vec<AppServerPromptOutputRecord>,
+}
+
+impl AppServerPromptOutputCapture {
+    fn record_event(&mut self, event: &ConversationStreamEvent) {
+        if let ConversationStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        } = event
+        {
+            self.output_items.push(AppServerPromptOutputRecord::new(
+                item_id.clone(),
+                phase.clone(),
+                text.clone(),
+            ));
+        }
+    }
+}
+
+fn prompt_log_stream_forwarder(
+    event_sender: Sender<ConversationStreamEvent>,
+    output_capture: Arc<Mutex<AppServerPromptOutputCapture>>,
+) -> (Sender<ConversationStreamEvent>, thread::JoinHandle<()>) {
+    let (forward_tx, forward_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for event in forward_rx {
+            if let Ok(mut capture) = output_capture.lock() {
+                capture.record_event(&event);
+            }
+            let _ = event_sender.send(event);
+        }
+    });
+    (forward_tx, handle)
+}
+
+fn prompt_log_input_records(input: &[TurnInputItem]) -> Vec<AppServerPromptInputRecord> {
+    input
+        .iter()
+        .map(|item| match item {
+            TurnInputItem::Text { text } => {
+                AppServerPromptInputRecord::new("text", "turn input", text.clone())
+            }
+            TurnInputItem::Skill { name, path } => {
+                AppServerPromptInputRecord::new("skill", name.clone(), path.clone())
+            }
+        })
+        .collect()
+}
+
+fn reasoning_effort_label(effort: ReasoningEffortValue) -> &'static str {
+    match effort {
+        ReasoningEffortValue::None => "none",
+        ReasoningEffortValue::Minimal => "minimal",
+        ReasoningEffortValue::Low => "low",
+        ReasoningEffortValue::Medium => "medium",
+        ReasoningEffortValue::High => "high",
+        ReasoningEffortValue::XHigh => "xhigh",
+    }
+}
+
+fn next_prompt_log_interaction_id() -> String {
+    let sequence = NEXT_PROMPT_LOG_INTERACTION_ID.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{}-{}-{sequence}",
+        std::process::id(),
+        Utc::now().timestamp_millis()
+    )
 }
 
 fn finish_stream_result(
@@ -734,10 +959,12 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::mpsc;
     use std::sync::{Mutex, MutexGuard};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use anyhow::Result;
     use serde_json::Value;
 
     use super::connection::AppServerConnectionConfig;
@@ -746,6 +973,10 @@ mod tests {
     use super::{
         CodexAppServerAdapter, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS,
         PLANNING_WORKER_SERVICE_NAME, PlanningThreadLauncher, finish_stream_result,
+    };
+    use crate::application::port::outbound::app_server_prompt_log_port::{
+        AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
+        AppServerPromptLogPort,
     };
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::parallel_agent_worker_port::{
@@ -983,6 +1214,63 @@ mod tests {
     }
 
     #[test]
+    fn app_server_streams_record_prompt_log_entries() {
+        let fake_codex = FakeCodex::install("prompt-log");
+        let prompt_log = Arc::new(RecordingPromptLogPort::default());
+        let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default(),
+            AppServerExecutionPolicy::default(),
+            prompt_log.clone(),
+        );
+
+        let (main_tx, main_rx) = mpsc::channel();
+        adapter
+            .run_new_thread_stream(
+                "/repo",
+                "start a logged session",
+                ConversationTurnOptions::default(),
+                main_tx,
+            )
+            .expect("main stream should complete");
+        assert!(has_turn_completed(&main_rx.try_iter().collect::<Vec<_>>()));
+
+        let (worker_tx, worker_rx) = mpsc::channel();
+        adapter
+            .run_isolated_new_thread_stream(
+                ParallelAgentWorkerStreamRequest {
+                    cwd: "/repo/slot-1",
+                    prompt: "implement logged task",
+                    developer_instructions: "worker developer instructions",
+                    service_name: "akra-parallel-worker",
+                },
+                worker_tx,
+            )
+            .expect("parallel stream should complete");
+        assert!(has_turn_completed(
+            &worker_rx.try_iter().collect::<Vec<_>>()
+        ));
+
+        let records = prompt_log.records();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].session_kind, "main");
+        assert_eq!(records[0].operation, "new_thread_turn");
+        assert_eq!(records[0].input_items[0].content, "start a logged session");
+        assert_eq!(records[0].output_items[0].text, "fake final response");
+        assert_eq!(records[1].session_kind, "parallel-worker");
+        assert_eq!(
+            records[1].developer_instructions.as_deref(),
+            Some("worker developer instructions")
+        );
+        assert_eq!(
+            records[1].service_name.as_deref(),
+            Some("akra-parallel-worker")
+        );
+        assert!(!fake_codex.logged_methods().is_empty());
+    }
+
+    #[test]
     fn runtime_control_and_stop_requests_are_app_server_truths() {
         let adapter = test_adapter();
 
@@ -1066,6 +1354,44 @@ mod tests {
             AppServerConnectionConfig::default(),
             AppServerExecutionPolicy::default(),
         )
+    }
+
+    #[derive(Default)]
+    struct RecordingPromptLogPort {
+        records: Mutex<Vec<AppServerPromptInteractionRecord>>,
+    }
+
+    impl RecordingPromptLogPort {
+        fn records(&self) -> Vec<AppServerPromptInteractionRecord> {
+            self.records
+                .lock()
+                .expect("prompt log records lock should succeed")
+                .clone()
+        }
+    }
+
+    impl AppServerPromptLogPort for RecordingPromptLogPort {
+        fn append_app_server_prompt_interaction(
+            &self,
+            _workspace_dir: &str,
+            record: AppServerPromptInteractionRecord,
+        ) -> Result<()> {
+            self.records
+                .lock()
+                .expect("prompt log records lock should succeed")
+                .push(record);
+            Ok(())
+        }
+
+        fn load_recent_app_server_prompt_interactions(
+            &self,
+            _workspace_dir: &str,
+            _limit: usize,
+        ) -> Result<AppServerPromptInteractionSnapshot> {
+            Ok(AppServerPromptInteractionSnapshot {
+                records: self.records(),
+            })
+        }
     }
 
     fn has_launch_attachment(events: &[ConversationStreamEvent]) -> bool {
@@ -1320,6 +1646,19 @@ for line in sys.stdin:
                 "turnId": turn_id,
                 "itemId": "agent-1",
                 "delta": "fake delta",
+            },
+        })
+        send({
+            "method": "item/completed",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "item": {
+                    "type": "agentMessage",
+                    "id": "agent-1",
+                    "phase": "final",
+                    "text": "fake final response",
+                },
             },
         })
         send({

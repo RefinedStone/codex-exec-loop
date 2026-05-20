@@ -7,8 +7,9 @@ use super::helpers::{
     notice_location, render_fragment, render_html, verify_form_csrf,
 };
 use super::views::{
-    AkraDashboardTemplate, AkraMetricsTemplate, ControlsTemplate, DashboardTemplate,
-    DirectionsTemplate, DraftStatusTemplate, EditorTemplate, TasksTemplate,
+    AkraDashboardTemplate, AkraMetricsTemplate, AppServerPromptLogView, AppServerPromptsTemplate,
+    ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate, EditorTemplate,
+    TasksTemplate,
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
@@ -522,6 +523,29 @@ pub(super) async fn controls_page(
             overview,
             agent_profile_config,
             agent_profile_config_json,
+        },
+    )
+}
+
+pub(super) async fn app_server_prompts_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    let snapshot = state
+        .app_server_prompt_log_port
+        .load_recent_app_server_prompt_interactions(state.facade.workspace_dir(), 80)
+        .map_err(internal_server_error)?;
+    render_html(
+        jar,
+        AppServerPromptsTemplate {
+            page_title: "App-server Prompts".to_string(),
+            current_nav: "app_server_prompts",
+            workspace_dir: state.facade.workspace_dir().to_string(),
+            csrf_token,
+            notice: query.get("notice").cloned(),
+            prompt_log: AppServerPromptLogView::from_records(snapshot.records),
         },
     )
 }

@@ -46,6 +46,8 @@ const CONTROLS_TEMPLATE: &str = include_str!("../../../../templates/admin/contro
 const DIRECTIONS_TEMPLATE: &str = include_str!("../../../../templates/admin/directions.html");
 const EDITOR_TEMPLATE: &str = include_str!("../../../../templates/admin/editor.html");
 const TASKS_TEMPLATE: &str = include_str!("../../../../templates/admin/tasks.html");
+const APP_SERVER_PROMPTS_TEMPLATE: &str =
+    include_str!("../../../../templates/admin/app_server_prompts.html");
 const DASHBOARD_TEMPLATE: &str = include_str!("../../../../templates/admin/dashboard.html");
 const AKRA_DASHBOARD_TEMPLATE: &str =
     include_str!("../../../../templates/admin/akra_dashboard.html");
@@ -792,6 +794,7 @@ async fn admin_html_page_routes_render_live_templates() {
         ("/admin/directions", "Directions"),
         ("/admin/tasks", "Task catalog view"),
         ("/admin/controls", "Controls"),
+        ("/admin/app-server-prompts", "App-server prompt I/O"),
         ("/admin/akra", "data-admin-graphic"),
         ("/admin/akra/metrics", "AKRA detached metrics"),
         ("/admin/akra/directions", "게임발전국 작전 방향"),
@@ -828,6 +831,11 @@ async fn admin_html_page_routes_render_live_templates() {
         if uri == "/admin/tasks" {
             assert!(body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
+        }
+        if uri == "/admin/app-server-prompts" {
+            assert!(body.contains(
+                r#"<a href="/admin/app-server-prompts" class="active">App-server I/O</a>"#
+            ));
         }
         if uri == "/admin/akra/directions" {
             assert!(body.contains(r#"<body class="akra-graphic">"#));
@@ -1452,6 +1460,14 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     ));
     assert!(BASE_TEMPLATE.contains(
         r#"href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}""#
+    ));
+    assert!(BASE_TEMPLATE.contains(
+        r#"href="/admin/app-server-prompts" class="{% if current_nav == "app_server_prompts" %}active{% endif %}""#
+    ));
+    assert!(APP_SERVER_PROMPTS_TEMPLATE.contains("App-server prompt I/O"));
+    assert!(APP_SERVER_PROMPTS_TEMPLATE.contains("Developer Instructions"));
+    assert!(ADMIN_MOD.contains(
+        ".route(\n            \"/admin/app-server-prompts\",\n            get(pages::app_server_prompts_page),\n        )"
     ));
     assert!(BASE_TEMPLATE.contains("akraHashTabRoutes"));
     assert!(BASE_TEMPLATE.contains("window.location.pathname !== \"/admin/akra\""));

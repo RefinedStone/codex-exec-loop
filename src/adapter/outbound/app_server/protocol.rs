@@ -433,8 +433,7 @@ pub(super) struct ThreadStartResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ThreadResumeResponse {
-    #[serde(rename = "thread")]
-    pub(super) _thread: ThreadRecord,
+    pub(super) thread: ThreadRecord,
 }
 
 #[derive(Debug, Clone, Deserialize)]

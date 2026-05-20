@@ -7,6 +7,9 @@
 use askama::Template;
 
 use super::akra_dashboard::AkraAdminDashboardView;
+use crate::application::port::outbound::app_server_prompt_log_port::{
+    AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptOutputRecord,
+};
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::application::service::planning::{
     PlanningAdminManagementView, PlanningAdminOverview, PlanningAdminSessionView,
@@ -99,6 +102,176 @@ pub(super) struct ControlsTemplate {
     pub(super) overview: PlanningAdminOverview,
     pub(super) agent_profile_config: ParallelAgentProfileConfig,
     pub(super) agent_profile_config_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AppServerPromptLogView {
+    pub(super) records: Vec<AppServerPromptInteractionView>,
+    pub(super) total_count: usize,
+    pub(super) main_count: usize,
+    pub(super) worker_count: usize,
+    pub(super) failure_count: usize,
+}
+
+impl AppServerPromptLogView {
+    pub(super) fn from_records(records: Vec<AppServerPromptInteractionRecord>) -> Self {
+        let total_count = records.len();
+        let main_count = records
+            .iter()
+            .filter(|record| record.session_kind == "main")
+            .count();
+        let worker_count = records
+            .iter()
+            .filter(|record| record.session_kind != "main")
+            .count();
+        let failure_count = records
+            .iter()
+            .filter(|record| record.status == "failed")
+            .count();
+        Self {
+            records: records
+                .into_iter()
+                .map(AppServerPromptInteractionView::from_record)
+                .collect(),
+            total_count,
+            main_count,
+            worker_count,
+            failure_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AppServerPromptInteractionView {
+    pub(super) sequence: i64,
+    pub(super) interaction_id: String,
+    pub(super) session_kind: String,
+    pub(super) operation: String,
+    pub(super) status: String,
+    pub(super) status_class: String,
+    pub(super) workspace_dir: String,
+    pub(super) thread_id: String,
+    pub(super) turn_id: String,
+    pub(super) service_name: String,
+    pub(super) model: String,
+    pub(super) reasoning_effort: String,
+    pub(super) developer_instructions: Option<String>,
+    pub(super) input_items: Vec<AppServerPromptInputView>,
+    pub(super) output_items: Vec<AppServerPromptOutputView>,
+    pub(super) error_message: Option<String>,
+    pub(super) started_at: String,
+    pub(super) completed_at: String,
+    pub(super) input_chars: usize,
+    pub(super) output_chars: usize,
+    pub(super) filter_text: String,
+}
+
+impl AppServerPromptInteractionView {
+    fn from_record(record: AppServerPromptInteractionRecord) -> Self {
+        let input_chars = record.input_chars();
+        let output_chars = record.output_chars();
+        let thread_id = record.thread_id.unwrap_or_else(|| "none".to_string());
+        let turn_id = record.turn_id.unwrap_or_else(|| "none".to_string());
+        let service_name = record
+            .service_name
+            .unwrap_or_else(|| "main session".to_string());
+        let model = record.model.unwrap_or_else(|| "default".to_string());
+        let reasoning_effort = record
+            .reasoning_effort
+            .unwrap_or_else(|| "default".to_string());
+        let filter_text = format!(
+            "{} {} {} {} {} {} {}",
+            record.session_kind,
+            record.operation,
+            record.status,
+            record.workspace_dir,
+            thread_id,
+            turn_id,
+            service_name
+        );
+        Self {
+            sequence: record.sequence,
+            interaction_id: record.interaction_id,
+            session_kind: record.session_kind,
+            operation: record.operation,
+            status_class: record.status.clone(),
+            status: record.status,
+            workspace_dir: record.workspace_dir,
+            thread_id,
+            turn_id,
+            service_name,
+            model,
+            reasoning_effort,
+            developer_instructions: record.developer_instructions,
+            input_items: record
+                .input_items
+                .into_iter()
+                .map(AppServerPromptInputView::from_record)
+                .collect(),
+            output_items: record
+                .output_items
+                .into_iter()
+                .map(AppServerPromptOutputView::from_record)
+                .collect(),
+            error_message: record.error_message,
+            started_at: record.started_at,
+            completed_at: record.completed_at,
+            input_chars,
+            output_chars,
+            filter_text,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AppServerPromptInputView {
+    pub(super) kind: String,
+    pub(super) label: String,
+    pub(super) content: String,
+    pub(super) char_count: usize,
+}
+
+impl AppServerPromptInputView {
+    fn from_record(record: AppServerPromptInputRecord) -> Self {
+        let char_count = record.content.chars().count();
+        Self {
+            kind: record.kind,
+            label: record.label,
+            content: record.content,
+            char_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AppServerPromptOutputView {
+    pub(super) item_id: String,
+    pub(super) phase: String,
+    pub(super) text: String,
+    pub(super) char_count: usize,
+}
+
+impl AppServerPromptOutputView {
+    fn from_record(record: AppServerPromptOutputRecord) -> Self {
+        let char_count = record.text.chars().count();
+        Self {
+            item_id: record.item_id,
+            phase: record.phase.unwrap_or_else(|| "default".to_string()),
+            text: record.text,
+            char_count,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "admin/app_server_prompts.html")]
+pub(super) struct AppServerPromptsTemplate {
+    pub(super) page_title: String,
+    pub(super) current_nav: &'static str,
+    pub(super) workspace_dir: String,
+    pub(super) csrf_token: String,
+    pub(super) notice: Option<String>,
+    pub(super) prompt_log: AppServerPromptLogView,
 }
 
 // editor는 session-scoped 화면이다. draft file, validation, queue preview, active file state가 하나의 read model로 이동한다.

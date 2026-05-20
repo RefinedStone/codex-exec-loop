@@ -1,0 +1,108 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="metric-row">
+  <div class="metric"><span>recent records</span><strong>{{ prompt_log.total_count }}</strong></div>
+  <div class="metric"><span>main session</span><strong>{{ prompt_log.main_count }}</strong></div>
+  <div class="metric"><span>sub sessions</span><strong>{{ prompt_log.worker_count }}</strong></div>
+  <div class="metric"><span>failures</span><strong>{{ prompt_log.failure_count }}</strong></div>
+</section>
+
+<section class="list-panel prompt-log-panel">
+  <div class="list-header">
+    <div>
+      <h2>App-server prompt I/O</h2>
+      <p>Recent main, planning-worker, and parallel-worker turn payloads captured at the app-server boundary.</p>
+    </div>
+    <label class="field list-filter">
+      <span>Search prompt log</span>
+      <input type="search" data-list-filter="app-server-prompt-log" placeholder="session, thread, service, workspace">
+    </label>
+  </div>
+  {% if prompt_log.records.is_empty() %}
+  <p class="empty-state">No app-server prompt interactions have been captured for this workspace yet.</p>
+  {% else %}
+  <p class="empty-state filter-empty" data-filter-empty="app-server-prompt-log">No prompt interactions match the current search.</p>
+  <div class="entity-list prompt-log-list" id="app-server-prompt-log">
+    {% for record in prompt_log.records %}
+    <details class="entity-row prompt-log-row" data-filter-text="{{ record.filter_text }}">
+      <summary>
+        <span class="entity-main">
+          <strong>{{ record.session_kind }} / {{ record.operation }}</strong>
+          <span class="mono">#{{ record.sequence }}</span>
+          <span class="status-pill {{ record.status_class }}">{{ record.status }}</span>
+        </span>
+        <span class="entity-meta">
+          <span>{{ record.completed_at }}</span>
+          <span class="mono">{{ record.thread_id }}</span>
+          <span>{{ record.input_chars }} in / {{ record.output_chars }} out</span>
+        </span>
+      </summary>
+      <div class="entity-detail prompt-log-detail">
+        <div class="prompt-meta-grid">
+          <div><span>interaction</span><strong class="mono">{{ record.interaction_id }}</strong></div>
+          <div><span>service</span><strong>{{ record.service_name }}</strong></div>
+          <div><span>turn</span><strong class="mono">{{ record.turn_id }}</strong></div>
+          <div><span>model</span><strong>{{ record.model }} / {{ record.reasoning_effort }}</strong></div>
+          <div class="span-wide"><span>workspace</span><strong class="mono">{{ record.workspace_dir }}</strong></div>
+          <div><span>started</span><strong>{{ record.started_at }}</strong></div>
+        </div>
+
+        {% if let Some(developer_instructions) = record.developer_instructions %}
+        <section class="prompt-block">
+          <div class="prompt-block-header">
+            <h3>Developer Instructions</h3>
+            <span>{{ developer_instructions.len() }} chars</span>
+          </div>
+          <pre>{{ developer_instructions }}</pre>
+        </section>
+        {% endif %}
+
+        <section class="prompt-block">
+          <div class="prompt-block-header">
+            <h3>Turn Input</h3>
+            <span>{{ record.input_chars }} chars</span>
+          </div>
+          {% for input in record.input_items %}
+          <div class="prompt-item-heading">
+            <span class="status-pill">{{ input.kind }}</span>
+            <strong>{{ input.label }}</strong>
+            <span>{{ input.char_count }} chars</span>
+          </div>
+          <pre>{{ input.content }}</pre>
+          {% endfor %}
+        </section>
+
+        <section class="prompt-block">
+          <div class="prompt-block-header">
+            <h3>App-server Output</h3>
+            <span>{{ record.output_chars }} chars</span>
+          </div>
+          {% if record.output_items.is_empty() %}
+          <p class="empty-state compact-empty">No completed assistant message was emitted before this turn ended.</p>
+          {% else %}
+          {% for output in record.output_items %}
+          <div class="prompt-item-heading">
+            <span class="status-pill">{{ output.phase }}</span>
+            <strong class="mono">{{ output.item_id }}</strong>
+            <span>{{ output.char_count }} chars</span>
+          </div>
+          <pre>{{ output.text }}</pre>
+          {% endfor %}
+          {% endif %}
+        </section>
+
+        {% if let Some(error_message) = record.error_message %}
+        <section class="prompt-block error-block">
+          <div class="prompt-block-header">
+            <h3>Error</h3>
+          </div>
+          <pre>{{ error_message }}</pre>
+        </section>
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

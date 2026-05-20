@@ -217,6 +217,25 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 payload_json TEXT NOT NULL,
                 recorded_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS app_server_prompt_interactions (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                interaction_id TEXT NOT NULL,
+                session_kind TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                service_name TEXT,
+                thread_id TEXT,
+                turn_id TEXT,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                content_json TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_app_server_prompt_interactions_recent
+                ON app_server_prompt_interactions(sequence DESC);
+            CREATE INDEX IF NOT EXISTS idx_app_server_prompt_interactions_thread
+                ON app_server_prompt_interactions(thread_id, turn_id);
             "#,
         )
         .context("failed to initialize authority-store schema")?;
