@@ -564,6 +564,16 @@
         color: var(--muted);
         background: #eef1f4;
       }
+      .status-pill.completed {
+        color: var(--success);
+        background: var(--success-soft);
+        border-color: #b7e2c5;
+      }
+      .status-pill.failed {
+        color: var(--error);
+        background: var(--error-soft);
+        border-color: #ffd0cc;
+      }
       .danger-zone {
         margin-top: 12px;
         padding-top: 12px;
@@ -684,6 +694,82 @@
       .issue.error { border-color: rgba(163, 36, 36, 0.24); }
       .issue.warning { border-color: rgba(155, 77, 17, 0.24); }
       .issue small { color: var(--muted); display: block; margin-bottom: 6px; }
+      .prompt-log-detail {
+        display: grid;
+        gap: 14px;
+      }
+      .prompt-meta-grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      }
+      .prompt-meta-grid div {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+      .prompt-meta-grid .span-wide {
+        grid-column: 1 / -1;
+      }
+      .prompt-meta-grid span,
+      .prompt-block-header span,
+      .prompt-item-heading span:last-child {
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .prompt-meta-grid strong {
+        overflow-wrap: anywhere;
+      }
+      .prompt-block {
+        display: grid;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 12px;
+      }
+      .prompt-block-header,
+      .prompt-item-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .prompt-block-header h3 {
+        margin: 0;
+      }
+      .prompt-item-heading {
+        justify-content: flex-start;
+      }
+      .prompt-block pre {
+        max-height: 28rem;
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        padding: 12px;
+        color: var(--ink-strong);
+        background: #0f141a;
+        color: #e8edf3;
+        line-height: 1.55;
+      }
+      .error-block pre {
+        border-color: #ffd0cc;
+        background: #2a1210;
+      }
+      .compact-empty {
+        padding: 0;
+        margin: 0;
+      }
       @media (max-width: 980px) {
         .admin-layout {
           grid-template-columns: 1fr;
@@ -917,6 +1003,7 @@
           <a href="/admin/directions" class="{% if current_nav == "directions" %}active{% endif %}">Directions</a>
           <a href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}">Tasks</a>
           <a href="/admin/controls" class="{% if current_nav == "controls" %}active{% endif %}">Controls</a>
+          <a href="/admin/app-server-prompts" class="{% if current_nav == "app_server_prompts" %}active{% endif %}">App-server I/O</a>
         </nav>
         <div class="workspace-chip">
           <span>Workspace</span>

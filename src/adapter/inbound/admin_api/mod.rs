@@ -1,3 +1,4 @@
+use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::{PlanningAdminFacadeService, PlanningResetTarget};
 use crate::composition::production;
@@ -38,6 +39,7 @@ struct AdminAppState {
      */
     facade: Arc<PlanningAdminFacadeService>,
     parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     graphic: AdminGraphicConfig,
 }
 
@@ -101,6 +103,7 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
     AdminAppState {
         facade: application.facade,
         parallel_mode_control_plane: application.parallel_mode_control_plane,
+        app_server_prompt_log_port: application.app_server_prompt_log_port,
         graphic: AdminGraphicConfig::from_env(),
     }
 }
@@ -149,6 +152,10 @@ fn build_router(state: AdminAppState) -> Router {
         .route("/admin/directions", get(pages::directions_page))
         .route("/admin/tasks", get(pages::tasks_page))
         .route("/admin/controls", get(pages::controls_page))
+        .route(
+            "/admin/app-server-prompts",
+            get(pages::app_server_prompts_page),
+        )
         .route("/admin/drafts", post(pages::create_draft_page))
         .route(
             "/admin/directions/upsert",

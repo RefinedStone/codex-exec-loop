@@ -9,6 +9,7 @@ use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
+use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
@@ -35,6 +36,7 @@ const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
 pub(crate) struct ProductionAdminApplication {
     pub(crate) facade: Arc<PlanningAdminFacadeService>,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    pub(crate) app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
 }
 
 pub(crate) struct ProductionTelegramApplication {
@@ -56,6 +58,7 @@ struct ProductionSharedPorts {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
+    app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
 }
 
 pub(crate) fn build_planning_services() -> PlanningServices {
@@ -99,6 +102,7 @@ pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminA
     ProductionAdminApplication {
         facade,
         parallel_mode_control_plane,
+        app_server_prompt_log_port: ports.app_server_prompt_log_port,
     }
 }
 
@@ -168,10 +172,12 @@ pub(crate) fn discover_github_review_poller_service_for_current_branch(
 }
 
 fn build_shared_ports() -> ProductionSharedPorts {
-    let app_server_adapter = app_server_adapter();
     let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning_authority_port: Arc<dyn PlanningAuthorityPort> =
         planning_authority_adapter.clone();
+    let app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort> =
+        planning_authority_adapter.clone();
+    let app_server_adapter = app_server_adapter(app_server_prompt_log_port.clone());
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
     let planning_workspace_port: Arc<dyn PlanningWorkspacePort> =
@@ -189,6 +195,7 @@ fn build_shared_ports() -> ProductionSharedPorts {
         planning_workspace_port,
         planning_worker_port,
         parallel_agent_worker_port,
+        app_server_prompt_log_port,
     }
 }
 
@@ -218,10 +225,13 @@ fn parallel_mode_control_plane_from_parts(
     )
 }
 
-fn app_server_adapter() -> Arc<CodexAppServerAdapter> {
-    Arc::new(CodexAppServerAdapter::new(
+fn app_server_adapter(
+    prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+) -> Arc<CodexAppServerAdapter> {
+    Arc::new(CodexAppServerAdapter::from_environment_with_prompt_log(
         APP_SERVER_CLIENT_NAME,
         env!("CARGO_PKG_VERSION"),
+        prompt_log_port,
     ))
 }
 

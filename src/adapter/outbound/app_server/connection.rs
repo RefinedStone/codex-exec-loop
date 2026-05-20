@@ -958,7 +958,7 @@ mod tests {
         assert_eq!(threads.next_cursor.as_deref(), Some("cursor-next"));
         assert_eq!(read_thread.thread.id, "thread-read");
         assert_eq!(started_thread.thread.id, "thread-started");
-        assert_eq!(resumed_thread._thread.id, "thread-resumed");
+        assert_eq!(resumed_thread.thread.id, "thread-resumed");
         assert_eq!(started_turn.turn.id, "turn-started");
 
         let logged = harness.logged_json_lines(8);

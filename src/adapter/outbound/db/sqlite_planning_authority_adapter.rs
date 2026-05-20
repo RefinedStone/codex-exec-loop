@@ -36,6 +36,8 @@ use crate::domain::parallel_mode::{
     ParallelModePoolResetReport, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
     ParallelModeTaskDispatchBlockSnapshot,
 };
+// app-server prompt 입출력 trace를 authority DB runtime 영역에 저장하는 모듈이다.
+mod app_server_prompt_log;
 // active snapshot 테이블을 다루는 하위 모듈이다.
 mod active_documents;
 // repo-scoped draft staging을 SQLite 행으로 저장하는 하위 모듈이다.
