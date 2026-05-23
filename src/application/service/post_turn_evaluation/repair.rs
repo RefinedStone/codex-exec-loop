@@ -258,52 +258,54 @@ mod tests {
 
     #[test]
     fn repair_worker_failure_records_failed_panel_state() {
-        let mut executor = test_executor();
-        let started_runtime_projection = PlanningRuntimeProjection::invalid("broken authority");
-        let repair_outcome = PlanningPostTurnRepairOutcome {
-            runtime_projection: started_runtime_projection.clone(),
-            resolved: false,
-            attempts: vec![PlanningPostTurnRepairAttempt {
-                attempt_number: 1,
-                max_attempts: 2,
-                retry_reason: None,
-                started_runtime_projection: started_runtime_projection.clone(),
-                worker_prompt: "repair prompt".to_string(),
-                result: PlanningPostTurnRepairAttemptResult::WorkerFailed {
-                    detail: "repair worker failed before producing commands".to_string(),
-                    error: "transport failed".to_string(),
-                },
-            }],
-        };
+        with_test_event_logging(|| {
+            let mut executor = test_executor();
+            let started_runtime_projection = PlanningRuntimeProjection::invalid("broken authority");
+            let repair_outcome = PlanningPostTurnRepairOutcome {
+                runtime_projection: started_runtime_projection.clone(),
+                resolved: false,
+                attempts: vec![PlanningPostTurnRepairAttempt {
+                    attempt_number: 1,
+                    max_attempts: 2,
+                    retry_reason: None,
+                    started_runtime_projection: started_runtime_projection.clone(),
+                    worker_prompt: "repair prompt".to_string(),
+                    result: PlanningPostTurnRepairAttemptResult::WorkerFailed {
+                        detail: "repair worker failed before producing commands".to_string(),
+                        error: "transport failed".to_string(),
+                    },
+                }],
+            };
 
-        executor.apply_repair_outcome(log_context(), false, &repair_outcome);
+            executor.apply_repair_outcome(log_context(), false, &repair_outcome);
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RepairFailed
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("repair")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_prompt.as_deref(),
-            Some("repair prompt")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("repair worker failed before producing commands")
-        );
-        assert!(executor.planning_worker_panel_state.last_response.is_none());
-        assert!(
-            executor
-                .planning_worker_panel_state
-                .last_queue_summary
-                .is_none()
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RepairFailed
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("repair")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_prompt.as_deref(),
+                Some("repair prompt")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("repair worker failed before producing commands")
+            );
+            assert!(executor.planning_worker_panel_state.last_response.is_none());
+            assert!(
+                executor
+                    .planning_worker_panel_state
+                    .last_queue_summary
+                    .is_none()
+            );
+        });
     }
 
     #[test]
@@ -482,6 +484,18 @@ mod tests {
             )),
             planning_worker_panel_state: PlanningWorkerPanelState::default(),
         }
+    }
+
+    fn with_test_event_logging<T>(action: impl FnOnce() -> T) -> T {
+        use tracing_subscriber::prelude::*;
+
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(format!(
+                "{}=debug",
+                crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET
+            )))
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+        tracing::subscriber::with_default(subscriber, action)
     }
 
     fn log_context() -> PostTurnWorkerLogContext<'static> {
