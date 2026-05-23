@@ -2620,3 +2620,7 @@ mod tests {
         assert!(detail.is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "use_cases/coverage_tests.rs"]
+mod coverage_tests;
