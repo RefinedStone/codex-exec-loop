@@ -1,5 +1,6 @@
 // startup check는 git workspace를 확인하기 위해 짧은 외부 명령을 실행한다.
 // `Command`는 `git rev-parse`를 호출하는 도구이고, `Stdio`는 startup overlay에 불필요한 stderr가 섞이지 않게 제어한다.
+use std::path::Path;
 use std::process::{Command, Stdio};
 // `Arc`는 TUI app runtime과 background startup task가 같은 startup probe adapter를 공유하게 한다.
 use std::sync::Arc;
@@ -142,62 +143,66 @@ impl StartupService {
         */
         // git 판정 실패 시 fallback path로 쓸 현재 directory이다.
         let current_directory = std::env::current_dir()
-            .context("failed to resolve current directory for workspace status")?
-            .display()
-            .to_string();
+            .context("failed to resolve current directory for workspace status")?;
+        detect_workspace_status_for(&current_directory)
+    }
+}
 
-        // git이 현재 directory에서 볼 수 있는 최상위 worktree path를 요청한다.
-        // stdout만 읽고 stderr는 버려, git repo가 아닌 일반 directory에서 startup 화면이 에러 로그로 오염되지 않게 한다.
-        let mut command = Command::new("git");
-        command
-            .args(["rev-parse", "--show-toplevel"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0");
-        let output = subprocess::command_output(&mut command, "git rev-parse --show-toplevel");
-        /*
-        `git rev-parse --show-toplevel`은 현재 directory가 git worktree 안에 있을 때 canonical
-        repo root를 돌려준다. stderr는 startup overlay를 어지럽히지 않도록 버리고, 실패는 아래
-        fallback branch에서 directory-only workspace로 표현한다.
-        */
+fn detect_workspace_status_for(current_directory: &Path) -> Result<WorkspaceStatus> {
+    let fallback_directory = current_directory.display().to_string();
 
-        // 성공한 git 결과만 repo workspace로 인정한다. 명령 실행 실패, git 미설치,
-        // non-zero exit은 모두 directory-only fallback으로 통일한다.
-        match output {
-            Ok(result) if result.status.success() => {
-                // git stdout은 trailing newline을 포함하므로 trim해서 UI 표시 path로 만든다.
-                let root = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                /*
-                Empty stdout is not expected from a successful `--show-toplevel`, but
-                this branch still treats the command success as the authoritative git
-                signal. If git ever returns unusual output, the detail line preserves
-                the raw trimmed value for diagnosis instead of inventing a path.
-                */
-                Ok(WorkspaceStatus {
-                    // git repo 안이므로 workspace check는 명확히 ok이다.
-                    ok: true,
-                    // root는 detail에도 쓰기 때문에 clone한다. 이 작은 struct에서는 복사 비용보다 명료성이 우선이다.
-                    path: root.clone(),
-                    // UI가 "git repo로 인식됨"을 명확히 보여 주는 설명이다.
-                    detail: format!("git repo: {root}"),
-                })
-            }
-            // git repo가 아니어도 Akra TUI 자체는 열 수 있으므로 ok=true fallback을 반환한다.
-            _ => Ok(WorkspaceStatus {
-                /*
-                fallback은 `ok: true`이다. 여기서 false로 두면 startup diagnostics가
-                session loading이나 prompt submit을 과도하게 막을 수 있다. 대신 detail에
-                "not inside a git repo"를 남겨 UI가 기능 제한의 원인을 설명하게 한다.
-                */
-                // hard failure가 아니라 "directory-only 모드"라는 soft state이다.
+    // git이 현재 directory에서 볼 수 있는 최상위 worktree path를 요청한다.
+    // stdout만 읽고 stderr는 버려, git repo가 아닌 일반 directory에서 startup 화면이 에러 로그로 오염되지 않게 한다.
+    let mut command = Command::new("git");
+    command
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(current_directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let output = subprocess::command_output(&mut command, "git rev-parse --show-toplevel");
+    /*
+    `git rev-parse --show-toplevel`은 현재 directory가 git worktree 안에 있을 때 canonical
+    repo root를 돌려준다. stderr는 startup overlay를 어지럽히지 않도록 버리고, 실패는 아래
+    fallback branch에서 directory-only workspace로 표현한다.
+    */
+
+    // 성공한 git 결과만 repo workspace로 인정한다. 명령 실행 실패, git 미설치,
+    // non-zero exit은 모두 directory-only fallback으로 통일한다.
+    match output {
+        Ok(result) if result.status.success() => {
+            // git stdout은 trailing newline을 포함하므로 trim해서 UI 표시 path로 만든다.
+            let root = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            /*
+            Empty stdout is not expected from a successful `--show-toplevel`, but
+            this branch still treats the command success as the authoritative git
+            signal. If git ever returns unusual output, the detail line preserves
+            the raw trimmed value for diagnosis instead of inventing a path.
+            */
+            Ok(WorkspaceStatus {
+                // git repo 안이므로 workspace check는 명확히 ok이다.
                 ok: true,
-                // repo root가 없으므로 현재 directory를 workspace path로 사용한다.
-                path: current_directory,
-                // UI와 로그가 왜 git root가 아닌 current directory를 쓰는지 설명하는 문구이다.
-                detail: "directory only (not inside a git repo)".to_string(),
-            }),
+                // root는 detail에도 쓰기 때문에 clone한다. 이 작은 struct에서는 복사 비용보다 명료성이 우선이다.
+                path: root.clone(),
+                // UI가 "git repo로 인식됨"을 명확히 보여 주는 설명이다.
+                detail: format!("git repo: {root}"),
+            })
         }
+        // git repo가 아니어도 Akra TUI 자체는 열 수 있으므로 ok=true fallback을 반환한다.
+        _ => Ok(WorkspaceStatus {
+            /*
+            fallback은 `ok: true`이다. 여기서 false로 두면 startup diagnostics가
+            session loading이나 prompt submit을 과도하게 막을 수 있다. 대신 detail에
+            "not inside a git repo"를 남겨 UI가 기능 제한의 원인을 설명하게 한다.
+            */
+            // hard failure가 아니라 "directory-only 모드"라는 soft state이다.
+            ok: true,
+            // repo root가 없으므로 현재 directory를 workspace path로 사용한다.
+            path: fallback_directory,
+            // UI와 로그가 왜 git root가 아닌 current directory를 쓰는지 설명하는 문구이다.
+            detail: "directory only (not inside a git repo)".to_string(),
+        }),
     }
 }
 
@@ -210,4 +215,33 @@ struct WorkspaceStatus {
     path: String,
     // UI 표시용 설명이다.
     detail: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_workspace_status_for;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn workspace_status_falls_back_to_directory_only_outside_git_repo() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "akra-startup-service-non-git-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir(&temp_dir).expect("temp workspace should be created");
+
+        let status = detect_workspace_status_for(&temp_dir)
+            .expect("workspace status should fall back outside git repositories");
+
+        assert!(status.ok);
+        assert_eq!(status.path, temp_dir.display().to_string());
+        assert_eq!(status.detail, "directory only (not inside a git repo)");
+
+        fs::remove_dir_all(&temp_dir).expect("temp workspace should be removed");
+    }
 }
