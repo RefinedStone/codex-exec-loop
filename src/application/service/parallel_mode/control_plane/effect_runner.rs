@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
+use serde_json::Value;
+
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
@@ -124,10 +126,7 @@ where
 
         thread::spawn(move || {
             event_log::emit_lazy("parallel_supervisor_refresh_started", || {
-                serde_json::json!({
-                    "workspace_directory": &workspace_directory,
-                    "mode_enabled": mode_enabled,
-                })
+                supervisor_refresh_started_payload(&workspace_directory, mode_enabled)
             });
             let supervisor_snapshot = parallel_mode_service.build_supervisor_snapshot(
                 &workspace_directory,
@@ -135,12 +134,11 @@ where
                 Some(&readiness_snapshot),
             );
             event_log::emit_lazy("parallel_supervisor_refresh_completed", || {
-                serde_json::json!({
-                    "workspace_directory": &workspace_directory,
-                    "mode_enabled": mode_enabled,
-                    "pool_status": &supervisor_snapshot.pool.reconcile_status,
-                    "roster_active_count": supervisor_snapshot.roster.active_count(),
-                })
+                supervisor_refresh_completed_payload(
+                    &workspace_directory,
+                    mode_enabled,
+                    &supervisor_snapshot,
+                )
             });
             event_sink.send_control_plane_event(
                 ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
@@ -168,11 +166,7 @@ where
 
         thread::spawn(move || {
             event_log::emit_lazy("parallel_orchestrator_retry_started", || {
-                serde_json::json!({
-                    "workspace": &workspace_directory,
-                    "signature": &signature,
-                    "trigger": "supervisor_active_distributor_queue",
-                })
+                orchestrator_retry_started_payload(&workspace_directory, &signature)
             });
             let (blocked, notices) = match parallel_mode_service.run_orchestrator_tick(
                 &workspace_directory,
@@ -185,12 +179,12 @@ where
                 ),
             };
             event_log::emit_lazy("parallel_orchestrator_retry_completed", || {
-                serde_json::json!({
-                    "workspace": &workspace_directory,
-                    "signature": &signature,
-                    "blocked": blocked,
-                    "notices_count": notices.len(),
-                })
+                orchestrator_retry_completed_payload(
+                    &workspace_directory,
+                    &signature,
+                    blocked,
+                    notices.len(),
+                )
             });
             event_sink.send_control_plane_event(
                 ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
@@ -230,13 +224,13 @@ where
             );
             let entry_plan = entry_decision.plan;
             event_log::emit_lazy("parallel_action_planned", || {
-                serde_json::json!({
-                    "workspace": &workspace_directory,
-                    "state": entry_plan.state.label(),
-                    "reset_scope": entry_plan.reset_scope.map(|scope| scope.label()),
-                    "readiness": readiness_snapshot.readiness_label(),
-                    "initial_setup_reset": initial_pool_reset_required,
-                })
+                parallel_action_planned_payload(
+                    &workspace_directory,
+                    entry_plan.state.label(),
+                    entry_plan.reset_scope.map(|scope| scope.label()),
+                    readiness_snapshot.readiness_label(),
+                    initial_pool_reset_required,
+                )
             });
 
             let initial_pool_reset_completed = initial_pool_reset_required
@@ -256,11 +250,10 @@ where
                     == Some(ParallelModePoolResetScope::PoolOnly)
                 {
                     event_log::emit_lazy("parallel_pool_reset_started", || {
-                        serde_json::json!({
-                            "workspace": &workspace_directory,
-                            "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
-                            "initial_setup_reset": initial_pool_reset_required,
-                        })
+                        parallel_pool_reset_started_payload(
+                            &workspace_directory,
+                            initial_pool_reset_required,
+                        )
                     });
                     let reset_report = match entry_decision.reset_policy {
                         Some(ParallelModePoolResetPolicy::ForceDisposable) => parallel_mode_service
@@ -275,13 +268,10 @@ where
                     reset_report.and_then(|report| {
                             if report.has_live_blockers() {
                                 event_log::emit_lazy("parallel_pool_reset_preserved_live", || {
-                                    serde_json::json!({
-                                        "workspace": &workspace_directory,
-                                        "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
-                                        "run_id": report.run_id.as_str(),
-                                        "policy": report.policy,
-                                        "live_blockers": report.live_blocker_count(),
-                                    })
+                                    parallel_pool_reset_preserved_live_payload(
+                                        &workspace_directory,
+                                        &report,
+                                    )
                                 });
                             }
                             if report.has_reset_failures() {
@@ -292,13 +282,11 @@ where
                             }
                             let count = report.succeeded_reset_slot_count();
                             event_log::emit_lazy("parallel_pool_reset_completed", || {
-                                serde_json::json!({
-                                    "workspace": &workspace_directory,
-                                    "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
-                                    "run_id": report.run_id.as_str(),
-                                    "policy": report.policy,
-                                    "slot_count": count,
-                                })
+                                parallel_pool_reset_completed_payload(
+                                    &workspace_directory,
+                                    &report,
+                                    count,
+                                )
                             });
                             let live_suffix = if report.has_live_blockers() {
                                 format!(" / preserved {} live slot(s)", report.live_blocker_count())
@@ -553,6 +541,102 @@ where
     }
 }
 
+fn supervisor_refresh_started_payload(workspace_directory: &str, mode_enabled: bool) -> Value {
+    serde_json::json!({
+        "workspace_directory": workspace_directory,
+        "mode_enabled": mode_enabled,
+    })
+}
+
+fn supervisor_refresh_completed_payload(
+    workspace_directory: &str,
+    mode_enabled: bool,
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+) -> Value {
+    serde_json::json!({
+        "workspace_directory": workspace_directory,
+        "mode_enabled": mode_enabled,
+        "pool_status": &supervisor_snapshot.pool.reconcile_status,
+        "roster_active_count": supervisor_snapshot.roster.active_count(),
+    })
+}
+
+fn orchestrator_retry_started_payload(workspace_directory: &str, signature: &str) -> Value {
+    serde_json::json!({
+        "workspace": workspace_directory,
+        "signature": signature,
+        "trigger": "supervisor_active_distributor_queue",
+    })
+}
+
+fn orchestrator_retry_completed_payload(
+    workspace_directory: &str,
+    signature: &str,
+    blocked: bool,
+    notices_count: usize,
+) -> Value {
+    serde_json::json!({
+        "workspace": workspace_directory,
+        "signature": signature,
+        "blocked": blocked,
+        "notices_count": notices_count,
+    })
+}
+
+fn parallel_action_planned_payload(
+    workspace_directory: &str,
+    state: &str,
+    reset_scope: Option<&str>,
+    readiness: &str,
+    initial_pool_reset_required: bool,
+) -> Value {
+    serde_json::json!({
+        "workspace": workspace_directory,
+        "state": state,
+        "reset_scope": reset_scope,
+        "readiness": readiness,
+        "initial_setup_reset": initial_pool_reset_required,
+    })
+}
+
+fn parallel_pool_reset_started_payload(
+    workspace_directory: &str,
+    initial_pool_reset_required: bool,
+) -> Value {
+    serde_json::json!({
+        "workspace": workspace_directory,
+        "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+        "initial_setup_reset": initial_pool_reset_required,
+    })
+}
+
+fn parallel_pool_reset_preserved_live_payload(
+    workspace_directory: &str,
+    report: &ParallelModePoolResetReport,
+) -> Value {
+    serde_json::json!({
+        "workspace": workspace_directory,
+        "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+        "run_id": report.run_id.as_str(),
+        "policy": report.policy,
+        "live_blockers": report.live_blocker_count(),
+    })
+}
+
+fn parallel_pool_reset_completed_payload(
+    workspace_directory: &str,
+    report: &ParallelModePoolResetReport,
+    slot_count: usize,
+) -> Value {
+    serde_json::json!({
+        "workspace": workspace_directory,
+        "reset_scope": ParallelModePoolResetScope::PoolOnly.label(),
+        "run_id": report.run_id.as_str(),
+        "policy": report.policy,
+        "slot_count": slot_count,
+    })
+}
+
 fn background_event_from_parallel_loop_event(
     event: ParallelModeOrchestratorLoopEvent,
     planning: &PlanningServices,
@@ -590,4 +674,144 @@ pub(crate) fn parallel_mode_distributor_tick_signature(
             .orchestrator_status
             .integration_worktree_readiness
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
+        ParallelModePoolBoardSnapshot, ParallelModePoolResetSlotAction,
+        ParallelModePoolResetSlotOutcome, ParallelModePoolResetSlotReport,
+        ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
+    };
+
+    use super::*;
+
+    fn supervisor_snapshot() -> ParallelModeSupervisorSnapshot {
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/repo",
+            ParallelModePoolBoardSnapshot::new(0, "pool", "ready", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "none"),
+            None,
+        )
+    }
+
+    #[test]
+    fn trace_payload_helpers_render_supervisor_and_retry_shapes() {
+        assert_eq!(
+            supervisor_refresh_started_payload("/repo", true),
+            json!({
+                "workspace_directory": "/repo",
+                "mode_enabled": true,
+            })
+        );
+
+        assert_eq!(
+            supervisor_refresh_completed_payload("/repo", true, &supervisor_snapshot()),
+            json!({
+                "workspace_directory": "/repo",
+                "mode_enabled": true,
+                "pool_status": "ready",
+                "roster_active_count": 0,
+            })
+        );
+
+        assert_eq!(
+            orchestrator_retry_started_payload("/repo", "tick-1"),
+            json!({
+                "workspace": "/repo",
+                "signature": "tick-1",
+                "trigger": "supervisor_active_distributor_queue",
+            })
+        );
+
+        assert_eq!(
+            orchestrator_retry_completed_payload("/repo", "tick-1", true, 2),
+            json!({
+                "workspace": "/repo",
+                "signature": "tick-1",
+                "blocked": true,
+                "notices_count": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn trace_payload_helpers_render_entry_and_pool_reset_shapes() {
+        assert_eq!(
+            parallel_action_planned_payload(
+                "/repo",
+                "pool_resetting",
+                Some(ParallelModePoolResetScope::PoolOnly.label()),
+                "ready",
+                true,
+            ),
+            json!({
+                "workspace": "/repo",
+                "state": "pool_resetting",
+                "reset_scope": "pool_only",
+                "readiness": "ready",
+                "initial_setup_reset": true,
+            })
+        );
+
+        let mut report = ParallelModePoolResetReport::new(
+            ParallelModePoolResetRunId::new("run-1"),
+            ParallelModePoolResetPolicy::ProtectLive,
+        );
+        report
+            .slot_reports
+            .push(ParallelModePoolResetSlotReport::new(
+                "slot-1",
+                ParallelModePoolResetSlotAction::PreserveLive,
+                ParallelModePoolResetSlotOutcome::Blocked,
+                "busy",
+            ));
+        report
+            .slot_reports
+            .push(ParallelModePoolResetSlotReport::new(
+                "slot-2",
+                ParallelModePoolResetSlotAction::Reset,
+                ParallelModePoolResetSlotOutcome::Succeeded,
+                "clean",
+            ));
+
+        assert_eq!(
+            parallel_pool_reset_started_payload("/repo", true),
+            json!({
+                "workspace": "/repo",
+                "reset_scope": "pool_only",
+                "initial_setup_reset": true,
+            })
+        );
+        assert_eq!(
+            parallel_pool_reset_preserved_live_payload("/repo", &report),
+            json!({
+                "workspace": "/repo",
+                "reset_scope": "pool_only",
+                "run_id": "run-1",
+                "policy": "protect_live",
+                "live_blockers": 1,
+            })
+        );
+        assert_eq!(
+            parallel_pool_reset_completed_payload(
+                "/repo",
+                &report,
+                report.succeeded_reset_slot_count(),
+            ),
+            json!({
+                "workspace": "/repo",
+                "reset_scope": "pool_only",
+                "run_id": "run-1",
+                "policy": "protect_live",
+                "slot_count": 1,
+            })
+        );
+    }
 }
