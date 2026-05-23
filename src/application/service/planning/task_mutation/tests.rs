@@ -674,6 +674,44 @@ Summary: one task added."#;
         )
     ));
 }
+
+#[test]
+fn extractor_handles_empty_fences_unclosed_fences_and_escaped_json_strings() {
+    /*
+     * scanner edge cases should stay benign: empty code fences are ignored, unclosed fences fall
+     * through to balanced JSON scanning, and braces inside escaped JSON strings must not terminate
+     * a candidate early.
+     */
+    assert!(matches!(
+        extract_planning_task_commands("```json\n\n```"),
+        PlanningTaskCommandExtraction::None
+    ));
+    assert!(matches!(
+        extract_planning_task_commands(r#"{"note":"not a command"}"#),
+        PlanningTaskCommandExtraction::None
+    ));
+
+    let unclosed_fence = r#"```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Recovered from unclosed fence"}]}}"#;
+    assert!(matches!(
+        extract_planning_task_commands(unclosed_fence),
+        PlanningTaskCommandExtraction::Commands(commands) if matches!(
+            commands.as_slice(),
+            [PlanningTaskMutationCommand::CreateTask(input)]
+                if input.title == "Recovered from unclosed fence"
+        )
+    ));
+
+    let escaped_string = r#"Lead text {"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Escaped \" brace } stays inside"}]}} tail"#;
+    assert!(matches!(
+        extract_planning_task_commands(escaped_string),
+        PlanningTaskCommandExtraction::Commands(commands) if matches!(
+            commands.as_slice(),
+            [PlanningTaskMutationCommand::CreateTask(input)]
+                if input.title == "Escaped \" brace } stays inside"
+        )
+    ));
+}
 #[test]
 fn terminal_status_change_is_rejected() {
     /*
