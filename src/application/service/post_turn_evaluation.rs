@@ -832,7 +832,7 @@ mod tests {
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
         PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
-        TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
+        QueueIdlePolicy, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
     };
     use std::collections::VecDeque;
     use std::fs;
@@ -1121,6 +1121,46 @@ mod tests {
     }
 
     #[test]
+    fn service_evaluate_enabled_request_runs_refresh_and_surfaces_drained_alert() {
+        let service = test_service();
+        let mut context = test_context(ready_projection(Some(queue_task())));
+        let workspace = TempPlanningWorkspace::new_git("post-turn-enabled-refresh");
+        let workspace_directory = workspace.path.clone();
+        context.planning_workspace_directory = workspace_directory.clone();
+        let mut request = test_request(context);
+        request.workspace_directory = workspace_directory;
+
+        let execution = service.evaluate(request);
+
+        assert_eq!(
+            execution.evaluation.action,
+            PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::PlanningQueueDrained
+            }
+        );
+        assert_eq!(
+            execution.evaluation.runtime_projection.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+        assert_eq!(execution.evaluation.operator_alerts.len(), 1);
+        assert_eq!(
+            execution.evaluation.operator_alerts[0].title,
+            "All planning tasks complete"
+        );
+        assert_eq!(
+            execution.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            execution
+                .planning_worker_panel_state
+                .last_summary
+                .as_deref(),
+            Some("planning worker disabled")
+        );
+    }
+
+    #[test]
     fn queue_refresh_worker_failure_records_refresh_failure_panel() {
         let workspace = TempPlanningWorkspace::new("queue-refresh-worker-failure");
         let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
@@ -1224,6 +1264,147 @@ mod tests {
         assert_eq!(
             outcome.runtime_projection.workspace_status(),
             PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+    }
+
+    #[test]
+    fn queue_refresh_repeated_handoff_marks_panel_failed_and_pauses_projection() {
+        let workspace = TempPlanningWorkspace::new("queue-refresh-repeated-handoff");
+        seed_ready_queue_authority(&workspace.path);
+        let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+            empty_task_commands_worker_message(),
+        )));
+        let current_projection = executor
+            .planning_feature
+            .runtime
+            .load_runtime_projection_or_invalid(&workspace.path);
+        let mut context = test_context(current_projection);
+        context.previous_handoff_task = Some(queue_handoff());
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshFailed
+        );
+        assert!(
+            executor
+                .planning_worker_panel_state
+                .last_host_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("previously handed-off task unchanged"))
+        );
+        assert!(
+            outcome
+                .runtime_projection
+                .auto_follow_pause_reason()
+                .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
+        );
+    }
+
+    #[test]
+    fn queue_idle_derivation_empty_records_host_detail_without_failure() {
+        let workspace = TempPlanningWorkspace::new("queue-idle-derivation-empty");
+        seed_queue_idle_review_authority(&workspace.path);
+        let mut executor = test_executor();
+        let current_projection = executor
+            .planning_feature
+            .runtime
+            .load_runtime_projection_or_invalid(&workspace.path);
+        let mut context = test_context(current_projection);
+        context.previous_handoff_task = None;
+        context.latest_main_reply = Some("the requested work is complete".to_string());
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_operation_label
+                .as_deref(),
+            Some("queue-idle-derive")
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_host_detail
+                .as_deref(),
+            Some(
+                "planning worker derived no justified follow-up task from the latest request and reply"
+            )
+        );
+        assert_eq!(
+            outcome.runtime_projection.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
+        );
+    }
+
+    #[test]
+    fn queue_refresh_promotes_worker_proposal_and_records_host_detail() {
+        let workspace = TempPlanningWorkspace::new("queue-refresh-promotes-proposal");
+        seed_ready_queue_authority(&workspace.path);
+        let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+            proposed_followup_worker_message(),
+        )));
+        let current_projection = executor
+            .planning_feature
+            .runtime
+            .load_runtime_projection_or_invalid(&workspace.path);
+        let context = test_context(current_projection);
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(
+            executor.planning_worker_panel_state.status,
+            PlanningWorkerStatus::RefreshSucceeded
+        );
+        assert_eq!(
+            executor
+                .planning_worker_panel_state
+                .last_host_detail
+                .as_deref(),
+            Some(
+                "host promoted top follow-up proposal into the executable queue: Review follow-up proposal"
+            )
+        );
+        assert!(
+            executor
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Review follow-up proposal"))
+        );
+        assert_eq!(
+            outcome.runtime_projection.workspace_status(),
+            PlanningRuntimeWorkspaceStatus::ReadyWithTask
+        );
+        assert!(
+            outcome
+                .runtime_projection
+                .queue_summary()
+                .is_some_and(|summary| summary.contains("Review follow-up proposal"))
         );
     }
 
@@ -1685,9 +1866,42 @@ mod tests {
     }
 
     fn seed_ready_queue_authority(workspace_directory: &str) {
+        seed_authority(
+            workspace_directory,
+            QueueIdleConfig::default(),
+            vec![task_definition("task-1", "Queue head", TaskStatus::Ready)],
+        );
+    }
+
+    fn seed_queue_idle_review_authority(workspace_directory: &str) {
+        let prompt_path = ".codex-exec-loop/planning/prompts/queue-idle-review.md";
+        fs::create_dir_all(format!(
+            "{workspace_directory}/.codex-exec-loop/planning/prompts"
+        ))
+        .expect("queue idle prompt directory should be seeded");
+        fs::write(
+            format!("{workspace_directory}/{prompt_path}"),
+            "# Queue Idle Review\nSuggest a justified follow-up task when the queue is empty.\n",
+        )
+        .expect("queue idle prompt should be seeded");
+        seed_authority(
+            workspace_directory,
+            QueueIdleConfig {
+                policy: QueueIdlePolicy::ReviewAndEnqueue,
+                prompt_path: prompt_path.to_string(),
+            },
+            Vec::new(),
+        );
+    }
+
+    fn seed_authority(
+        workspace_directory: &str,
+        queue_idle: QueueIdleConfig,
+        tasks: Vec<TaskDefinition>,
+    ) {
         let directions = DirectionCatalogDocument {
             version: 1,
-            queue_idle: QueueIdleConfig::default(),
+            queue_idle,
             directions: vec![DirectionDefinition {
                 id: "general-workstream".to_string(),
                 title: "General".to_string(),
@@ -1698,30 +1912,10 @@ mod tests {
                 state: DirectionState::Active,
             }],
         };
-        let task_authority = TaskAuthorityDocument {
-            version: 1,
-            tasks: vec![TaskDefinition {
-                id: "task-1".to_string(),
-                direction_id: "general-workstream".to_string(),
-                direction_relation_note: "fits the general workstream".to_string(),
-                title: "Queue head".to_string(),
-                description: "Continue the queue head task".to_string(),
-                status: TaskStatus::Ready,
-                base_priority: 80,
-                dynamic_priority_delta: 0,
-                priority_reason: String::new(),
-                depends_on: Vec::new(),
-                blocked_by: Vec::new(),
-                created_by: TaskActor::User,
-                last_updated_by: TaskActor::User,
-                source_turn_id: None,
-                provenance: Default::default(),
-                updated_at: "2026-05-12T00:00:00Z".to_string(),
-            }],
-        };
+        let task_authority = TaskAuthorityDocument { version: 1, tasks };
         let queue_projection = PriorityQueueService::new()
             .build_projection(&directions, &task_authority)
-            .expect("seeded ready task should build queue projection");
+            .expect("seeded authority should build queue projection");
         let repository = NoopPlanningTaskRepositoryPort;
         repository
             .commit_direction_authority_snapshot(
@@ -1742,6 +1936,27 @@ mod tests {
                 },
             )
             .expect("task authority should be seeded");
+    }
+
+    fn task_definition(id: &str, title: &str, status: TaskStatus) -> TaskDefinition {
+        TaskDefinition {
+            id: id.to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_relation_note: "fits the general workstream".to_string(),
+            title: title.to_string(),
+            description: format!("Continue {title}"),
+            status,
+            base_priority: 80,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: Default::default(),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        }
     }
 
     fn with_test_event_logging<T>(action: impl FnOnce() -> T) -> T {
@@ -1860,6 +2075,22 @@ mod tests {
 
 ```json
 {"planning_task_commands":{"version":1,"commands":[{"op":"update_task","task_id":"task-1","status":"done","priority_reason":"Completed by official completion repair."}]}}
+```"#
+    }
+
+    fn empty_task_commands_worker_message() -> &'static str {
+        r#"The worker found no planning changes.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[]}}
+```"#
+    }
+
+    fn proposed_followup_worker_message() -> &'static str {
+        r#"The worker completed the current queue head and proposed a follow-up.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"update_task","task_id":"task-1","status":"done","priority_reason":"Completed by the latest main reply."},{"op":"create_task","title":"Review follow-up proposal","description":"Review the completed work and decide whether to continue.","direction_id":"general-workstream","direction_relation_note":"follows the general workstream after queue head completion","status":"proposed","base_priority":70,"priority_reason":"Potential follow-up after the completed queue head."}]}}
 ```"#
     }
 
