@@ -1417,11 +1417,15 @@ fn repeated_queue_head_detail(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use anyhow::{Result, anyhow};
 
     use super::*;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
@@ -1431,6 +1435,7 @@ mod tests {
     };
     use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+    use crate::application::service::planning::task_tool::PlanningTaskToolListRequest;
     use crate::domain::planning::{
         PlanningOfficialCompletionRefreshPayload, PriorityQueueTask, TaskStatus,
     };
@@ -1614,6 +1619,232 @@ mod tests {
                 "archive_rejected_planning_file should not be called by use-case tests"
             ))
         }
+    }
+
+    struct TempPlanningWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempPlanningWorkspace {
+        fn new(prefix: &str) -> Self {
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{suffix}"));
+            fs::create_dir_all(&path).expect("planning workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempPlanningWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn workspace_use_cases_delegate_init_editor_directions_and_reset_paths() {
+        let workspace = TempPlanningWorkspace::new("planning-use-cases-workspace");
+        let planning = planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+
+        assert!(
+            !planning
+                .workspace
+                .has_planning_workspace(workspace.path_str())
+                .expect("fresh workspace probe should succeed")
+        );
+        assert!(
+            !planning
+                .workspace
+                .has_planning_candidate_workspace(workspace.path_str())
+                .expect("fresh candidate probe should succeed")
+        );
+
+        let init = planning
+            .workspace
+            .initialize_simple_workspace(workspace.path_str())
+            .expect("simple initialization should create accepted planning files");
+        assert!(
+            init.created_paths
+                .iter()
+                .any(|path| path == RESULT_OUTPUT_FILE_PATH)
+        );
+        assert!(workspace.path().join(RESULT_OUTPUT_FILE_PATH).is_file());
+        assert!(
+            planning
+                .workspace
+                .has_planning_workspace(workspace.path_str())
+                .expect("initialized workspace probe should succeed")
+        );
+        assert!(
+            planning
+                .workspace
+                .has_planning_candidate_workspace(workspace.path_str())
+                .expect("initialized candidate probe should succeed")
+        );
+
+        let doctor = planning.workspace.inspect_workspace(workspace.path_str());
+        assert_ne!(
+            doctor.planning_state(),
+            super::super::repair::doctor::PlanningDoctorState::Absent
+        );
+
+        let summary = planning
+            .workspace
+            .load_summary(workspace.path_str())
+            .expect("directions summary should load through workspace facade");
+        assert!(summary.parse_error.is_none());
+        assert!(
+            summary
+                .directions
+                .iter()
+                .any(|direction| direction.id == "general-workstream")
+        );
+
+        let review = planning
+            .workspace
+            .load_queue_idle_review_context(workspace.path_str())
+            .expect("queue-idle review context should load through workspace facade");
+        assert!(review.prompt_markdown.is_some());
+
+        let simple_stage = planning
+            .workspace
+            .stage_simple_mode_draft(workspace.path_str())
+            .expect("simple draft should stage through workspace facade");
+        assert!(simple_stage.staged_file_count > 0);
+        let simple_session = planning
+            .workspace
+            .load_manual_editor_session(workspace.path_str(), &simple_stage.draft_name)
+            .expect("staged simple draft should load through workspace facade");
+        assert!(
+            simple_session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
+        );
+        let simple_promote = planning
+            .workspace
+            .promote_staged_draft(workspace.path_str(), &simple_stage.draft_name)
+            .expect("staged simple draft should promote through workspace facade");
+        assert!(simple_promote.promoted_file_count > 0);
+
+        let manual_session = planning
+            .workspace
+            .stage_manual_editor_session(workspace.path_str())
+            .expect("manual editor session should stage through workspace facade");
+        let save = planning
+            .workspace
+            .save_draft_editor_files(
+                workspace.path_str(),
+                &manual_session.draft_name,
+                &manual_session.editable_files,
+            )
+            .expect("manual editor save should delegate through workspace facade");
+        assert_eq!(save.draft_name, manual_session.draft_name);
+        let manual_promote = planning
+            .workspace
+            .promote_draft_editor_files(
+                workspace.path_str(),
+                &manual_session.draft_name,
+                &manual_session.editable_files,
+            )
+            .expect("manual editor promotion should return validation outcome");
+        assert_eq!(manual_promote.promoted_file_count, 0);
+
+        let detail_session = planning
+            .workspace
+            .stage_detail_doc_editor_session(workspace.path_str(), "general-workstream")
+            .expect("detail doc editor should stage through directions facade");
+        let expected_detail_path =
+            crate::application::service::planning::default_direction_detail_doc_path(
+                "general-workstream",
+            );
+        assert!(
+            detail_session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path == expected_detail_path)
+        );
+        let prompt_session = planning
+            .workspace
+            .stage_queue_idle_prompt_editor_session(workspace.path_str())
+            .expect("queue-idle prompt editor should stage through directions facade");
+        assert!(
+            prompt_session
+                .editable_files
+                .iter()
+                .any(|file| file.active_path.contains("queue-idle"))
+        );
+
+        let reset = planning
+            .workspace
+            .reset_workspace(workspace.path_str(), PlanningResetTarget::Queue)
+            .expect("queue reset should delegate through workspace facade");
+        assert_eq!(reset.target, PlanningResetTarget::Queue);
+    }
+
+    #[test]
+    fn task_tool_and_prompt_wrappers_delegate_through_public_use_cases() {
+        let workspace = TempPlanningWorkspace::new("planning-use-cases-task-tool");
+        let planning = planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path_str())
+            .expect("task tool fixture should have accepted authority");
+
+        assert!(planning.task_tool.contract_json().contains("list_tasks"));
+        let response = planning
+            .task_tool
+            .run(
+                workspace.path_str(),
+                PlanningTaskToolRequest::ListTasks(PlanningTaskToolListRequest {
+                    version: 1,
+                    status: Vec::new(),
+                    limit: Some(5),
+                }),
+            )
+            .expect("list_tasks should run through task tool facade");
+        assert!(response.ok);
+        assert_eq!(response.operation, "list_tasks");
+
+        let handoff = sample_handoff();
+        let refresh_prompt =
+            planning
+                .worker
+                .render_refresh_queue_prompt(&PlanningQueueRefreshRequest {
+                    workspace_directory: workspace.path_str(),
+                    parent_thread_id: Some("thread-1"),
+                    completed_turn_id: "turn-1",
+                    latest_user_message: Some("user request"),
+                    latest_main_reply: "main reply",
+                    previous_handoff_task: Some(&handoff),
+                    mode: PlanningQueueRefreshMode::FromLatestMainReply,
+                });
+        assert!(refresh_prompt.contains("main reply"));
+
+        let contract = sample_official_completion_contract();
+        let official_prompt = planning.worker.render_official_completion_refresh_prompt(
+            &PlanningOfficialCompletionRefreshRequest {
+                workspace_directory: workspace.path_str(),
+                parent_thread_id: Some("thread-1"),
+                latest_user_message: Some("user request"),
+                latest_main_reply: "official reply",
+                previous_handoff_task: Some(&handoff),
+                contract: &contract,
+            },
+        );
+        assert!(official_prompt.contains("official reply"));
     }
 
     #[test]
