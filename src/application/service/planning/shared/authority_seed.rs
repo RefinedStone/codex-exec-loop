@@ -223,7 +223,10 @@ mod tests {
     use super::PlanningAuthoritySeedService;
     use crate::adapter::outbound::filesystem::planning_workspace::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_task_repository_port::{
-        NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningDirectionAuthoritySnapshot, PlanningTaskAuthorityCommit,
+        PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot,
+        PlanningTaskRepositoryPort,
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::PlanningValidationService;
@@ -252,9 +255,15 @@ mod tests {
     fn seed_service(
         workspace_port: Arc<dyn PlanningWorkspacePort>,
     ) -> PlanningAuthoritySeedService {
+        seed_service_with_repository(workspace_port, Arc::new(NoopPlanningTaskRepositoryPort))
+    }
+    fn seed_service_with_repository(
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> PlanningAuthoritySeedService {
         PlanningAuthoritySeedService::new(
             workspace_port,
-            Arc::new(NoopPlanningTaskRepositoryPort),
+            repository_port,
             PlanningValidationService::new(),
             PriorityQueueService::new(),
         )
@@ -330,5 +339,68 @@ mod tests {
             .expect("seeded directions should exist")
             .directions;
         assert_eq!(directions.directions[0].id, "general-workstream");
+    }
+    #[test]
+    fn commit_conflicts_are_reported_as_not_seeded() {
+        // Startup may race another authority seeder.  Repository conflict values
+        // are idempotent "someone else wrote first" outcomes, not hard errors.
+        let workspace_dir = unique_workspace_dir("commit-conflict");
+        let workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let repository = Arc::new(ConflictPlanningTaskRepositoryPort);
+        let service = seed_service_with_repository(workspace_port, repository.clone());
+        let outcome = service
+            .ensure_default_authority(&workspace_dir)
+            .expect("conflicting seed should remain idempotent");
+
+        assert!(outcome.workspace_files_seeded);
+        assert!(!outcome.direction_authority_seeded);
+        assert!(!outcome.task_authority_seeded);
+        repository
+            .clear_direction_authority_snapshot(&workspace_dir)
+            .expect("direction clear should be a harmless no-op");
+        repository
+            .clear_task_authority_snapshot(&workspace_dir)
+            .expect("task clear should be a harmless no-op");
+    }
+    struct ConflictPlanningTaskRepositoryPort;
+    impl PlanningTaskRepositoryPort for ConflictPlanningTaskRepositoryPort {
+        fn load_direction_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+        ) -> anyhow::Result<Option<PlanningDirectionAuthoritySnapshot>> {
+            Ok(None)
+        }
+        fn commit_direction_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+            _commit: PlanningDirectionAuthorityCommit<'_>,
+        ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
+            Ok(conflict_commit_result())
+        }
+        fn clear_direction_authority_snapshot(&self, _workspace_dir: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn load_task_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+        ) -> anyhow::Result<Option<PlanningTaskAuthoritySnapshot>> {
+            Ok(None)
+        }
+        fn commit_task_authority_snapshot(
+            &self,
+            _workspace_dir: &str,
+            _commit: PlanningTaskAuthorityCommit<'_>,
+        ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
+            Ok(conflict_commit_result())
+        }
+        fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    fn conflict_commit_result() -> PlanningTaskAuthorityCommitResult {
+        PlanningTaskAuthorityCommitResult::Conflict {
+            observed_planning_revision: 0,
+            current_planning_revision: 1,
+        }
     }
 }
