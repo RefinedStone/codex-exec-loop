@@ -8,6 +8,9 @@ use crate::application::port::outbound::planning_worker_port::{
     NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::parallel_agent_profile::{
+    ParallelAgentProfile, ParallelAgentProfileConfig, save_parallel_agent_profile_config,
+};
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
@@ -17,10 +20,10 @@ use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeControlPlaneWorkerEventKind,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
-    ParallelModeRuntimeEvent,
+    ParallelModeRuntimeEvent, ParallelModeSlotLeaseRequest,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Barrier, mpsc};
+use std::sync::{Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -54,6 +57,63 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
         let _ = event_sender.send(ConversationStreamEvent::Failed {
             message: "test worker stops after launch".to_string(),
         });
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedParallelWorkerLaunch {
+    cwd: String,
+    service_name: String,
+}
+
+#[derive(Debug)]
+struct HoldingParallelAgentWorkerPort {
+    launch_count: AtomicUsize,
+    launches: Mutex<Vec<CapturedParallelWorkerLaunch>>,
+    release_rx: Mutex<mpsc::Receiver<()>>,
+}
+
+impl HoldingParallelAgentWorkerPort {
+    fn new(release_rx: mpsc::Receiver<()>) -> Self {
+        Self {
+            launch_count: AtomicUsize::new(0),
+            launches: Mutex::new(Vec::new()),
+            release_rx: Mutex::new(release_rx),
+        }
+    }
+
+    fn launch_count(&self) -> usize {
+        self.launch_count.load(Ordering::SeqCst)
+    }
+
+    fn launches(&self) -> Vec<CapturedParallelWorkerLaunch> {
+        self.launches
+            .lock()
+            .expect("captured launches mutex should not be poisoned")
+            .clone()
+    }
+}
+
+impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
+    fn run_isolated_new_thread_stream(
+        &self,
+        request: ParallelAgentWorkerStreamRequest<'_>,
+        _event_sender: mpsc::Sender<ConversationStreamEvent>,
+    ) -> anyhow::Result<()> {
+        self.launches
+            .lock()
+            .expect("captured launches mutex should not be poisoned")
+            .push(CapturedParallelWorkerLaunch {
+                cwd: request.cwd.to_string(),
+                service_name: request.service_name.to_string(),
+            });
+        self.launch_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self
+            .release_rx
+            .lock()
+            .expect("release receiver mutex should not be poisoned")
+            .recv_timeout(Duration::from_secs(5));
         Ok(())
     }
 }
@@ -357,6 +417,114 @@ fn dispatch_tick_enqueue_trigger_claims_and_runs_new_command() {
     assert_eq!(
         projections.dispatch_commands[0].state,
         ParallelModeDispatchCommandState::Completed
+    );
+}
+
+#[test]
+fn dispatch_uses_task_identity_lease_when_agent_profiles_are_disabled() {
+    let repo = TempGitRepo::new("orchestrator-disabled-agent-profiles");
+    let workspace_dir = repo.workspace_dir();
+    save_parallel_agent_profile_config(
+        &workspace_dir,
+        &ParallelAgentProfileConfig {
+            profiles: vec![ParallelAgentProfile {
+                agent_id: "disabled-agent".to_string(),
+                display_name: "Disabled".to_string(),
+                role: "Disabled".to_string(),
+                persona_prompt: "This profile must not be selected.".to_string(),
+                avatar_class: "Runner".to_string(),
+                capabilities: Vec::new(),
+                enabled: false,
+            }],
+        },
+    )
+    .expect("disabled agent profile config should be written");
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    let queue_head = planning_projection
+        .queue_head()
+        .expect("ready task should become queue head");
+    let fallback_lease_request = ParallelModeSlotLeaseRequest::from_task_identity(
+        &queue_head.task_id,
+        &queue_head.task_title,
+    );
+
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(25),
+        )
+        .expect("dispatch command should enqueue");
+
+    let service = Arc::new(service);
+    let (release_tx, release_rx) = mpsc::channel();
+    let worker_port = Arc::new(HoldingParallelAgentWorkerPort::new(release_rx));
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result = with_akra_event_trace(|| {
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 25,
+            enqueue_trigger: None,
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        })
+    });
+
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    for _ in 0..100 {
+        if worker_port.launch_count() >= 1 && !worker_port.launches().is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(worker_port.launch_count(), 1);
+    let launch = worker_port
+        .launches()
+        .into_iter()
+        .next()
+        .expect("worker launch should be captured");
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    let lease = projections
+        .slot_leases
+        .values()
+        .find(|lease| lease.worktree_path == launch.cwd)
+        .expect("captured worker cwd should map to a held slot lease");
+    assert_eq!(lease.agent_id, fallback_lease_request.agent_id);
+    assert_ne!(lease.agent_id, "disabled-agent");
+    assert_eq!(launch.service_name, "akra-parallel-worker");
+
+    release_tx
+        .send(())
+        .expect("holding worker should be releasable");
+    let worker_event = match event_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("released holding worker should report terminal event")
+    {
+        ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
+        ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
+            panic!("unexpected runtime notice: {notice}")
+        }
+    };
+    assert_eq!(
+        worker_event.kind,
+        ParallelModeControlPlaneWorkerEventKind::LaunchFailed
     );
 }
 
