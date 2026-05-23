@@ -518,13 +518,22 @@ fn language_option_index(language: TuiLanguage) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LanguageSelectionOverlayUiState, TuiLanguage};
+    use crate::domain::recent_sessions::SessionCatalogTier;
+
+    use super::{
+        LanguageSelectionOverlayUiState, ShellActionAvailability, TUI_LOCALIZED_IMPORTANT_MARKERS,
+        TuiLanguage, language_option_index,
+    };
 
     #[test]
     fn parser_accepts_english_and_korean_aliases() {
         assert_eq!(TuiLanguage::parse("english"), Some(TuiLanguage::English));
         assert_eq!(TuiLanguage::parse("en"), Some(TuiLanguage::English));
+        assert_eq!(TuiLanguage::parse("ENG"), Some(TuiLanguage::English));
         assert_eq!(TuiLanguage::parse("korean"), Some(TuiLanguage::Korean));
+        assert_eq!(TuiLanguage::parse("ko"), Some(TuiLanguage::Korean));
+        assert_eq!(TuiLanguage::parse("kor"), Some(TuiLanguage::Korean));
+        assert_eq!(TuiLanguage::parse("kr"), Some(TuiLanguage::Korean));
         assert_eq!(TuiLanguage::parse("한국어"), Some(TuiLanguage::Korean));
         assert_eq!(TuiLanguage::parse("한글"), Some(TuiLanguage::Korean));
         assert_eq!(TuiLanguage::parse("spanish"), None);
@@ -549,5 +558,414 @@ mod tests {
         assert_eq!(state.selected_language(), TuiLanguage::English);
         state.reset_from_language(TuiLanguage::English);
         assert_eq!(state.selected_language(), TuiLanguage::English);
+    }
+
+    #[test]
+    fn startup_and_diagnostic_copy_are_localized() {
+        assert_eq!(TuiLanguage::English.label(), "English");
+        assert_eq!(TuiLanguage::Korean.label(), "한국어");
+        assert_eq!(TuiLanguage::English.status_label(), "English");
+        assert_eq!(TuiLanguage::Korean.status_label(), "Korean");
+        assert_eq!(
+            TuiLanguage::English.language_set_status(),
+            "language set to English"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.language_set_status(),
+            "언어가 한국어로 설정되었습니다."
+        );
+        assert_eq!(
+            TuiLanguage::English.github_review_polling_status("off"),
+            "off"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.github_review_polling_status("off"),
+            "꺼짐"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.github_review_polling_status("watching acme/repo#1"),
+            "watching acme/repo#1"
+        );
+
+        for availability in [
+            ShellActionAvailability::Ready,
+            ShellActionAvailability::Pending,
+            ShellActionAvailability::Blocked,
+        ] {
+            assert!(
+                !TuiLanguage::English
+                    .startup_axis_status(availability)
+                    .is_empty()
+            );
+            assert!(
+                !TuiLanguage::Korean
+                    .startup_axis_status(availability)
+                    .is_empty()
+            );
+        }
+        assert!(
+            TuiLanguage::English
+                .startup_axis_row("ready", "idle", "ok")
+                .contains("Workflows")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .startup_axis_row("준비", "대기", "정상")
+                .contains("워크플로")
+        );
+        assert_eq!(
+            TuiLanguage::English.startup_workspace_line("/repo"),
+            "workspace: /repo"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.startup_workspace_line("/repo"),
+            "작업공간: /repo"
+        );
+        assert_eq!(
+            TuiLanguage::English.startup_status_line("ready"),
+            "status: ready"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.startup_status_line("준비"),
+            "상태: 준비"
+        );
+        assert_eq!(
+            TuiLanguage::English.startup_warning_line("check config"),
+            "warning: check config"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.startup_warning_line("설정 확인"),
+            "경고: 설정 확인"
+        );
+        assert_eq!(
+            TuiLanguage::English.startup_conversation_label(),
+            "conversation"
+        );
+        assert_eq!(TuiLanguage::Korean.startup_conversation_label(), "대화");
+        assert!(
+            TuiLanguage::English
+                .startup_first_reply_hint()
+                .contains("first reply")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .startup_first_reply_hint()
+                .contains("첫 응답")
+        );
+        assert_eq!(
+            TuiLanguage::English.startup_starter_line("fix bug"),
+            "starter: fix bug"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.startup_starter_line("버그 수정"),
+            "시작: 버그 수정"
+        );
+        assert!(
+            TuiLanguage::English
+                .startup_empty_starter_copy()
+                .contains("task")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .startup_empty_starter_copy()
+                .contains("작업")
+        );
+        assert!(
+            TuiLanguage::English
+                .startup_buffered_starter_copy()
+                .contains("buffered")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .startup_buffered_starter_copy()
+                .contains("입력됨")
+        );
+        assert!(
+            TuiLanguage::English
+                .startup_diagnostics_summary_line("ok", "ok", "attention")
+                .contains("diagnostics")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .startup_diagnostics_summary_line("정상", "정상", "확인")
+                .contains("진단")
+        );
+        assert_eq!(
+            TuiLanguage::English.inline_diagnostic_status(true, "check"),
+            "ok"
+        );
+        assert_eq!(
+            TuiLanguage::English.inline_diagnostic_status(false, "attention"),
+            "attention"
+        );
+        assert_eq!(
+            TuiLanguage::English.inline_diagnostic_status(false, "check"),
+            "check"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.inline_diagnostic_status(true, "check"),
+            "정상"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.inline_diagnostic_status(false, "attention"),
+            "확인 필요"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.inline_diagnostic_status(false, "check"),
+            "점검 필요"
+        );
+        assert!(
+            TuiLanguage::English
+                .startup_attachment_summary_line("files", "anchor")
+                .contains("attachment")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .startup_attachment_summary_line("파일", "앵커")
+                .contains("연결")
+        );
+    }
+
+    #[test]
+    fn recent_session_copy_covers_states_tiers_and_counts() {
+        assert_eq!(
+            TuiLanguage::English.recent_session_status_waiting_for_startup(),
+            "waiting for startup checks"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.recent_session_status_waiting_for_startup(),
+            "startup 검사 대기 중"
+        );
+        assert!(
+            TuiLanguage::English
+                .recent_session_status_blocked_by_startup()
+                .contains("blocked")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .recent_session_status_blocked_by_startup()
+                .contains("차단")
+        );
+        assert_eq!(
+            TuiLanguage::English.recent_session_status_not_requested(),
+            "not requested yet"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.recent_session_status_not_requested(),
+            "아직 요청 안 함"
+        );
+        assert_eq!(
+            TuiLanguage::English.recent_session_status_ready_to_load(),
+            "ready to load"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.recent_session_status_ready_to_load(),
+            "로드 준비됨"
+        );
+        assert_eq!(
+            TuiLanguage::English.recent_session_status_loading(),
+            "loading from codex app-server"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.recent_session_status_loading(),
+            "codex app-server에서 로드 중"
+        );
+        assert_eq!(
+            TuiLanguage::English.recent_session_status_load_failed(),
+            "load failed"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.recent_session_status_load_failed(),
+            "로드 실패"
+        );
+
+        for tier in [
+            SessionCatalogTier::AttachOnly,
+            SessionCatalogTier::HandleBasedReattach,
+            SessionCatalogTier::ProviderBackedCatalog,
+        ] {
+            assert!(
+                TuiLanguage::English
+                    .recent_session_status_unsupported(tier)
+                    .contains("catalog unsupported")
+            );
+            assert!(
+                TuiLanguage::Korean
+                    .recent_session_status_unsupported(tier)
+                    .contains("카탈로그 미지원")
+            );
+            assert!(
+                TuiLanguage::English
+                    .recent_session_status_partial(tier)
+                    .contains("partial catalog")
+            );
+            assert!(
+                TuiLanguage::Korean
+                    .recent_session_status_partial(tier)
+                    .contains("부분 카탈로그")
+            );
+            assert!(
+                TuiLanguage::English
+                    .recent_session_status_loaded(tier, 3)
+                    .contains("3 loaded")
+            );
+            assert!(
+                TuiLanguage::Korean
+                    .recent_session_status_loaded(tier, 3)
+                    .contains("3개 로드됨")
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_supervisor_copy_helpers_cover_event_summaries() {
+        assert!(TUI_LOCALIZED_IMPORTANT_MARKERS.contains(&"차단"));
+        assert_eq!(
+            TuiLanguage::English.parallel_board_refreshed("ready"),
+            "parallel board refreshed. ready"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.parallel_board_refreshed("준비"),
+            "parallel board 상태를 갱신했습니다. 준비"
+        );
+        assert!(
+            TuiLanguage::English
+                .pool_slot_state("slot-1", "idle", "none")
+                .contains("slot-1 is idle")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .pool_slot_state("slot-1", "대기", "없음")
+                .contains("slot-1 상태는 대기")
+        );
+        assert!(
+            TuiLanguage::English
+                .agent_roster_state("Task", "slot-1", "running", "50%")
+                .contains("Task is running")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .agent_roster_state("작업", "slot-1", "실행", "50%")
+                .contains("작업 작업이 slot-1")
+        );
+        assert!(
+            TuiLanguage::English
+                .distributor_queue_item("Task", "queued", "feature/task", "waiting")
+                .contains("branch feature/task")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .distributor_queue_item("작업", "대기", "feature/task", "대기 중")
+                .contains("결과가 대기 상태")
+        );
+        assert_eq!(
+            TuiLanguage::English.ledger_stage_record("refresh", "ok"),
+            "refresh stage record: ok"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.ledger_stage_record("refresh", "정상"),
+            "refresh 단계 기록: 정상"
+        );
+        assert_eq!(
+            TuiLanguage::English.integration_blocked("conflict"),
+            "integration is blocked. conflict"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.integration_blocked("충돌"),
+            "integration이 차단되었습니다. 충돌"
+        );
+        assert_eq!(
+            TuiLanguage::English.slot_return_withheld("dirty"),
+            "slot return withheld. dirty"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.slot_return_withheld("변경 있음"),
+            "slot 반환을 보류했습니다. 변경 있음"
+        );
+        assert!(
+            TuiLanguage::English
+                .no_parallel_events()
+                .contains("no parallel events")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .no_parallel_events()
+                .contains("아직 parallel 이벤트")
+        );
+    }
+
+    #[test]
+    fn parallel_history_summary_maps_known_states_and_fallback() {
+        let cases = [
+            ("assigned", "leased to"),
+            ("starting", "leased to"),
+            ("running", "started Task"),
+            ("reported_complete", "reported completion"),
+            ("ledger_refreshing", "checking official completion"),
+            ("commit_ready", "accepted Task"),
+            ("merge_queued", "distributor queue"),
+            ("pushing", "delivery stage is pushing"),
+            ("pr_pending", "delivery stage is pr pending"),
+            ("merge_pending", "delivery stage is merge pending"),
+            ("integrating", "delivery stage is integrating"),
+            ("merged", "integrated into prerelease"),
+            ("cleanup_pending", "integrated into prerelease"),
+            ("cleaned", "integrated into prerelease"),
+            ("failed", "failed"),
+            (
+                "official_refresh_recovery_needed",
+                "needs official completion recovery",
+            ),
+        ];
+        for (state, expected) in cases {
+            assert!(
+                TuiLanguage::English
+                    .parallel_history_summary(state, "Task", "slot-1", "agent-a", "fallback")
+                    .contains(expected),
+                "state {state} should contain {expected}"
+            );
+        }
+        assert_eq!(
+            TuiLanguage::English
+                .parallel_history_summary("unknown", "Task", "slot-1", "agent-a", "fallback"),
+            "fallback"
+        );
+        assert!(
+            TuiLanguage::Korean
+                .parallel_history_summary("assigned", "작업", "slot-1", "agent-a", "fallback")
+                .contains("대여되었습니다")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .parallel_history_summary("running", "작업", "slot-1", "agent-a", "fallback")
+                .contains("시작했습니다")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .parallel_history_summary(
+                    "official_refresh_recovery_needed",
+                    "작업",
+                    "slot-1",
+                    "agent-a",
+                    "fallback"
+                )
+                .contains("복구가 필요합니다")
+        );
+    }
+
+    #[test]
+    fn selection_state_wraps_selects_and_rejects_invalid_indices() {
+        let mut state = LanguageSelectionOverlayUiState::default();
+        assert_eq!(state.selected_language_index(), 0);
+        assert_eq!(language_option_index(TuiLanguage::English), Some(0));
+        assert_eq!(language_option_index(TuiLanguage::Korean), Some(1));
+        assert!(state.select_index(1));
+        assert_eq!(state.selected_language(), TuiLanguage::Korean);
+        assert!(!state.select_index(99));
+        assert_eq!(state.selected_language(), TuiLanguage::Korean);
+        state.move_selection(-1);
+        assert_eq!(state.selected_language(), TuiLanguage::English);
+        state.move_selection(-1);
+        assert_eq!(state.selected_language(), TuiLanguage::Korean);
     }
 }
