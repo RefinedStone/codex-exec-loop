@@ -1,6 +1,196 @@
 use super::*;
 
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
+use crate::application::port::outbound::github_automation_port::{
+    GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+};
+use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+use crate::application::service::parallel_mode::ParallelModeService;
+use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::planning::PlanningServices;
+use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+use crate::domain::parallel_mode::{
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeSupervisorSnapshot,
+};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
+
 const WORKSPACE: &str = "/repo";
+
+#[derive(Clone)]
+struct CapturingControlPlaneEventSink {
+    tx: mpsc::Sender<ParallelModeControlPlaneBackgroundEvent>,
+}
+
+impl ParallelModeControlPlaneEventSink for CapturingControlPlaneEventSink {
+    fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
+        let _ = self.tx.send(event);
+    }
+}
+
+struct ReadyGithubAutomationPort;
+
+impl GithubAutomationPort for ReadyGithubAutomationPort {
+    fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+        GithubAutomationCapabilities::new(
+            ready_capability(ParallelModeCapabilityKey::PushRemote),
+            ready_capability(ParallelModeCapabilityKey::GhBinary),
+            ready_capability(ParallelModeCapabilityKey::GhAuth),
+        )
+    }
+
+    fn push_branch(
+        &self,
+        _repo_root: &str,
+        _branch_name: &str,
+        _force_with_lease: bool,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn ensure_pull_request(
+        &self,
+        _repo_root: &str,
+        base_branch: &str,
+        head_branch: &str,
+        _title: &str,
+        _body: &str,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        Ok(GithubAutomationPullRequest::new(
+            1,
+            "https://github.example/pr/1",
+            "open",
+            base_branch,
+            head_branch,
+            false,
+        ))
+    }
+
+    fn inspect_pull_request(
+        &self,
+        _repo_root: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        Ok(GithubAutomationPullRequest::new(
+            pr_number,
+            "https://github.example/pr/1",
+            "open",
+            "prerelease",
+            "akra-agent/slot-1/task",
+            false,
+        ))
+    }
+
+    fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn close_pull_request(&self, _repo_root: &str, _pr_number: u64) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+fn ready_capability(key: ParallelModeCapabilityKey) -> ParallelModeCapabilitySnapshot {
+    ParallelModeCapabilitySnapshot::new(key, ParallelModeCapabilityState::Ready, "ready", None)
+}
+
+fn unique_workspace(label: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after epoch")
+        .as_nanos();
+    format!("/tmp/akra-control-plane-coverage-{label}-{nanos}")
+}
+
+fn test_parallel_mode_service(
+    authority: Arc<SqlitePlanningAuthorityAdapter>,
+) -> ParallelModeService {
+    ParallelModeService::new(
+        authority,
+        Arc::new(ReadyGithubAutomationPort),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    )
+}
+
+fn test_planning_services(authority: Arc<SqlitePlanningAuthorityAdapter>) -> PlanningServices {
+    PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        authority.clone(),
+        authority,
+        Arc::new(NoopPlanningWorkerPort),
+    )
+}
+
+fn test_control_plane_handle() -> (
+    ParallelModeControlPlaneHandle<CapturingControlPlaneEventSink>,
+    mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) {
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let parallel_mode_service = test_parallel_mode_service(authority.clone());
+    let planning = test_planning_services(authority);
+    let (tx, rx) = mpsc::channel();
+    let effect_runner = ParallelModeControlPlaneEffectRunner::new(
+        parallel_mode_service.clone(),
+        planning,
+        Arc::new(NoopParallelAgentWorkerPort),
+        ParallelModeTurnService::new(parallel_mode_service),
+        CapturingControlPlaneEventSink { tx },
+    );
+    let service = super::controller::ParallelModeControlPlaneService::new(effect_runner);
+    (ParallelModeControlPlaneHandle::new(service), rx)
+}
+
+fn ready_readiness(workspace_directory: &str) -> ParallelModeReadinessSnapshot {
+    ParallelModeReadinessSnapshot::new(
+        workspace_directory,
+        ParallelModeReadinessState::Ready,
+        Vec::new(),
+        None,
+    )
+}
+
+fn supervisor_snapshot(workspace_directory: &str) -> ParallelModeSupervisorSnapshot {
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let service = test_parallel_mode_service(authority);
+    let readiness = ready_readiness(workspace_directory);
+    service.build_supervisor_snapshot(workspace_directory, true, Some(&readiness))
+}
+
+fn recv_background_event(
+    rx: &mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) -> ParallelModeControlPlaneBackgroundEvent {
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("control plane background event should be sent")
+}
+
+fn recv_orchestrator_wake_completed(
+    rx: &mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) -> ParallelModeControlPlaneBackgroundEvent {
+    for _ in 0..8 {
+        let event = recv_background_event(rx);
+        if matches!(
+            event,
+            ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted { .. }
+        ) {
+            return event;
+        }
+    }
+    panic!("orchestrator wake completion should be sent");
+}
+
+fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+    tracing::subscriber::with_default(subscriber, body)
+}
 
 fn open_epoch(runtime: &mut ParallelModeControlPlaneRuntime) {
     runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
@@ -697,4 +887,375 @@ fn unknown_effect_completion_reasons_cover_refresh_and_specific_kind_mismatches(
         [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
             if reason == "unknown orchestrator wake"
     ));
+}
+
+#[test]
+fn controller_background_events_map_direct_notices_and_ignore_stale_completions() {
+    let (handle, _rx) = test_control_plane_handle();
+    handle.force_mode_for_test(WORKSPACE, true);
+
+    let notice = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(
+            "runtime notice".to_string(),
+        ),
+    );
+    assert!(matches!(
+        notice.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice }]
+            if notice == "runtime notice"
+    ));
+
+    let inactive_progress =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: "/other".to_string(),
+            readiness_snapshot: Some(ready_readiness("/other")),
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "ignored".to_string(),
+        });
+    assert!(inactive_progress.is_empty());
+
+    let active_progress =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: WORKSPACE.to_string(),
+            readiness_snapshot: None,
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "working".to_string(),
+        });
+    assert!(matches!(
+        active_progress.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::EnterProgress {
+            readiness_snapshot: None,
+            status_text,
+            ..
+        }] if status_text == "working"
+    ));
+
+    let unknown_entry =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::Entered {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                900,
+                ParallelModeControlPlaneEffectKind::EnterParallelMode,
+            ),
+            mode_was_enabled: false,
+            readiness_snapshot: ready_readiness(WORKSPACE),
+            supervisor_snapshot: Box::new(supervisor_snapshot(WORKSPACE)),
+            status_text: "entered".to_string(),
+            initial_pool_reset_completed: true,
+            has_actionable_queue_head: false,
+            orchestrator_tick_signature: None,
+        });
+    assert!(unknown_entry.is_empty());
+
+    let stale_refresh = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+            workspace_directory: "/other".to_string(),
+            epoch_id: 1,
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                901,
+                ParallelModeControlPlaneEffectKind::RefreshSupervisor,
+            ),
+            supervisor_snapshot: Box::new(supervisor_snapshot("/other")),
+            orchestrator_tick_signature: None,
+        },
+    );
+    assert!(stale_refresh.is_empty());
+
+    let unknown_refresh = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                902,
+                ParallelModeControlPlaneEffectKind::RefreshSupervisor,
+            ),
+            supervisor_snapshot: Box::new(supervisor_snapshot(WORKSPACE)),
+            orchestrator_tick_signature: None,
+        },
+    );
+    assert!(unknown_refresh.is_empty());
+
+    let stale_wake = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted {
+            workspace_directory: "/other".to_string(),
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                903,
+                ParallelModeControlPlaneEffectKind::RunOrchestrator,
+            ),
+            readiness_snapshot: ready_readiness("/other"),
+            supervisor_snapshot: Box::new(supervisor_snapshot("/other")),
+            outcome: ParallelModeDispatchOutcome::new(
+                ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                "/other",
+                1,
+            ),
+            orchestrator_tick_signature: None,
+        },
+    );
+    assert!(stale_wake.is_empty());
+
+    let unknown_wake = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted {
+            workspace_directory: WORKSPACE.to_string(),
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                904,
+                ParallelModeControlPlaneEffectKind::RunOrchestrator,
+            ),
+            readiness_snapshot: ready_readiness(WORKSPACE),
+            supervisor_snapshot: Box::new(supervisor_snapshot(WORKSPACE)),
+            outcome: ParallelModeDispatchOutcome::new(
+                ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                WORKSPACE,
+                1,
+            ),
+            orchestrator_tick_signature: None,
+        },
+    );
+    assert!(unknown_wake.is_empty());
+}
+
+#[test]
+fn controller_orchestrator_tick_completion_covers_retry_status_paths() {
+    let (unblocked_handle, unblocked_rx) = test_control_plane_handle();
+    unblocked_handle.force_epoch_for_test(WORKSPACE, 1);
+    let started =
+        unblocked_handle.handle_command(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+            workspace_directory: WORKSPACE.to_string(),
+            signature: "retry-1".to_string(),
+        });
+    assert!(started.is_empty());
+    let tick_event = recv_background_event(&unblocked_rx);
+    let (workspace_directory, epoch_id, effect_id) = match tick_event {
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id,
+            effect_id,
+            ..
+        } => (workspace_directory, epoch_id, effect_id),
+        other => panic!("expected orchestrator tick completion, got {other:?}"),
+    };
+    let completed = unblocked_handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id,
+            effect_id,
+            blocked: false,
+            notices: vec!["retry completed".to_string()],
+        },
+    );
+    assert!(completed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice }
+            if notice == "retry completed"
+    )));
+    assert!(completed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
+            workspace_directory
+        } if workspace_directory == WORKSPACE
+    )));
+    assert!(completed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+            if status_text == "parallel mode: distributor retry completed / notices: 1"
+    )));
+
+    let stale_tick = unblocked_handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory: "/other".to_string(),
+            epoch_id: 1,
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                905,
+                ParallelModeControlPlaneEffectKind::RunOrchestratorTick,
+            ),
+            blocked: false,
+            notices: Vec::new(),
+        },
+    );
+    assert!(stale_tick.is_empty());
+
+    let unknown_tick = unblocked_handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: ParallelModeControlPlaneEffectId::new(
+                906,
+                ParallelModeControlPlaneEffectKind::RunOrchestratorTick,
+            ),
+            blocked: false,
+            notices: Vec::new(),
+        },
+    );
+    assert!(unknown_tick.is_empty());
+
+    let (blocked_handle, blocked_rx) = test_control_plane_handle();
+    blocked_handle.force_epoch_for_test(WORKSPACE, 7);
+    let started =
+        blocked_handle.handle_command(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+            workspace_directory: WORKSPACE.to_string(),
+            signature: "retry-2".to_string(),
+        });
+    assert!(started.is_empty());
+    let tick_event = recv_background_event(&blocked_rx);
+    let (workspace_directory, epoch_id, effect_id) = match tick_event {
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id,
+            effect_id,
+            ..
+        } => (workspace_directory, epoch_id, effect_id),
+        other => panic!("expected orchestrator tick completion, got {other:?}"),
+    };
+    let blocked = blocked_handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id,
+            effect_id,
+            blocked: true,
+            notices: vec!["retry blocked".to_string()],
+        },
+    );
+    assert!(blocked.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+            if status_text == "parallel mode: distributor retry blocked / notices: 1"
+    )));
+}
+
+#[test]
+fn controller_dispatch_wake_completion_records_traceable_dispatch_state() {
+    let (handle, rx) = test_control_plane_handle();
+    let workspace = unique_workspace("dispatch-wake");
+    handle.force_mode_for_test(&workspace, true);
+
+    let started = with_akra_event_trace(|| {
+        handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: workspace.clone(),
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        })
+    });
+    assert!(started.is_empty());
+
+    let wake_completed = recv_orchestrator_wake_completed(&rx);
+    let presented = with_akra_event_trace(|| handle.handle_background_event(wake_completed));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged { .. }
+    )));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged { .. }
+    )));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
+            workspace_directory
+        } if workspace_directory == &workspace
+    )));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+            if status_text.starts_with("parallel mode: dispatch refreshed / trigger: ")
+    )));
+    assert_eq!(
+        handle.last_automation_trigger(),
+        Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
+    );
+}
+
+#[test]
+fn controller_refresh_supervisor_uses_cached_readiness_and_applies_refreshed_snapshot() {
+    let (handle, rx) = test_control_plane_handle();
+    handle.force_mode_for_test(WORKSPACE, true);
+    let progress =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: WORKSPACE.to_string(),
+            readiness_snapshot: Some(ready_readiness(WORKSPACE)),
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "warming up".to_string(),
+        });
+    assert!(matches!(
+        progress.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::EnterProgress { .. }]
+    ));
+
+    let started = handle.handle_command(ParallelModeControlPlaneCommand::RefreshSupervisor {
+        workspace_directory: WORKSPACE.to_string(),
+    });
+    assert!(started.is_empty());
+
+    let refreshed = recv_background_event(&rx);
+    assert!(matches!(
+        refreshed,
+        ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed { .. }
+    ));
+    let presented = handle.handle_background_event(refreshed);
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged { .. }
+    )));
+}
+
+#[test]
+fn controller_pending_dispatch_poll_runs_follow_up_tick_when_queue_is_empty() {
+    let (handle, rx) = test_control_plane_handle();
+    let workspace = unique_workspace("pending-poll");
+    handle.force_epoch_for_test(&workspace, 1);
+
+    let started = handle.handle_command(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: workspace,
+        follow_up_tick_signature: Some("empty-queue-tick".to_string()),
+    });
+    assert!(started.is_empty());
+
+    let tick_event = recv_background_event(&rx);
+    let (workspace_directory, epoch_id, effect_id) = match tick_event {
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id,
+            effect_id,
+            ..
+        } => (workspace_directory, epoch_id, effect_id),
+        other => panic!("expected follow-up orchestrator tick completion, got {other:?}"),
+    };
+    let completed = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id,
+            effect_id,
+            blocked: false,
+            notices: Vec::new(),
+        },
+    );
+    assert!(completed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+            if status_text == "parallel mode: distributor retry completed / notices: 0"
+    )));
+}
+
+#[test]
+fn controller_deferred_dispatch_without_projection_records_traceable_queue_state() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("deferred-dispatch");
+    handle.force_epoch_for_test(&workspace, 1);
+
+    let presented = with_akra_event_trace(|| {
+        handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: workspace,
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        })
+    });
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+            if status_text
+                == "parallel mode: dispatch deferred / entry loading or control-plane refresh is still in progress"
+    )));
+    assert_eq!(handle.last_dispatch_withheld_reason().as_deref(), None);
+    assert_eq!(
+        handle.last_automation_trigger(),
+        Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
+    );
 }
