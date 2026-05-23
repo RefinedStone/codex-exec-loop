@@ -653,3 +653,165 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+    use crate::domain::parallel_mode::{
+        ParallelModeAutomationTrigger, ParallelModeDispatchCommandSnapshot,
+    };
+
+    fn queue_record_with_source(
+        source_branch: &str,
+        source_commit_sha: &str,
+    ) -> PlanningAuthorityDistributorQueueRecord {
+        PlanningAuthorityDistributorQueueRecord {
+            queue_item_id: "queue-1".to_string(),
+            queue_order_key: 7,
+            session_key: "session-1".to_string(),
+            slot_id: "slot-1".to_string(),
+            agent_id: "agent-a".to_string(),
+            task_id: "task-1".to_string(),
+            task_title: "Implement coverage guards".to_string(),
+            source_branch: source_branch.to_string(),
+            source_commit_sha: source_commit_sha.to_string(),
+            branch_name: "akra-agent/slot-1/task-1".to_string(),
+            worktree_path: "/tmp/worktree".to_string(),
+            commit_sha: "abcdef1234567890".to_string(),
+            original_commit_sha: Some("abcdef1234567890".to_string()),
+            planning_refresh_state: "completed".to_string(),
+            integration_state: "pr_pending".to_string(),
+            conflict_files: Vec::new(),
+            recovery_note: None,
+            validation_summary: "cargo test passed".to_string(),
+            authority_refresh_outcome: "promoted".to_string(),
+            github_capabilities: None,
+            pull_request_number: Some(12),
+            pull_request_url: Some("https://github.example/pr/12".to_string()),
+            queue_state: ParallelModeQueueItemState::PrPending,
+            integration_note: "waiting for review".to_string(),
+            enqueued_at: "2026-05-23T00:00:00Z".to_string(),
+            updated_at: "2026-05-23T00:01:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn distributor_queue_record_display_uses_effective_source_and_short_commit() {
+        let record = queue_record_with_source("prerelease", "1234567890abcdef");
+
+        assert_eq!(record.effective_source_branch(), "prerelease");
+        assert_eq!(record.effective_source_commit_sha(), "1234567890abcdef");
+
+        let display = record.display_item();
+
+        assert_eq!(display.source_agent, "agent-a");
+        assert_eq!(display.task_title, "Implement coverage guards");
+        assert_eq!(display.queue_state, ParallelModeQueueItemState::PrPending);
+        assert_eq!(display.branch_name, "prerelease");
+        assert_eq!(display.commit_short_sha, "abcdef1");
+        assert_eq!(display.integration_note, "waiting for review");
+    }
+
+    #[test]
+    fn distributor_queue_record_preserves_legacy_branch_and_commit_fallbacks() {
+        let record = queue_record_with_source("   ", "");
+
+        assert_eq!(record.effective_source_branch(), "akra-agent/slot-1/task-1");
+        assert_eq!(record.effective_source_commit_sha(), "abcdef1234567890");
+    }
+
+    #[test]
+    fn noop_planning_authority_reports_empty_in_sync_fallbacks() {
+        let port = NoopPlanningAuthorityPort::default();
+
+        let location = port
+            .resolve_authority_location("/tmp/root")
+            .expect("fallback location should resolve");
+        assert_eq!(location.workspace_root, "/tmp/root");
+        assert_eq!(location.canonical_repo_root, "/tmp/root");
+        assert_eq!(location.runtime_dir, "");
+        assert_eq!(location.authority_store_path, "");
+
+        let inspection = port
+            .inspect_shadow_store("/tmp/root")
+            .expect("fallback shadow inspection should resolve");
+        assert_eq!(
+            inspection.sync_state,
+            PlanningAuthorityShadowStoreSyncState::InSync
+        );
+        assert_eq!(inspection.mirrored_document_count, 0);
+        assert_eq!(inspection.parity_issue_count, 0);
+        assert!(inspection.parity_issue_examples.is_empty());
+
+        assert_eq!(
+            port.load_runtime_event_log("/tmp/root", ParallelModeRuntimeEventLogRequest::default())
+                .expect("runtime event log should load")
+                .compact_summary(),
+            "runtime event log is unavailable without an authority store"
+        );
+        assert!(
+            port.load_runtime_projections("/tmp/root")
+                .expect("runtime projections should load")
+                .distributor_queue_records
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn noop_planning_authority_keeps_callers_on_claim_and_command_paths() {
+        let port = NoopPlanningAuthorityPort::default();
+
+        assert_eq!(
+            port.reserve_next_official_refresh_order("/tmp/root")
+                .expect("first order should reserve"),
+            1
+        );
+        assert_eq!(
+            port.reserve_next_official_refresh_order("/tmp/root")
+                .expect("second order should reserve"),
+            2
+        );
+        assert_eq!(
+            port.acquire_official_refresh_claim("/tmp/root", 1, "owner")
+                .expect("fallback claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        port.release_official_refresh_claim("/tmp/root", 1, "owner")
+            .expect("fallback release should succeed");
+        assert_eq!(
+            port.abandon_next_official_refresh_order("/tmp/root", "test")
+                .expect("fallback abandon should resolve"),
+            PlanningAuthorityOfficialRefreshRecoveryStatus::NoPendingOrder
+        );
+        assert!(
+            port.try_acquire_distributor_queue_claim("/tmp/root", "queue-1", "owner")
+                .expect("fallback queue claim should acquire")
+        );
+        port.release_distributor_queue_claim("/tmp/root", "queue-1", "owner")
+            .expect("fallback queue release should succeed");
+
+        let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+            ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+            Some("task-1".to_string()),
+            Some(3),
+            "2026-05-23T00:00:00Z",
+        );
+        assert!(
+            port.enqueue_runtime_dispatch_command("/tmp/root", &command)
+                .expect("fallback enqueue should report inserted")
+        );
+        assert!(
+            port.try_claim_next_runtime_dispatch_command("/tmp/root", "owner")
+                .expect("fallback claim should load")
+                .is_none()
+        );
+        port.update_runtime_dispatch_command("/tmp/root", &command)
+            .expect("fallback update should succeed");
+        assert_eq!(
+            port.cancel_runtime_dispatch_commands("/tmp/root", "reset")
+                .expect("fallback cancel should succeed"),
+            0
+        );
+    }
+}

@@ -71,6 +71,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/planning_shell_command.rs`
 - `src/adapter/inbound/tui/app/planning_worker_debug_preview.rs`
 - `src/adapter/inbound/tui/app/session_overlay_ui.rs`
+- `src/adapter/inbound/tui/app/session_shell_controller.rs`
 - `src/adapter/inbound/tui/app/shell_entrypoint.rs`
 - `src/adapter/inbound/tui/app/shell_frontend.rs`
 - `src/adapter/inbound/tui/app/shell_layout.rs`
@@ -99,6 +100,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_runtime/tests/flows.rs`
 - `src/adapter/inbound/tui/app/shell_runtime/tests/input.rs`
 - `src/adapter/inbound/tui/app/shell_runtime/tests/scheduler.rs`
+- `src/adapter/inbound/tui/app/test_helpers.rs`
 - `src/adapter/inbound/tui/app/tui_testkit.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime.rs`
 - `src/adapter/inbound/tui/app/view_selection_overlay_ui.rs`

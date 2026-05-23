@@ -274,3 +274,224 @@ impl NativeTuiApp {
         self.current_session_browser_page().is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::ConversationState;
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+    use crate::domain::session_browser::SessionProjectFilter;
+
+    fn key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> event::KeyEvent {
+        event::KeyEvent::new(code, modifiers)
+    }
+
+    fn session(id: &str, title: &str, cwd: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.to_string(),
+            name: Some(title.to_string()),
+            preview: format!("{title} preview"),
+            cwd: cwd.to_string(),
+            source: "native".to_string(),
+            model_provider: "openai".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: format!("{cwd}/{id}.json"),
+            git_branch: Some("feature/session-browser".to_string()),
+        }
+    }
+
+    fn seed_sessions(app: &mut NativeTuiApp, sessions: Vec<SessionSummary>) {
+        app.session_state = SessionState::Ready(SessionCatalog::ready(
+            SessionCatalogTier::ProviderBackedCatalog,
+            RecentSessions {
+                items: sessions,
+                warnings: Vec::new(),
+                next_cursor: None,
+            },
+        ));
+        app.shell_overlay = ShellOverlay::Sessions;
+    }
+
+    fn selected_session_id(app: &NativeTuiApp) -> Option<&str> {
+        app.current_session().map(|session| session.id.as_str())
+    }
+
+    #[test]
+    fn session_navigation_reprojects_selection_when_pages_change() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            (0..12)
+                .map(|index| {
+                    session(
+                        &format!("thread-{index:02}"),
+                        &format!("Session {index:02}"),
+                        "/tmp/root",
+                    )
+                })
+                .collect(),
+        );
+
+        assert!(app.session_browser_available());
+        assert_eq!(selected_session_id(&app), Some("thread-00"));
+
+        app.jump_to_last_session();
+
+        assert_eq!(app.selected_session_index, 1);
+        assert_eq!(selected_session_id(&app), Some("thread-11"));
+
+        app.move_session_page(-1);
+
+        assert_eq!(app.selected_session_index, 1);
+        assert_eq!(selected_session_id(&app), Some("thread-01"));
+
+        app.jump_to_first_session();
+
+        assert_eq!(app.selected_session_index, 0);
+        assert_eq!(selected_session_id(&app), Some("thread-00"));
+    }
+
+    #[test]
+    fn search_editor_owns_text_keys_only_in_sessions_overlay() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![
+                session("thread-alpha", "Alpha draft", "/tmp/root"),
+                session("thread-beta", "Beta bugfix", "/tmp/root"),
+            ],
+        );
+
+        app.shell_overlay = ShellOverlay::Hidden;
+        app.start_session_search_query_edit();
+        assert!(!app.is_session_search_query_editing());
+        assert!(!app.handle_session_search_query_editor_key(key(KeyCode::Char('b'))));
+
+        app.shell_overlay = ShellOverlay::Sessions;
+        assert!(app.handle_session_overlay_key(key(KeyCode::Char('/'))));
+        assert!(app.is_session_search_query_editing());
+
+        assert!(app.handle_session_search_query_editor_key(key(KeyCode::Char('b'))));
+        assert!(app.handle_session_search_query_editor_key(modified_key(
+            KeyCode::Char('E'),
+            KeyModifiers::SHIFT,
+        )));
+        assert!(app.handle_session_search_query_editor_key(key(KeyCode::Backspace)));
+        assert_eq!(
+            app.session_overlay_ui_state.search_query_editor_buffer(),
+            "b"
+        );
+
+        assert!(app.handle_session_search_query_editor_key(key(KeyCode::Enter)));
+
+        assert!(!app.is_session_search_query_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            "b"
+        );
+        assert_eq!(selected_session_id(&app), Some("thread-beta"));
+
+        assert!(app.handle_session_overlay_key(key(KeyCode::Char('/'))));
+        assert!(app.handle_session_search_query_editor_key(key(KeyCode::Char('z'))));
+        assert!(app.handle_session_search_query_editor_key(key(KeyCode::Esc)));
+
+        assert!(!app.is_session_search_query_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            "b"
+        );
+        assert_eq!(
+            app.session_overlay_ui_state.search_query_editor_buffer(),
+            "b"
+        );
+
+        assert!(app.handle_session_overlay_key(key(KeyCode::Char('/'))));
+        assert!(app.handle_session_search_query_editor_key(modified_key(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+
+        assert!(!app.is_session_search_query_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            "b"
+        );
+    }
+
+    #[test]
+    fn overlay_keymap_cycles_project_filters_and_clear_resets_browser() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![
+                session("thread-root", "Root task", "/tmp/root"),
+                session("thread-other", "Other task", "/tmp/other"),
+            ],
+        );
+
+        app.shell_overlay = ShellOverlay::Hidden;
+        assert!(!app.handle_session_overlay_key(key(KeyCode::Tab)));
+
+        app.shell_overlay = ShellOverlay::Sessions;
+        assert!(app.handle_session_overlay_key(key(KeyCode::Tab)));
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().project_filter,
+            SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root".to_string(),
+            }
+        );
+        assert_eq!(selected_session_id(&app), Some("thread-root"));
+
+        assert!(app.handle_session_overlay_key(key(KeyCode::BackTab)));
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().project_filter,
+            SessionProjectFilter::AllProjects,
+        );
+
+        app.session_overlay_ui_state.set_search_query("other");
+        app.sync_session_browser_selection();
+        assert_eq!(selected_session_id(&app), Some("thread-other"));
+
+        assert!(app.handle_session_overlay_key(key(KeyCode::Char('c'))));
+
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().search_query,
+            ""
+        );
+        assert_eq!(
+            app.session_overlay_ui_state.browser_state().project_filter,
+            SessionProjectFilter::AllProjects,
+        );
+        assert_eq!(selected_session_id(&app), Some("thread-root"));
+    }
+
+    #[test]
+    fn open_conversation_shell_routes_selected_session_through_lifecycle() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![
+                session("thread-alpha", "Alpha draft", "/tmp/root"),
+                session("thread-beta", "Beta bugfix", "/tmp/root"),
+            ],
+        );
+        app.move_selection(1);
+
+        app.open_conversation_shell();
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .map(|session| session.id.as_str()),
+            Some("thread-beta")
+        );
+        assert!(matches!(app.conversation_state, ConversationState::Loading));
+    }
+}
