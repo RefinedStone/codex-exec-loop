@@ -18,12 +18,16 @@ use serde::de::DeserializeOwned;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::Duration;
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const PER_PAGE: usize = 100;
 const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
 const CURL_MAX_TIME_SECONDS: &str = "30";
+const CURL_SPAWN_ATTEMPTS: usize = 3;
+const CURL_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(10);
 const WINDOWS_USERS_ROOT: &str = "/mnt/c/Users";
 // GitHub `head=owner:branch` 같은 query value는 branch slash, colon, and shell-sensitive 문자를 포함할 수 있다.
 // endpoint path는 직접 조립하지만 query value는 이 set으로 percent-encode해 GitHub search 조건이 깨지지 않게 한다.
@@ -549,20 +553,8 @@ impl GithubReviewPollerAdapter {
         let authorization = format!("Authorization: Bearer {}", self.token);
         let user_agent = format!("User-Agent: {}", self.user_agent);
         let api_version = format!("X-GitHub-Api-Version: {}", GITHUB_API_VERSION);
-        let output = Command::new(&self.curl_path)
-            .args([
-                "-sSfL",
-                "--connect-timeout",
-                CURL_CONNECT_TIMEOUT_SECONDS,
-                "--max-time",
-                CURL_MAX_TIME_SECONDS,
-            ])
-            .args(["-H", "Accept: application/vnd.github+json"])
-            .args(["-H", api_version.as_str()])
-            .args(["-H", authorization.as_str()])
-            .args(["-H", user_agent.as_str()])
-            .arg(&url)
-            .output()
+        let output = self
+            .run_curl_process(&url, &api_version, &authorization, &user_agent)
             .with_context(|| format!("failed to run {} for {url}", self.curl_path))?;
         if !output.status.success() {
             bail!(
@@ -571,6 +563,41 @@ impl GithubReviewPollerAdapter {
             );
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+    fn run_curl_process(
+        &self,
+        url: &str,
+        api_version: &str,
+        authorization: &str,
+        user_agent: &str,
+    ) -> io::Result<Output> {
+        for attempt in 1..=CURL_SPAWN_ATTEMPTS {
+            let output = Command::new(&self.curl_path)
+                .args([
+                    "-sSfL",
+                    "--connect-timeout",
+                    CURL_CONNECT_TIMEOUT_SECONDS,
+                    "--max-time",
+                    CURL_MAX_TIME_SECONDS,
+                ])
+                .args(["-H", "Accept: application/vnd.github+json"])
+                .args(["-H", api_version])
+                .args(["-H", authorization])
+                .args(["-H", user_agent])
+                .arg(url)
+                .output();
+            match output {
+                Ok(output) => return Ok(output),
+                Err(error)
+                    if attempt < CURL_SPAWN_ATTEMPTS && is_transient_curl_spawn_error(&error) =>
+                {
+                    thread::sleep(CURL_SPAWN_RETRY_DELAY);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        unreachable!("curl spawn retry loop should return from every attempt")
     }
     fn parse_json<T>(body: &str, endpoint: &str) -> Result<T>
     where
@@ -675,6 +702,11 @@ impl GithubReviewPollerAdapter {
         }
     }
 }
+
+fn is_transient_curl_spawn_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(26))
+}
+
 impl GithubReviewPollerPort for GithubReviewPollerAdapter {
     fn load_pull_request_activity(
         &self,

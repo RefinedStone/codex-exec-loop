@@ -567,18 +567,17 @@ fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_row
 
     let mut rendered_rows_before_line = 0usize;
     for line in lines {
-        if rendered_rows_before_line >= minimum_scroll_offset {
+        let rendered_rows_after_line = rendered_rows_before_line + rendered_line_rows(line, width);
+        if minimum_scroll_offset < rendered_rows_after_line {
             return rendered_rows_before_line.min(u16::MAX as usize) as u16;
         }
-        rendered_rows_before_line += rendered_line_rows(line, width);
+        if minimum_scroll_offset == rendered_rows_after_line {
+            return rendered_rows_after_line.min(u16::MAX as usize) as u16;
+        }
+        rendered_rows_before_line = rendered_rows_after_line;
     }
 
-    total_rendered_rows
-        .saturating_sub(rendered_line_rows(
-            lines.last().expect("non-empty lines"),
-            width,
-        ))
-        .min(u16::MAX as usize) as u16
+    total_rendered_rows.min(u16::MAX as usize) as u16
 }
 
 fn parallel_event_stream_title_visible(lines: &[Line<'static>], width: u16, area: Rect) -> bool {
@@ -821,4 +820,27 @@ fn draw_inline_session_list_panel(
         section_layout[1],
         &mut app.session_overlay_ui_state.list_state,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::text::Line;
+
+    use super::event_boundary_scroll_offset;
+
+    #[test]
+    fn event_boundary_scroll_offset_keeps_wrapped_event_intact() {
+        let lines = vec![Line::from("alpha beta gamma"), Line::from("tail event")];
+
+        assert_eq!(
+            event_boundary_scroll_offset(&lines, 10, 2),
+            0,
+            "boundary inside the first wrapped event should keep the whole event live"
+        );
+        assert_eq!(
+            event_boundary_scroll_offset(&lines, 10, 1),
+            2,
+            "boundary exactly after the first wrapped event may start at the next event"
+        );
+    }
 }

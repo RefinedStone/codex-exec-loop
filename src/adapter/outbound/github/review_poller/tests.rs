@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,6 +17,16 @@ review poller adapter는 GitHub REST API, local git origin, local GitHub credent
 snapshot으로 바꾸는 outbound boundary다. 이 테스트 파일은 네트워크를 실제로 치지 않고도 "입력
 문자열/JSON이 어떤 domain shape로 정규화되는가"를 고정한다.
 */
+
+#[test]
+fn curl_spawn_retry_error_classifier_is_narrow() {
+    assert!(super::is_transient_curl_spawn_error(
+        &io::Error::from_raw_os_error(26)
+    ));
+    assert!(!super::is_transient_curl_spawn_error(
+        &io::Error::from_raw_os_error(2)
+    ));
+}
 
 #[test]
 fn parses_github_credential_lines() {

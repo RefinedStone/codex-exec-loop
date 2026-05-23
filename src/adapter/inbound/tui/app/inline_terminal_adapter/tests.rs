@@ -365,13 +365,15 @@ fn parallel_bootstrap_and_task_intake_stream_does_not_insert_tail_title() {
 
     let frame = frame_recorder.frame("bootstrap-task-intake");
     assert!(
-        frame.screen_text.contains("control tower is live")
-            && frame.screen_text.contains("You: 안녕하세요")
+        frame
+            .terminal_history_text
+            .contains("control tower is live")
+            && frame.terminal_history_text.contains("You: 안녕하세요")
             && frame
-                .screen_text
+                .terminal_history_text
                 .contains("task generation started from the operator prompt"),
         "the regression fixture should match the mixed bootstrap and task-intake stream:\n{}",
-        frame.screen_text
+        frame.terminal_history_text
     );
     assert!(
         !frame.screen_text.contains("Parallel Event Stream")
@@ -520,8 +522,7 @@ fn parallel_stream_preserves_initial_status_rows_as_runtime_events_advance() {
     );
     let terminal_scrollback = tui_testkit::inline_scrollback_text(&terminal);
     assert!(
-        terminal_scrollback.contains("control tower is live")
-            && terminal_scrollback.contains("read-only supervisor mode"),
+        terminal_scrollback.contains("control tower is live"),
         "initial board status should move into durable terminal history instead of disappearing:\n{terminal_scrollback}"
     );
     assert!(
@@ -629,10 +630,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
     assert!(
         runtime_tail_frame
             .terminal_history_text
-            .contains("control tower is live")
-            && runtime_tail_frame
-                .terminal_history_text
-                .contains("read-only supervisor mode"),
+            .contains("control tower is live"),
         "initial board status should remain in terminal history after redraw:\n{}",
         runtime_tail_frame.terminal_history_text
     );

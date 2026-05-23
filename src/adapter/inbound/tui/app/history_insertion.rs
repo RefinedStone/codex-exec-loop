@@ -379,7 +379,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::InlineHistoryRenderMode;
     use crate::adapter::inbound::tui::app::tui_testkit;
     use ratatui::layout::Position;
-    use ratatui::text::Line;
+    use ratatui::text::{Line, Span};
     use std::io::Write;
     #[test]
     fn history_insertion_mode_defaults_to_standard_scroll_region() {
@@ -447,6 +447,24 @@ mod tests {
         assert_eq!(text, "aa  \naa  \naa  ");
     }
     #[test]
+    fn rendered_history_rows_preserve_wrapped_parallel_notice_suffix() {
+        let lines = vec![Line::from(vec![
+            Span::raw("[--:--:--] "),
+            Span::raw("Supervisor: "),
+            Span::raw(
+                "parallel board refreshed. control tower is live in read-only supervisor mode",
+            ),
+        ])];
+        let buffer = rendered_history_buffer(80, &lines);
+        let text = tui_testkit::buffer_text(&buffer);
+
+        assert_eq!(count_rendered_history_rows(&lines, 80), 2);
+        assert!(
+            text.contains("read-only supervisor mode"),
+            "wrapped notice suffix should remain in rendered history: {text:?}"
+        );
+    }
+    #[test]
     fn rendered_history_rows_are_stable_through_vt100_screen_parsing() {
         let lines = vec![
             Line::from("https://example.test/really/long/path"),
@@ -484,6 +502,67 @@ mod tests {
         let rendered = tui_testkit::screen_text(&terminal);
         assert!(rendered.contains("first committed"));
         assert!(rendered.contains("https://example"));
+    }
+    #[test]
+    fn standard_scroll_region_preserves_wrapped_parallel_notice_suffix() {
+        let mut terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        let lines = vec![Line::from(vec![
+            Span::raw("[--:--:--] "),
+            Span::raw("Supervisor: "),
+            Span::raw(
+                "parallel board refreshed. control tower is live in read-only supervisor mode",
+            ),
+        ])];
+
+        HistoryInsertionAdapter::new(HistoryInsertionMode::StandardScrollRegion)
+            .insert(&mut terminal, &lines)
+            .unwrap();
+        let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
+
+        assert!(
+            terminal_history.contains("read-only supervisor mode"),
+            "standard insertion should preserve wrapped suffix rows: {terminal_history:?}"
+        );
+    }
+    #[test]
+    fn standard_scroll_region_preserves_wrapped_notice_before_ledger_rows() {
+        let mut terminal =
+            tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        let lines = vec![
+            Line::from(vec![
+                Span::raw("[--:--:--] "),
+                Span::raw("Supervisor: "),
+                Span::raw(
+                    "parallel board refreshed. control tower is live in read-only supervisor mode",
+                ),
+            ]),
+            Line::from("[--:--:--] Ledger: reported stage record: no agent results reported yet"),
+            Line::from(
+                "[--:--:--] Ledger: ledger refreshing stage record: no official refresh workers are active",
+            ),
+            Line::from("[--:--:--] Ledger: official stage record: nothing is queued for merge"),
+            Line::from(
+                "[--:--:--] Ledger: merge queued stage record: no distributor queue items are waiting",
+            ),
+            Line::from(
+                "[--:--:--] Ledger: merged stage record: nothing has been integrated into prerelease yet",
+            ),
+        ];
+
+        HistoryInsertionAdapter::new(HistoryInsertionMode::StandardScrollRegion)
+            .insert(&mut terminal, &lines)
+            .unwrap();
+        let terminal_history = tui_testkit::inline_terminal_history_text(&terminal);
+
+        assert!(
+            terminal_history.contains("read-only supervisor mode"),
+            "standard insertion should not blank the wrapped notice before ledger rows: {terminal_history:?}"
+        );
+        assert!(
+            terminal_history.contains("no agent results reported yet"),
+            "ledger rows should still follow the wrapped notice: {terminal_history:?}"
+        );
     }
     #[test]
     fn newline_fallback_inserts_history_without_scroll_regions() {

@@ -500,13 +500,18 @@ fn rendered_tail_start_index(
 
     let mut rendered_rows_before_entry = 0usize;
     for (index, entry) in entries.iter().enumerate() {
-        if rendered_rows_before_entry >= minimum_scroll_offset {
+        let rendered_rows_after_entry =
+            rendered_rows_before_entry + rendered_line_rows(&entry.line, width);
+        if minimum_scroll_offset < rendered_rows_after_entry {
             return index;
         }
-        rendered_rows_before_entry += rendered_line_rows(&entry.line, width);
+        if minimum_scroll_offset == rendered_rows_after_entry {
+            return index + 1;
+        }
+        rendered_rows_before_entry = rendered_rows_after_entry;
     }
 
-    entries.len().saturating_sub(1)
+    entries.len()
 }
 
 fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
@@ -669,6 +674,29 @@ mod tests {
         assert!(
             rendered[0].to_string().contains("event-004"),
             "oldest retained event should be the first item after capping"
+        );
+    }
+
+    #[test]
+    fn durable_tail_boundary_keeps_wrapped_event_out_of_scrollback_until_complete() {
+        let entries = VecDeque::from([
+            ParallelSupervisorEventEntry {
+                line: Line::from("alpha beta gamma"),
+            },
+            ParallelSupervisorEventEntry {
+                line: Line::from("tail event"),
+            },
+        ]);
+
+        assert_eq!(
+            rendered_tail_start_index(&entries, 2, 10),
+            0,
+            "a wrapped event must not be partly durable and partly live"
+        );
+        assert_eq!(
+            rendered_tail_start_index(&entries, 1, 10),
+            1,
+            "boundary exactly after a wrapped event may start at the next event"
         );
     }
 

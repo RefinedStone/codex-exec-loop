@@ -86,6 +86,8 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_presentation/startup_banner.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/parallel_working_copy.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/plan_indicator.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/transcript_copy.rs`
+- `src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs`
 - `src/adapter/inbound/tui/app/shell_rendering/inline_layout.rs`
 - `src/adapter/inbound/tui/app/shell_rendering_contract_tests.rs`
 - `src/adapter/inbound/tui/app/shell_rendering_contract_tests/planning.rs`
