@@ -590,6 +590,111 @@ fn low_level_context_loaders_report_missing_git_inventory_or_baseline() {
 }
 
 #[test]
+fn pool_entrypoints_report_canonical_root_failures() {
+    let repo = init_temp_git_repo("canonical-root-failure");
+    let workspace = path_string(&repo);
+    let planning_authority = NoopPlanningAuthorityPort::default()
+        .with_authority_location_error("authority location failed");
+
+    let reset_error = reset_pool_for_parallel_enable(
+        &planning_authority,
+        &MirrorRuntime::default(),
+        &workspace,
+        ParallelModePoolResetPolicy::ProtectLive,
+    )
+    .expect_err("canonical root failure should block reset");
+    assert_eq!(reset_error, "canonical repository root is unavailable");
+
+    let reconcile_error = reconcile_pool_board_and_context(
+        &planning_authority,
+        &MirrorRuntime::default(),
+        &workspace,
+    )
+    .expect_err("canonical root failure should block reconcile");
+    let (pool, detail) = *reconcile_error;
+    assert!(
+        pool.reconcile_status
+            .contains("canonical repository root is unavailable")
+    );
+    assert_eq!(detail, "canonical root inspection failed");
+
+    let context_error = load_pool_runtime_context(&planning_authority, &workspace)
+        .expect_err("canonical root failure should block context load");
+    assert_eq!(
+        context_error,
+        (
+            "reconcile failed / canonical repository root is unavailable",
+            "canonical root inspection failed"
+        )
+    );
+
+    let lease_error = resolve_workspace_slot_lease(&planning_authority, &workspace)
+        .expect_err("canonical root failure should block lease resolution");
+    assert_eq!(lease_error, "canonical root inspection failed");
+
+    remove_pool_artifacts(&repo);
+}
+
+#[test]
+fn pool_reset_surfaces_authority_projection_write_failures() {
+    let clear_repo = init_temp_git_repo("clear-projection-failure");
+    let clear_workspace = path_string(&clear_repo);
+    let clear_authority = NoopPlanningAuthorityPort::default()
+        .with_clear_parallel_runtime_projections_error("clear failed");
+
+    let clear_error = reset_pool_for_parallel_enable(
+        &clear_authority,
+        &MirrorRuntime::default(),
+        &clear_workspace,
+        ParallelModePoolResetPolicy::ForceDisposable,
+    )
+    .expect_err("projection clear failure should be reported");
+    assert!(clear_error.contains("parallel runtime projection clear failed after initial reset"));
+    assert!(clear_error.contains("clear failed"));
+    remove_pool_artifacts(&clear_repo);
+
+    let task_clear_repo = init_temp_git_repo("task-clear-projection-failure");
+    let task_clear_workspace = path_string(&task_clear_repo);
+    let mut projection = PlanningAuthorityRuntimeProjectionSnapshot::default();
+    projection.distributor_queue_records.push(queue_record(
+        "queue-blocked",
+        "slot-1",
+        "task-blocked",
+    ));
+    let task_clear_authority = NoopPlanningAuthorityPort::default()
+        .with_runtime_projection(projection)
+        .with_clear_parallel_runtime_projections_for_tasks_error("task clear failed");
+
+    let task_clear_error = reset_pool_for_parallel_enable(
+        &task_clear_authority,
+        &MirrorRuntime::default(),
+        &task_clear_workspace,
+        ParallelModePoolResetPolicy::ForceDisposable,
+    )
+    .expect_err("task projection clear failure should be reported");
+    assert!(task_clear_error.contains("parallel dispatch block clear failed after initial reset"));
+    assert!(task_clear_error.contains("task clear failed"));
+    remove_pool_artifacts(&task_clear_repo);
+
+    let apply_repo = init_temp_git_repo("apply-reset-report-failure");
+    let apply_workspace = path_string(&apply_repo);
+    create_detached_pool_slot(&apply_repo, 1);
+    let apply_authority = NoopPlanningAuthorityPort::default()
+        .with_apply_parallel_pool_reset_report_error("apply failed");
+
+    let apply_error = reset_pool_for_parallel_enable(
+        &apply_authority,
+        &MirrorRuntime::default(),
+        &apply_workspace,
+        ParallelModePoolResetPolicy::ProtectLive,
+    )
+    .expect_err("reset report application failure should be reported");
+    assert!(apply_error.contains("parallel runtime projection reset report failed"));
+    assert!(apply_error.contains("apply failed"));
+    remove_pool_artifacts(&apply_repo);
+}
+
+#[test]
 fn utility_helpers_cover_pool_ids_heads_and_reconcile_action_flags() {
     assert_eq!(slot_id(7), "slot-7");
     assert_eq!(short_sha("abcdef1234567890"), "abcdef1");
