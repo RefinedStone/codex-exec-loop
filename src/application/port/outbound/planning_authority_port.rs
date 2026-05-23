@@ -422,6 +422,45 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
 pub struct NoopPlanningAuthorityPort {
     // Monotonic refresh counter keeps orchestration on the same path as real adapters.
     next_refresh_order: AtomicU64,
+    resolve_authority_location_error: Option<&'static str>,
+    runtime_projection: Option<PlanningAuthorityRuntimeProjectionSnapshot>,
+    clear_parallel_runtime_projections_error: Option<&'static str>,
+    clear_parallel_runtime_projections_for_tasks_error: Option<&'static str>,
+    apply_parallel_pool_reset_report_error: Option<&'static str>,
+}
+
+#[cfg(test)]
+impl NoopPlanningAuthorityPort {
+    pub fn with_authority_location_error(mut self, message: &'static str) -> Self {
+        self.resolve_authority_location_error = Some(message);
+        self
+    }
+
+    pub fn with_runtime_projection(
+        mut self,
+        snapshot: PlanningAuthorityRuntimeProjectionSnapshot,
+    ) -> Self {
+        self.runtime_projection = Some(snapshot);
+        self
+    }
+
+    pub fn with_clear_parallel_runtime_projections_error(mut self, message: &'static str) -> Self {
+        self.clear_parallel_runtime_projections_error = Some(message);
+        self
+    }
+
+    pub fn with_clear_parallel_runtime_projections_for_tasks_error(
+        mut self,
+        message: &'static str,
+    ) -> Self {
+        self.clear_parallel_runtime_projections_for_tasks_error = Some(message);
+        self
+    }
+
+    pub fn with_apply_parallel_pool_reset_report_error(mut self, message: &'static str) -> Self {
+        self.apply_parallel_pool_reset_report_error = Some(message);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +480,9 @@ impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
     // Without a store, the supplied workspace is both workspace root and canonical root.
     fn resolve_authority_location(&self, workspace_dir: &str) -> Result<PlanningAuthorityLocation> {
+        if let Some(message) = self.resolve_authority_location_error {
+            anyhow::bail!(message);
+        }
         Ok(PlanningAuthorityLocation {
             // Caller-supplied path as the operational root.
             workspace_root: workspace_dir.to_string(),
@@ -545,7 +587,7 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         // Workspace partitioning is not provided by the fallback.
         _workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
-        Ok(PlanningAuthorityRuntimeProjectionSnapshot::default())
+        Ok(self.runtime_projection.clone().unwrap_or_default())
     }
 
     fn enqueue_runtime_dispatch_command(
@@ -586,6 +628,9 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
         _reason: &str,
     ) -> Result<()> {
+        if let Some(message) = self.clear_parallel_runtime_projections_error {
+            anyhow::bail!(message);
+        }
         Ok(())
     }
 
@@ -595,6 +640,9 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _task_ids: &[String],
         _reason: &str,
     ) -> Result<()> {
+        if let Some(message) = self.clear_parallel_runtime_projections_for_tasks_error {
+            anyhow::bail!(message);
+        }
         Ok(())
     }
 
@@ -603,6 +651,9 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
         _report: &ParallelModePoolResetReport,
     ) -> Result<()> {
+        if let Some(message) = self.apply_parallel_pool_reset_report_error {
+            anyhow::bail!(message);
+        }
         Ok(())
     }
 
