@@ -183,7 +183,7 @@ pub(super) fn post_turn_action_decision(action: &PostTurnContinuationAction) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::super::PostTurnAutoFollowSkipReason;
+    use super::super::{PostTurnAutoFollowSkipReason, PostTurnQueuedPrompt};
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
 
@@ -236,5 +236,35 @@ mod tests {
         assert_eq!(detail["type"], json!("skip_auto_followup"));
         assert_eq!(detail["reason"], json!("PlanningQueueIdlePolicyStop"));
         assert_eq!(post_turn_action_decision(&action), "skip_auto_followup");
+    }
+
+    #[test]
+    fn post_turn_action_detail_counts_queued_prompt_without_logging_body() {
+        let action = PostTurnContinuationAction::QueueAutoPrompt(Box::new(PostTurnQueuedPrompt {
+            prompt: "continue with the queue head".to_string(),
+            mode_label: "auto-follow".to_string(),
+            transcript_text: "assistant summary".to_string(),
+        }));
+        let provenance = PostTurnEvaluationProvenance::new("turn-1".to_string()).with_handoff_task(
+            Some(crate::application::service::planning::PlanningTaskHandoff {
+                task_id: "task-1".to_string(),
+                task_title: "Queue head".to_string(),
+                direction_id: "general-workstream".to_string(),
+                combined_priority: 90,
+                updated_at: "2026-05-12T00:00:00Z".to_string(),
+                status_label: "ready".to_string(),
+            }),
+        );
+
+        let detail = post_turn_action_log_detail(&action, &provenance);
+
+        assert_eq!(detail["type"], json!("queue_auto_prompt"));
+        assert_eq!(detail["completed_turn_id"], json!("turn-1"));
+        assert_eq!(detail["mode_label"], json!("auto-follow"));
+        assert_eq!(detail["prompt_chars"], json!(28));
+        assert_eq!(detail["transcript_text_chars"], json!(17));
+        assert_eq!(detail["handoff_task_id"], json!("task-1"));
+        assert_eq!(post_turn_action_decision(&action), "queue_auto_prompt");
+        assert!(!detail.to_string().contains("continue with the queue head"));
     }
 }

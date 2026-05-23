@@ -1049,89 +1049,138 @@ mod tests {
 
     #[test]
     fn queue_refresh_skip_keeps_projection_and_preserves_existing_panel_state() {
-        let mut executor = test_executor();
-        executor.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
-        executor.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
-        let mut context = test_context(PlanningRuntimeProjection::invalid("planning blocked"));
-        context.latest_main_reply = Some("worker reply".to_string());
-        let request = test_request(context.clone());
+        with_test_event_logging(|| {
+            let mut executor = test_executor();
+            executor.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
+            executor.planning_worker_panel_state.last_summary =
+                Some("previous summary".to_string());
+            let mut context = test_context(PlanningRuntimeProjection::invalid("planning blocked"));
+            context.latest_main_reply = Some("worker reply".to_string());
+            let request = test_request(context.clone());
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            outcome.runtime_projection.failure_reason(),
-            Some("planning blocked")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("previous summary")
-        );
+            assert_eq!(
+                outcome.runtime_projection.failure_reason(),
+                Some("planning blocked")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("previous summary")
+            );
+        });
     }
 
     #[test]
     fn service_evaluate_paused_request_skips_worker_refresh_and_preserves_panel_state() {
-        let service = test_service();
-        let mut context = test_context(ready_projection(Some(queue_task())));
-        let workspace = TempPlanningWorkspace::new_git("post-turn-paused");
-        let workspace_directory = workspace.path.clone();
-        context.planning_workspace_directory = workspace_directory.clone();
-        context.continuation_paused = true;
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace_directory;
-        request.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
-        request.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
+        with_test_event_logging(|| {
+            let service = test_service();
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            let workspace = TempPlanningWorkspace::new_git("post-turn-paused");
+            let workspace_directory = workspace.path.clone();
+            context.planning_workspace_directory = workspace_directory.clone();
+            context.continuation_paused = true;
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace_directory;
+            request.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
+            request.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
 
-        assert_eq!(
-            service.worker_panel_start_state(&request),
-            PlanningPostTurnWorkerPanelStartState::PreserveCurrent
-        );
+            assert_eq!(
+                service.worker_panel_start_state(&request),
+                PlanningPostTurnWorkerPanelStartState::PreserveCurrent
+            );
 
-        let execution = service.evaluate(request);
+            let execution = service.evaluate(request);
 
-        assert_eq!(
-            execution.evaluation.action,
-            PostTurnContinuationAction::SkipAutoFollow {
-                reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused
-            }
-        );
-        assert_eq!(
-            execution.evaluation.runtime_projection,
-            context.current_runtime_projection
-        );
-        assert!(execution.evaluation.runtime_notices.is_empty());
-        assert_eq!(
-            execution.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            execution
-                .planning_worker_panel_state
-                .last_summary
-                .as_deref(),
-            Some("previous summary")
-        );
+            assert_eq!(
+                execution.evaluation.action,
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused
+                }
+            );
+            assert_eq!(
+                execution.evaluation.runtime_projection,
+                context.current_runtime_projection
+            );
+            assert!(execution.evaluation.runtime_notices.is_empty());
+            assert_eq!(
+                execution.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                execution
+                    .planning_worker_panel_state
+                    .last_summary
+                    .as_deref(),
+                Some("previous summary")
+            );
+        });
     }
 
     #[test]
     fn service_evaluate_enabled_request_runs_refresh_and_surfaces_drained_alert() {
+        with_test_event_logging(|| {
+            let service = test_service();
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            let workspace = TempPlanningWorkspace::new_git("post-turn-enabled-refresh");
+            let workspace_directory = workspace.path.clone();
+            context.planning_workspace_directory = workspace_directory.clone();
+            let mut request = test_request(context);
+            request.workspace_directory = workspace_directory;
+
+            let execution = service.evaluate(request);
+
+            assert_eq!(
+                execution.evaluation.action,
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PlanningQueueDrained
+                }
+            );
+            assert_eq!(
+                execution.evaluation.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+            assert_eq!(execution.evaluation.operator_alerts.len(), 1);
+            assert_eq!(
+                execution.evaluation.operator_alerts[0].title,
+                "All planning tasks complete"
+            );
+            assert_eq!(
+                execution.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                execution
+                    .planning_worker_panel_state
+                    .last_summary
+                    .as_deref(),
+                Some("planning worker disabled")
+            );
+        });
+    }
+
+    #[test]
+    fn service_evaluate_with_timeout_returns_completed_execution_before_deadline() {
         let service = test_service();
         let mut context = test_context(ready_projection(Some(queue_task())));
-        let workspace = TempPlanningWorkspace::new_git("post-turn-enabled-refresh");
+        let workspace = TempPlanningWorkspace::new_git("post-turn-timeout-success");
         let workspace_directory = workspace.path.clone();
         context.planning_workspace_directory = workspace_directory.clone();
         let mut request = test_request(context);
         request.workspace_directory = workspace_directory;
 
-        let execution = service.evaluate(request);
+        let execution = service.evaluate_with_timeout(request, Duration::from_secs(5));
 
+        assert_eq!(execution.thread_id, "thread-1");
+        assert_eq!(execution.completed_turn_id, "turn-1");
         assert_eq!(
             execution.evaluation.action,
             PostTurnContinuationAction::SkipAutoFollow {
@@ -1139,324 +1188,407 @@ mod tests {
             }
         );
         assert_eq!(
-            execution.evaluation.runtime_projection.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        );
-        assert_eq!(execution.evaluation.operator_alerts.len(), 1);
-        assert_eq!(
-            execution.evaluation.operator_alerts[0].title,
-            "All planning tasks complete"
-        );
-        assert_eq!(
             execution.planning_worker_panel_state.status,
             PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            execution
-                .planning_worker_panel_state
-                .last_summary
-                .as_deref(),
-            Some("planning worker disabled")
         );
     }
 
     #[test]
     fn queue_refresh_worker_failure_records_refresh_failure_panel() {
-        let workspace = TempPlanningWorkspace::new("queue-refresh-worker-failure");
-        let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
-        let context = test_context(ready_projection(Some(queue_task())));
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-refresh-worker-failure");
+            let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            outcome.runtime_projection.failure_reason(),
-            Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("refresh")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("planning worker refresh failed: worker boom")
-        );
+            assert_eq!(
+                outcome.runtime_projection.failure_reason(),
+                Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("refresh")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("planning worker refresh failed: worker boom")
+            );
+        });
     }
 
     #[test]
     fn queue_idle_derivation_worker_failure_records_idle_specific_panel_copy() {
-        let workspace = TempPlanningWorkspace::new("queue-idle-worker-failure");
-        let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
-        let mut context = test_context(ready_projection(None));
-        context.previous_handoff_task = None;
-        context.latest_main_reply = Some("finished the requested work".to_string());
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-idle-worker-failure");
+            let mut executor = test_executor_with_worker(Arc::new(FailingPlanningWorkerPort));
+            let mut context = test_context(ready_projection(None));
+            context.previous_handoff_task = None;
+            context.latest_main_reply = Some("finished the requested work".to_string());
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            outcome.runtime_projection.failure_reason(),
-            Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("queue-idle-derive")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("planning worker queue-idle derivation failed: worker boom")
-        );
+            assert_eq!(
+                outcome.runtime_projection.failure_reason(),
+                Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("queue-idle-derive")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("planning worker queue-idle derivation failed: worker boom")
+            );
+        });
     }
 
     #[test]
     fn queue_refresh_success_records_worker_outcome_and_drained_projection() {
-        let workspace = TempPlanningWorkspace::new("queue-refresh-success");
-        let mut executor = test_executor();
-        let context = test_context(ready_projection(Some(queue_task())));
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-refresh-success");
+            let mut executor = test_executor();
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("refresh")
-        );
-        assert_eq!(
-            executor.planning_worker_panel_state.last_summary.as_deref(),
-            Some("planning worker disabled")
-        );
-        assert_eq!(
-            outcome.runtime_projection.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("refresh")
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.last_summary.as_deref(),
+                Some("planning worker disabled")
+            );
+            assert_eq!(
+                outcome.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+        });
+    }
+
+    #[test]
+    fn queue_refresh_unresolved_repair_blocks_auto_follow_with_refresh_failure_projection() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-refresh-unresolved-repair");
+            seed_ready_queue_authority(&workspace.path);
+            let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+                invalid_task_command_worker_message(),
+            )));
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let context = test_context(current_projection);
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
+
+            assert_eq!(
+                outcome.runtime_projection.failure_reason(),
+                Some(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
+            );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RepairFailed
+            );
+            assert!(
+                executor
+                    .planning_worker_panel_state
+                    .last_summary
+                    .as_deref()
+                    .is_some_and(|summary| summary.contains("planning worker repair exhausted")),
+                "panel state: {:?}",
+                executor.planning_worker_panel_state
+            );
+        });
+    }
+
+    #[test]
+    fn queue_refresh_resolved_repair_uses_repaired_projection_for_final_decision() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-refresh-resolved-repair");
+            seed_ready_queue_authority(&workspace.path);
+            let mut executor =
+                test_executor_with_worker(Arc::new(SequencedPlanningWorkerPort::new([
+                    invalid_task_command_worker_message(),
+                    done_task_command_worker_message(),
+                ])));
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let context = test_context(current_projection);
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
+
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RepairSucceeded
+            );
+            assert_eq!(
+                outcome.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_none()
+            );
+        });
     }
 
     #[test]
     fn queue_refresh_repeated_handoff_marks_panel_failed_and_pauses_projection() {
-        let workspace = TempPlanningWorkspace::new("queue-refresh-repeated-handoff");
-        seed_ready_queue_authority(&workspace.path);
-        let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
-            empty_task_commands_worker_message(),
-        )));
-        let current_projection = executor
-            .planning_feature
-            .runtime
-            .load_runtime_projection_or_invalid(&workspace.path);
-        let mut context = test_context(current_projection);
-        context.previous_handoff_task = Some(queue_handoff());
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-refresh-repeated-handoff");
+            seed_ready_queue_authority(&workspace.path);
+            let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+                empty_task_commands_worker_message(),
+            )));
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let mut context = test_context(current_projection);
+            context.previous_handoff_task = Some(queue_handoff());
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshFailed
-        );
-        assert!(
-            executor
-                .planning_worker_panel_state
-                .last_host_detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("previously handed-off task unchanged"))
-        );
-        assert!(
-            outcome
-                .runtime_projection
-                .auto_follow_pause_reason()
-                .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert!(
+                executor
+                    .planning_worker_panel_state
+                    .last_host_detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("previously handed-off task unchanged"))
+            );
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_some_and(|reason| reason.contains("previously handed-off task unchanged"))
+            );
+        });
     }
 
     #[test]
     fn queue_idle_derivation_empty_records_host_detail_without_failure() {
-        let workspace = TempPlanningWorkspace::new("queue-idle-derivation-empty");
-        seed_queue_idle_review_authority(&workspace.path);
-        let mut executor = test_executor();
-        let current_projection = executor
-            .planning_feature
-            .runtime
-            .load_runtime_projection_or_invalid(&workspace.path);
-        let mut context = test_context(current_projection);
-        context.previous_handoff_task = None;
-        context.latest_main_reply = Some("the requested work is complete".to_string());
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-idle-derivation-empty");
+            seed_queue_idle_review_authority(&workspace.path);
+            let mut executor = test_executor();
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let mut context = test_context(current_projection);
+            context.previous_handoff_task = None;
+            context.latest_main_reply = Some("the requested work is complete".to_string());
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_operation_label
-                .as_deref(),
-            Some("queue-idle-derive")
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_host_detail
-                .as_deref(),
-            Some(
-                "planning worker derived no justified follow-up task from the latest request and reply"
-            )
-        );
-        assert_eq!(
-            outcome.runtime_projection.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyNoTask
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_operation_label
+                    .as_deref(),
+                Some("queue-idle-derive")
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_host_detail
+                    .as_deref(),
+                Some(
+                    "planning worker derived no justified follow-up task from the latest request and reply"
+                )
+            );
+            assert_eq!(
+                outcome.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+        });
     }
 
     #[test]
     fn queue_refresh_promotes_worker_proposal_and_records_host_detail() {
-        let workspace = TempPlanningWorkspace::new("queue-refresh-promotes-proposal");
-        seed_ready_queue_authority(&workspace.path);
-        let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
-            proposed_followup_worker_message(),
-        )));
-        let current_projection = executor
-            .planning_feature
-            .runtime
-            .load_runtime_projection_or_invalid(&workspace.path);
-        let context = test_context(current_projection);
-        let mut request = test_request(context.clone());
-        request.workspace_directory = workspace.path.clone();
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("queue-refresh-promotes-proposal");
+            seed_ready_queue_authority(&workspace.path);
+            let mut executor = test_executor_with_worker(Arc::new(StaticPlanningWorkerPort::new(
+                proposed_followup_worker_message(),
+            )));
+            let current_projection = executor
+                .planning_feature
+                .runtime
+                .load_runtime_projection_or_invalid(&workspace.path);
+            let context = test_context(current_projection);
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
 
-        let outcome = executor.run_planning_queue_refresh(
-            &context,
-            &request,
-            context.current_runtime_projection.clone(),
-        );
+            let outcome = executor.run_planning_queue_refresh(
+                &context,
+                &request,
+                context.current_runtime_projection.clone(),
+            );
 
-        assert_eq!(
-            executor.planning_worker_panel_state.status,
-            PlanningWorkerStatus::RefreshSucceeded
-        );
-        assert_eq!(
-            executor
-                .planning_worker_panel_state
-                .last_host_detail
-                .as_deref(),
-            Some(
-                "host promoted top follow-up proposal into the executable queue: Review follow-up proposal"
-            )
-        );
-        assert!(
-            executor
-                .planning_worker_panel_state
-                .last_queue_summary
-                .as_deref()
-                .is_some_and(|summary| summary.contains("Review follow-up proposal"))
-        );
-        assert_eq!(
-            outcome.runtime_projection.workspace_status(),
-            PlanningRuntimeWorkspaceStatus::ReadyWithTask
-        );
-        assert!(
-            outcome
-                .runtime_projection
-                .queue_summary()
-                .is_some_and(|summary| summary.contains("Review follow-up proposal"))
-        );
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshSucceeded
+            );
+            assert_eq!(
+                executor
+                    .planning_worker_panel_state
+                    .last_host_detail
+                    .as_deref(),
+                Some(
+                    "host promoted top follow-up proposal into the executable queue: Review follow-up proposal"
+                )
+            );
+            assert!(
+                executor
+                    .planning_worker_panel_state
+                    .last_queue_summary
+                    .as_deref()
+                    .is_some_and(|summary| summary.contains("Review follow-up proposal"))
+            );
+            assert_eq!(
+                outcome.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyWithTask
+            );
+            assert!(
+                outcome
+                    .runtime_projection
+                    .queue_summary()
+                    .is_some_and(|summary| summary.contains("Review follow-up proposal"))
+            );
+        });
     }
 
     #[test]
     fn auto_follow_decision_queues_prompt_with_handoff_provenance() {
-        let executor = test_executor();
-        let context = test_context(ready_projection(Some(queue_task())));
-        let request = test_request(context.clone());
+        with_test_event_logging(|| {
+            let executor = test_executor();
+            let context = test_context(ready_projection(Some(queue_task())));
+            let request = test_request(context.clone());
 
-        let decision = executor.auto_follow_decision_from_projection(
-            &context,
-            &request,
-            &context.current_runtime_projection,
-        );
+            let decision = executor.auto_follow_decision_from_projection(
+                &context,
+                &request,
+                &context.current_runtime_projection,
+            );
 
-        let PostTurnContinuationAction::QueueAutoPrompt(prompt) = decision.action else {
-            panic!("ready queue head should produce queued prompt action");
-        };
-        assert_eq!(prompt.mode_label, "auto-follow");
-        assert!(prompt.prompt.contains("Queue head"));
-        assert_eq!(
-            decision
-                .provenance
-                .handoff_task
-                .as_ref()
-                .map(|task| task.task_id.as_str()),
-            Some("task-1")
-        );
-        assert!(decision.operator_alerts.is_empty());
+            let PostTurnContinuationAction::QueueAutoPrompt(prompt) = decision.action else {
+                panic!("ready queue head should produce queued prompt action");
+            };
+            assert_eq!(prompt.mode_label, "auto-follow");
+            assert!(prompt.prompt.contains("Queue head"));
+            assert_eq!(
+                decision
+                    .provenance
+                    .handoff_task
+                    .as_ref()
+                    .map(|task| task.task_id.as_str()),
+                Some("task-1")
+            );
+            assert!(decision.operator_alerts.is_empty());
+        });
     }
 
     #[test]
     fn auto_follow_decision_maps_skip_to_post_turn_action() {
-        let executor = test_executor();
-        let mut context = test_context(ready_projection(Some(queue_task())));
-        context.can_queue_next = false;
-        let request = test_request(context.clone());
+        with_test_event_logging(|| {
+            let executor = test_executor();
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            context.can_queue_next = false;
+            let request = test_request(context.clone());
 
-        let decision = executor.auto_follow_decision_from_projection(
-            &context,
-            &request,
-            &context.current_runtime_projection,
-        );
+            let decision = executor.auto_follow_decision_from_projection(
+                &context,
+                &request,
+                &context.current_runtime_projection,
+            );
 
-        assert_eq!(
-            decision.action,
-            PostTurnContinuationAction::SkipAutoFollow {
-                reason: PostTurnAutoFollowSkipReason::LimitReached
-            }
-        );
-        assert_eq!(decision.provenance.completed_turn_id, "turn-1");
-        assert!(decision.operator_alerts.is_empty());
+            assert_eq!(
+                decision.action,
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::LimitReached
+                }
+            );
+            assert_eq!(decision.provenance.completed_turn_id, "turn-1");
+            assert!(decision.operator_alerts.is_empty());
+        });
     }
 
     #[test]
