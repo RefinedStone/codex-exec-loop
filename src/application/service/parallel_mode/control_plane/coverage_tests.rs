@@ -185,6 +185,21 @@ fn recv_orchestrator_wake_completed(
     panic!("orchestrator wake completion should be sent");
 }
 
+fn recv_entered_event(
+    rx: &mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) -> ParallelModeControlPlaneBackgroundEvent {
+    for _ in 0..8 {
+        let event = recv_background_event(rx);
+        if matches!(
+            event,
+            ParallelModeControlPlaneBackgroundEvent::Entered { .. }
+        ) {
+            return event;
+        }
+    }
+    panic!("parallel entry completion should be sent");
+}
+
 fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
@@ -1258,4 +1273,108 @@ fn controller_deferred_dispatch_without_projection_records_traceable_queue_state
         handle.last_automation_trigger(),
         Some(ParallelModeAutomationTrigger::MainTurnPostEvaluation)
     );
+}
+
+#[test]
+fn effect_runner_spawns_traceable_refresh_tick_and_blocked_entry_events() {
+    let (refresh_handle, refresh_rx) = test_control_plane_handle();
+    refresh_handle.force_mode_for_test(WORKSPACE, true);
+    let progress = refresh_handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: WORKSPACE.to_string(),
+            readiness_snapshot: Some(ready_readiness(WORKSPACE)),
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "cached readiness".to_string(),
+        },
+    );
+    assert!(matches!(
+        progress.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::EnterProgress { .. }]
+    ));
+    assert!(
+        refresh_handle
+            .handle_command(ParallelModeControlPlaneCommand::RefreshSupervisor {
+                workspace_directory: WORKSPACE.to_string(),
+            })
+            .is_empty()
+    );
+    assert!(matches!(
+        recv_background_event(&refresh_rx),
+        ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed { .. }
+    ));
+
+    let (tick_handle, tick_rx) = test_control_plane_handle();
+    let tick_workspace = unique_workspace("trace-tick");
+    tick_handle.force_epoch_for_test(&tick_workspace, 1);
+    assert!(
+        tick_handle
+            .handle_command(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+                workspace_directory: tick_workspace.clone(),
+                signature: "traceable-tick".to_string(),
+            })
+            .is_empty()
+    );
+    assert!(matches!(
+        recv_background_event(&tick_rx),
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            ..
+        } if workspace_directory == tick_workspace
+    ));
+
+    let (entry_handle, entry_rx) = test_control_plane_handle();
+    let entry_workspace = unique_workspace("blocked-entry");
+    assert!(
+        entry_handle
+            .handle_command(ParallelModeControlPlaneCommand::Enable {
+                workspace_directory: entry_workspace.clone(),
+            })
+            .is_empty()
+    );
+    let entered = recv_entered_event(&entry_rx);
+    assert!(matches!(
+        entered,
+        ParallelModeControlPlaneBackgroundEvent::Entered {
+            workspace_directory,
+            readiness_snapshot,
+            status_text,
+            initial_pool_reset_completed: false,
+            ..
+        } if workspace_directory == entry_workspace
+            && !readiness_snapshot.allows_parallel_mode()
+            && status_text.starts_with("parallel mode: blocked / readiness:")
+    ));
+}
+
+#[test]
+fn controller_inspect_supervisor_reconciles_pool_when_requested() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("inspect-reconcile");
+    handle.force_mode_for_test(&workspace, true);
+
+    let presented = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace.clone(),
+        reconcile_pool: true,
+        show_status: true,
+    });
+
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
+            workspace_directory,
+            ..
+        } if workspace_directory == &workspace
+    )));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
+            workspace_directory,
+            ..
+        } if workspace_directory == &workspace
+    )));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+            if status_text.starts_with("parallel readiness refreshed / state:")
+    )));
 }
