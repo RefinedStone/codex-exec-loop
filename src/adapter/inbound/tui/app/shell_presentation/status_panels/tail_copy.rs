@@ -664,3 +664,375 @@ fn build_inline_ready_prompt_lines(
     lines.push(Line::from(hint));
     lines
 }
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::conversation_model::RecordedAutoFollowActivity;
+    use crate::adapter::inbound::tui::app::language::TuiLanguage;
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::adapter::inbound::tui::app::{AutoFollowRuntimePhase, ConversationState};
+    use crate::core::app::StartupReadySnapshot;
+    use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+    use crate::domain::startup_diagnostics::StartupDiagnostics;
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+    use std::time::Instant;
+
+    fn ready_conversation(app: &NativeTuiApp) -> &ConversationViewModel {
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("expected ready conversation");
+        };
+        conversation
+    }
+
+    fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut ConversationViewModel {
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("expected ready conversation");
+        };
+        conversation
+    }
+
+    fn rendered(lines: Vec<Line<'static>>) -> String {
+        lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render_tail(app: &NativeTuiApp, recent_changes: Option<&str>) -> String {
+        let context = ShellCorePresentationContext::from_app(app);
+        rendered(build_inline_tail_lines_with_context(
+            app,
+            &context,
+            recent_changes.map(str::to_string),
+        ))
+    }
+
+    fn startup_ready_snapshot(can_continue: bool) -> Box<StartupReadySnapshot> {
+        let account_detail = if can_continue {
+            "ok"
+        } else {
+            "missing account"
+        };
+        Box::new(StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
+            cwd: "/tmp/root".to_string(),
+            codex_binary_ok: true,
+            codex_binary_detail: "codex".to_string(),
+            workspace_ok: true,
+            workspace_path: "/tmp/root".to_string(),
+            workspace_detail: "workspace found".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+            initialize_ok: true,
+            initialize_detail: "app-server initialize ok".to_string(),
+            account_ok: can_continue,
+            account_detail: account_detail.to_string(),
+            warnings: vec!["first warning should stay visible".to_string()],
+            schema_snapshot: "schema".to_string(),
+        }))
+    }
+
+    fn context_for<'a>(
+        startup_state: &'a StartupState,
+        shell_action_availability: ShellActionAvailability,
+        conversation_state: ShellConversationState<'a>,
+    ) -> ShellCorePresentationContext<'a> {
+        ShellCorePresentationContext {
+            show_startup_ascii_art: false,
+            startup_state,
+            shell_action_availability,
+            recent_session_status_label: "loaded".to_string(),
+            github_review_polling_status_label: "polling".to_string(),
+            tui_language: TuiLanguage::English,
+            parallel_mode_enabled: false,
+            conversation_state,
+        }
+    }
+
+    #[test]
+    fn shell_loading_and_failed_tails_keep_prompt_copy_without_ready_conversation() {
+        let mut app = test_native_tui_app();
+
+        app.conversation_state = ConversationState::Loading;
+        app.startup_state = StartupState::Loading;
+        let loading = render_tail(&app, None);
+        assert!(loading.contains("thread: loading"));
+        assert!(loading.contains("runtime: loading thread history"));
+        assert!(loading.contains("prompt: waiting for shell readiness"));
+
+        app.conversation_state =
+            ConversationState::Failed("session catalog unavailable".to_string());
+        let failed = render_tail(&app, None);
+        assert!(failed.contains("thread: unavailable"));
+        assert!(failed.contains("status: session catalog unavailable"));
+        assert!(failed.contains("prompt: unavailable  |  session catalog unavailable"));
+    }
+
+    #[test]
+    fn startup_tail_covers_masthead_overlay_state_and_starter_variants() {
+        let mut app = test_native_tui_app();
+
+        app.startup_state = StartupState::Idle;
+        let idle = render_tail(&app, None);
+        assert!(idle.contains("Akra"));
+        assert!(idle.contains("preparing startup checks"));
+        assert!(idle.contains("workspace: /tmp/root"));
+
+        app.startup_state = StartupState::Loading;
+        let loading = render_tail(&app, None);
+        assert!(loading.contains("initializing codex shell"));
+        assert!(loading.contains("opening codex app-server"));
+
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        let ready = render_tail(&app, None);
+        assert!(ready.contains("workspace: /tmp/root"));
+        assert!(ready.contains("first warning should stay visible"));
+        assert!(ready.contains("first reply appears here after you send the opening prompt"));
+
+        app.startup_state = StartupState::Failed("codex missing".to_string());
+        let failed = render_tail(&app, None);
+        assert!(failed.contains("codex missing"));
+
+        ready_conversation_mut(&mut app).input_buffer = "queued startup prompt".to_string();
+        let overlay = render_tail(&app, None);
+        assert!(overlay.contains("Akra"));
+        assert!(!overlay.contains("████"));
+
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        let context = ShellCorePresentationContext::from_app(&app);
+        assert!(
+            rendered(build_inline_startup_screen_lines_with_context(&context))
+                .contains("opening prompt buffered below")
+        );
+
+        app.conversation_state = ConversationState::Loading;
+        let loading_context = ShellCorePresentationContext::from_app(&app);
+        assert_eq!(
+            inline_starter_copy_in_context(&loading_context),
+            loading_context.tui_language.startup_empty_starter_copy()
+        );
+    }
+
+    #[test]
+    fn ready_status_helpers_cover_auto_follow_completion_warnings_and_transcript() {
+        let startup_state = StartupState::Loading;
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.thread_id = "thread-1".to_string();
+        conversation.status_text =
+            "a very long status line that should be compacted inside the inline tail".to_string();
+
+        assert!(!should_show_auto_follow_status(&conversation));
+        conversation.auto_follow_state.completed_auto_turns = 2;
+        assert!(should_show_auto_follow_status(&conversation));
+        conversation.auto_follow_state.completed_auto_turns = 0;
+        conversation
+            .auto_follow_state
+            .pause_post_turn_continuation();
+        assert!(should_show_auto_follow_status(&conversation));
+        conversation
+            .auto_follow_state
+            .clear_post_turn_continuation_pause();
+        conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Queued {
+            started_at: Instant::now(),
+            turn_index: 3,
+        };
+
+        let ribbon = build_ready_status_ribbon_line(&conversation).to_string();
+        assert!(ribbon.contains("auto:"));
+        assert!(ribbon.contains("done:"));
+
+        let context = context_for(
+            &startup_state,
+            ShellActionAvailability::Blocked,
+            ShellConversationState::Ready(&conversation),
+        );
+        let detail = build_ready_status_detail_line(&conversation, &context).to_string();
+        assert!(detail.contains("startup: startup diagnostics need attention"));
+        assert!(detail.contains("gh: polling"));
+
+        assert!(!warning_summary_has_signal("warn: none"));
+        assert!(!warning_summary_has_signal("none"));
+        assert!(warning_summary_has_signal("warn: disk almost full"));
+
+        assert!(build_completion_alert_line(&conversation).is_none());
+        conversation.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
+            summary: "complete: planning queue drained".to_string(),
+            detail: "all done".to_string(),
+        });
+        assert!(
+            build_completion_alert_line(&conversation)
+                .expect("completion line")
+                .to_string()
+                .contains("all planning tasks complete")
+        );
+
+        assert!(
+            build_recent_transcript_summary_lines(
+                InlineHistoryRenderMode::HostScrollback,
+                &conversation
+            )
+            .is_empty()
+        );
+        conversation.messages = vec![
+            ConversationMessage::new(ConversationMessageKind::Tool, "tool noise", None, None),
+            ConversationMessage::new(ConversationMessageKind::User, "first user", None, None),
+            ConversationMessage::new(ConversationMessageKind::Status, "status noise", None, None),
+            ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                "\nsecond agent line",
+                Some("final_answer".to_string()),
+                None,
+            ),
+        ];
+        let transcript = rendered(build_recent_transcript_summary_lines(
+            InlineHistoryRenderMode::ViewportReplay,
+            &conversation,
+        ));
+        assert!(transcript.contains("recent you: first user"));
+        assert!(transcript.contains("recent codex: second agent line"));
+        assert!(!transcript.contains("tool noise"));
+
+        conversation.messages = vec![
+            ConversationMessage::new(ConversationMessageKind::Tool, "tool noise", None, None),
+            ConversationMessage::new(ConversationMessageKind::Status, "   ", None, None),
+        ];
+        let fallback = rendered(build_recent_transcript_summary_lines(
+            InlineHistoryRenderMode::ViewportReplay,
+            &conversation,
+        ));
+        assert!(fallback.contains("recent status: (blank)"));
+    }
+
+    #[test]
+    fn ready_prompt_copy_covers_empty_buffer_commands_and_buffered_states() {
+        for (state, availability, expected) in [
+            (
+                ConversationInputState::DraftReady,
+                ShellActionAvailability::Pending,
+                "waiting for startup",
+            ),
+            (
+                ConversationInputState::DraftReady,
+                ShellActionAvailability::Blocked,
+                "blocked by startup diagnostics",
+            ),
+            (
+                ConversationInputState::DraftReady,
+                ShellActionAvailability::Ready,
+                "new thread ready",
+            ),
+            (
+                ConversationInputState::ReadyToContinue,
+                ShellActionAvailability::Ready,
+                "session ready",
+            ),
+            (
+                ConversationInputState::SubmittingTurn,
+                ShellActionAvailability::Ready,
+                "sending",
+            ),
+            (
+                ConversationInputState::StreamingTurn,
+                ShellActionAvailability::Ready,
+                "turn running",
+            ),
+        ] {
+            let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+            conversation.input_state = state;
+            let prompt = rendered(build_inline_ready_prompt_lines(&conversation, availability));
+            assert!(
+                prompt.contains(expected),
+                "expected `{expected}` in `{prompt}`"
+            );
+        }
+
+        let mut palette = ConversationViewModel::new_draft("/tmp/root".to_string());
+        palette.input_buffer = ":".to_string();
+        palette.sync_inline_shell_command_palette();
+        let palette_prompt = rendered(build_inline_ready_prompt_lines(
+            &palette,
+            ShellActionAvailability::Ready,
+        ));
+        assert!(palette_prompt.contains("command: palette"));
+        assert!(palette_prompt.contains(":diag"));
+
+        let mut command = ConversationViewModel::new_draft("/tmp/root".to_string());
+        command.input_buffer = ":reset queue".to_string();
+        let command_prompt = rendered(build_inline_ready_prompt_lines(
+            &command,
+            ShellActionAvailability::Ready,
+        ));
+        assert!(
+            command_prompt.contains("command: Press Enter to reset queue-side planning state.")
+        );
+
+        let mut busy = ConversationViewModel::new_draft("/tmp/root".to_string());
+        busy.input_buffer = "next prompt".to_string();
+        busy.auto_follow_state.begin_post_turn_evaluation();
+        let busy_prompt = rendered(build_inline_ready_prompt_lines(
+            &busy,
+            ShellActionAvailability::Ready,
+        ));
+        assert!(busy_prompt.contains("auto-follow busy"));
+
+        let mut armed = ConversationViewModel::new_draft("/tmp/root".to_string());
+        armed.input_buffer = "queued".to_string();
+        armed.startup_submit_armed = true;
+        let armed_prompt = rendered(build_inline_ready_prompt_lines(
+            &armed,
+            ShellActionAvailability::Pending,
+        ));
+        assert!(armed_prompt.contains("editing cancels the queued send"));
+
+        for (state, availability, expected) in [
+            (
+                ConversationInputState::DraftReady,
+                ShellActionAvailability::Ready,
+                "Enter send",
+            ),
+            (
+                ConversationInputState::ReadyToContinue,
+                ShellActionAvailability::Blocked,
+                "Enter when ready",
+            ),
+            (
+                ConversationInputState::StreamingTurn,
+                ShellActionAvailability::Ready,
+                "Enter when idle",
+            ),
+        ] {
+            let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+            conversation.input_buffer = "buffered".to_string();
+            conversation.input_state = state;
+            let prompt = rendered(build_inline_ready_prompt_lines(&conversation, availability));
+            assert!(
+                prompt.contains(expected),
+                "expected `{expected}` in `{prompt}`"
+            );
+        }
+
+        assert!(!parallel_loading_prompt_indicator_frame().is_empty());
+    }
+
+    #[test]
+    fn full_ready_tail_includes_runtime_warnings_planning_notice_and_operator_notice() {
+        let mut app = test_native_tui_app();
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        let conversation = ready_conversation_mut(&mut app);
+        conversation.thread_id = "thread-1".to_string();
+        conversation.base_warnings.push("warning one".to_string());
+        conversation.warnings.push("warning one".to_string());
+        conversation.runtime_notices.push("runtime one".to_string());
+        conversation.input_buffer = "buffered".to_string();
+
+        let tail = render_tail(&app, Some("review changed"));
+
+        assert!(tail.contains("runtime:"));
+        assert!(tail.contains("warning one"));
+        assert!(tail.contains("notice:"));
+        assert!(tail.contains("review changed"));
+        assert!(tail.contains("buffered prompt"));
+
+        assert_eq!(ready_conversation(&app).thread_id, "thread-1");
+    }
+}
