@@ -203,24 +203,31 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::Arc;
+    use std::sync::Mutex;
 
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        PlanningDirectionAuthorityCommit, PlanningDirectionAuthoritySnapshot,
+        PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+        PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::service::planning::{
         ManualPromptIntakeOutcome, ManualPromptIntakeRequest, PlanningServices,
     };
+    use crate::diagnostics::event_log;
+    use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+    use anyhow::anyhow;
+    use serde_json::json;
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::prelude::*;
 
     #[test]
     fn manual_prompt_intake_commits_greetings_and_questions_as_tasks() {
         let workspace_dir = create_temp_git_repo("manual-intake-no-heuristic");
-        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-        let planning = PlanningServices::from_ports(
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
-            authority.clone(),
-            authority,
-            Arc::new(NoopPlanningWorkerPort),
-        );
+        let planning = planning_services();
         bootstrap_planning_workspace(&planning, &workspace_dir);
 
         for (prompt, expected_title) in [
@@ -249,6 +256,155 @@ mod tests {
         }
     }
 
+    #[test]
+    fn manual_prompt_intake_emits_trace_events_for_committed_and_failed_outcomes() {
+        let capture = CaptureWriter::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_writer(capture.clone()),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            event_log::emit_lazy("manual_intake_test_probe", || json!({ "enabled": true }));
+            let planning = planning_services();
+            let success_workspace = create_temp_git_repo("manual-intake-event-success");
+            bootstrap_planning_workspace(&planning, &success_workspace);
+            let committed =
+                planning
+                    .runtime
+                    .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                        workspace_directory: success_workspace,
+                        raw_prompt: "Trace manual intake success".to_string(),
+                        legacy_source_turn_id: None,
+                        parent_thread_id: Some("parent-thread".to_string()),
+                        parent_turn_id: Some("parent-turn".to_string()),
+                    });
+            assert!(matches!(
+                committed,
+                ManualPromptIntakeOutcome::TaskCommitted { .. }
+            ));
+
+            let failed_workspace = create_temp_git_repo("manual-intake-event-failure");
+            write_invalid_result_output(&failed_workspace);
+            let failed = planning
+                .runtime
+                .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                    workspace_directory: failed_workspace,
+                    raw_prompt: "Trace manual intake failure".to_string(),
+                    legacy_source_turn_id: None,
+                    parent_thread_id: None,
+                    parent_turn_id: None,
+                });
+            let ManualPromptIntakeOutcome::Failed { reason } = failed else {
+                panic!("invalid result output should fail manual intake: {failed:?}");
+            };
+            assert!(reason.contains("manual intake prepare failed"));
+        });
+
+        let joined = capture.lines().join("\n");
+        assert!(joined.contains("manual_intake_test_probe"));
+        assert!(joined.contains("manual_intake_started"));
+        assert!(joined.contains("manual_intake_committed"));
+        assert!(joined.contains("manual_intake_failed"));
+        assert!(joined.contains("manual intake prepare failed"));
+        let mut sink = capture.make_writer();
+        std::io::Write::flush(&mut sink).expect("capture sink should flush");
+    }
+
+    #[test]
+    fn manual_prompt_intake_reports_commit_failure_from_task_repository() {
+        let workspace_dir = create_temp_git_repo("manual-intake-commit-failure");
+        let workspace = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let bootstrap_planning = PlanningServices::from_ports(
+            workspace.clone(),
+            authority.clone(),
+            authority.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        bootstrap_planning_workspace(&bootstrap_planning, &workspace_dir);
+        let failing_repository = Arc::new(CommitFailingTaskRepositoryPort {
+            inner: authority.clone(),
+        });
+        let direction_snapshot = failing_repository
+            .load_direction_authority_snapshot(&workspace_dir)
+            .expect("direction authority should load")
+            .expect("direction authority should exist");
+        let direction_commit = failing_repository
+            .commit_direction_authority_snapshot(
+                &workspace_dir,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: &direction_snapshot.directions,
+                },
+            )
+            .expect("direction authority commit should delegate");
+        assert!(matches!(
+            direction_commit,
+            PlanningTaskAuthorityCommitResult::Committed { .. }
+        ));
+        let task_snapshot = failing_repository
+            .load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
+        let task_commit = failing_repository
+            .commit_task_authority_snapshot(
+                &workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority: &task_snapshot.task_authority,
+                    queue_projection: &task_snapshot.queue_projection,
+                },
+            )
+            .expect("seed-style task authority commit should delegate");
+        assert!(matches!(
+            task_commit,
+            PlanningTaskAuthorityCommitResult::Committed { .. }
+        ));
+        let failing_planning = PlanningServices::from_ports(
+            workspace,
+            authority.clone(),
+            failing_repository.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+
+        let outcome =
+            failing_planning
+                .runtime
+                .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                    workspace_directory: workspace_dir.clone(),
+                    raw_prompt: "Commit this as a task".to_string(),
+                    legacy_source_turn_id: None,
+                    parent_thread_id: None,
+                    parent_turn_id: None,
+                });
+        let ManualPromptIntakeOutcome::Failed { reason } = outcome else {
+            panic!("commit repository failure should fail manual intake: {outcome:?}");
+        };
+
+        assert!(reason.contains("manual intake commit failed"));
+        assert!(reason.contains("synthetic task authority commit failure"));
+        failing_repository
+            .clear_direction_authority_snapshot(&workspace_dir)
+            .expect("direction authority clear should delegate");
+        failing_repository
+            .clear_task_authority_snapshot(&workspace_dir)
+            .expect("task authority clear should delegate");
+    }
+
+    fn planning_services() -> PlanningServices {
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        PlanningServices::from_ports(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            authority.clone(),
+            authority,
+            Arc::new(NoopPlanningWorkerPort),
+        )
+    }
+
     fn bootstrap_planning_workspace(planning: &PlanningServices, workspace_dir: &str) {
         let stage_result = planning
             .workspace
@@ -262,6 +418,13 @@ mod tests {
             promote_result.promoted_file_count > 0,
             "bootstrap planning workspace should become ready"
         );
+    }
+
+    fn write_invalid_result_output(workspace_dir: &str) {
+        let path = PathBuf::from(workspace_dir).join(".codex-exec-loop/planning");
+        std::fs::create_dir_all(&path).expect("planning directory should be created");
+        std::fs::write(path.join("result-output.md"), "not a markdown heading")
+            .expect("invalid result output should write");
     }
 
     fn create_temp_git_repo(prefix: &str) -> String {
@@ -310,5 +473,101 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+    }
+
+    #[derive(Clone, Default)]
+    struct CaptureWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl CaptureWriter {
+        fn lines(&self) -> Vec<String> {
+            let bytes = self
+                .bytes
+                .lock()
+                .expect("capture lock should not be poisoned");
+            String::from_utf8(bytes.clone())
+                .expect("captured diagnostics should be UTF-8")
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+        type Writer = CaptureSink;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            CaptureSink {
+                bytes: Arc::clone(&self.bytes),
+            }
+        }
+    }
+
+    struct CaptureSink {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for CaptureSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("capture lock should not be poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct CommitFailingTaskRepositoryPort {
+        inner: Arc<SqlitePlanningAuthorityAdapter>,
+    }
+
+    impl PlanningTaskRepositoryPort for CommitFailingTaskRepositoryPort {
+        fn load_direction_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+        ) -> anyhow::Result<Option<PlanningDirectionAuthoritySnapshot>> {
+            self.inner.load_direction_authority_snapshot(workspace_dir)
+        }
+
+        fn commit_direction_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+            commit: PlanningDirectionAuthorityCommit<'_>,
+        ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
+            self.inner
+                .commit_direction_authority_snapshot(workspace_dir, commit)
+        }
+
+        fn clear_direction_authority_snapshot(&self, workspace_dir: &str) -> anyhow::Result<()> {
+            self.inner.clear_direction_authority_snapshot(workspace_dir)
+        }
+
+        fn load_task_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+        ) -> anyhow::Result<Option<PlanningTaskAuthoritySnapshot>> {
+            self.inner.load_task_authority_snapshot(workspace_dir)
+        }
+
+        fn commit_task_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+            commit: PlanningTaskAuthorityCommit<'_>,
+        ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
+            if commit.observed_planning_revision.is_some() {
+                return Err(anyhow!("synthetic task authority commit failure"));
+            }
+            self.inner
+                .commit_task_authority_snapshot(workspace_dir, commit)
+        }
+
+        fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> anyhow::Result<()> {
+            self.inner.clear_task_authority_snapshot(workspace_dir)
+        }
     }
 }
