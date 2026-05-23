@@ -15,7 +15,6 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
-use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PlanningWorkspaceFiles, RuntimeProjection, RuntimeWorkspaceStatus,
@@ -99,20 +98,6 @@ impl PlanningPromptService {
         let workspace_present = workspace_record.has_any_files();
         if !workspace_present {
             return Ok(PlanningRuntimeProjection::uninitialized());
-        }
-
-        let missing_paths = missing_workspace_paths(&workspace_record);
-        if !missing_paths.is_empty() {
-            /*
-             * operator 파일이 일부만 있으면 planning은 시작됐지만 신뢰할 수 없는 상태다.
-             * inactive로 되돌리면 사용자가 왜 planning이 사라졌는지 알 수 없으므로 invalid로
-             * 유지해 repair/doctor 안내가 보이게 한다.
-             */
-            return Ok(PlanningRuntimeProjection::invalid(format!(
-                "planning files incomplete: missing {}",
-                missing_paths.join(", ")
-            ))
-            .with_workspace_present(workspace_present));
         }
 
         // runtime validation은 task-ledger 파일이 아니라 accepted DB authority를 사용한다.
@@ -307,36 +292,342 @@ fn workspace_record_to_files<'a>(
     }
 }
 
-fn missing_workspace_paths(workspace_record: &PlanningWorkspaceLoadRecord) -> Vec<&'static str> {
-    // direction/task authority는 이제 DB snapshot에서 오므로 workspace missing path로
-    // 보고하지 않는다. operator가 실제로 복구해야 하는 파일만 surface에 남긴다.
-    let mut missing_paths = Vec::new();
-    if workspace_record.result_output_markdown.is_none() {
-        missing_paths.push(RESULT_OUTPUT_FILE_PATH);
-    }
-    missing_paths
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{missing_workspace_paths, workspace_record_to_files};
-    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-    use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use super::{PlanningPromptService, PlanningRuntimeWorkspaceStatus, workspace_record_to_files};
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
+    use crate::application::service::planning::PlanningValidationService;
     use crate::application::service::planning::shared::prompt_sections::runtime_task_authority_contract_rules;
     use crate::domain::planning::{
-        DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
+        PriorityQueueProjection, PriorityQueueTask, QueueIdleConfig, TaskAuthorityDocument,
+        TaskStatus,
     };
+    use anyhow::{Result, anyhow};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn missing_workspace_paths_only_reports_operator_files() {
-        let record = PlanningWorkspaceLoadRecord {
-            result_output_markdown: None,
-        };
+    #[derive(Debug, Clone, Copy)]
+    enum ClearAuthorityOnSecondLoad {
+        Task,
+        Direction,
+    }
 
-        assert_eq!(
-            missing_workspace_paths(&record),
-            vec![RESULT_OUTPUT_FILE_PATH]
-        );
+    #[derive(Debug)]
+    struct PromptTestWorkspacePort {
+        record: Mutex<PlanningWorkspaceLoadRecord>,
+        optional_files: Mutex<BTreeMap<String, String>>,
+        persist_commits: bool,
+        load_count: Mutex<usize>,
+        clear_on_second_load: Option<(
+            Arc<NoopPlanningTaskRepositoryPort>,
+            ClearAuthorityOnSecondLoad,
+        )>,
+    }
+
+    impl PromptTestWorkspacePort {
+        fn absent_non_persistent() -> Self {
+            Self {
+                record: Mutex::new(PlanningWorkspaceLoadRecord::default()),
+                optional_files: Mutex::new(BTreeMap::new()),
+                persist_commits: false,
+                load_count: Mutex::new(0),
+                clear_on_second_load: None,
+            }
+        }
+
+        fn with_result_output(result_output_markdown: &str) -> Self {
+            Self {
+                record: Mutex::new(PlanningWorkspaceLoadRecord {
+                    result_output_markdown: Some(result_output_markdown.to_string()),
+                }),
+                optional_files: Mutex::new(BTreeMap::new()),
+                persist_commits: true,
+                load_count: Mutex::new(0),
+                clear_on_second_load: None,
+            }
+        }
+
+        fn with_optional_file(self, path: &str, body: &str) -> Self {
+            self.optional_files
+                .lock()
+                .expect("optional file store should not be poisoned")
+                .insert(path.to_string(), body.to_string());
+            self
+        }
+
+        fn clear_authority_on_second_load(
+            mut self,
+            repository: Arc<NoopPlanningTaskRepositoryPort>,
+            authority: ClearAuthorityOnSecondLoad,
+        ) -> Self {
+            self.clear_on_second_load = Some((repository, authority));
+            self
+        }
+    }
+
+    impl PlanningWorkspacePort for PromptTestWorkspacePort {
+        fn stage_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _files: &[PlanningDraftFileRecord],
+        ) -> Result<PlanningDraftStageRecord> {
+            Err(anyhow!(
+                "stage_planning_draft_files is outside runtime prompt loading"
+            ))
+        }
+
+        fn load_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+        ) -> Result<PlanningDraftLoadRecord> {
+            Err(anyhow!(
+                "load_planning_draft_files is outside runtime prompt loading"
+            ))
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow!(
+                "replace_planning_draft_file is outside runtime prompt loading"
+            ))
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            let mut load_count = self
+                .load_count
+                .lock()
+                .expect("workspace load count should not be poisoned");
+            *load_count += 1;
+            if *load_count == 2
+                && let Some((repository, authority)) = &self.clear_on_second_load
+            {
+                match authority {
+                    ClearAuthorityOnSecondLoad::Task => {
+                        repository.clear_task_authority_snapshot(workspace_dir)?;
+                    }
+                    ClearAuthorityOnSecondLoad::Direction => {
+                        repository.clear_direction_authority_snapshot(workspace_dir)?;
+                    }
+                }
+            }
+            Ok(self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned")
+                .clone())
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Err(anyhow!(
+                "load_planning_workspace_candidate_files is outside runtime prompt loading"
+            ))
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            if self.persist_commits {
+                *self
+                    .record
+                    .lock()
+                    .expect("workspace record should not be poisoned") = record.clone();
+            }
+            Ok(())
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            Ok(self
+                .optional_files
+                .lock()
+                .expect("optional file store should not be poisoned")
+                .get(relative_path)
+                .cloned())
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<Option<String>> {
+            Err(anyhow!(
+                "load_optional_planning_candidate_file is outside runtime prompt loading"
+            ))
+        }
+
+        fn replace_planning_workspace_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+            body: Option<&str>,
+        ) -> Result<()> {
+            if self.persist_commits {
+                let mut optional_files = self
+                    .optional_files
+                    .lock()
+                    .expect("optional file store should not be poisoned");
+                if let Some(body) = body {
+                    optional_files.insert(relative_path.to_string(), body.to_string());
+                } else {
+                    optional_files.remove(relative_path);
+                }
+            }
+            Ok(())
+        }
+
+        fn remove_planning_workspace_entry(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<()> {
+            self.optional_files
+                .lock()
+                .expect("optional file store should not be poisoned")
+                .remove(relative_path);
+            Ok(())
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            _workspace_dir: &str,
+            _archive_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow!(
+                "archive_rejected_planning_file is outside runtime prompt loading"
+            ))
+        }
+    }
+
+    fn direction(detail_doc_path: &str) -> DirectionDefinition {
+        DirectionDefinition {
+            id: "general-workstream".to_string(),
+            title: "General workstream".to_string(),
+            summary: "default".to_string(),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: detail_doc_path.to_string(),
+            state: DirectionState::Active,
+        }
+    }
+
+    fn directions(detail_doc_path: &str) -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction(detail_doc_path)],
+        }
+    }
+
+    fn empty_task_authority() -> TaskAuthorityDocument {
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: Vec::new(),
+        }
+    }
+
+    fn empty_queue_projection() -> PriorityQueueProjection {
+        PriorityQueueProjection {
+            next_task: None,
+            active_tasks: Vec::new(),
+            proposed_tasks: Vec::new(),
+            skipped_tasks: Vec::new(),
+        }
+    }
+
+    fn stale_queue_projection() -> PriorityQueueProjection {
+        PriorityQueueProjection {
+            next_task: None,
+            active_tasks: vec![PriorityQueueTask {
+                rank: 1,
+                task_id: "stale-task".to_string(),
+                direction_id: "general-workstream".to_string(),
+                direction_title: "General workstream".to_string(),
+                task_title: "Stale stored queue task".to_string(),
+                status: TaskStatus::Ready,
+                combined_priority: 50,
+                updated_at: "2026-05-23T00:00:00Z".to_string(),
+                rank_reasons: vec!["stale stored projection".to_string()],
+            }],
+            proposed_tasks: Vec::new(),
+            skipped_tasks: Vec::new(),
+        }
+    }
+
+    fn unique_workspace(label: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        format!("runtime-prompt-{label}-{nanos}")
+    }
+
+    fn seed_authority(
+        repository: &NoopPlanningTaskRepositoryPort,
+        workspace: &str,
+        directions: &DirectionCatalogDocument,
+        task_authority: &TaskAuthorityDocument,
+        queue_projection: &PriorityQueueProjection,
+    ) {
+        repository
+            .commit_direction_authority_snapshot(
+                workspace,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions,
+                },
+            )
+            .expect("direction authority should commit");
+        repository
+            .commit_task_authority_snapshot(
+                workspace,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority,
+                    queue_projection,
+                },
+            )
+            .expect("task authority should commit");
+    }
+
+    fn prompt_service(
+        workspace_port: PromptTestWorkspacePort,
+        repository: Arc<NoopPlanningTaskRepositoryPort>,
+    ) -> PlanningPromptService {
+        PlanningPromptService::with_task_repository(
+            Arc::new(workspace_port),
+            PlanningValidationService::new(),
+            crate::domain::planning::PriorityQueueService::new(),
+            repository,
+        )
     }
 
     #[test]
@@ -370,24 +661,200 @@ mod tests {
         let record = PlanningWorkspaceLoadRecord {
             result_output_markdown: Some("# Result Output Prompt".to_string()),
         };
-        let directions = DirectionCatalogDocument {
-            version: 1,
-            queue_idle: QueueIdleConfig::default(),
-            directions: vec![DirectionDefinition {
-                id: "general-workstream".to_string(),
-                title: "General workstream".to_string(),
-                summary: "default".to_string(),
-                success_criteria: vec!["done".to_string()],
-                scope_hints: Vec::new(),
-                detail_doc_path: String::new(),
-                state: DirectionState::Active,
-            }],
-        };
+        let directions = directions("");
 
         let files = workspace_record_to_files(&record, &directions, "{\"version\":1,\"tasks\":[]}");
 
         assert_eq!(files.directions, &directions);
         assert_eq!(files.task_authority_json, "{\"version\":1,\"tasks\":[]}");
         assert_eq!(files.result_output_markdown, "# Result Output Prompt");
+    }
+
+    #[test]
+    fn runtime_projection_reports_uninitialized_when_seeded_workspace_still_has_no_operator_files()
+    {
+        let workspace = unique_workspace("uninitialized");
+        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+        let service = prompt_service(PromptTestWorkspacePort::absent_non_persistent(), repository);
+
+        let projection = service
+            .load_runtime_projection(&workspace)
+            .expect("uninitialized projection should be recoverable");
+
+        assert_eq!(
+            projection.workspace_status,
+            PlanningRuntimeWorkspaceStatus::Uninitialized
+        );
+        assert!(!projection.workspace_present);
+        assert!(projection.prompt_fragment.is_none());
+    }
+
+    #[test]
+    fn runtime_projection_reports_task_authority_that_disappears_after_seed() {
+        let workspace = unique_workspace("missing-task-authority");
+        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+        let directions = directions("");
+        let task_authority = empty_task_authority();
+        seed_authority(
+            repository.as_ref(),
+            &workspace,
+            &directions,
+            &task_authority,
+            &empty_queue_projection(),
+        );
+        let workspace_port = PromptTestWorkspacePort::with_result_output("# Result Output")
+            .clear_authority_on_second_load(repository.clone(), ClearAuthorityOnSecondLoad::Task);
+        let service = prompt_service(workspace_port, repository);
+
+        let error = service
+            .load_runtime_projection(&workspace)
+            .expect_err("missing task authority should be reported as an error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("planning task authority is unavailable")
+        );
+    }
+
+    #[test]
+    fn runtime_projection_reports_direction_authority_that_disappears_after_seed() {
+        let workspace = unique_workspace("missing-direction-authority");
+        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+        let directions = directions("");
+        let task_authority = empty_task_authority();
+        seed_authority(
+            repository.as_ref(),
+            &workspace,
+            &directions,
+            &task_authority,
+            &empty_queue_projection(),
+        );
+        let workspace_port = PromptTestWorkspacePort::with_result_output("# Result Output")
+            .clear_authority_on_second_load(
+                repository.clone(),
+                ClearAuthorityOnSecondLoad::Direction,
+            );
+        let service = prompt_service(workspace_port, repository);
+
+        let error = service
+            .load_runtime_projection(&workspace)
+            .expect_err("missing direction authority should be reported as an error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("planning direction authority is unavailable")
+        );
+    }
+
+    #[test]
+    fn runtime_projection_discards_stale_stored_queue_and_validates_supporting_files() {
+        let workspace = unique_workspace("stale-stored-queue");
+        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+        let detail_doc_path = ".codex-exec-loop/planning/directions/general-workstream.md";
+        let directions = directions(detail_doc_path);
+        let task_authority = empty_task_authority();
+        seed_authority(
+            repository.as_ref(),
+            &workspace,
+            &directions,
+            &task_authority,
+            &stale_queue_projection(),
+        );
+        let workspace_port =
+            PromptTestWorkspacePort::with_result_output("# Result Output\nContinue queued work.")
+                .with_optional_file(detail_doc_path, "# General detail");
+        let service = prompt_service(workspace_port, repository);
+
+        let projection = service
+            .load_runtime_projection(&workspace)
+            .expect("runtime projection should load");
+
+        assert_eq!(
+            projection.workspace_status,
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask,
+            "{:?}",
+            projection.failure_reason
+        );
+        assert_eq!(
+            projection.queue_summary.as_deref(),
+            Some("queue idle: no executable planning task")
+        );
+        assert!(
+            projection
+                .queue_projection
+                .as_ref()
+                .expect("queue projection should be present")
+                .active_tasks
+                .is_empty()
+        );
+        assert!(
+            projection
+                .prompt_fragment
+                .as_deref()
+                .expect("prompt fragment should be present")
+                .contains(
+                    "detail_doc_path=.codex-exec-loop/planning/directions/general-workstream.md"
+                )
+        );
+    }
+
+    #[test]
+    fn prompt_workspace_test_double_rejects_surfaces_unused_by_runtime_prompt_loading() {
+        let workspace_port = PromptTestWorkspacePort::with_result_output("# Result Output")
+            .with_optional_file("obsolete.md", "remove me");
+        let record = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("updated".to_string()),
+        };
+
+        assert!(
+            workspace_port
+                .stage_planning_draft_files("workspace", "draft", &[])
+                .is_err()
+        );
+        assert!(
+            workspace_port
+                .load_planning_draft_files("workspace", "draft")
+                .is_err()
+        );
+        assert!(
+            workspace_port
+                .replace_planning_draft_file("workspace", "draft", "path", "body")
+                .is_err()
+        );
+        assert!(
+            workspace_port
+                .load_planning_workspace_candidate_files("workspace")
+                .is_err()
+        );
+        workspace_port
+            .commit_planning_workspace_files("workspace", &record)
+            .expect("test double should accept active workspace commits");
+        workspace_port
+            .replace_planning_workspace_file("workspace", "optional.md", Some("body"))
+            .expect("test double should accept optional file writes");
+        assert_eq!(
+            workspace_port
+                .load_optional_planning_file("workspace", "optional.md")
+                .expect("optional file should load"),
+            Some("body".to_string())
+        );
+        workspace_port
+            .replace_planning_workspace_file("workspace", "optional.md", None)
+            .expect("test double should accept optional file removals");
+        assert!(
+            workspace_port
+                .load_optional_planning_candidate_file("workspace", "optional.md")
+                .is_err()
+        );
+        workspace_port
+            .remove_planning_workspace_entry("workspace", "obsolete.md")
+            .expect("test double should accept workspace entry removal");
+        assert!(
+            workspace_port
+                .archive_rejected_planning_file("workspace", "archive", "path", "body")
+                .is_err()
+        );
     }
 }
