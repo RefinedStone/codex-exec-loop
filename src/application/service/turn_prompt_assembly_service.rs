@@ -269,7 +269,7 @@ fn render_sub_session_prompt(handoff_prompt: &str, persona_lines: &[String]) -> 
 mod tests {
     use super::{
         MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionAgentPrompt,
-        SubSessionPromptAssemblyRequest, TurnPromptAssemblyService,
+        SubSessionPromptAssemblyRequest, TurnPromptAssemblyService, sub_session_prompt_heading,
     };
 
     #[test]
@@ -323,6 +323,44 @@ mod tests {
         assert!(
             rendered.ends_with("[user-prompt]\n# queued-task-handoff\n\n[task]\nintent=Continue")
         );
+    }
+
+    #[test]
+    // 공백 prompt는 main/sub-session 모두 turn 실행 대상이 아니므로 렌더링하지 않는다.
+    fn blank_main_and_sub_session_prompts_do_not_render() {
+        let service = TurnPromptAssemblyService::new();
+
+        assert_eq!(
+            service.build_main_session_prompt(MainSessionPromptAssemblyRequest {
+                user_prompt: " \n\t ",
+            }),
+            None
+        );
+        assert_eq!(
+            service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
+                handoff_prompt: " \n\t ",
+                agent_prompt: SubSessionAgentPrompt::default(),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    // agent profile label이 비어 있어도 persona prompt heading은 안정적인 기본 copy를 유지한다.
+    fn sub_session_prompt_heading_uses_default_copy_without_profile_label() {
+        let empty_prompt = SubSessionAgentPrompt::default();
+        let unlabeled_prompt =
+            SubSessionAgentPrompt::new(" \t ", vec!["  line one  ".to_string(), " ".to_string()]);
+
+        assert_eq!(
+            sub_session_prompt_heading(&empty_prompt),
+            "Agent profile prompt:"
+        );
+        assert_eq!(
+            sub_session_prompt_heading(&unlabeled_prompt),
+            "Agent profile prompt:"
+        );
+        assert_eq!(unlabeled_prompt.lines, vec!["line one".to_string()]);
     }
 
     #[test]
