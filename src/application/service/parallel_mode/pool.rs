@@ -1047,3 +1047,7 @@ pub(super) fn resolve_workspace_head_sha(workspace_path: &Path) -> Option<String
     let workspace = workspace_path.display().to_string();
     run_command("git", ["-C", workspace.as_str(), "rev-parse", "HEAD"], None)
 }
+
+#[cfg(test)]
+#[path = "pool/coverage_tests.rs"]
+mod tests;
