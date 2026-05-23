@@ -1438,6 +1438,18 @@ mod tests {
         )
     }
 
+    fn with_test_event_logging<T>(action: impl FnOnce() -> T) -> T {
+        use tracing_subscriber::prelude::*;
+
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(format!(
+                "{}=debug",
+                crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET
+            )))
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+        tracing::subscriber::with_default(subscriber, action)
+    }
+
     #[test]
     fn trigger_mapping_covers_public_automation_triggers() {
         assert_eq!(
@@ -1618,6 +1630,84 @@ mod tests {
                 .notices
                 .iter()
                 .any(|notice| notice.contains("no running slot lease was found")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
+    fn scripted_worker_run_traces_stream_event_shapes_when_logging_is_enabled() {
+        let result = with_test_event_logging(|| {
+            run_scripted_worker(
+                vec![
+                    ConversationStreamEvent::ThreadPrepared {
+                        thread_id: "thread-prepared".to_string(),
+                        title: "Prepared slot".to_string(),
+                        cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                    },
+                    ConversationStreamEvent::TurnStarted {
+                        turn_id: "turn-started".to_string(),
+                    },
+                    ConversationStreamEvent::AgentMessageCompleted {
+                        item_id: "item-final".to_string(),
+                        phase: Some("final_answer".to_string()),
+                        text: "final stream reply".to_string(),
+                    },
+                    ConversationStreamEvent::Failed {
+                        message: "stream terminal failure".to_string(),
+                    },
+                ],
+                WorkerExit::Ok,
+            )
+        });
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+    }
+
+    #[test]
+    fn scripted_worker_keeps_port_error_notice_after_turn_completed() {
+        let result = with_test_event_logging(|| {
+            run_scripted_worker(
+                vec![
+                    ConversationStreamEvent::TurnStarted {
+                        turn_id: "turn-completed-before-port-error".to_string(),
+                    },
+                    ConversationStreamEvent::AgentMessageCompleted {
+                        item_id: "item-final".to_string(),
+                        phase: Some("final_answer".to_string()),
+                        text: "done before port error".to_string(),
+                    },
+                    ConversationStreamEvent::TurnCompleted {
+                        turn_id: "turn-completed-before-port-error".to_string(),
+                        changed_planning_file_paths: vec![
+                            ".codex-exec-loop/planning/result.md".to_string(),
+                        ],
+                    },
+                ],
+                WorkerExit::Err,
+            )
+        });
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("returned an error")),
+            "notices: {:?}",
+            result.notices
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("could not reserve official refresh order")),
             "notices: {:?}",
             result.notices
         );
