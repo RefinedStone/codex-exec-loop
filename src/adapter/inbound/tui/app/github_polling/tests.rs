@@ -72,6 +72,116 @@ fn bootstrap_rejects_pull_request_value_with_invalid_repository_shape() {
     }
 }
 
+#[test]
+fn bootstrap_env_edges_cover_empty_values_parse_errors_and_loader_failure() {
+    let disabled = GithubReviewPollingBootstrap::from_env_values(
+        Some("   ".to_string()),
+        Some("15".to_string()),
+        || unreachable!("service loader should not run for blank PR env"),
+        Instant::now(),
+    );
+    assert!(matches!(disabled.state, GithubReviewPollingState::Disabled));
+
+    for (raw_target, expected) in [
+        ("acme/widgets#not-a-number", "numeric PR number"),
+        ("acme/widgets#0", "greater than zero"),
+    ] {
+        let bootstrap = GithubReviewPollingBootstrap::from_env_values(
+            Some(raw_target.to_string()),
+            None,
+            || unreachable!("service loader should not run for invalid target"),
+            Instant::now(),
+        );
+        match bootstrap.state {
+            GithubReviewPollingState::SetupError { target, message } => {
+                assert!(target.is_none());
+                assert!(message.contains(expected), "{message}");
+            }
+            other => panic!("expected setup error state, got {other:?}"),
+        }
+    }
+
+    let bad_interval = GithubReviewPollingBootstrap::from_env_values(
+        Some("acme/widgets#42".to_string()),
+        Some("abc".to_string()),
+        || unreachable!("service loader should not run for invalid interval"),
+        Instant::now(),
+    );
+    match bad_interval.state {
+        GithubReviewPollingState::SetupError { target, message } => {
+            assert_eq!(
+                target,
+                Some(GithubPullRequestTarget::new("acme/widgets", 42))
+            );
+            assert!(message.contains("positive whole number"), "{message}");
+        }
+        other => panic!("expected setup error state, got {other:?}"),
+    }
+
+    let zero_interval = GithubReviewPollingBootstrap::from_env_values(
+        Some("acme/widgets#42".to_string()),
+        Some("0".to_string()),
+        || unreachable!("service loader should not run for zero interval"),
+        Instant::now(),
+    );
+    match zero_interval.state {
+        GithubReviewPollingState::SetupError { target, message } => {
+            assert_eq!(
+                target,
+                Some(GithubPullRequestTarget::new("acme/widgets", 42))
+            );
+            assert!(message.contains("greater than zero"), "{message}");
+        }
+        other => panic!("expected setup error state, got {other:?}"),
+    }
+
+    let loader_error = GithubReviewPollingBootstrap::from_env_values(
+        Some("acme/widgets#42".to_string()),
+        Some("15".to_string()),
+        || Err(anyhow::anyhow!("github credentials unavailable")),
+        Instant::now(),
+    );
+    match loader_error.state {
+        GithubReviewPollingState::SetupError { target, message } => {
+            assert_eq!(
+                target,
+                Some(GithubPullRequestTarget::new("acme/widgets", 42))
+            );
+            assert_eq!(message, "github credentials unavailable");
+        }
+        other => panic!("expected setup error state, got {other:?}"),
+    }
+}
+
+#[test]
+fn bootstrap_discovery_surfaces_interval_and_loader_errors() {
+    let bad_interval = GithubReviewPollingBootstrap::from_discovery_result(
+        Some("abc".to_string()),
+        || unreachable!("discovery loader should not run for invalid interval"),
+        Instant::now(),
+    );
+    match bad_interval.state {
+        GithubReviewPollingState::SetupError { target, message } => {
+            assert!(target.is_none());
+            assert!(message.contains("positive whole number"), "{message}");
+        }
+        other => panic!("expected setup error state, got {other:?}"),
+    }
+
+    let discovery_error = GithubReviewPollingBootstrap::from_discovery_result(
+        None,
+        || Err(anyhow::anyhow!("gh pr lookup failed")),
+        Instant::now(),
+    );
+    match discovery_error.state {
+        GithubReviewPollingState::SetupError { target, message } => {
+            assert!(target.is_none());
+            assert_eq!(message, "gh pr lookup failed");
+        }
+        other => panic!("expected setup error state, got {other:?}"),
+    }
+}
+
 // Active polling starts with an immediate request so a freshly opened review
 // lane sees GitHub activity right away. After the first result, the state keeps
 // previous poll metadata for delta comparisons and waits for the configured
@@ -138,6 +248,48 @@ fn active_state_keeps_last_error_visible() {
         }
         other => panic!("expected active state, got {other:?}"),
     }
+}
+
+#[test]
+fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
+    let mut disabled = GithubReviewPollingState::Disabled;
+    assert_eq!(disabled.status_label(), "off");
+    assert!(disabled.recent_change_summary(40).is_none());
+    assert!(disabled.take_due_request(Instant::now()).is_none());
+    disabled.record_result(
+        Instant::now(),
+        Err("ignored because polling is disabled".to_string()),
+    );
+    assert_eq!(disabled.status_label(), "off");
+
+    let setup_with_target = GithubReviewPollingState::SetupError {
+        target: Some(GithubPullRequestTarget::new("acme/widgets", 42)),
+        message: "   credentials are missing and the message should be trimmed   ".to_string(),
+    };
+    assert_eq!(
+        setup_with_target.status_label(),
+        "setup failed acme/widgets#42 (credentials are missing and the message shoul...)"
+    );
+
+    let setup_without_target = GithubReviewPollingState::SetupError {
+        target: None,
+        message: "bad env".to_string(),
+    };
+    assert_eq!(
+        setup_without_target.status_label(),
+        "setup failed (bad env)"
+    );
+
+    let config = GithubReviewPollingConfig {
+        target: GithubPullRequestTarget::new("acme/widgets", 42),
+        interval: Duration::from_secs(30),
+    };
+    let start = Instant::now();
+    let mut active = GithubReviewPollingState::active(config, start);
+    assert_eq!(active.status_label(), "starting acme/widgets#42");
+    assert!(active.take_due_request(start).is_some());
+    assert_eq!(active.status_label(), "polling acme/widgets#42");
+    assert!(active.take_due_request(start).is_none());
 }
 
 // Recent-change copy is driven by the polling service's delta, not by every
@@ -288,6 +440,76 @@ fn active_state_exposes_compact_recent_change_summary() {
         runtime.recent_change_summary(24).as_deref(),
         Some("review commented by r...")
     );
+}
+
+#[test]
+fn active_state_exposes_multiple_recent_change_summary() {
+    let config = GithubReviewPollingConfig {
+        target: GithubPullRequestTarget::new("acme/widgets", 42),
+        interval: Duration::from_secs(30),
+    };
+    let start = Instant::now();
+    let mut state = GithubReviewPollingState::active(config, start);
+    let _ = state.take_due_request(start);
+    state.record_result(
+        start + Duration::from_secs(1),
+        Ok(poll_result(
+            vec![
+                event(
+                    100,
+                    GithubPullRequestActivityKind::IssueComment,
+                    "2026-04-08T09:00:00Z",
+                ),
+                event(
+                    101,
+                    GithubPullRequestActivityKind::Review,
+                    "2026-04-08T10:00:00Z",
+                )
+                .with_state("APPROVED"),
+            ],
+            vec![
+                event(
+                    100,
+                    GithubPullRequestActivityKind::IssueComment,
+                    "2026-04-08T09:00:00Z",
+                ),
+                event(
+                    101,
+                    GithubPullRequestActivityKind::Review,
+                    "2026-04-08T10:00:00Z",
+                )
+                .with_state("APPROVED"),
+            ],
+        )),
+    );
+    let GithubReviewPollingState::Active(runtime) = state else {
+        panic!("expected active state");
+    };
+    assert_eq!(
+        runtime.recent_change_summary(48).as_deref(),
+        Some("2 new, latest review approved by reviewer: Lo...")
+    );
+}
+
+#[test]
+fn parse_helpers_accept_trimmed_values_and_truncate_status_details() {
+    let target =
+        parse_pull_request_target(" acme/widgets # 42 ").expect("trimmed target should parse");
+    assert_eq!(target, GithubPullRequestTarget::new("acme/widgets", 42));
+    assert_eq!(
+        parse_poll_interval(Some(" 7 ")).unwrap(),
+        Duration::from_secs(7)
+    );
+    assert_eq!(
+        parse_poll_interval(Some(" ")).unwrap(),
+        Duration::from_secs(DEFAULT_GITHUB_POLL_INTERVAL_SECONDS)
+    );
+    assert_eq!(truncate_status_detail("  short detail  "), "short detail");
+
+    let long = "x".repeat(80);
+    let truncated = truncate_status_detail(&long);
+    assert_eq!(truncated.chars().count(), MAX_STATUS_DETAIL_LENGTH);
+    assert!(truncated.ends_with("..."));
 }
 
 // A valid explicit configuration must produce both active state and a service
