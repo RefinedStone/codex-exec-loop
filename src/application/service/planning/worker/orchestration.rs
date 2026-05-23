@@ -905,10 +905,12 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use anyhow::{Result, anyhow};
 
     use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::{
         NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
@@ -927,13 +929,23 @@ mod tests {
     use crate::application::service::planning::runtime::validation::PlanningValidationService;
     use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::application::service::turn_prompt_assembly_service::TurnPromptAssemblyService;
+    use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
         PLANNING_FORMAT_VERSION, PlanningOfficialCompletionRefreshPayload, PriorityQueueProjection,
         QueueIdleConfig, TaskActor, TaskAuthorityDocument,
     };
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::prelude::*;
 
     static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+        tracing::subscriber::with_default(subscriber, body)
+    }
 
     #[derive(Default)]
     struct RecordingPlanningWorkerPort {
@@ -1316,6 +1328,63 @@ mod tests {
     }
 
     #[test]
+    fn valid_worker_task_commands_that_fail_domain_validation_build_repair_request() {
+        let workspace = workspace("command-validation");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker_message = r#"Worker proposed a task for a missing direction.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","direction_id":"missing-direction","title":"Unroutable task","description":"This command is structurally valid but invalid for the accepted direction authority."}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-validation".to_string()),
+            turn_id: Some("worker-turn-validation".to_string()),
+            final_agent_message: Some(worker_message.to_string()),
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let service = orchestration_service(worker, workspace_port.clone(), repo.clone());
+
+        let outcome = service
+            .refresh_queue_from_reply(PlanningQueueRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-validation"),
+                completed_turn_id: "parent-turn-validation",
+                latest_user_message: None,
+                latest_main_reply: "done",
+                previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestMainReply,
+            })
+            .expect("validation failure should be converted into repair request");
+
+        assert!(!outcome.task_authority_changed);
+        assert!(outcome.repair_request.is_some());
+        assert!(outcome.rejected_summary.is_some_and(|summary| {
+            summary.contains("planning worker task commands failed validation")
+                && summary.contains("missing-direction")
+        }));
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice.contains("failed validation"))
+        );
+        assert!(workspace_port.commits().is_empty());
+        assert!(
+            repo.load_task_authority_snapshot(&workspace)
+                .expect("task snapshot should load")
+                .expect("task snapshot should exist")
+                .task_authority
+                .tasks
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn official_completion_ignores_delivery_only_follow_up_task_commands() {
         let workspace = workspace("official-completion-delivery-follow-up");
         let repo = Arc::new(NoopPlanningTaskRepositoryPort);
@@ -1338,16 +1407,19 @@ mod tests {
         let service = orchestration_service(worker.clone(), workspace_port, repo.clone());
         let contract = official_completion_contract();
 
-        let outcome = service
-            .refresh_queue_from_official_completion(PlanningOfficialCompletionRefreshRequest {
-                workspace_directory: &workspace,
-                parent_thread_id: Some("parent-thread-delivery"),
-                latest_user_message: Some("finish the queued task"),
-                latest_main_reply: "Implementation complete; distributor will handle delivery.",
-                previous_handoff_task: None,
-                contract: &contract,
-            })
-            .expect("official completion refresh should ignore delivery-only follow-up");
+        let outcome = with_akra_event_trace(|| {
+            service.refresh_queue_from_official_completion(
+                PlanningOfficialCompletionRefreshRequest {
+                    workspace_directory: &workspace,
+                    parent_thread_id: Some("parent-thread-delivery"),
+                    latest_user_message: Some("finish the queued task"),
+                    latest_main_reply: "Implementation complete; distributor will handle delivery.",
+                    previous_handoff_task: None,
+                    contract: &contract,
+                },
+            )
+        })
+        .expect("official completion refresh should ignore delivery-only follow-up");
 
         assert!(!outcome.task_authority_changed);
         assert!(outcome.repair_request.is_none());
@@ -1371,6 +1443,107 @@ mod tests {
             requests[0]
                 .prompt
                 .contains("Akra distributor owns that after official completion")
+        );
+    }
+
+    #[test]
+    fn official_completion_refresh_reports_already_completed_claim_before_worker_run() {
+        let workspace = workspace("official-completion-already-completed");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-completed".to_string()),
+            turn_id: Some("worker-turn-completed".to_string()),
+            final_agent_message: Some("should not run".to_string()),
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let refresh_order = authority
+            .reserve_next_official_refresh_order(&workspace)
+            .expect("refresh order should reserve");
+        assert_eq!(
+            authority
+                .acquire_official_refresh_claim(&workspace, refresh_order, "completed-owner")
+                .expect("refresh claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        authority
+            .release_official_refresh_claim(&workspace, refresh_order, "completed-owner")
+            .expect("refresh claim should release");
+        let service =
+            orchestration_service_with_authority(worker.clone(), workspace_port, repo, authority);
+        let contract = official_completion_contract_with_order(refresh_order);
+
+        let error = service
+            .refresh_queue_from_official_completion(PlanningOfficialCompletionRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-completed"),
+                latest_user_message: None,
+                latest_main_reply: "done",
+                previous_handoff_task: None,
+                contract: &contract,
+            })
+            .expect_err("completed order should fail before worker execution");
+
+        assert!(error.to_string().contains("already completed"));
+        assert!(worker.requests().is_empty());
+    }
+
+    #[test]
+    fn official_refresh_permit_waits_for_earlier_claim_then_releases_on_drop() {
+        let workspace = workspace("official-completion-waiting");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: None,
+            turn_id: None,
+            final_agent_message: None,
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let first_order = authority
+            .reserve_next_official_refresh_order(&workspace)
+            .expect("first order should reserve");
+        let second_order = authority
+            .reserve_next_official_refresh_order(&workspace)
+            .expect("second order should reserve");
+        assert_eq!(
+            authority
+                .acquire_official_refresh_claim(&workspace, first_order, "first-owner")
+                .expect("first claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        let release_authority = authority.clone();
+        let release_workspace = workspace.clone();
+        let release_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            release_authority
+                .release_official_refresh_claim(&release_workspace, first_order, "first-owner")
+                .expect("first claim should release from waiter thread");
+        });
+        let service =
+            orchestration_service_with_authority(worker, workspace_port, repo, authority.clone());
+
+        let permit = service
+            .acquire_official_refresh_permit(&workspace, second_order)
+            .expect("second order should acquire after first order releases");
+        release_handle
+            .join()
+            .expect("release helper thread should complete");
+        drop(permit);
+
+        assert_eq!(
+            authority
+                .acquire_official_refresh_claim(&workspace, second_order, "second-owner")
+                .expect("second order should be completed after permit drop"),
+            PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
         );
     }
 
@@ -1399,6 +1572,115 @@ mod tests {
         ));
         assert!(!is_delivery_only_follow_up_task(&product_work));
         assert!(!is_delivery_only_follow_up_task(&implementation_work));
+    }
+
+    #[test]
+    fn delivery_only_filter_covers_boundary_synonyms_and_mixed_command_sets() {
+        let pull_request_work = create_task_input(
+            "Ensure PR",
+            "Ensure pull request exists for the completed work.",
+        );
+        let pushed_remote_work = create_task_input(
+            "Pushed result branch",
+            "Pushed origin branch and update remote delivery state.",
+        );
+        let rebase_work = create_task_input(
+            "Rebase shared branch",
+            "Rebase prerelease after the distributor delivery step.",
+        );
+        let merge_work = create_task_input(
+            "Merge integration branch",
+            "Merge the completed branch into the integration branch.",
+        );
+        let code_work = create_task_input(
+            "Implement queue parser",
+            "Write parser code even though the change also mentions a pull request.",
+        );
+
+        assert!(is_delivery_only_follow_up_task(&pull_request_work));
+        assert!(is_delivery_only_follow_up_task(&pushed_remote_work));
+        assert!(is_delivery_only_follow_up_task(&rebase_work));
+        assert!(is_delivery_only_follow_up_task(&merge_work));
+        assert!(!is_delivery_only_follow_up_task(&code_work));
+
+        let (accepted_commands, ignored_count) = filter_worker_task_commands(
+            vec![
+                PlanningTaskMutationCommand::CreateTask(pull_request_work),
+                PlanningTaskMutationCommand::CreateTask(code_work),
+            ],
+            WorkerTaskCommandPolicy::IgnoreDeliveryOnlyFollowUps,
+        );
+
+        assert_eq!(ignored_count, 1);
+        assert_eq!(accepted_commands.len(), 1);
+        assert!(matches!(
+            accepted_commands.as_slice(),
+            [PlanningTaskMutationCommand::CreateTask(input)] if input.title == "Implement queue parser"
+        ));
+    }
+
+    #[test]
+    fn recording_workspace_port_rejects_unexpected_test_helper_calls() {
+        let port = RecordingPlanningWorkspacePort::new("# Result Output");
+
+        assert!(
+            port.stage_planning_draft_files("/tmp/root", "draft", &[])
+                .expect_err("stage should be rejected")
+                .to_string()
+                .contains("should not be used")
+        );
+        assert!(
+            port.load_planning_draft_files("/tmp/root", "draft")
+                .expect_err("draft load should be rejected")
+                .to_string()
+                .contains("should not be used")
+        );
+        assert!(
+            port.replace_planning_draft_file(
+                "/tmp/root",
+                "draft",
+                "docs/plan/result-output.md",
+                "body"
+            )
+            .expect_err("draft replace should be rejected")
+            .to_string()
+            .contains("should not be used")
+        );
+        assert!(
+            port.load_planning_workspace_candidate_files("/tmp/root")
+                .expect_err("candidate load should be rejected")
+                .to_string()
+                .contains("should not be used")
+        );
+        assert!(
+            port.load_optional_planning_candidate_file("/tmp/root", "docs/plan/missing.md")
+                .expect_err("optional candidate load should be rejected")
+                .to_string()
+                .contains("should not be used")
+        );
+        assert!(
+            port.replace_planning_workspace_file("/tmp/root", "docs/plan/result-output.md", None)
+                .expect_err("workspace replace should be rejected")
+                .to_string()
+                .contains("should not be used")
+        );
+        assert!(
+            port.remove_planning_workspace_entry("/tmp/root", "docs/plan/result-output.md")
+                .expect_err("workspace remove should be rejected")
+                .to_string()
+                .contains("should not be used")
+        );
+        assert!(
+            port.archive_rejected_planning_file(
+                "/tmp/root",
+                "rejected.json",
+                "schema/task-authority.json",
+                "{}",
+            )
+            .expect_err("archive should be rejected")
+            .to_string()
+            .contains("should not be used")
+        );
     }
 
     #[test]
@@ -1445,6 +1727,20 @@ mod tests {
         workspace_port: Arc<dyn PlanningWorkspacePort>,
         repo: Arc<NoopPlanningTaskRepositoryPort>,
     ) -> PlanningWorkerOrchestrationService {
+        orchestration_service_with_authority(
+            worker,
+            workspace_port,
+            repo,
+            Arc::new(NoopPlanningAuthorityPort::default()),
+        )
+    }
+
+    fn orchestration_service_with_authority(
+        worker: Arc<dyn PlanningWorkerPort>,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        repo: Arc<NoopPlanningTaskRepositoryPort>,
+        planning_authority: Arc<dyn PlanningAuthorityPort>,
+    ) -> PlanningWorkerOrchestrationService {
         let validation = PlanningValidationService::new();
         let priority_queue = crate::domain::planning::PriorityQueueService::new();
         let prompt = PlanningPromptService::with_task_repository(
@@ -1465,12 +1761,7 @@ mod tests {
             PlanningRuntimePolicyService::new(),
             TurnPromptAssemblyService::new(),
         );
-        PlanningWorkerOrchestrationService::new(
-            worker,
-            runtime_facade,
-            Arc::new(NoopPlanningAuthorityPort::default()),
-            repo,
-        )
+        PlanningWorkerOrchestrationService::new(worker, runtime_facade, planning_authority, repo)
     }
 
     fn workspace(label: &str) -> String {
@@ -1530,9 +1821,15 @@ mod tests {
     }
 
     fn official_completion_contract() -> PlanningOfficialCompletionRefreshContract {
+        official_completion_contract_with_order(7)
+    }
+
+    fn official_completion_contract_with_order(
+        refresh_order: u64,
+    ) -> PlanningOfficialCompletionRefreshContract {
         PlanningOfficialCompletionRefreshContract::new(
             "parent-turn-delivery",
-            7,
+            refresh_order,
             PlanningOfficialCompletionRefreshPayload::new(
                 "agent-1",
                 "task-1",
