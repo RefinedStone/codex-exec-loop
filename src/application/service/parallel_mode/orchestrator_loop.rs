@@ -569,16 +569,7 @@ fn spawn_parallel_dispatch_worker(
         let task_id = request.handoff_task.task_id.clone();
         let task_title = request.handoff_task.task_title.clone();
         event_log::emit_lazy("parallel_worker_thread_started", || {
-            serde_json::json!({
-                "planning_workspace": &request.planning_workspace_directory,
-                "worktree": &request.worktree_directory,
-                "epoch_id": request.automation_epoch_id,
-                "task_id": &request.handoff_task.task_id,
-                "task_title": &request.handoff_task.task_title,
-                "service_name": &request.service_name,
-                "prompt_chars": request.prompt.chars().count(),
-                "developer_instructions_chars": request.developer_instructions.chars().count(),
-            })
+            parallel_worker_thread_started_trace_payload(&request)
         });
         let result = run_parallel_dispatch_worker(request, worker_port, turn_service, planning);
         let _ = outer_tx.send(ParallelModeOrchestratorLoopEvent::WorkerEvent(
@@ -1167,6 +1158,21 @@ fn parallel_worker_stream_starting_trace_payload(
     })
 }
 
+fn parallel_worker_thread_started_trace_payload(
+    request: &ParallelDispatchWorkerRequest,
+) -> serde_json::Value {
+    serde_json::json!({
+        "planning_workspace": &request.planning_workspace_directory,
+        "worktree": &request.worktree_directory,
+        "epoch_id": request.automation_epoch_id,
+        "task_id": &request.handoff_task.task_id,
+        "task_title": &request.handoff_task.task_title,
+        "service_name": &request.service_name,
+        "prompt_chars": request.prompt.chars().count(),
+        "developer_instructions_chars": request.developer_instructions.chars().count(),
+    })
+}
+
 fn parallel_worker_agent_message_completed_trace_payload(
     request: &ParallelDispatchWorkerRequest,
     item_id: &str,
@@ -1188,11 +1194,13 @@ mod tests {
     use super::{
         ParallelDispatchOfficialCompletionOutcome, ParallelDispatchTurnCompleted,
         ParallelDispatchWorkerRequest, ParallelDispatchWorkerRunResult,
-        ParallelDispatchWorkerStreamState, parallel_dispatch_validation_summary,
-        parallel_official_completion_started_trace_payload,
+        ParallelDispatchWorkerStreamState, ParallelModeDispatchExecutionContext,
+        dispatch_parallel_queue_pool, emit_parallel_worker_stream_event,
+        parallel_dispatch_validation_summary, parallel_official_completion_started_trace_payload,
         parallel_runtime_event_for_dispatch_trigger,
         parallel_worker_agent_message_completed_trace_payload,
-        parallel_worker_stream_starting_trace_payload, run_parallel_dispatch_worker,
+        parallel_worker_stream_starting_trace_payload,
+        parallel_worker_thread_started_trace_payload, run_parallel_dispatch_worker,
         sync_parallel_dispatch_worker_event,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -1219,7 +1227,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct NoopGithubAutomationPort;
@@ -1665,6 +1673,50 @@ mod tests {
             result.worker_event_kind,
             ParallelModeControlPlaneWorkerEventKind::StreamFailed
         );
+
+        emit_parallel_worker_stream_event(
+            &worker_request_with_secret_bodies(),
+            &ConversationStreamEvent::StatusUpdated {
+                text: "status events are intentionally not traced here".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn dispatch_pool_reports_plan_build_error_before_worker_launch() {
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let service = test_parallel_service(authority.clone());
+        let planning = test_planning_services(authority);
+        let projection = planning
+            .runtime
+            .load_runtime_projection_or_invalid("/tmp/akra-not-a-git-repository");
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        let outcome = with_test_event_logging(|| {
+            dispatch_parallel_queue_pool(
+                &service,
+                ParallelModeDispatchExecutionContext {
+                    workspace_directory: "/tmp/akra-not-a-git-repository",
+                    planning_projection: &projection,
+                    worker_port: Arc::new(ScriptedParallelAgentWorkerPort::new(
+                        Vec::new(),
+                        WorkerExit::Ok,
+                    )),
+                    turn_service: ParallelModeTurnService::new(service.clone()),
+                    planning,
+                    event_sender,
+                    trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                    epoch_id: 99,
+                },
+            )
+        });
+
+        assert!(
+            outcome
+                .blocked_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("repository inspection failed"))
+        );
     }
 
     #[test]
@@ -1817,6 +1869,22 @@ mod tests {
     }
 
     #[test]
+    fn parallel_worker_thread_started_trace_payload_keeps_prompt_bodies_out_of_log() {
+        let request = worker_request_with_secret_bodies();
+
+        let payload = parallel_worker_thread_started_trace_payload(&request);
+        let fields = payload.as_object().expect("payload should be an object");
+
+        assert_eq!(fields["planning_workspace"], "/tmp/workspace");
+        assert_eq!(fields["epoch_id"], 7);
+        assert_eq!(fields["prompt_chars"], 18);
+        assert_eq!(fields["developer_instructions_chars"], 21);
+        assert!(!fields.contains_key("prompt"));
+        assert!(!fields.contains_key("developer_instructions"));
+        assert!(!json_payload_contains(&payload, "SECRET-"));
+    }
+
+    #[test]
     fn parallel_worker_completed_message_trace_payload_keeps_text_body_out_of_log() {
         let request = worker_request_with_secret_bodies();
 
@@ -1866,6 +1934,43 @@ mod tests {
             ]),
             "parallel worker completed with planning file changes: docs/plan/result-output.md, schema/task-authority.json"
         );
+    }
+
+    #[test]
+    fn noop_github_helper_methods_and_failed_git_diagnostics_are_covered() {
+        let github = NoopGithubAutomationPort;
+        let capabilities = github.inspect_capabilities("/tmp/repo");
+        assert!(capabilities.push_ready());
+        assert!(capabilities.pull_request_workflow_ready());
+        github
+            .push_branch("/tmp/repo", "feature/test", false)
+            .expect("noop push should succeed");
+        let pr = github
+            .ensure_pull_request("/tmp/repo", "prerelease", "feature/test", "title", "body")
+            .expect("noop PR ensure should succeed");
+        assert_eq!(pr.base_branch, "prerelease");
+        assert_eq!(
+            github
+                .inspect_pull_request("/tmp/repo", 12)
+                .expect("noop PR inspect should succeed")
+                .number,
+            12
+        );
+        github
+            .push_integration_branch("/tmp/repo", "prerelease")
+            .expect("noop integration push should succeed");
+        github
+            .close_pull_request("/tmp/repo", 12)
+            .expect("noop PR close should succeed");
+
+        let temp = TempGitWorkspace::new("parallel-run-git-failure");
+        let panic = std::panic::catch_unwind(|| {
+            run_git(
+                Path::new(temp.path()),
+                &["definitely-not-a-real-git-subcommand"],
+            );
+        });
+        assert!(panic.is_err());
     }
 
     fn worker_request_with_secret_bodies() -> ParallelDispatchWorkerRequest {
