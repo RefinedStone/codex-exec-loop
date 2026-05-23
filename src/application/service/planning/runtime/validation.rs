@@ -233,9 +233,9 @@ impl PlanningValidationService {
             })
             .collect::<Vec<_>>();
 
-        let Some((_, first_line)) = non_empty_lines.first() else {
-            return;
-        };
+        let (_, first_line) = non_empty_lines
+            .first()
+            .expect("non-blank result-output markdown should contain a non-empty line");
         // 첫 줄 heading 요구는 admin preview와 prompt fragment가 같은 section boundary를 기준으로
         // result-output 지시문을 다루게 만드는 작은 markdown contract다.
         if !first_line.starts_with('#') {
