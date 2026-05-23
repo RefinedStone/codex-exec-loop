@@ -507,9 +507,11 @@ mod tests {
     };
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::domain::conversation::ConversationSnapshot;
+    use crate::domain::conversation::{
+        ConversationControlSupport, ConversationSnapshot, ConversationTurnOptions,
+    };
     use crate::domain::planning::QueueIdlePolicy;
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -859,6 +861,101 @@ mod tests {
         }
     }
 
+    fn staged_draft_file_path(
+        workspace: &TempPlanningWorkspace,
+        draft_name: &str,
+        active_path: &str,
+    ) -> PathBuf {
+        let draft_relative_path = active_path
+            .strip_prefix(".codex-exec-loop/planning/")
+            .unwrap_or(active_path);
+        workspace
+            .path()
+            .join(crate::application::service::planning::PLANNING_DRAFTS_DIRECTORY)
+            .join(draft_name)
+            .join(draft_relative_path)
+    }
+
+    #[test]
+    fn controller_fixture_ports_cover_boundary_methods() {
+        let codex_port = FakeAppServerPort;
+
+        let startup = codex_port
+            .load_startup_context()
+            .expect("startup context should load");
+        assert!(startup.account_ok);
+
+        let catalog = codex_port
+            .load_session_catalog(SessionCatalogRequest::for_workspace(5, "/tmp/root"))
+            .expect("session catalog should load");
+        assert_eq!(
+            catalog
+                .recent_sessions()
+                .expect("catalog should be ready")
+                .items
+                .len(),
+            0
+        );
+
+        let truth = codex_port.runtime_control_truth();
+        assert_eq!(truth.approval, ConversationControlSupport::ManualHandoff);
+        assert_eq!(truth.interrupt, ConversationControlSupport::Unsupported);
+
+        let snapshot = codex_port
+            .load_conversation_snapshot("thread-fixture")
+            .expect("snapshot should load");
+        assert_eq!(snapshot.thread_id, "thread-fixture");
+        codex_port
+            .request_stop_all_sessions()
+            .expect("stop should be accepted");
+        let (new_thread_sender, _new_thread_receiver) = std::sync::mpsc::channel();
+        codex_port
+            .run_new_thread_stream(
+                "/tmp/root",
+                "prompt",
+                ConversationTurnOptions::default(),
+                new_thread_sender,
+            )
+            .expect("new thread stream should be accepted");
+        let (turn_sender, _turn_receiver) = std::sync::mpsc::channel();
+        codex_port
+            .run_turn_stream(
+                "thread-fixture",
+                "prompt",
+                ConversationTurnOptions::default(),
+                turn_sender,
+            )
+            .expect("turn stream should be accepted");
+
+        let workspace = TempPlanningWorkspace::new("tui-fixture-port-coverage");
+        let planning_port =
+            FailingPlanningWorkspacePort::new(PlanningWorkspacePortFailure::StageDraft);
+        let candidate_record = planning_port
+            .load_planning_workspace_candidate_files(workspace.path_str())
+            .expect("candidate workspace should load");
+        planning_port
+            .commit_planning_workspace_files(workspace.path_str(), &candidate_record)
+            .expect("candidate workspace should commit");
+        assert_eq!(
+            planning_port
+                .load_optional_planning_candidate_file(workspace.path_str(), "missing.md")
+                .expect("candidate optional read should succeed"),
+            None
+        );
+        planning_port
+            .remove_planning_workspace_entry(workspace.path_str(), "missing.md")
+            .expect("missing workspace entry removal should succeed");
+        let archived_path = planning_port
+            .archive_rejected_planning_file(
+                workspace.path_str(),
+                "rejected-fixture",
+                crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+                "# rejected\n",
+            )
+            .expect("rejected planning file should archive");
+        assert!(Path::new(&archived_path).is_file());
+    }
+
     #[test]
     fn planning_shell_commands_route_statuses_and_doctor_paths() {
         let workspace = TempPlanningWorkspace::new("tui-planning-shell-command");
@@ -915,6 +1012,31 @@ mod tests {
             PlanningInitOverlayStep::ExistingWorkspace
         );
         assert!(ready_status(&existing_app).starts_with("planning state: "));
+
+        let absent_doctor_workspace = TempPlanningWorkspace::new("tui-planning-doctor-absent");
+        let mut absent_doctor_app = make_test_app(&absent_doctor_workspace);
+        absent_doctor_app.handle_planning_shell_command(Some("doctor"));
+        assert_eq!(absent_doctor_app.shell_overlay, ShellOverlay::Hidden);
+        assert!(ready_status(&absent_doctor_app).starts_with("planning state: ready_without_task"));
+    }
+
+    #[test]
+    fn overlay_shell_open_paths_present_planning_surfaces() {
+        let workspace = TempPlanningWorkspace::new("tui-overlay-shell-open-paths");
+        let mut app = make_test_app(&workspace);
+
+        app.handle_directions_shell_command(None);
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+        assert_eq!(ready_status(&app), "opened directions maintenance");
+
+        app.handle_queue_shell_command(None);
+        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+
+        app.close_shell_overlay();
+        app.present_directions_maintenance_overview("directions loaded quietly".to_string(), false);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(ready_status(&app), "directions loaded quietly");
     }
 
     #[test]
@@ -930,6 +1052,9 @@ mod tests {
             ready_status(&app),
             "reset directions preview: rewrites DB direction authority, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue"
         );
+
+        app.handle_reset_shell_command(Some("all"));
+        assert!(ready_status(&app).starts_with("reset all preview:"));
 
         fs::remove_dir_all(workspace.path()).expect("seeded planning fixture should be removable");
         fs::create_dir_all(workspace.path()).expect("planning fixture should be recreated");
@@ -949,6 +1074,10 @@ mod tests {
             ready_status(&success_app),
             "planning reset applied / target: queue / rewritten: 0 / removed: 0"
         );
+        success_app.handle_reset_shell_command(Some("directions confirm"));
+        assert!(
+            ready_status(&success_app).starts_with("planning reset applied / target: directions")
+        );
 
         let failure_workspace = TempPlanningWorkspace::new("tui-reset-command-failure");
         let mut seed_app = make_test_app(&failure_workspace);
@@ -967,6 +1096,66 @@ mod tests {
             "status: {}",
             ready_status(&failure_app)
         );
+    }
+
+    #[test]
+    fn simple_mode_editor_loads_and_promotion_blocks_invalid_staged_drafts() {
+        let editor_workspace = TempPlanningWorkspace::new("tui-simple-editor-invalid-load");
+        let mut editor_app = make_test_app(&editor_workspace);
+        editor_app.open_first_run_planning_simple_review();
+        let editor_draft_name = editor_app
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .expect("simple review should be staged")
+            .draft_name()
+            .to_string();
+        fs::write(
+            staged_draft_file_path(
+                &editor_workspace,
+                &editor_draft_name,
+                crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+            ),
+            "invalid result output without heading",
+        )
+        .expect("staged result output should be writable");
+
+        editor_app.open_simple_mode_planning_editor();
+
+        assert_eq!(
+            editor_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+        assert!(ready_status(&editor_app).contains("planning simple draft editor ready / draft: "));
+        assert!(ready_status(&editor_app).contains("validation: needs attention"));
+
+        let promote_workspace = TempPlanningWorkspace::new("tui-simple-promote-invalid");
+        let mut promote_app = make_test_app(&promote_workspace);
+        promote_app.open_first_run_planning_simple_review();
+        let promote_draft_name = promote_app
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .expect("simple review should be staged")
+            .draft_name()
+            .to_string();
+        fs::write(
+            staged_draft_file_path(
+                &promote_workspace,
+                &promote_draft_name,
+                crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+            ),
+            "invalid result output without heading",
+        )
+        .expect("staged result output should be writable");
+
+        promote_app.promote_simple_mode_planning_draft();
+
+        assert_eq!(promote_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            promote_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        assert!(ready_status(&promote_app).contains("planning simple draft promote blocked"));
+        assert!(ready_status(&promote_app).contains("validation: needs attention"));
     }
 
     #[test]
