@@ -296,3 +296,140 @@ pub(super) struct DraftStatusTemplate {
     // full session view를 재사용하면 partial과 full-page의 status copy가 서로 다른 projection으로 drift하지 않는다.
     pub(super) session: PlanningAdminSessionView,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AppServerPromptLogView;
+    use crate::application::port::outbound::app_server_prompt_log_port::{
+        AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptOutputRecord,
+    };
+
+    #[test]
+    fn prompt_log_view_counts_session_kinds_failures_and_character_totals() {
+        let view = AppServerPromptLogView::from_records(vec![
+            prompt_record(
+                10,
+                "main",
+                "turn",
+                "completed",
+                Some("thread-main"),
+                Some("turn-1"),
+                Some("conversation"),
+            )
+            .with_input("prompt", "operator", "안녕")
+            .with_output("assistant", Some("final"), "hello")
+            .build(),
+            prompt_record(11, "worker", "repair", "failed", None, None, None)
+                .with_input("developer", "instructions", "fix")
+                .with_output("notice", None, "실패")
+                .with_error("worker timeout")
+                .build(),
+        ]);
+
+        assert_eq!(view.total_count, 2);
+        assert_eq!(view.main_count, 1);
+        assert_eq!(view.worker_count, 1);
+        assert_eq!(view.failure_count, 1);
+
+        let main = &view.records[0];
+        assert_eq!(main.thread_id, "thread-main");
+        assert_eq!(main.turn_id, "turn-1");
+        assert_eq!(main.service_name, "conversation");
+        assert_eq!(main.model, "default");
+        assert_eq!(main.reasoning_effort, "default");
+        assert_eq!(main.input_chars, 2);
+        assert_eq!(main.output_chars, 5);
+        assert_eq!(main.input_items[0].char_count, 2);
+        assert_eq!(main.output_items[0].char_count, 5);
+        assert_eq!(main.output_items[0].phase, "final");
+
+        let worker = &view.records[1];
+        assert_eq!(worker.thread_id, "none");
+        assert_eq!(worker.turn_id, "none");
+        assert_eq!(worker.service_name, "main session");
+        assert_eq!(worker.status_class, "failed");
+        assert_eq!(worker.error_message.as_deref(), Some("worker timeout"));
+        assert_eq!(worker.output_items[0].phase, "default");
+        assert!(
+            worker
+                .filter_text
+                .contains("worker repair failed /workspace none none main session")
+        );
+    }
+
+    #[test]
+    fn prompt_log_view_handles_empty_records() {
+        let view = AppServerPromptLogView::from_records(Vec::new());
+
+        assert!(view.records.is_empty());
+        assert_eq!(view.total_count, 0);
+        assert_eq!(view.main_count, 0);
+        assert_eq!(view.worker_count, 0);
+        assert_eq!(view.failure_count, 0);
+    }
+
+    fn prompt_record(
+        sequence: i64,
+        session_kind: &str,
+        operation: &str,
+        status: &str,
+        thread_id: Option<&str>,
+        turn_id: Option<&str>,
+        service_name: Option<&str>,
+    ) -> PromptRecordBuilder {
+        PromptRecordBuilder {
+            record: AppServerPromptInteractionRecord {
+                sequence,
+                interaction_id: format!("interaction-{sequence}"),
+                session_kind: session_kind.to_string(),
+                operation: operation.to_string(),
+                status: status.to_string(),
+                workspace_dir: "/workspace".to_string(),
+                thread_id: thread_id.map(str::to_string),
+                turn_id: turn_id.map(str::to_string),
+                service_name: service_name.map(str::to_string),
+                model: None,
+                reasoning_effort: None,
+                developer_instructions: None,
+                input_items: Vec::new(),
+                output_items: Vec::new(),
+                error_message: None,
+                started_at: "2026-05-23T00:00:00Z".to_string(),
+                completed_at: "2026-05-23T00:00:01Z".to_string(),
+            },
+        }
+    }
+
+    struct PromptRecordBuilder {
+        record: AppServerPromptInteractionRecord,
+    }
+
+    impl PromptRecordBuilder {
+        fn with_input(mut self, kind: &str, label: &str, content: &str) -> Self {
+            self.record
+                .input_items
+                .push(AppServerPromptInputRecord::new(kind, label, content));
+            self
+        }
+
+        fn with_output(mut self, item_id: &str, phase: Option<&str>, text: &str) -> Self {
+            self.record
+                .output_items
+                .push(AppServerPromptOutputRecord::new(
+                    item_id,
+                    phase.map(str::to_string),
+                    text,
+                ));
+            self
+        }
+
+        fn with_error(mut self, error: &str) -> Self {
+            self.record.error_message = Some(error.to_string());
+            self
+        }
+
+        fn build(self) -> AppServerPromptInteractionRecord {
+            self.record
+        }
+    }
+}

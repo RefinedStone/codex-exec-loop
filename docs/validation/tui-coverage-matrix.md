@@ -62,6 +62,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/parallel_supervisor_events.rs`
 - `src/adapter/inbound/tui/app/planning/controller.rs`
+- `src/adapter/inbound/tui/app/planning/presentation.rs`
 - `src/adapter/inbound/tui/app/planning/status_projection.rs`
 - `src/adapter/inbound/tui/app/planning_draft_editor_ui/tests.rs`
 - `src/adapter/inbound/tui/app/planning_init_overlay_ui.rs`
