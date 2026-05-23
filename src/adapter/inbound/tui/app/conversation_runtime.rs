@@ -506,18 +506,230 @@ fn queue_post_turn_evaluation(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
-    use crate::adapter::inbound::tui::app::{AutoFollowSubmitContext, PromptOrigin};
+    use crate::adapter::inbound::tui::app::{
+        AutoFollowSubmitContext, ManualIntakeSubmitContext, PromptOrigin,
+    };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::planning::{
         PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
     };
     use crate::core::app::TurnStreamState;
+    use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessageKind,
+        ConversationToolActivity, ConversationToolActivityKind,
+    };
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::prelude::*;
 
     fn stream_snapshot_event(event: ConversationStreamEvent) -> ConversationRuntimeEvent {
         let mut stream_state = TurnStreamState::new();
         ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
             stream_state.apply_stream_event(core_turn_stream_event_from_application(event)),
         ))
+    }
+
+    fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+        tracing::subscriber::with_default(subscriber, body)
+    }
+
+    fn auto_follow_origin() -> PromptOrigin {
+        PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            completed_turn_id: "turn-root".to_string(),
+            mode_label: "planning queue".to_string(),
+            transcript_text: "continue queue".to_string(),
+            debug_detail: None,
+            handoff_task: None,
+        }))
+    }
+
+    fn manual_intake_origin() -> PromptOrigin {
+        PromptOrigin::ManualIntake(Box::new(ManualIntakeSubmitContext {
+            transcript_text: "manual intake".to_string(),
+            handoff_task: None,
+            parallel_mode_enabled_at_submission: true,
+        }))
+    }
+
+    #[test]
+    fn ignored_prompt_edges_and_origin_labels_are_stable() {
+        assert_eq!(prompt_origin_label(&PromptOrigin::Manual), "manual");
+        assert_eq!(
+            prompt_origin_label(&manual_intake_origin()),
+            "manual_intake"
+        );
+        assert_eq!(prompt_origin_label(&auto_follow_origin()), "auto_follow");
+
+        let empty_prompt = with_akra_event_trace(|| {
+            reduce_conversation_runtime(
+                ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+                ConversationRuntimeEvent::SubmitPrompt {
+                    prompt: "   ".to_string(),
+                    transcript_text: "ignored".to_string(),
+                    origin: PromptOrigin::Manual,
+                },
+            )
+        });
+        assert!(empty_prompt.effects.is_empty());
+        assert!(empty_prompt.state.messages.is_empty());
+
+        let mut submitting_state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        submitting_state.mark_turn_submitting("/tmp/workspace".to_string());
+        let blocked_runtime_prompt = with_akra_event_trace(|| {
+            reduce_conversation_runtime(
+                submitting_state,
+                ConversationRuntimeEvent::SubmitPrompt {
+                    prompt: "continue".to_string(),
+                    transcript_text: "continue".to_string(),
+                    origin: auto_follow_origin(),
+                },
+            )
+        });
+        assert!(blocked_runtime_prompt.effects.is_empty());
+        assert!(blocked_runtime_prompt.state.messages.is_empty());
+
+        let mut manual_blocked_state =
+            ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        manual_blocked_state.record_auto_follow_queue("turn-root");
+        let blocked_manual_prompt = with_akra_event_trace(|| {
+            reduce_conversation_runtime(
+                manual_blocked_state,
+                ConversationRuntimeEvent::SubmitPrompt {
+                    prompt: "manual".to_string(),
+                    transcript_text: "manual".to_string(),
+                    origin: PromptOrigin::Manual,
+                },
+            )
+        });
+        assert!(blocked_manual_prompt.effects.is_empty());
+        assert!(blocked_manual_prompt.state.messages.is_empty());
+    }
+
+    #[test]
+    fn stream_snapshot_updates_cover_runtime_notices_messages_and_failures() {
+        let mut reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            stream_snapshot_event(ConversationStreamEvent::codex_app_server_launch_attachment()),
+        );
+        assert!(
+            reduction
+                .state
+                .runtime_notices
+                .iter()
+                .any(|notice| notice.contains("provider-launched"))
+        );
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Runtime thread".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+            }),
+        );
+        assert_eq!(reduction.state.thread_id, "thread-1");
+        assert_eq!(reduction.state.title, "Runtime thread");
+        assert_eq!(reduction.state.cwd, "/tmp/workspace");
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::AgentMessageDelta {
+                item_id: "agent-1".to_string(),
+                phase: Some("analysis".to_string()),
+                delta: "hel".to_string(),
+            }),
+        );
+        assert_eq!(
+            reduction
+                .state
+                .live_agent_message
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("hel")
+        );
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::AgentMessageCompleted {
+                item_id: "agent-1".to_string(),
+                phase: Some("final".to_string()),
+                text: "hello final".to_string(),
+            }),
+        );
+        assert!(reduction.state.live_agent_message.is_none());
+        assert!(reduction.state.messages.iter().any(|message| {
+            message.kind == ConversationMessageKind::Agent && message.text == "hello final"
+        }));
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::ToolActivity {
+                activity: ConversationToolActivity {
+                    kind: ConversationToolActivityKind::CommandExecution,
+                    text: "cargo test".to_string(),
+                    file_change_count: 0,
+                },
+            }),
+        );
+        assert!(
+            reduction
+                .state
+                .buffered_tool_messages
+                .iter()
+                .any(|message| {
+                    message.kind == ConversationMessageKind::Tool && message.text == "cargo test"
+                })
+        );
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::ApprovalReviewUpdated {
+                review: ConversationApprovalReview {
+                    target_item_id: "tool-1".to_string(),
+                    status: ConversationApprovalReviewStatus::Unknown(
+                        "human_review_requested".to_string(),
+                    ),
+                    risk_level: Some("medium".to_string()),
+                    rationale: Some("needs review".to_string()),
+                },
+            }),
+        );
+        assert!(
+            reduction
+                .state
+                .runtime_notices
+                .iter()
+                .any(|notice| notice.contains("approval requires manual review"))
+        );
+        assert_eq!(
+            reduction
+                .state
+                .approval_review
+                .as_ref()
+                .map(|review| review.target_item_id.as_str()),
+            Some("tool-1")
+        );
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::Failed {
+                message: "provider failed".to_string(),
+            }),
+        );
+        assert_eq!(reduction.state.status_text, "turn failed");
+        assert!(reduction.state.messages.iter().any(|message| {
+            message.kind == ConversationMessageKind::Tool && message.text == "cargo test"
+        }));
+        assert!(
+            reduction
+                .state
+                .messages
+                .iter()
+                .any(|message| message.text == "provider failed")
+        );
     }
 
     #[test]
@@ -577,16 +789,18 @@ mod tests {
             PlanningExecutionSnapshot::default(),
         );
 
-        let reduction = reduce_conversation_runtime(
-            state,
-            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
-                TurnStreamState::new().apply_turn_completed(
-                    "turn-1".to_string(),
-                    vec!["new/docs/plan.md".to_string()],
-                    snapshot_capture.clone(),
-                ),
-            )),
-        );
+        let reduction = with_akra_event_trace(|| {
+            reduce_conversation_runtime(
+                state,
+                ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
+                    TurnStreamState::new().apply_turn_completed(
+                        "turn-1".to_string(),
+                        vec!["new/docs/plan.md".to_string()],
+                        snapshot_capture.clone(),
+                    ),
+                )),
+            )
+        });
 
         let post_turn_effect = reduction
             .effects
