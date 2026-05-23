@@ -997,13 +997,11 @@ impl ParallelModeControlPlaneRuntime {
                 .push(ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice });
         }
         if decision.refresh_supervisor {
-            let Some(workspace_directory) = self.store.workspace_directory.clone() else {
-                return;
-            };
-            let Some(epoch_id) = self.store.current_epoch_id else {
-                return;
-            };
-            self.start_or_queue_supervisor_refresh(workspace_directory, epoch_id, outcome);
+            self.start_or_queue_supervisor_refresh(
+                event.workspace_directory.clone(),
+                event.epoch_id,
+                outcome,
+            );
         }
         if let Some(trigger) = decision.wake_trigger {
             self.wake_orchestrator(
@@ -1786,10 +1784,9 @@ mod tests {
             .effects
             .iter()
             .filter(|effect| {
-                matches!(
-                    effect,
-                    ParallelModeControlPlaneEffect::RunOrchestrator { .. }
-                )
+                effect.effect_id().is_some_and(|effect_id| {
+                    effect_id.kind == ParallelModeControlPlaneEffectKind::RunOrchestrator
+                })
             })
             .count();
         assert_eq!(run_effects, 1);
@@ -2001,12 +1998,11 @@ mod tests {
             has_actionable_queue_head: false,
         });
 
-        assert!(requested.events.iter().any(|event| {
-            matches!(
-                event,
-                ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed
-            )
-        }));
+        assert!(
+            requested
+                .events
+                .contains(&ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed)
+        );
         assert!(requested.events.iter().any(|event| {
             matches!(
                 event,
@@ -2140,3 +2136,7 @@ mod tests {
         assert!(decision.wake_trigger.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "coverage_tests.rs"]
+mod coverage_tests;
