@@ -93,3 +93,86 @@ pub(super) fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     // ledger diff와 queue tie-breaker가 같은 time format을 쓰게 한다.
     timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{find_direction, required_id, required_text};
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
+        QueueIdleConfig,
+    };
+
+    fn directions() -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: "general-workstream".to_string(),
+                title: "General".to_string(),
+                summary: "General planning work.".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        }
+    }
+
+    #[test]
+    fn find_direction_trims_ids_and_reports_invalid_or_unknown_ids() {
+        let directions = directions();
+
+        assert_eq!(
+            find_direction(" general-workstream ", &directions)
+                .unwrap()
+                .title,
+            "General"
+        );
+        assert_eq!(
+            find_direction("bad/id", &directions)
+                .unwrap_err()
+                .to_string(),
+            "direction id `bad/id` must not contain whitespace or path separators"
+        );
+        assert_eq!(
+            find_direction("missing-workstream", &directions)
+                .unwrap_err()
+                .to_string(),
+            "direction `missing-workstream` does not exist"
+        );
+    }
+
+    #[test]
+    fn required_id_rejects_blank_whitespace_and_path_fragments() {
+        assert_eq!(required_id(" task-1 ", "task id").unwrap(), "task-1");
+
+        assert_eq!(
+            required_id("   ", "task id").unwrap_err().to_string(),
+            "task id is required"
+        );
+        assert_eq!(
+            required_id("task 1", "task id").unwrap_err().to_string(),
+            "task id `task 1` must not contain whitespace or path separators"
+        );
+        assert_eq!(
+            required_id("task/1", "task id").unwrap_err().to_string(),
+            "task id `task/1` must not contain whitespace or path separators"
+        );
+        assert_eq!(
+            required_id("task\\1", "task id").unwrap_err().to_string(),
+            "task id `task\\1` must not contain whitespace or path separators"
+        );
+    }
+
+    #[test]
+    fn required_text_trims_and_rejects_blank_values() {
+        assert_eq!(
+            required_text(" Review queue ", "title").unwrap(),
+            "Review queue"
+        );
+        assert_eq!(
+            required_text("\n\t", "title").unwrap_err().to_string(),
+            "title is required"
+        );
+    }
+}
