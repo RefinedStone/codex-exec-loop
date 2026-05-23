@@ -479,10 +479,338 @@ fn plural_suffix(count: usize) -> &'static str {
 }
 #[cfg(test)]
 mod tests {
-    use super::format_session_query_label;
+    use super::*;
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
+    use crate::domain::recent_sessions::RecentSessions;
+
+    fn session(id: &str, title: &str, cwd: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.to_string(),
+            name: Some(title.to_string()),
+            preview: format!("{title} preview\nsecond line"),
+            cwd: cwd.to_string(),
+            source: "native".to_string(),
+            model_provider: "openai".to_string(),
+            updated_at_epoch: 1_700_000_000,
+            status_type: "ready".to_string(),
+            path: format!("{cwd}/{id}.json"),
+            git_branch: Some("feature/session-browser".to_string()),
+        }
+    }
+
+    fn ready_catalog(
+        items: Vec<SessionSummary>,
+        warnings: Vec<String>,
+        next_cursor: Option<String>,
+    ) -> SessionCatalog {
+        SessionCatalog::ready(
+            SessionCatalogTier::ProviderBackedCatalog,
+            RecentSessions {
+                items,
+                warnings,
+                next_cursor,
+            },
+        )
+    }
+
+    fn projection(
+        active_project_filter: SessionProjectFilter,
+        project_filter_options: Vec<SessionProjectFilterOption>,
+        project_filtered_session_count: usize,
+        filtered_session_count: usize,
+        visible_session_range: Option<(usize, usize)>,
+    ) -> SessionBrowserProjection {
+        let total_session_count = project_filter_options
+            .first()
+            .map(|option| option.session_count)
+            .unwrap_or(0);
+
+        SessionBrowserProjection {
+            active_project_filter,
+            project_filter_options,
+            current_workspace_session_count: 0,
+            total_session_count,
+            project_filtered_session_count,
+            filtered_session_count,
+            page_index: 0,
+            total_pages: usize::from(visible_session_range.is_some()),
+            visible_session_range,
+            page_session_indexes: Vec::new(),
+        }
+    }
+
+    fn lines_text(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn list_text(list_view: &OverlayListView) -> String {
+        let mut lines = list_view
+            .message_lines
+            .as_ref()
+            .map(|lines| lines_text(lines))
+            .unwrap_or_default();
+        for item in &list_view.items {
+            if !lines.is_empty() {
+                lines.push('\n');
+            }
+            lines.push_str(&lines_text(&item.lines));
+        }
+        lines
+    }
+
     #[test]
     fn query_label_uses_all_text_placeholder_for_empty_query() {
         assert_eq!(format_session_query_label(""), "(all text)");
         assert_eq!(format_session_query_label("release"), "release");
+    }
+
+    #[test]
+    fn overlay_content_covers_non_ready_and_non_queryable_catalogs() {
+        let mut app = test_native_tui_app();
+
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert!(list_text(&list_view).contains("recent sessions unlock"));
+        assert!(lines_text(&detail_lines).contains("startup diagnostics"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("remain unavailable"));
+        assert!(
+            lines_text(&build_session_key_lines(&app)).contains("requires a queryable catalog")
+        );
+
+        app.session_state = SessionState::Loading;
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert!(list_text(&list_view).contains("loading recent sessions"));
+        assert!(lines_text(&detail_lines).contains("waiting for session list response"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("waiting for app-server"));
+
+        app.session_state = SessionState::Failed("catalog unavailable".to_string());
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert!(list_text(&list_view).contains("catalog unavailable"));
+        assert!(lines_text(&detail_lines).contains("catalog unavailable"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("catalog unavailable"));
+
+        app.session_state = SessionState::Ready(SessionCatalog::unsupported(
+            SessionCatalogTier::AttachOnly,
+            "provider disabled",
+            vec!["unsupported warning".to_string()],
+        ));
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert!(list_text(&list_view).contains("does not expose a recent-session catalog"));
+        let detail_text = lines_text(&detail_lines);
+        assert!(detail_text.contains("catalog tier: attach-only"));
+        assert!(detail_text.contains("detail: provider disabled"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("unsupported warning"));
+
+        app.session_state = SessionState::Ready(SessionCatalog::partial(
+            SessionCatalogTier::HandleBasedReattach,
+            "handle only",
+            vec!["partial warning".to_string()],
+        ));
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert!(
+            list_text(&list_view).contains("handle-based reattach is only partially available")
+        );
+        assert!(lines_text(&detail_lines).contains("handle only"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("partial warning"));
+    }
+
+    #[test]
+    fn ready_catalog_content_covers_empty_detail_search_and_query_editing() {
+        let mut app = test_native_tui_app();
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.session_state = SessionState::Ready(ready_catalog(Vec::new(), Vec::new(), None));
+
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert_eq!(list_view.selected_index, None);
+        assert!(list_text(&list_view).contains("no recent sessions have been recorded yet"));
+        let detail_text = lines_text(&detail_lines);
+        assert!(detail_text.contains("catalog tier: provider-backed catalog"));
+        assert!(detail_text.contains("codex app-server has not returned any recent sessions"));
+        assert!(detail_text.contains("Start a new draft with n"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("no warnings"));
+
+        app.session_state = SessionState::Ready(ready_catalog(
+            vec![
+                session("thread-alpha", "Alpha task", "/tmp/root"),
+                session("thread-beta", "Beta task", "/tmp/other"),
+            ],
+            vec!["catalog warning".to_string()],
+            Some("next-cursor".to_string()),
+        ));
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert_eq!(list_view.items.len(), 2);
+        assert_eq!(list_view.selected_index, Some(0));
+        assert!(list_text(&list_view).contains("thread-a"));
+        assert!(list_text(&list_view).contains("Alpha task [native / openai]"));
+        let detail_text = lines_text(&detail_lines);
+        assert!(detail_text.contains("id: thread-alpha"));
+        assert!(detail_text.contains("updated:"));
+        assert!(detail_text.contains("workspace: /tmp/root"));
+        assert!(detail_text.contains("source: native"));
+        assert!(detail_text.contains("model provider: openai"));
+        assert!(detail_text.contains("status: ready"));
+        assert!(detail_text.contains("git branch: feature/session-browser"));
+        assert!(detail_text.contains("query: (all text)"));
+        assert!(
+            detail_text.contains("filter: all projects (2 recent sessions across 2 workspaces)")
+        );
+        assert!(detail_text.contains("more threads are available in the next cursor"));
+        assert!(detail_text.contains("Alpha task preview"));
+        assert!(detail_text.contains("path: /tmp/root/thread-alpha.json"));
+        assert!(lines_text(&build_session_warning_lines(&app)).contains("catalog warning"));
+        assert!(lines_text(&build_session_key_lines(&app)).contains("/: query"));
+
+        app.session_overlay_ui_state
+            .set_project_filter(SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root".to_string(),
+            });
+        let (_, detail_lines) = build_session_overlay_content(&app);
+        let detail_text = lines_text(&detail_lines);
+        assert!(detail_text.contains("filter: /tmp/root (1 recent session)"));
+        assert!(detail_text.contains("context: current workspace ("));
+
+        app.session_overlay_ui_state
+            .set_search_query("does-not-exist");
+        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        assert_eq!(list_view.items.len(), 0);
+        assert!(list_text(&list_view).contains("no sessions in /tmp/root match query"));
+        let detail_text = lines_text(&detail_lines);
+        assert!(detail_text.contains("query: does-not-exist"));
+        assert!(detail_text.contains("no session detail is available for /tmp/root and query"));
+        assert!(detail_text.contains("Press c to clear the browser"));
+
+        app.session_overlay_ui_state.start_search_query_edit();
+        app.session_overlay_ui_state
+            .push_search_query_character('!');
+        let (_, detail_lines) = build_session_overlay_content(&app);
+        let detail_text = lines_text(&detail_lines);
+        assert!(detail_text.contains("query edit: does-not-exist!"));
+        assert!(detail_text.contains("Enter applies the query"));
+        assert!(lines_text(&build_session_key_lines(&app)).contains("Type the session query"));
+    }
+
+    #[test]
+    fn helper_copy_covers_filter_labels_browser_lines_entries_and_pluralization() {
+        let all_projects = SessionProjectFilterOption {
+            filter: SessionProjectFilter::AllProjects,
+            session_count: 3,
+            is_current_workspace: false,
+        };
+        let current_workspace = SessionProjectFilterOption {
+            filter: SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/root".to_string(),
+            },
+            session_count: 1,
+            is_current_workspace: true,
+        };
+        let other_workspace = SessionProjectFilterOption {
+            filter: SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+            session_count: 2,
+            is_current_workspace: false,
+        };
+
+        assert_eq!(
+            session_project_filter_option_label(&current_workspace),
+            "current workspace (/tmp/root)"
+        );
+        assert_eq!(
+            session_project_filter_option_label(&other_workspace),
+            "/tmp/docs"
+        );
+        assert_eq!(
+            session_project_filter_label(&SessionProjectFilter::AllProjects),
+            "all projects"
+        );
+
+        let all_projection = projection(
+            SessionProjectFilter::AllProjects,
+            vec![
+                all_projects.clone(),
+                current_workspace.clone(),
+                other_workspace.clone(),
+            ],
+            3,
+            3,
+            Some((1, 3)),
+        );
+        assert_eq!(
+            format_session_filter_line(&all_projection, "all projects", 3),
+            "filter: all projects (3 recent sessions across 2 workspaces)"
+        );
+        assert_eq!(
+            format_session_browser_line(&all_projection, "all projects"),
+            "browser: page 1 of 1 | showing 1-3 of 3 matches"
+        );
+
+        let single_workspace_projection = projection(
+            SessionProjectFilter::AllProjects,
+            vec![all_projects.clone(), current_workspace.clone()],
+            1,
+            1,
+            Some((1, 1)),
+        );
+        assert_eq!(
+            format_session_filter_line(&single_workspace_projection, "all projects", 1),
+            "filter: all projects (1 recent session)"
+        );
+
+        let project_projection = projection(
+            SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+            vec![all_projects.clone(), other_workspace.clone()],
+            2,
+            2,
+            Some((1, 2)),
+        );
+        assert_eq!(
+            format_session_filter_line(&project_projection, "/tmp/docs", 2),
+            "filter: /tmp/docs (2 recent sessions)"
+        );
+
+        let empty_projection =
+            projection(SessionProjectFilter::AllProjects, Vec::new(), 0, 0, None);
+        assert_eq!(
+            format_session_browser_line(&empty_projection, "all projects"),
+            "browser: no recent sessions loaded"
+        );
+
+        let no_all_matches = projection(
+            SessionProjectFilter::AllProjects,
+            vec![all_projects.clone()],
+            3,
+            0,
+            None,
+        );
+        assert_eq!(
+            format_session_browser_line(&no_all_matches, "all projects"),
+            "browser: no matches in 3 recent sessions"
+        );
+
+        let no_project_matches = projection(
+            SessionProjectFilter::RecentProject {
+                workspace_directory: "/tmp/docs".to_string(),
+            },
+            vec![all_projects, other_workspace],
+            2,
+            0,
+            None,
+        );
+        assert_eq!(
+            format_session_browser_line(&no_project_matches, "/tmp/docs"),
+            "browser: no matches in /tmp/docs across 2 recent sessions"
+        );
+
+        let entry = build_session_list_entry(&session("thread-gamma", "Gamma task", "/tmp/root"));
+        assert!(lines_text(&entry.lines).contains("thread-g"));
+        assert!(lines_text(&entry.lines).contains("Gamma task [native / openai]"));
+        assert_eq!(plural_suffix(1), "");
+        assert_eq!(plural_suffix(2), "s");
     }
 }
