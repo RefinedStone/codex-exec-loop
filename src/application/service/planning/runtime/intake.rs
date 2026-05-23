@@ -523,12 +523,23 @@ fn build_preview_lines(draft: &PlanningTaskIntakeDraft) -> Vec<String> {
 // shared fixture는 sibling intake test에 공개해 generator와 validator expectation을 맞춘다.
 pub(super) mod tests {
     use chrono::{TimeZone, Utc};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
         LocalPromptTaskDraftGenerator, PlanningTaskDraftGenerator,
-        PlanningTaskIntakeGenerationRequest, PlanningTaskIntakeRequest,
-        PlanningTaskIntakeValidationService,
+        PlanningTaskIntakeGenerationRequest, PlanningTaskIntakeRequest, PlanningTaskIntakeService,
+        PlanningTaskIntakeValidationError, PlanningTaskIntakeValidationService,
+        required_workspace_body, task_intake_repair_guidance,
     };
+    use crate::adapter::outbound::filesystem::planning_workspace::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
+    use crate::application::service::planning::runtime::validation::PlanningValidationService;
+    use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+    use crate::domain::planning::PriorityQueueService;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, QueueIdleConfig,
         TaskAuthorityDocument, TaskMutationProvenance,
@@ -574,6 +585,100 @@ pub(super) mod tests {
         }
     }
 
+    fn intake_service() -> PlanningTaskIntakeService {
+        PlanningTaskIntakeService::new(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            Arc::new(NoopPlanningTaskRepositoryPort),
+            PlanningValidationService::new(),
+            PriorityQueueService::new(),
+        )
+    }
+
+    fn draft_for(prompt: &str) -> super::PlanningTaskIntakeDraft {
+        LocalPromptTaskDraftGenerator::new()
+            .generate(&PlanningTaskIntakeGenerationRequest {
+                intake_request: &request(prompt),
+                directions: &directions(),
+                generated_at: Utc.with_ymd_and_hms(2026, 4, 24, 1, 2, 3).unwrap(),
+                collision_suffix: None,
+            })
+            .expect("draft should generate")
+    }
+
+    struct TempIntakeWorkspace {
+        path: PathBuf,
+        path_text: String,
+    }
+
+    impl TempIntakeWorkspace {
+        fn new(prefix: &str) -> Self {
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{suffix}"));
+            fs::create_dir_all(&path).expect("temp intake workspace should be created");
+            let path_text = path.display().to_string();
+            Self { path, path_text }
+        }
+
+        fn path_str(&self) -> &str {
+            &self.path_text
+        }
+    }
+
+    impl Drop for TempIntakeWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn validation_error_converts_to_user_facing_anyhow_message() {
+        let error =
+            PlanningTaskIntakeValidationError::new("custom", "custom intake failure").into_anyhow();
+
+        assert_eq!(error.to_string(), "custom intake failure");
+    }
+
+    #[test]
+    fn prepare_task_intake_rejects_blank_prompt_before_loading_workspace() {
+        let error = intake_service()
+            .prepare_task_intake(request(" \n\t "))
+            .expect_err("blank prompt should reject before context loading");
+
+        assert_eq!(
+            error.to_string(),
+            "Type a task prompt before previewing runtime intake."
+        );
+    }
+
+    #[test]
+    fn prepare_and_commit_task_intake_round_trip_through_mutation_preview() {
+        let workspace = TempIntakeWorkspace::new("planning-intake-round-trip");
+        let service = intake_service();
+        let mut intake_request = request("Ship the planning intake coverage slice");
+        intake_request.workspace_directory = workspace.path_str().to_string();
+
+        let proposal = service
+            .prepare_task_intake(intake_request)
+            .expect("task intake proposal should prepare");
+        let commit = service
+            .commit_task_intake(&proposal)
+            .expect("task intake proposal should commit");
+
+        assert_eq!(commit.committed_task_id, proposal.draft.task.id);
+        assert!(commit.task_authority_committed);
+        assert!(commit.committed_planning_revision > proposal.observed_planning_revision);
+        assert!(commit.queue_head.is_some());
+        assert!(
+            proposal
+                .preview_lines
+                .iter()
+                .any(|line| line.contains("Ship the planning intake coverage slice"))
+        );
+    }
+
     #[test]
     // validator test는 가장 중요한 pre-preview guardrail을 하나의 compact fixture에 고정한다.
     fn validation_rejects_blank_prompt_duplicate_ids_and_priority_bounds() {
@@ -609,5 +714,120 @@ pub(super) mod tests {
             .validate_draft(&existing_request, &invalid_priority, &directions, &ledger)
             .expect_err("priority should reject");
         assert_eq!(priority.code, "invalid_priority");
+    }
+
+    #[test]
+    fn validation_rejects_blank_generated_fields_and_direction_edges() {
+        let directions = directions();
+        let request = request("Create intake validation coverage");
+        let validation = PlanningTaskIntakeValidationService::new();
+        let ledger = TaskAuthorityDocument {
+            version: 1,
+            tasks: Vec::new(),
+        };
+        let draft = draft_for("Create intake validation coverage");
+
+        let mut blank_title = draft.clone();
+        blank_title.task.title = "  ".to_string();
+        let error = validation
+            .validate_draft(&request, &blank_title, &directions, &ledger)
+            .expect_err("blank generated title should reject");
+        assert_eq!(error.code, "blank_title");
+
+        let mut blank_description = draft.clone();
+        blank_description.task.description = "\n ".to_string();
+        let error = validation
+            .validate_draft(&request, &blank_description, &directions, &ledger)
+            .expect_err("blank generated description should reject");
+        assert_eq!(error.code, "blank_description");
+
+        let mut unknown_direction = draft.clone();
+        unknown_direction.task.direction_id = "missing-direction".to_string();
+        let error = validation
+            .validate_draft(&request, &unknown_direction, &directions, &ledger)
+            .expect_err("unknown generated direction should reject");
+        assert_eq!(error.code, "unknown_direction");
+
+        let mut paused_directions = directions.clone();
+        for direction in &mut paused_directions.directions {
+            if direction.id == draft.task.direction_id {
+                direction.state = DirectionState::Paused;
+            }
+        }
+        let error = validation
+            .validate_draft(&request, &draft, &paused_directions, &ledger)
+            .expect_err("inactive generated direction should reject");
+        assert_eq!(error.code, "inactive_direction");
+    }
+
+    #[test]
+    fn validation_rejects_bad_dependency_and_blocker_links() {
+        let directions = directions();
+        let request = request("Create task link validation coverage");
+        let validation = PlanningTaskIntakeValidationService::new();
+        let draft = draft_for("Create task link validation coverage");
+        let mut existing = draft.task.clone();
+        existing.id = "existing-task".to_string();
+        let ledger = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![existing],
+        };
+
+        let mut blank_dependency = draft.clone();
+        blank_dependency.task.depends_on = vec!["  ".to_string()];
+        let error = validation
+            .validate_draft(&request, &blank_dependency, &directions, &ledger)
+            .expect_err("blank dependency should reject");
+        assert_eq!(error.code, "blank_task_link");
+
+        let mut self_dependency = draft.clone();
+        self_dependency.task.depends_on = vec![draft.task.id.clone()];
+        let error = validation
+            .validate_draft(&request, &self_dependency, &directions, &ledger)
+            .expect_err("self dependency should reject");
+        assert_eq!(error.code, "self_reference");
+
+        let mut missing_blocker = draft.clone();
+        missing_blocker.task.blocked_by = vec!["missing-task".to_string()];
+        let error = validation
+            .validate_draft(&request, &missing_blocker, &directions, &ledger)
+            .expect_err("missing blocker should reject");
+        assert_eq!(error.code, "missing_task_link");
+
+        let mut valid_links = draft;
+        valid_links.task.depends_on = vec!["existing-task".to_string()];
+        valid_links.task.blocked_by = vec!["existing-task".to_string()];
+        validation
+            .validate_draft(&request, &valid_links, &directions, &ledger)
+            .expect("existing dependency and blocker should validate");
+    }
+
+    #[test]
+    fn required_workspace_body_and_repair_guidance_cover_missing_file_copy() {
+        let record = PlanningWorkspaceLoadRecord::default();
+        let error = required_workspace_body(&record, RESULT_OUTPUT_FILE_PATH, None)
+            .expect_err("missing result output should reject intake context");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Planning workspace is incomplete")
+        );
+        assert_eq!(
+            task_intake_repair_guidance("task-authority.json is invalid"),
+            "Next action: run :doctor to inspect task authority."
+        );
+        assert_eq!(
+            task_intake_repair_guidance("task abc references unknown direction_id missing"),
+            "Next action: run :doctor to inspect direction authority."
+        );
+        assert_eq!(
+            task_intake_repair_guidance("queue_idle direction rule failed"),
+            "Next action: run :doctor to inspect direction authority."
+        );
+        assert_eq!(
+            task_intake_repair_guidance("result-output.md must start with a heading"),
+            "Next action: run :doctor to inspect the workspace."
+        );
     }
 }
