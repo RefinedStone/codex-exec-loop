@@ -65,6 +65,28 @@ fn enqueue_single_commit_ready_result(
     lease
 }
 
+fn write_slot_git_metadata(slot_path: &Path, file_name: &str) {
+    let git_dir = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be valid utf-8"),
+            "rev-parse",
+            "--git-dir",
+        ],
+        None,
+    )
+    .expect("slot git dir should resolve");
+    let git_dir = PathBuf::from(git_dir);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        slot_path.join(git_dir)
+    };
+    fs::write(git_dir.join(file_name), "synthetic pending operation\n")
+        .expect("slot git metadata should be writable");
+}
+
 // PR workflow가 required인 상태에서 `gh` 실행과 인증이 degraded라면 distributor는
 // branch push까지는 진행하되 PR 자동화를 이어갈 수 없으므로 queue head를
 // blocked로 남기고, slot lease와 session history를 실패 상태로 보존해야 한다.
@@ -403,6 +425,302 @@ fn distributor_blocks_source_push_rejection_without_ensuring_pull_request() {
         queue_records[0]
             .integration_note
             .contains("remote rejected signed commit")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_slot_lease_disappears_before_delivery() {
+    let repo = TempGitRepo::new("distributor-missing-slot-lease");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-missing-lease");
+    SqlitePlanningAuthorityAdapter::remove_runtime_slot_lease(
+        &repo.workspace_dir(),
+        &lease.slot_id,
+    )
+    .expect("slot lease should be removed from authority");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("slot lease disappeared before distributor integration")),
+        "missing lease should block before GitHub delivery: {notices:?}"
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty(),
+        "delivery must not push when the live slot lease disappeared"
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+}
+
+#[test]
+fn distributor_blocks_when_slot_has_pending_operation_metadata() {
+    let repo = TempGitRepo::new("distributor-slot-pending-operation");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "disabled"],
+    );
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-slot-pending");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    write_slot_git_metadata(&slot_path, "CHERRY_PICK_HEAD");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("has pending merge or rebase metadata")),
+        "pending slot metadata should block integration: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![format!("push:{}:false", lease.branch_name)]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("pending merge or rebase metadata")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_source_branch_head_drifts_after_enqueue() {
+    let repo = TempGitRepo::new("distributor-source-head-drift");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "disabled"],
+    );
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-head-drift");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    repo.commit_file_in_slot(
+        &slot_path,
+        "unexpected.txt",
+        "drift\n",
+        "unexpected extra work",
+    );
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("branch head drifted from expected commit")),
+        "head drift should block before cherry-pick: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![format!("push:{}:false", lease.branch_name)]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("branch head drifted from expected commit")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_integration_branch_push_is_rejected_without_remote_equivalence() {
+    let repo = TempGitRepo::new("distributor-integration-push-rejection");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "disabled"],
+    );
+    let github = FakeGithubAutomationPort::with_integration_push_error("non-fast-forward");
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-integration-push");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("`prerelease` could not be pushed to `origin`")
+                && notice.contains("non-fast-forward")
+        }),
+        "integration push rejection should block when remote equivalence cannot be proven: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            "push-integration:prerelease".to_string(),
+        ]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("`prerelease` could not be pushed to `origin`")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_pull_request_close_fails_after_integration_push() {
+    let repo = TempGitRepo::new("distributor-pr-close-failure");
+    let github = FakeGithubAutomationPort::with_close_error("close rejected by policy");
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-pr-close-failure");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("pull request #77 could not be closed")
+                && notice.contains("close rejected by policy")
+        }),
+        "PR close failure should block after local integration push: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            format!("ensure-pr:prerelease:{}", lease.branch_name),
+            "inspect-pr:77".to_string(),
+            "push-integration:prerelease".to_string(),
+            "inspect-pr:77".to_string(),
+            "close-pr:77".to_string(),
+        ]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("pull request #77 could not be closed")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_cleanup_cannot_delete_branch_checked_out_elsewhere() {
+    let repo = TempGitRepo::new("distributor-cleanup-branch-held");
+    let github = FakeGithubAutomationPort::ready();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-cleanup-held");
+    let duplicate_worktree = repo.root.join("branch-holder");
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "add",
+            "--force",
+            duplicate_worktree
+                .to_str()
+                .expect("duplicate worktree path should be valid utf-8"),
+            &lease.branch_name,
+        ],
+    );
+    let mut queue_record =
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
+    queue_record.queue_state = ParallelModeQueueItemState::Cleaning;
+    queue_record.integration_state = "done".to_string();
+    queue_record.integration_note =
+        "branch integrated into prerelease and the slot is entering cleanup".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &queue_record,
+    )
+    .expect("cleaning queue record should persist");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("cleanup failed after distributor delivery")),
+        "held branch should make slot cleanup block: {notices:?}"
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("cleanup failed after distributor delivery")
     );
 }
 
