@@ -25,6 +25,8 @@ pub(crate) use auto_follow::{
 };
 // shell은 conversation state, input state, planning-repair state를 이 surface에서
 // 가져오고, 실제 mapping logic은 `view_model.rs` 안에 남긴다.
+#[cfg(test)]
+pub(crate) use view_model::RecordedAutoFollowActivity;
 pub(crate) use view_model::{
     ConversationInputState, ConversationState, ConversationViewModel, PlanningRepairState,
 };
