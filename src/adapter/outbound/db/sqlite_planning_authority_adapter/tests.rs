@@ -74,6 +74,17 @@ fn set_claim_timestamp(workspace_dir: &str, claim_kind: &str, scope_key: &str, c
     assert_eq!(changed_rows, 1);
 }
 
+fn set_authority_metadata(workspace_dir: &str, key: &str, value: &str) {
+    authority_connection(workspace_dir)
+        .execute(
+            "INSERT INTO authority_metadata (key, value)
+             VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        .expect("authority metadata should upsert");
+}
+
 fn insert_invalid_slot_marker(workspace_dir: &str, slot_id: &str) {
     let connection = authority_connection(workspace_dir);
     connection
@@ -476,6 +487,13 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
     let adapter = SqlitePlanningAuthorityAdapter::new();
 
     adapter
+        .upsert_runtime_slot_lease(
+            &workspace_dir,
+            &slot_lease_for_task("slot-reset", "task-1", ParallelModeSlotLeaseState::Running),
+        )
+        .expect("slot lease should persist before reset");
+    insert_invalid_slot_marker(&workspace_dir, "slot-reset");
+    adapter
         .upsert_runtime_session_detail(
             &workspace_dir,
             &failed_start_session_detail("session-new", "task-1", "2026-05-04T12:00:00+00:00"),
@@ -487,6 +505,47 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
             &failed_start_session_detail("session-old", "task-1", "2026-05-04T11:00:00+00:00"),
         )
         .expect("older failed-start detail should persist");
+    adapter
+        .upsert_runtime_session_detail(
+            &workspace_dir,
+            &running_session_detail(
+                "session-running",
+                "task-running",
+                "2026-05-04T12:02:00+00:00",
+            ),
+        )
+        .expect("non-failed session should persist before reset");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-reset", "session-new", "task-1"),
+        )
+        .expect("queue record should persist before reset");
+    adapter
+        .enqueue_runtime_dispatch_command(
+            &workspace_dir,
+            &ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+                ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                Some("task-1:ready".to_string()),
+                Some(501),
+                "2026-05-08T00:00:00+00:00",
+            ),
+        )
+        .expect("dispatch command should persist before reset");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-reset", "queue-owner")
+            .expect("queue claim should acquire before reset")
+    );
+    let refresh_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("official refresh order should reserve before reset");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner")
+            .expect("official refresh claim should acquire before reset"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
 
     adapter
         .clear_parallel_runtime_projections(&workspace_dir, "test reset")
@@ -495,11 +554,26 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
     let snapshot = adapter
         .load_runtime_projections(&workspace_dir)
         .expect("runtime projections should load");
+    assert!(snapshot.slot_leases.is_empty());
+    assert!(snapshot.invalid_slot_leases.is_empty());
     assert_eq!(snapshot.session_details.len(), 0);
+    assert!(snapshot.distributor_queue_records.is_empty());
+    assert!(snapshot.dispatch_commands.is_empty());
     assert_eq!(snapshot.task_dispatch_blocks.len(), 1);
     let block = &snapshot.task_dispatch_blocks[0];
     assert_eq!(block.task_id, "task-1");
     assert_eq!(block.blocked_at, "2026-05-04T12:00:00+00:00");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-reset", "queue-owner-2")
+            .expect("queue claim should clear during runtime reset")
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner-2")
+            .expect("official refresh claim should clear during runtime reset"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
 }
 
 #[test]
@@ -555,6 +629,95 @@ fn runtime_dispatch_command_enqueue_claim_and_update_round_trips() {
     assert_eq!(
         snapshot.dispatch_commands[0].status_detail.as_deref(),
         Some("launched workers")
+    );
+}
+
+#[test]
+fn runtime_dispatch_command_reenqueue_revives_terminal_rows() {
+    let workspace_dir = temp_workspace("dispatch-command-revive");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let mut command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("queue-head-revive".to_string()),
+        Some(71),
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("initial command should enqueue")
+    );
+    let mut claimed = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-1")
+        .expect("initial command should claim")
+        .expect("initial command should exist");
+    claimed.mark_blocked("waiting for capacity", "2026-05-08T00:00:10+00:00");
+    adapter
+        .update_runtime_dispatch_command(&workspace_dir, &claimed)
+        .expect("blocked command should persist");
+
+    command.updated_at = "2026-05-08T00:01:00+00:00".to_string();
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("terminal command should revive")
+    );
+    let revived = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-2")
+        .expect("revived command should claim")
+        .expect("revived command should be pending again");
+
+    assert_eq!(revived.command_id, command.command_id);
+    assert_eq!(revived.state, ParallelModeDispatchCommandState::Running);
+    assert_eq!(revived.owner_token.as_deref(), Some("owner-2"));
+    assert!(
+        adapter
+            .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-3")
+            .expect("empty dispatch queue should inspect cleanly")
+            .is_none()
+    );
+}
+
+#[test]
+fn runtime_dispatch_command_claim_handles_payload_row_id_mismatch_as_lost_claim() {
+    let workspace_dir = temp_workspace("dispatch-command-lost-claim");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let mut payload_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("payload-head".to_string()),
+        Some(72),
+        "2026-05-08T00:00:00+00:00",
+    );
+    payload_command.command_id = "payload-command-id".to_string();
+    let payload_json =
+        serde_json::to_string(&payload_command).expect("dispatch command payload should serialize");
+    authority_connection(&workspace_dir)
+        .execute(
+            "INSERT INTO runtime_dispatch_commands
+                (command_id, command_kind, trigger, command_state, queue_head_signature,
+                 epoch_id, created_at, updated_at, owner_token, content)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (
+                "row-command-id",
+                payload_command.kind.label(),
+                payload_command.trigger.label(),
+                payload_command.state.label(),
+                payload_command.queue_head_signature.as_deref(),
+                payload_command.epoch_id.map(|value| value as i64),
+                payload_command.created_at.as_str(),
+                payload_command.updated_at.as_str(),
+                payload_command.owner_token.as_deref(),
+                payload_json.as_str(),
+            ),
+        )
+        .expect("mismatched dispatch command row should insert");
+
+    assert!(
+        adapter
+            .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner")
+            .expect("mismatched dispatch command should be treated as lost claim")
+            .is_none()
     );
 }
 
@@ -657,6 +820,8 @@ fn runtime_task_cleanup_removes_deleted_task_projections_only() {
     adapter
         .upsert_runtime_slot_lease(&workspace_dir, &kept_lease)
         .expect("kept task slot lease should persist");
+    insert_invalid_slot_marker(&workspace_dir, "slot-1");
+    insert_invalid_slot_marker(&workspace_dir, "slot-2");
     adapter
         .upsert_runtime_session_detail(
             &workspace_dir,
@@ -673,6 +838,28 @@ fn runtime_task_cleanup_removes_deleted_task_projections_only() {
             &failed_start_session_detail("session-kept", "task-kept", "2026-05-04T12:01:00+00:00"),
         )
         .expect("kept task session should persist");
+    adapter
+        .upsert_runtime_task_dispatch_block(
+            &workspace_dir,
+            &ParallelModeTaskDispatchBlockSnapshot::new(
+                "task-deleted",
+                "2026-05-04T11:55:00+00:00",
+                "2026-05-04T12:00:00+00:00",
+                ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+            ),
+        )
+        .expect("deleted task dispatch block should persist");
+    adapter
+        .upsert_runtime_task_dispatch_block(
+            &workspace_dir,
+            &ParallelModeTaskDispatchBlockSnapshot::new(
+                "task-kept",
+                "2026-05-04T11:56:00+00:00",
+                "2026-05-04T12:01:00+00:00",
+                ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+            ),
+        )
+        .expect("kept task dispatch block should persist");
     adapter
         .upsert_runtime_distributor_queue_record(
             &workspace_dir,
@@ -710,14 +897,78 @@ fn runtime_task_cleanup_removes_deleted_task_projections_only() {
             .collect::<Vec<_>>(),
         vec!["task-kept"]
     );
+    assert!(!snapshot.invalid_slot_leases.contains("slot-1"));
+    assert!(snapshot.invalid_slot_leases.contains("slot-2"));
     assert_eq!(snapshot.session_details.len(), 1);
     assert_eq!(snapshot.session_details[0].task_id, "task-kept");
+    assert_eq!(snapshot.task_dispatch_blocks.len(), 1);
+    assert_eq!(snapshot.task_dispatch_blocks[0].task_id, "task-kept");
     assert_eq!(snapshot.distributor_queue_records.len(), 1);
     assert_eq!(snapshot.distributor_queue_records[0].task_id, "task-kept");
     assert!(
         adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-deleted", "owner-2")
             .expect("deleted queue claim should be cleared")
+    );
+}
+
+#[test]
+fn runtime_task_cleanup_reports_malformed_json_in_lookup_rows() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let slot_workspace = temp_workspace("runtime-task-cleanup-bad-slot");
+    authority_connection(&slot_workspace)
+        .execute(
+            "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
+             VALUES (?1, ?2, ?3)",
+            ("slot-bad", "2026-05-04T10:00:00+00:00", "{bad-json"),
+        )
+        .expect("malformed slot cleanup row should insert");
+    let slot_error = adapter
+        .clear_parallel_runtime_projections_for_tasks(
+            &slot_workspace,
+            &["task-bad".to_string()],
+            "cleanup malformed slot",
+        )
+        .expect_err("malformed slot JSON should fail task cleanup");
+    let slot_message = format!("{slot_error:?}");
+    assert!(
+        slot_message.contains("failed to iterate runtime slot ids for `task-bad`")
+            || slot_message.contains("failed to decode runtime slot id for `task-bad`")
+            || slot_message.contains("failed to clear runtime slot leases for `task-bad`"),
+        "{slot_message}"
+    );
+
+    let queue_workspace = temp_workspace("runtime-task-cleanup-bad-queue");
+    authority_connection(&queue_workspace)
+        .execute(
+            "INSERT INTO runtime_distributor_queue
+                (queue_item_id, session_key, queue_state, enqueued_at, updated_at, content)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                "queue-bad",
+                "session-bad",
+                ParallelModeQueueItemState::Queued.label(),
+                "2026-05-04T10:00:00+00:00",
+                "2026-05-04T10:01:00+00:00",
+                "{bad-json",
+            ),
+        )
+        .expect("malformed queue cleanup row should insert");
+    let queue_error = adapter
+        .clear_parallel_runtime_projections_for_tasks(
+            &queue_workspace,
+            &["task-bad".to_string()],
+            "cleanup malformed queue",
+        )
+        .expect_err("malformed queue JSON should fail task cleanup");
+    let queue_message = format!("{queue_error:?}");
+    assert!(
+        queue_message.contains("failed to iterate runtime distributor queue ids for `task-bad`")
+            || queue_message
+                .contains("failed to decode runtime distributor queue id for `task-bad`")
+            || queue_message
+                .contains("failed to clear runtime distributor queue records for `task-bad`"),
+        "{queue_message}"
     );
 }
 
@@ -781,6 +1032,21 @@ fn runtime_projection_snapshot_groups_current_rows_and_recent_events() {
 #[test]
 fn malformed_runtime_projection_rows_report_row_specific_context() {
     let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let slot_workspace = temp_workspace("runtime-bad-slot-json");
+    authority_connection(&slot_workspace)
+        .execute(
+            "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
+             VALUES (?1, ?2, ?3)",
+            ("slot-bad", "2026-05-04T10:00:00+00:00", "{bad-json"),
+        )
+        .expect("malformed slot row should insert");
+    let slot_error = adapter
+        .load_runtime_projections(&slot_workspace)
+        .expect_err("malformed slot row should fail projection load");
+    assert!(
+        format!("{slot_error:?}").contains("failed to deserialize runtime slot lease `slot-bad`")
+    );
 
     let session_workspace = temp_workspace("runtime-bad-session-json");
     authority_connection(&session_workspace)
@@ -881,6 +1147,33 @@ fn malformed_runtime_projection_rows_report_row_specific_context() {
         "failed to deserialize runtime dispatch command `{}`",
         command.command_id
     )));
+}
+
+#[test]
+fn runtime_reset_reports_malformed_failed_start_session_before_clearing_rows() {
+    let workspace_dir = temp_workspace("runtime-reset-bad-session-json");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    authority_connection(&workspace_dir)
+        .execute(
+            "INSERT INTO runtime_session_details (session_key, slot_id, updated_at, content)
+             VALUES (?1, ?2, ?3, ?4)",
+            (
+                "session-bad",
+                "slot-1",
+                "2026-05-04T10:00:00+00:00",
+                "{bad-json",
+            ),
+        )
+        .expect("malformed session row should insert before reset");
+
+    let error = adapter
+        .clear_parallel_runtime_projections(&workspace_dir, "reset malformed session")
+        .expect_err("malformed failed-start preservation row should fail reset");
+
+    assert!(
+        format!("{error:?}")
+            .contains("failed to deserialize session detail `session-bad` before reset")
+    );
 }
 
 #[test]
@@ -1023,6 +1316,78 @@ fn official_refresh_claim_orders_are_enforced_by_authority_store() {
             .acquire_official_refresh_claim(&workspace_dir, second_order, "owner-2")
             .expect("next order should acquire after first release"),
         PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+}
+
+#[test]
+fn runtime_claim_release_and_stale_timestamp_edges_respect_claim_ownership() {
+    let workspace_dir = temp_workspace("runtime-claim-release-edges");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-claim", "queue-owner")
+            .expect("queue claim should acquire")
+    );
+    adapter
+        .release_distributor_queue_claim(&workspace_dir, "queue-claim", "wrong-owner")
+        .expect("wrong queue owner release should be harmless");
+    assert!(
+        !adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-claim", "queue-other")
+            .expect("wrong release should not clear queue claim")
+    );
+    adapter
+        .release_distributor_queue_claim(&workspace_dir, "queue-claim", "queue-owner")
+        .expect("matching queue owner should release");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-claim", "queue-other")
+            .expect("matching release should clear queue claim")
+    );
+    set_claim_timestamp(
+        &workspace_dir,
+        DISTRIBUTOR_QUEUE_CLAIM_KIND,
+        "queue-claim",
+        "not-a-timestamp",
+    );
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-claim", "queue-reclaimer")
+            .expect("invalid queue claim timestamp should be reclaimed")
+    );
+
+    let refresh_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("official refresh order should reserve");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner")
+            .expect("official refresh claim should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    adapter
+        .release_official_refresh_claim(&workspace_dir, refresh_order, "wrong-refresh-owner")
+        .expect("wrong official owner release should be harmless");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-other")
+            .expect("wrong release should not clear official claim"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+    );
+    set_authority_metadata(
+        &workspace_dir,
+        "next_executable_refresh_order",
+        &(refresh_order + 5).to_string(),
+    );
+    adapter
+        .release_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner")
+        .expect("matching official owner should release without moving advanced pointer back");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner")
+            .expect("advanced pointer should still mark old order completed"),
+        PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
     );
 }
 
@@ -1258,6 +1623,81 @@ fn runtime_slot_removal_clears_current_and_invalid_slot_projection() {
 }
 
 #[test]
+fn runtime_slot_removal_without_current_row_clears_invalid_marker_without_event() {
+    let workspace_dir = temp_workspace("runtime-slot-removal-empty");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    insert_invalid_slot_marker(&workspace_dir, "slot-missing");
+
+    adapter
+        .remove_runtime_slot_lease(&workspace_dir, "slot-missing")
+        .expect("missing slot removal should still clear invalid marker");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load after missing slot removal");
+    assert!(snapshot.invalid_slot_leases.is_empty());
+    assert!(
+        !snapshot
+            .runtime_events
+            .iter()
+            .any(|event| event.event_kind == "slot_lease_removed")
+    );
+}
+
+#[test]
+fn runtime_task_dispatch_block_keeps_newer_block_when_older_update_arrives() {
+    let workspace_dir = temp_workspace("runtime-dispatch-block-older");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let newer = ParallelModeTaskDispatchBlockSnapshot::new(
+        "task-blocked",
+        "2026-05-04T12:00:00+00:00",
+        "2026-05-04T12:10:00+00:00",
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    let older = ParallelModeTaskDispatchBlockSnapshot::new(
+        "task-blocked",
+        "2026-05-04T11:00:00+00:00",
+        "2026-05-04T12:00:00+00:00",
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+
+    adapter
+        .upsert_runtime_task_dispatch_block(&workspace_dir, &newer)
+        .expect("newer dispatch block should persist");
+    adapter
+        .upsert_runtime_task_dispatch_block(&workspace_dir, &older)
+        .expect("older dispatch block should be ignored without failing");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(snapshot.task_dispatch_blocks, vec![newer]);
+    let block_events = snapshot
+        .runtime_events
+        .iter()
+        .filter(|event| event.event_kind == "task_dispatch_block_upsert")
+        .count();
+    assert_eq!(block_events, 1);
+}
+
+#[test]
+fn runtime_event_log_empty_filter_reports_no_events() {
+    let workspace_dir = temp_workspace("runtime-events-empty");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let snapshot = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::for_projection("slot_lease", "missing", 5),
+        )
+        .expect("empty runtime event log should load");
+
+    assert_eq!(snapshot.total_event_count, 0);
+    assert_eq!(snapshot.visible_count(), 0);
+    assert_eq!(snapshot.empty_state, "no runtime events captured yet");
+}
+
+#[test]
 fn runtime_event_log_port_reads_recent_projection_events() {
     let workspace_dir = temp_workspace("runtime-events");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -1377,6 +1817,32 @@ fn failed_start_session_detail(
         "launch failed before the session reached the running state",
         "validation unavailable",
         "startup failed",
+        None,
+        Vec::new(),
+        updated_at,
+    )
+}
+
+fn running_session_detail(
+    session_key: &str,
+    task_id: &str,
+    updated_at: &str,
+) -> ParallelModeAgentSessionDetailSnapshot {
+    ParallelModeAgentSessionDetailSnapshot::new(
+        session_key,
+        "agent-1",
+        task_id,
+        "Task One",
+        "slot-1",
+        Some("thread-running".to_string()),
+        "/tmp/worktree",
+        "akra-agent/slot-1/task-one",
+        "2026-05-04T10:00:00+00:00",
+        "running",
+        "in_progress",
+        "worker is running",
+        "validation unavailable",
+        "running",
         None,
         Vec::new(),
         updated_at,
