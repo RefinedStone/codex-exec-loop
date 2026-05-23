@@ -445,6 +445,21 @@ fn detect_canonical_repo_root_uses_workspace_relative_common_dir() {
     );
 }
 
+#[test]
+fn slot_git_status_detects_staged_changes_and_relative_git_dir() {
+    let repo = TempGitRepo::new("slot-status-staged");
+    fs::write(repo.repo_root.join("staged.txt"), "staged change\n")
+        .expect("staged file should write");
+    run_git(&repo.repo_root, &["add", "staged.txt"]);
+
+    let status =
+        inspect_slot_git_status(&repo.repo_root).expect("git status should inspect repo root");
+    assert_eq!(status.detail_label(), "staged changes");
+    assert!(!status.is_clean_baseline());
+    assert!(!status.is_ready_for_integration());
+    assert!(!status.has_pending_operation);
+}
+
 // linked worktree의 planning 파일이 canonical repository의 authority shadow store와
 // 달라질 수 있다. readiness 검사는 파일 시스템의 우연한 worktree 복사본보다
 // canonical root에 저장된 authority record를 신뢰해야 한다.

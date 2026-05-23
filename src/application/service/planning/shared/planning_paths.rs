@@ -36,3 +36,39 @@ pub(crate) fn is_valid_planning_markdown_path(path: &str, required_prefix: &str)
     // 마지막 `.md` 조건은 planning references가 markdown 문서만 가리키는 service 계약이다.
     suffix.starts_with('/') && suffix.len() > 1 && normalized.ends_with(".md")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_planning_markdown_path;
+    use crate::application::service::planning::shared::contract::{
+        PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
+    };
+
+    #[test]
+    fn planning_markdown_path_rejects_prefix_mismatch_and_traversal_edges() {
+        assert!(is_valid_planning_markdown_path(
+            ".codex-exec-loop/planning/directions/detail.md",
+            PLANNING_DIRECTION_DOCS_DIRECTORY
+        ));
+        assert!(is_valid_planning_markdown_path(
+            " .codex-exec-loop\\planning\\directions\\detail.md ",
+            PLANNING_DIRECTION_DOCS_DIRECTORY
+        ));
+        assert!(!is_valid_planning_markdown_path(
+            ".codex-exec-loop/planning/prompts/review.md",
+            PLANNING_DIRECTION_DOCS_DIRECTORY
+        ));
+        assert!(!is_valid_planning_markdown_path(
+            ".codex-exec-loop/planning/directions",
+            PLANNING_DIRECTION_DOCS_DIRECTORY
+        ));
+        assert!(!is_valid_planning_markdown_path(
+            ".codex-exec-loop/planning/directions/../prompts/review.md",
+            PLANNING_PROMPTS_DIRECTORY
+        ));
+        assert!(!is_valid_planning_markdown_path(
+            "/.codex-exec-loop/planning/directions/detail.md",
+            PLANNING_DIRECTION_DOCS_DIRECTORY
+        ));
+    }
+}
