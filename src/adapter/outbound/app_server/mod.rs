@@ -969,10 +969,12 @@ mod tests {
 
     use super::connection::AppServerConnectionConfig;
     use super::execution_policy::AppServerExecutionPolicy;
-    use super::protocol::ThreadStartParams;
+    use super::protocol::{ReasoningEffortValue, ThreadStartParams, TurnInputItem};
     use super::{
-        CodexAppServerAdapter, PLANNING_WORKER_DEVELOPER_INSTRUCTIONS,
-        PLANNING_WORKER_SERVICE_NAME, PlanningThreadLauncher, finish_stream_result,
+        AppServerPromptOutputCapture, CodexAppServerAdapter,
+        PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
+        PlanningThreadLauncher, finish_stream_result, prompt_log_input_records,
+        reasoning_effort_label,
     };
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
@@ -1046,6 +1048,88 @@ mod tests {
                 "thread/read"
             ]
         );
+    }
+
+    #[test]
+    fn shared_runtime_retries_after_first_failure_and_returns_retry_notice() {
+        let _fake_codex =
+            FakeCodex::install_with_scenario("shared-runtime-retry", "fail_account_once");
+        let adapter = test_adapter();
+
+        let startup = adapter
+            .load_startup_context()
+            .expect("startup should retry with a fresh shared runtime");
+
+        assert!(startup.account_ok);
+        assert!(startup.warnings.iter().any(|warning| {
+            warning.contains("shared runtime reset after startup checks request failure")
+                && warning.contains("forced one-time account/read failure")
+        }));
+    }
+
+    #[test]
+    fn shared_runtime_final_failure_keeps_request_kind_context() {
+        let _fake_codex =
+            FakeCodex::install_with_scenario("shared-runtime-final-failure", "fail_account_always");
+        let adapter = test_adapter();
+
+        let error = adapter
+            .load_startup_context()
+            .expect_err("startup should fail after shared retry is exhausted");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("startup checks request still failed after resetting"));
+        assert!(message.contains("forced account/read failure"));
+    }
+
+    #[test]
+    fn short_requests_use_isolated_fallback_while_shared_runtime_is_locked() {
+        let _fake_codex = FakeCodex::install("isolated-fallback-success");
+        let adapter = test_adapter();
+        let _stream_guard = adapter
+            .shared_runtime
+            .lock()
+            .expect("shared runtime lock should be held by simulated stream");
+
+        let catalog = adapter
+            .load_session_catalog(SessionCatalogRequest::for_workspace(3, "/repo"))
+            .expect(
+                "recent sessions should use isolated fallback while stream owns shared runtime",
+            );
+
+        let SessionCatalog::Ready {
+            recent_sessions, ..
+        } = catalog
+        else {
+            panic!("fake app-server should produce a ready provider catalog");
+        };
+        assert_eq!(recent_sessions.items[0].id, "listed-thread");
+        assert!(recent_sessions.warnings.iter().any(|warning| {
+            warning.contains(
+                "recent sessions request used an isolated app-server connection while a turn stream was active",
+            )
+        }));
+    }
+
+    #[test]
+    fn isolated_fallback_final_failure_reports_busy_stream_context() {
+        let _fake_codex = FakeCodex::install_with_scenario(
+            "isolated-fallback-final-failure",
+            "fail_thread_list_always",
+        );
+        let adapter = test_adapter();
+        let _stream_guard = adapter
+            .shared_runtime
+            .lock()
+            .expect("shared runtime lock should be held by simulated stream");
+
+        let error = adapter
+            .load_session_catalog(SessionCatalogRequest::for_workspace(3, "/repo"))
+            .expect_err("isolated fallback should fail after retry is exhausted");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("recent sessions request still failed on isolated retry"));
+        assert!(message.contains("forced thread/list failure"));
     }
 
     #[test]
@@ -1271,6 +1355,80 @@ mod tests {
     }
 
     #[test]
+    fn stream_start_failures_emit_failed_event_and_failed_prompt_log_record() {
+        let _fake_codex =
+            FakeCodex::install_with_scenario("stream-start-failure", "fail_turn_start");
+        let prompt_log = Arc::new(RecordingPromptLogPort::default());
+        let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default(),
+            AppServerExecutionPolicy::default(),
+            prompt_log.clone(),
+        );
+
+        let (tx, rx) = mpsc::channel();
+        let error = adapter
+            .run_new_thread_stream(
+                "/repo",
+                "start a failing stream",
+                ConversationTurnOptions::default(),
+                tx,
+            )
+            .expect_err("turn/start failure should fail the stream");
+
+        assert!(error.to_string().contains("forced turn/start failure"));
+        assert!(rx
+            .try_iter()
+            .any(|event| matches!(event, ConversationStreamEvent::Failed { message } if message.contains("forced turn/start failure"))));
+
+        let records = prompt_log.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, "failed");
+        assert_eq!(records[0].thread_id.as_deref(), Some("started-thread"));
+        assert!(records[0].turn_id.is_none());
+        assert_eq!(records[0].input_items[0].content, "start a failing stream");
+        assert!(
+            records[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("forced turn/start failure"))
+        );
+
+        let startup = adapter
+            .load_startup_context()
+            .expect("startup should reconnect after stream failure reset");
+        assert!(startup.warnings.iter().any(|warning| {
+            warning.contains("shared runtime reset after turn stream failure")
+                && warning.contains("forced turn/start failure")
+        }));
+    }
+
+    #[test]
+    fn prompt_log_append_errors_do_not_fail_streams() {
+        let _fake_codex = FakeCodex::install("prompt-log-append-failure");
+        let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default(),
+            AppServerExecutionPolicy::default(),
+            Arc::new(FailingPromptLogPort),
+        );
+
+        let (tx, rx) = mpsc::channel();
+        adapter
+            .run_new_thread_stream(
+                "/repo",
+                "prompt log write fails",
+                ConversationTurnOptions::default(),
+                tx,
+            )
+            .expect("prompt log append failure should stay warning-only");
+
+        assert!(has_turn_completed(&rx.try_iter().collect::<Vec<_>>()));
+    }
+
+    #[test]
     fn runtime_control_and_stop_requests_are_app_server_truths() {
         let adapter = test_adapter();
 
@@ -1347,6 +1505,46 @@ mod tests {
         assert_eq!(PLANNING_WORKER_SERVICE_NAME, "akra-planning-worker");
     }
 
+    #[test]
+    fn prompt_log_helpers_cover_skill_input_effort_labels_and_ignored_events() {
+        let input_records = prompt_log_input_records(&[
+            TurnInputItem::text("plain prompt"),
+            TurnInputItem::skill("queue-skill", "/tmp/SKILL.md"),
+        ]);
+        assert_eq!(input_records[0].kind, "text");
+        assert_eq!(input_records[0].content, "plain prompt");
+        assert_eq!(input_records[1].kind, "skill");
+        assert_eq!(input_records[1].label, "queue-skill");
+        assert_eq!(input_records[1].content, "/tmp/SKILL.md");
+
+        assert_eq!(reasoning_effort_label(ReasoningEffortValue::None), "none");
+        assert_eq!(
+            reasoning_effort_label(ReasoningEffortValue::Minimal),
+            "minimal"
+        );
+        assert_eq!(reasoning_effort_label(ReasoningEffortValue::Low), "low");
+        assert_eq!(
+            reasoning_effort_label(ReasoningEffortValue::Medium),
+            "medium"
+        );
+        assert_eq!(reasoning_effort_label(ReasoningEffortValue::High), "high");
+        assert_eq!(reasoning_effort_label(ReasoningEffortValue::XHigh), "xhigh");
+
+        let mut capture = AppServerPromptOutputCapture::default();
+        capture.record_event(&ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+        });
+        assert!(capture.output_items.is_empty());
+        capture.record_event(&ConversationStreamEvent::AgentMessageCompleted {
+            item_id: "agent-1".to_string(),
+            phase: Some("final".to_string()),
+            text: "done".to_string(),
+        });
+        assert_eq!(capture.output_items.len(), 1);
+        assert_eq!(capture.output_items[0].text, "done");
+    }
+
     fn test_adapter() -> CodexAppServerAdapter {
         CodexAppServerAdapter::with_configs(
             "test-client",
@@ -1367,6 +1565,28 @@ mod tests {
                 .lock()
                 .expect("prompt log records lock should succeed")
                 .clone()
+        }
+    }
+
+    struct FailingPromptLogPort;
+
+    impl AppServerPromptLogPort for FailingPromptLogPort {
+        fn append_app_server_prompt_interaction(
+            &self,
+            _workspace_dir: &str,
+            _record: AppServerPromptInteractionRecord,
+        ) -> Result<()> {
+            anyhow::bail!("prompt log append failed")
+        }
+
+        fn load_recent_app_server_prompt_interactions(
+            &self,
+            _workspace_dir: &str,
+            _limit: usize,
+        ) -> Result<AppServerPromptInteractionSnapshot> {
+            Ok(AppServerPromptInteractionSnapshot {
+                records: Vec::new(),
+            })
         }
     }
 
@@ -1436,19 +1656,30 @@ mod tests {
         log_path: PathBuf,
         previous_path: Option<OsString>,
         previous_log: Option<OsString>,
+        previous_scenario: Option<OsString>,
+        previous_marker: Option<OsString>,
     }
 
     impl FakeCodex {
         fn install(name: &str) -> Self {
-            let guard = FAKE_CODEX_ENV_LOCK.lock().expect("fake codex env lock");
+            Self::install_with_scenario(name, "")
+        }
+
+        fn install_with_scenario(name: &str, scenario: &str) -> Self {
+            let guard = FAKE_CODEX_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let temp_dir = unique_temp_dir(name);
             let codex_path = temp_dir.join("codex");
             let log_path = temp_dir.join("requests.jsonl");
+            let marker_path = temp_dir.join("scenario-marker");
             fs::write(&codex_path, fake_codex_script()).expect("fake codex script should write");
             make_executable(&codex_path);
 
             let previous_path = std::env::var_os("PATH");
             let previous_log = std::env::var_os("AKRA_FAKE_APP_SERVER_LOG");
+            let previous_scenario = std::env::var_os("AKRA_FAKE_APP_SERVER_SCENARIO");
+            let previous_marker = std::env::var_os("AKRA_FAKE_APP_SERVER_MARKER");
             let mut paths = vec![temp_dir.clone()];
             if let Some(path) = &previous_path {
                 paths.extend(std::env::split_paths(path));
@@ -1457,6 +1688,8 @@ mod tests {
             unsafe {
                 std::env::set_var("PATH", joined_path);
                 std::env::set_var("AKRA_FAKE_APP_SERVER_LOG", &log_path);
+                std::env::set_var("AKRA_FAKE_APP_SERVER_SCENARIO", scenario);
+                std::env::set_var("AKRA_FAKE_APP_SERVER_MARKER", &marker_path);
             }
 
             Self {
@@ -1465,6 +1698,8 @@ mod tests {
                 log_path,
                 previous_path,
                 previous_log,
+                previous_scenario,
+                previous_marker,
             }
         }
 
@@ -1503,6 +1738,18 @@ mod tests {
                 } else {
                     std::env::remove_var("AKRA_FAKE_APP_SERVER_LOG");
                 }
+
+                if let Some(scenario) = &self.previous_scenario {
+                    std::env::set_var("AKRA_FAKE_APP_SERVER_SCENARIO", scenario);
+                } else {
+                    std::env::remove_var("AKRA_FAKE_APP_SERVER_SCENARIO");
+                }
+
+                if let Some(marker) = &self.previous_marker {
+                    std::env::set_var("AKRA_FAKE_APP_SERVER_MARKER", marker);
+                } else {
+                    std::env::remove_var("AKRA_FAKE_APP_SERVER_MARKER");
+                }
             }
             let _ = fs::remove_dir_all(&self.temp_dir);
         }
@@ -1539,6 +1786,8 @@ import os
 import sys
 
 log_path = os.environ.get("AKRA_FAKE_APP_SERVER_LOG")
+scenario = os.environ.get("AKRA_FAKE_APP_SERVER_SCENARIO", "")
+marker_path = os.environ.get("AKRA_FAKE_APP_SERVER_MARKER")
 
 def log_request(request):
     if not log_path:
@@ -1549,6 +1798,25 @@ def log_request(request):
 def send(value):
     sys.stdout.write(json.dumps(value) + "\n")
     sys.stdout.flush()
+
+def send_error(request_id, message):
+    send({
+        "id": request_id,
+        "error": {
+            "message": message,
+        },
+    })
+
+def should_fail_once(expected):
+    if scenario != expected:
+        return False
+    if not marker_path:
+        return True
+    if os.path.exists(marker_path):
+        return False
+    with open(marker_path, "w", encoding="utf-8") as handle:
+        handle.write(expected)
+    return True
 
 def thread_record(thread_id, params=None):
     params = params or {}
@@ -1588,6 +1856,12 @@ for line in sys.stdin:
             },
         })
     elif method == "account/read":
+        if scenario == "fail_account_always":
+            send_error(request_id, "forced account/read failure")
+            continue
+        if should_fail_once("fail_account_once"):
+            send_error(request_id, "forced one-time account/read failure")
+            continue
         send({
             "id": request_id,
             "result": {
@@ -1600,6 +1874,9 @@ for line in sys.stdin:
             },
         })
     elif method == "thread/list":
+        if scenario == "fail_thread_list_always":
+            send_error(request_id, "forced thread/list failure")
+            continue
         send({
             "id": request_id,
             "result": {
@@ -1629,6 +1906,9 @@ for line in sys.stdin:
             },
         })
     elif method == "turn/start":
+        if scenario == "fail_turn_start":
+            send_error(request_id, "forced turn/start failure")
+            continue
         thread_id = params.get("threadId", "started-thread")
         turn_id = "turn-" + str(request_id)
         send({
@@ -1669,6 +1949,14 @@ for line in sys.stdin:
                     "id": turn_id,
                 },
             },
+        })
+    elif method == "thread/archive":
+        if scenario == "fail_thread_archive":
+            send_error(request_id, "forced thread/archive failure")
+            continue
+        send({
+            "id": request_id,
+            "result": {},
         })
     elif method == "turn/interrupt":
         send({
