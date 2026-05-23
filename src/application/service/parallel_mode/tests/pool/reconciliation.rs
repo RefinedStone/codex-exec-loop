@@ -25,6 +25,136 @@ fn reconcile_marks_missing_slots_when_pool_root_has_not_been_created() {
     assert!(pool.reconcile_status.contains("missing slot"));
 }
 
+#[test]
+fn build_pool_board_blocks_when_pool_baseline_is_missing_during_inspection() {
+    let repo = TempGitRepo::new("inspect-missing-baseline");
+    repo.delete_local_prerelease_branch();
+    repo.delete_remote_standard_tracking_branch();
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+
+    let pool = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&readiness),
+    );
+
+    assert_eq!(pool.blocked_slots, DEFAULT_POOL_SIZE);
+    assert!(
+        pool.reconcile_status
+            .contains("pool runtime state could not be loaded")
+    );
+    assert!(
+        pool.slots
+            .iter()
+            .all(|slot| slot.worktree_label == "pool baseline is unavailable during inspection")
+    );
+}
+
+#[test]
+fn parallel_enable_reset_reports_non_repository_workspace() {
+    let repo = TempGitRepo::new("reset-non-repository");
+    let non_repo = repo.root.join("plain-directory");
+    fs::create_dir_all(&non_repo).expect("plain directory should be created");
+    let service = test_parallel_mode_service();
+
+    let error = service
+        .reset_pool_on_parallel_enable_report(
+            non_repo.to_str().expect("plain path should be utf-8"),
+        )
+        .expect_err("non-repository reset should be rejected");
+
+    assert_eq!(error, "git repository is unavailable");
+}
+
+#[test]
+fn parallel_enable_reset_reports_pool_root_creation_failure() {
+    let repo = TempGitRepo::new("reset-pool-root-blocked");
+    fs::write(repo.root.join("repo-akra-worktrees"), "not a directory\n")
+        .expect("pool root parent should be blocked by a file");
+    let service = test_parallel_mode_service();
+
+    let error = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect_err("blocked pool root parent should fail reset");
+
+    assert!(error.contains("pool root could not be created"));
+}
+
+#[test]
+fn parallel_enable_reset_reports_unseedable_agent_branch_baseline() {
+    let repo = TempGitRepo::new("reset-agent-branch-baseline");
+    repo.delete_local_prerelease_branch();
+    repo.delete_remote_standard_tracking_branch();
+    run_git(
+        &repo.repo_root,
+        &["checkout", "-b", "akra-agent/slot-1/manual"],
+    );
+    let service = test_parallel_mode_service();
+
+    let error = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect_err("agent branch should not seed the pool baseline");
+
+    assert_eq!(error, "pool baseline could not be created");
+}
+
+#[test]
+fn reconcile_reports_pool_root_creation_failure() {
+    let repo = TempGitRepo::new("reconcile-pool-root-blocked");
+    fs::write(repo.root.join("repo-akra-worktrees"), "not a directory\n")
+        .expect("pool root parent should be blocked by a file");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.blocked_slots, DEFAULT_POOL_SIZE);
+    assert!(
+        pool.reconcile_status
+            .contains("pool root could not be created")
+    );
+    assert!(
+        pool.slots
+            .iter()
+            .all(|slot| slot.worktree_label == "pool root creation failed")
+    );
+}
+
+#[test]
+fn reconcile_reports_unseedable_agent_branch_baseline() {
+    let repo = TempGitRepo::new("reconcile-agent-branch-baseline");
+    repo.delete_local_prerelease_branch();
+    repo.delete_remote_standard_tracking_branch();
+    run_git(
+        &repo.repo_root,
+        &["checkout", "-b", "akra-agent/slot-1/manual"],
+    );
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.blocked_slots, DEFAULT_POOL_SIZE);
+    assert!(
+        pool.reconcile_status
+            .contains("pool baseline could not be created")
+    );
+    assert!(
+        pool.slots
+            .iter()
+            .all(|slot| slot.worktree_label == "pool baseline is unavailable during reconcile")
+    );
+}
+
 // detached `prerelease` worktree는 재사용 가능한 idle baseline이다. branch 이름이
 // 실제 local branch가 아니라 detached baseline임을 드러내면서도 slot 하나의
 // capacity로 계산되어야 한다.
@@ -331,6 +461,67 @@ fn parallel_entry_from_off_preserves_live_running_slot_and_resets_idle_slots() {
     assert!(slot_path.join("stale.txt").exists());
     assert!(slot_path.join("scratch.tmp").exists());
     assert!(current_branch(&slot_path).starts_with("akra-agent/slot-1/"));
+}
+
+#[test]
+fn parallel_entry_from_off_preserves_recent_leased_slot_with_invalid_timestamp() {
+    let repo = TempGitRepo::new("parallel-enable-invalid-lease-timestamp");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    lease.leased_at = "not-a-timestamp".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
+        .expect("invalid timestamp lease should be persisted");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+
+    let report = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("parallel enable reset should preserve invalid timestamp startup lease");
+
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE - 1);
+    assert_eq!(
+        report.slot_reports[0].action,
+        ParallelModePoolResetSlotAction::PreserveLive
+    );
+    assert!(report.slot_reports[0].reason.contains("live leased lease"));
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(repo.branch_exists(&lease.branch_name));
+    assert!(current_branch(&slot_path).starts_with("akra-agent/slot-1/"));
+}
+
+#[test]
+fn parallel_entry_reset_reloads_context_after_clean_split_brain_cleanup() {
+    let repo = TempGitRepo::new("parallel-reset-clean-split-brain");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(lease.worktree_path.clone());
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
+    run_git(
+        &repo.repo_root,
+        &["branch", "-D", lease.branch_name.as_str()],
+    );
+
+    let report = service
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("split-brain cleanup should refresh reset context");
+
+    assert_eq!(report.live_blocker_count(), 0);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE);
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(report.succeeded_reset_slot_ids().contains(&lease.slot_id));
 }
 
 // TUI 프로세스에서 처음 `:parallel`을 켜는 초기 설정은 이전 실행의 stale
