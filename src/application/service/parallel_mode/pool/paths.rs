@@ -270,3 +270,60 @@ canonicalize가 성공하면 실제 경로를 비교하고, 실패하면 원래 
 pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
     canonicalize_best_effort(left) == canonicalize_best_effort(right)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_git_dir;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_repo(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!(
+            "akra-pool-paths-{label}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn run_git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .status()
+            .expect("git command should run");
+
+        assert!(status.success(), "git command failed: {args:?}");
+    }
+
+    #[test]
+    fn resolve_git_dir_absolutizes_relative_git_dir_output() {
+        let repo = unique_repo("relative-git-dir");
+        fs::create_dir_all(&repo).expect("repo directory should be created");
+        run_git(&repo, &["init", "-q"]);
+
+        assert_eq!(
+            resolve_git_dir(&repo).expect("git directory should resolve"),
+            repo.join(".git")
+        );
+
+        fs::remove_dir_all(&repo).expect("repo directory should be removed");
+    }
+
+    #[test]
+    fn resolve_git_dir_returns_none_outside_git_repository() {
+        let workspace = unique_repo("not-a-repo");
+        fs::create_dir_all(&workspace).expect("workspace directory should be created");
+
+        assert_eq!(resolve_git_dir(&workspace), None);
+
+        fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
+    }
+}
