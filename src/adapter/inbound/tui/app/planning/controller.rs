@@ -490,6 +490,10 @@ mod tests {
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
+        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::port::outbound::startup_probe_port::{
         AppServerStartupContext, StartupProbePort,
@@ -593,9 +597,19 @@ mod tests {
     }
 
     fn make_test_app(workspace: &TempPlanningWorkspace) -> NativeTuiApp {
+        make_test_app_with_planning_workspace_port(
+            workspace,
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        )
+    }
+
+    fn make_test_app_with_planning_workspace_port(
+        workspace: &TempPlanningWorkspace,
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+    ) -> NativeTuiApp {
         let codex_port = Arc::new(FakeAppServerPort);
         let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
-            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            planning_workspace_port,
         );
         let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
@@ -614,6 +628,151 @@ mod tests {
         app
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PlanningWorkspacePortFailure {
+        LoadWorkspace,
+        StageDraft,
+        LoadDraft,
+        ReplaceDraft,
+        ReplaceWorkspace,
+    }
+
+    struct FailingPlanningWorkspacePort {
+        inner: FilesystemPlanningWorkspaceAdapter,
+        failure: PlanningWorkspacePortFailure,
+    }
+
+    impl FailingPlanningWorkspacePort {
+        fn new(failure: PlanningWorkspacePortFailure) -> Self {
+            Self {
+                inner: FilesystemPlanningWorkspaceAdapter::new(),
+                failure,
+            }
+        }
+
+        fn fail_if(&self, failure: PlanningWorkspacePortFailure) -> anyhow::Result<()> {
+            if self.failure == failure {
+                anyhow::bail!("forced {failure:?} failure");
+            }
+            Ok(())
+        }
+    }
+
+    impl PlanningWorkspacePort for FailingPlanningWorkspacePort {
+        fn stage_planning_draft_files(
+            &self,
+            workspace_dir: &str,
+            draft_name: &str,
+            files: &[PlanningDraftFileRecord],
+        ) -> anyhow::Result<PlanningDraftStageRecord> {
+            self.fail_if(PlanningWorkspacePortFailure::StageDraft)?;
+            self.inner
+                .stage_planning_draft_files(workspace_dir, draft_name, files)
+        }
+
+        fn load_planning_draft_files(
+            &self,
+            workspace_dir: &str,
+            draft_name: &str,
+        ) -> anyhow::Result<PlanningDraftLoadRecord> {
+            self.fail_if(PlanningWorkspacePortFailure::LoadDraft)?;
+            self.inner
+                .load_planning_draft_files(workspace_dir, draft_name)
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            workspace_dir: &str,
+            draft_name: &str,
+            active_path: &str,
+            body: &str,
+        ) -> anyhow::Result<String> {
+            self.fail_if(PlanningWorkspacePortFailure::ReplaceDraft)?;
+            self.inner
+                .replace_planning_draft_file(workspace_dir, draft_name, active_path, body)
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+        ) -> anyhow::Result<PlanningWorkspaceLoadRecord> {
+            self.fail_if(PlanningWorkspacePortFailure::LoadWorkspace)?;
+            self.inner.load_planning_workspace_files(workspace_dir)
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            workspace_dir: &str,
+        ) -> anyhow::Result<PlanningWorkspaceLoadRecord> {
+            self.fail_if(PlanningWorkspacePortFailure::LoadWorkspace)?;
+            self.inner
+                .load_planning_workspace_candidate_files(workspace_dir)
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> anyhow::Result<()> {
+            self.fail_if(PlanningWorkspacePortFailure::ReplaceWorkspace)?;
+            self.inner
+                .commit_planning_workspace_files(workspace_dir, record)
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> anyhow::Result<Option<String>> {
+            self.inner
+                .load_optional_planning_file(workspace_dir, relative_path)
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> anyhow::Result<Option<String>> {
+            self.inner
+                .load_optional_planning_candidate_file(workspace_dir, relative_path)
+        }
+
+        fn replace_planning_workspace_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+            body: Option<&str>,
+        ) -> anyhow::Result<()> {
+            self.fail_if(PlanningWorkspacePortFailure::ReplaceWorkspace)?;
+            self.inner
+                .replace_planning_workspace_file(workspace_dir, relative_path, body)
+        }
+
+        fn remove_planning_workspace_entry(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> anyhow::Result<()> {
+            self.inner
+                .remove_planning_workspace_entry(workspace_dir, relative_path)
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            workspace_dir: &str,
+            archive_name: &str,
+            active_path: &str,
+            body: &str,
+        ) -> anyhow::Result<String> {
+            self.inner.archive_rejected_planning_file(
+                workspace_dir,
+                archive_name,
+                active_path,
+                body,
+            )
+        }
+    }
+
     fn ready_status(app: &NativeTuiApp) -> &str {
         match &app.conversation_state {
             ConversationState::Ready(conversation) => conversation.status_text.as_str(),
@@ -627,6 +786,10 @@ mod tests {
 
     fn ctrl_key(code: KeyCode) -> event::KeyEvent {
         event::KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    fn shift_key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, KeyModifiers::SHIFT)
     }
 
     struct TempPlanningWorkspace {
@@ -694,6 +857,190 @@ mod tests {
             queue_idle_prompt_status: DirectionsSupportingFileStatus::Ready,
             parse_error: parse_error.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn planning_shell_commands_route_statuses_and_doctor_paths() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-shell-command");
+        let mut app = make_test_app(&workspace);
+
+        app.handle_directions_shell_command(Some("now"));
+        assert_eq!(
+            ready_status(&app),
+            "unsupported :directions argument `now` / supported: :directions"
+        );
+
+        app.handle_queue_shell_command(Some("later"));
+        assert_eq!(
+            ready_status(&app),
+            "`:queue` does not accept arguments (`later`); use :queue to open queue inspection"
+        );
+
+        app.handle_planning_shell_command(Some("status"));
+        assert_eq!(
+            ready_status(&app),
+            "unsupported :planning argument `status` / supported: :planning, :planning doctor, :doctor"
+        );
+
+        fs::remove_dir_all(workspace.path()).expect("seeded planning fixture should be removable");
+        fs::create_dir_all(workspace.path()).expect("planning fixture should be recreated");
+        app.handle_planning_shell_command(None);
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        assert!(ready_status(&app).contains("planning simple review ready / staged draft: "));
+
+        let existing_workspace = TempPlanningWorkspace::new("tui-planning-shell-existing");
+        let mut existing_app = make_test_app(&existing_workspace);
+        existing_app.open_first_run_planning_simple_review();
+        existing_app.promote_simple_mode_planning_draft();
+        assert_eq!(existing_app.shell_overlay, ShellOverlay::Hidden);
+
+        existing_app.handle_planning_shell_command(None);
+        assert_eq!(existing_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            existing_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ExistingWorkspace
+        );
+        assert_eq!(
+            ready_status(&existing_app),
+            "operator surface: planning setup / existing workspace"
+        );
+
+        existing_app.run_planning_doctor();
+        assert_eq!(
+            existing_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ExistingWorkspace
+        );
+        assert!(ready_status(&existing_app).starts_with("planning state: "));
+    }
+
+    #[test]
+    fn reset_shell_command_handles_usage_preview_success_and_fallbacks() {
+        let workspace = TempPlanningWorkspace::new("tui-reset-command-missing");
+        let mut app = make_test_app(&workspace);
+
+        app.handle_reset_shell_command(Some("queue now"));
+        assert_eq!(ready_status(&app), PLANNING_RESET_USAGE_TEXT);
+
+        app.handle_reset_shell_command(Some("directions"));
+        assert_eq!(
+            ready_status(&app),
+            "reset directions preview: rewrites DB direction authority, recreates the default queue-idle prompt, removes direction detail docs and prompt artifacts, and clears derived queue state / rerun `:reset directions confirm` to continue"
+        );
+
+        fs::remove_dir_all(workspace.path()).expect("seeded planning fixture should be removable");
+        fs::create_dir_all(workspace.path()).expect("planning fixture should be recreated");
+        app.handle_reset_shell_command(Some("queue"));
+        assert_eq!(
+            ready_status(&app),
+            "planning workspace: missing / next action: open :planning to initialize it"
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+
+        let success_workspace = TempPlanningWorkspace::new("tui-reset-command-success");
+        let mut success_app = make_test_app(&success_workspace);
+        success_app.open_first_run_planning_simple_review();
+        success_app.promote_simple_mode_planning_draft();
+        success_app.handle_reset_shell_command(Some("queue"));
+        assert_eq!(
+            ready_status(&success_app),
+            "planning reset applied / target: queue / rewritten: 0 / removed: 0"
+        );
+
+        let failure_workspace = TempPlanningWorkspace::new("tui-reset-command-failure");
+        let mut seed_app = make_test_app(&failure_workspace);
+        seed_app.open_first_run_planning_simple_review();
+        seed_app.promote_simple_mode_planning_draft();
+        let mut failure_app = make_test_app_with_planning_workspace_port(
+            &failure_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::ReplaceWorkspace,
+            )),
+        );
+
+        failure_app.handle_reset_shell_command(Some("all confirm"));
+        assert!(
+            ready_status(&failure_app).starts_with("planning reset failed: forced "),
+            "status: {}",
+            ready_status(&failure_app)
+        );
+    }
+
+    #[test]
+    fn controller_reports_workspace_port_failures() {
+        let load_workspace = TempPlanningWorkspace::new("tui-controller-load-failure");
+        let mut load_app = make_test_app_with_planning_workspace_port(
+            &load_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::LoadWorkspace,
+            )),
+        );
+
+        load_app.handle_planning_shell_command(None);
+        assert!(
+            ready_status(&load_app).starts_with("planning setup unavailable: forced "),
+            "status: {}",
+            ready_status(&load_app)
+        );
+
+        load_app.present_directions_maintenance_overview("reload directions".to_string(), false);
+        assert!(
+            ready_status(&load_app).starts_with("directions maintenance unavailable: forced "),
+            "status: {}",
+            ready_status(&load_app)
+        );
+
+        let stage_workspace = TempPlanningWorkspace::new("tui-controller-stage-failure");
+        let mut stage_app = make_test_app_with_planning_workspace_port(
+            &stage_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::StageDraft,
+            )),
+        );
+        stage_app.stage_simple_mode_planning_init_draft();
+        assert!(
+            ready_status(&stage_app).starts_with("planning init failed: forced "),
+            "status: {}",
+            ready_status(&stage_app)
+        );
+
+        stage_app.open_planning_manual_editor();
+        assert!(
+            ready_status(&stage_app).starts_with("planning init failed: forced "),
+            "status: {}",
+            ready_status(&stage_app)
+        );
+
+        stage_app.show_directions_maintenance_overlay();
+        stage_app.open_queue_idle_prompt_editor();
+        assert!(
+            ready_status(&stage_app).starts_with("directions editor failed: forced "),
+            "status: {}",
+            ready_status(&stage_app)
+        );
+
+        let load_draft_workspace = TempPlanningWorkspace::new("tui-controller-load-draft-failure");
+        let mut load_draft_app = make_test_app_with_planning_workspace_port(
+            &load_draft_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::LoadDraft,
+            )),
+        );
+        load_draft_app.stage_simple_mode_planning_init_draft();
+        assert!(
+            ready_status(&load_draft_app).contains("planning simple review ready"),
+            "status: {}",
+            ready_status(&load_draft_app)
+        );
+        load_draft_app.open_simple_mode_planning_editor();
+        assert!(
+            ready_status(&load_draft_app).starts_with("planning init failed: forced "),
+            "status: {}",
+            ready_status(&load_draft_app)
+        );
     }
 
     #[test]
@@ -1118,6 +1465,229 @@ mod tests {
         );
         assert!(ready_status(&app).contains("directions editor closed"));
         assert!(app.planning_draft_editor_ui_state.draft_name().is_none());
+    }
+
+    #[test]
+    fn editor_controller_handles_empty_session_immediate_close_and_confirmation_fallthrough() {
+        let workspace = TempPlanningWorkspace::new("tui-editor-empty-session");
+        let mut app = make_test_app(&workspace);
+        let unchanged_status = ready_status(&app).to_string();
+
+        app.open_simple_mode_planning_editor();
+        app.promote_simple_mode_planning_draft();
+        app.save_planning_manual_editor();
+        app.save_directions_manual_editor();
+        app.promote_planning_manual_editor();
+        app.promote_directions_manual_editor();
+
+        assert_eq!(ready_status(&app), unchanged_status);
+        assert!(app.planning_draft_editor_ui_state.draft_name().is_none());
+
+        let planning_close_workspace = TempPlanningWorkspace::new("tui-planning-clean-close");
+        let mut planning_close_app = make_test_app(&planning_close_workspace);
+        planning_close_app.open_first_run_planning_simple_review();
+        planning_close_app.open_simple_mode_planning_editor();
+        planning_close_app.request_close_planning_manual_editor();
+
+        assert_eq!(planning_close_app.shell_overlay, ShellOverlay::Hidden);
+        assert!(
+            !planning_close_app
+                .planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+
+        let directions_close_workspace = TempPlanningWorkspace::new("tui-directions-clean-close");
+        let mut directions_close_app = make_test_app(&directions_close_workspace);
+        directions_close_app.show_directions_maintenance_overlay();
+        directions_close_app.open_directions_detail_doc_editor("general-workstream");
+        directions_close_app.request_close_directions_manual_editor();
+
+        assert_eq!(
+            directions_close_app.shell_overlay,
+            ShellOverlay::DirectionsMaintenance
+        );
+        assert_eq!(
+            directions_close_app
+                .directions_maintenance_overlay_ui_state
+                .step(),
+            DirectionsMaintenanceOverlayStep::Overview
+        );
+        assert_eq!(
+            ready_status(&directions_close_app),
+            "directions editor closed"
+        );
+
+        let confirmation_workspace = TempPlanningWorkspace::new("tui-editor-confirm-fallthrough");
+        let mut confirmation_app = make_test_app(&confirmation_workspace);
+        confirmation_app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        confirmation_app.open_planning_manual_editor();
+        confirmation_app.request_close_planning_manual_editor();
+        assert!(
+            confirmation_app
+                .planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+
+        assert!(
+            !confirmation_app
+                .handle_planning_manual_editor_close_confirmation_key(key(KeyCode::Char('x')))
+        );
+        assert!(
+            !confirmation_app
+                .planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+
+        confirmation_app.request_close_planning_manual_editor();
+        assert!(
+            confirmation_app
+                .planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        assert!(matches!(
+            confirmation_app.planning_draft_editor_ui_state.close_risk(),
+            Some(risk) if !risk.has_dirty_buffers() && risk.has_invalid_staged_draft()
+        ));
+        confirmation_app.request_close_planning_manual_editor();
+
+        assert_eq!(confirmation_app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            ready_status(&confirmation_app),
+            "planning draft editor closed; invalid staged draft remains in drafts for review"
+        );
+    }
+
+    #[test]
+    fn draft_editor_keymap_exercises_navigation_editing_and_default_keys() {
+        let workspace = TempPlanningWorkspace::new("tui-draft-keymap-navigation");
+        let mut app = make_test_app(&workspace);
+        app.open_first_run_planning_simple_review();
+        app.open_simple_mode_planning_editor();
+
+        app.handle_draft_editor_key(
+            key(KeyCode::Tab),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+        app.handle_draft_editor_key(
+            key(KeyCode::BackTab),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+        for code in [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Enter,
+            KeyCode::Backspace,
+        ] {
+            app.handle_draft_editor_key(
+                key(code),
+                NativeTuiApp::save_planning_manual_editor,
+                NativeTuiApp::promote_planning_manual_editor,
+            );
+        }
+        app.handle_draft_editor_key(
+            shift_key(KeyCode::Char('A')),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+        app.handle_draft_editor_key(
+            ctrl_key(KeyCode::Char('w')),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+        app.handle_draft_editor_key(
+            key(KeyCode::Esc),
+            NativeTuiApp::save_planning_manual_editor,
+            NativeTuiApp::promote_planning_manual_editor,
+        );
+
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            app.planning_draft_editor_ui_state.selected_file_index(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn editor_save_and_promote_report_workspace_port_failures() {
+        let save_workspace = TempPlanningWorkspace::new("tui-planning-save-failure");
+        let mut save_app = make_test_app_with_planning_workspace_port(
+            &save_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::ReplaceDraft,
+            )),
+        );
+        save_app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        save_app.open_planning_manual_editor();
+        save_app.save_planning_manual_editor();
+        assert!(
+            ready_status(&save_app).starts_with("planning draft save failed: forced "),
+            "status: {}",
+            ready_status(&save_app)
+        );
+
+        let directions_save_workspace = TempPlanningWorkspace::new("tui-directions-save-failure");
+        let mut directions_save_app = make_test_app_with_planning_workspace_port(
+            &directions_save_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::ReplaceDraft,
+            )),
+        );
+        directions_save_app.show_directions_maintenance_overlay();
+        directions_save_app.open_directions_detail_doc_editor("general-workstream");
+        directions_save_app.save_directions_manual_editor();
+        assert!(
+            ready_status(&directions_save_app).starts_with("directions draft save failed: forced "),
+            "status: {}",
+            ready_status(&directions_save_app)
+        );
+
+        let promote_workspace = TempPlanningWorkspace::new("tui-planning-promote-failure");
+        let mut promote_app = make_test_app_with_planning_workspace_port(
+            &promote_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::ReplaceWorkspace,
+            )),
+        );
+        promote_app.open_first_run_planning_simple_review();
+        promote_app.open_simple_mode_planning_editor();
+        promote_app.promote_planning_manual_editor();
+        assert!(
+            ready_status(&promote_app).starts_with("planning draft promote failed: forced "),
+            "status: {}",
+            ready_status(&promote_app)
+        );
+        assert_eq!(promote_app.shell_overlay, ShellOverlay::PlanningInit);
+
+        let directions_promote_workspace =
+            TempPlanningWorkspace::new("tui-directions-promote-failure");
+        let mut seed_app = make_test_app(&directions_promote_workspace);
+        seed_app.open_first_run_planning_simple_review();
+        seed_app.promote_simple_mode_planning_draft();
+        let mut directions_promote_app = make_test_app_with_planning_workspace_port(
+            &directions_promote_workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::ReplaceWorkspace,
+            )),
+        );
+        directions_promote_app.show_directions_maintenance_overlay();
+        directions_promote_app.open_directions_detail_doc_editor("general-workstream");
+        directions_promote_app.promote_directions_manual_editor();
+        assert!(
+            ready_status(&directions_promote_app)
+                .starts_with("directions draft promote failed: forced "),
+            "status: {}",
+            ready_status(&directions_promote_app)
+        );
+        assert_eq!(
+            directions_promote_app
+                .directions_maintenance_overlay_ui_state
+                .step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
     }
 
     #[test]
