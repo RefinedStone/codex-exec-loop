@@ -4,11 +4,13 @@ use super::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
     agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
-    command_succeeds, derive_default_pool_root, detect_canonical_repo_root, inspect_gh_auth,
-    inspect_gh_binary, lease_session_key, local_branch_ref, parse_https_remote,
-    read_agent_session_detail_record, reconcile_pool_board, record_assigned_session_detail,
-    remote_branch_name, remote_tracking_branch_ref, resolve_workspace_slot_lease, run_command,
-    sanitize_task_slug, short_branch_slug_hash, slot_id, slot_lease_file_path,
+    command_succeeds, derive_default_pool_root, detect_canonical_repo_root, inspect_akra_branch,
+    inspect_authority_store, inspect_gh_auth, inspect_gh_binary, inspect_git_worktree,
+    inspect_planning_projection, inspect_push_remote, lease_session_key, local_branch_ref,
+    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
+    record_assigned_session_detail, remote_branch_name, remote_tracking_branch_ref,
+    resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash, slot_id,
+    slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -17,13 +19,16 @@ use crate::application::port::outbound::github_automation_port::{
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
-    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
+    NoopPlanningAuthorityPort, PlanningAuthorityDistributorQueueRecord,
+    PlanningAuthorityOfficialRefreshClaimStatus,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
 };
-use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::{
+    PlanningApplicationProjection, PlanningRuntimeProjection,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
     ParallelModeDispatchCommandSnapshot, ParallelModePoolResetPolicy,
@@ -367,12 +372,35 @@ struct FakeReadinessRuntime {
     gh_auth_ok: bool,
     fallback_script_available: bool,
     fallback_auth_ok: bool,
+    git_worktree_list_available: bool,
+    standard_ref_present: bool,
+    push_remote_ok: bool,
+    head_present: bool,
+    push_url: Option<String>,
+    credential_fill: Option<String>,
+    current_branch: Option<String>,
+    push_dry_run_ok: bool,
 }
 impl ParallelModeRuntimePort for FakeReadinessRuntime {
     fn detect_git_repo_root(&self, _workspace_dir: &str) -> Option<String> {
         None
     }
     fn command_succeeds(&self, _program: &str, _args: &[&str]) -> bool {
+        if _program != "git" {
+            return false;
+        }
+        if _args.contains(&"show-ref") {
+            return self.standard_ref_present;
+        }
+        if _args.starts_with(&["-C"]) && _args.contains(&"remote") && _args.contains(&"get-url") {
+            return self.push_remote_ok || self.push_url.is_some();
+        }
+        if _args.contains(&"rev-parse") && _args.contains(&"HEAD") {
+            return self.head_present;
+        }
+        if _args.contains(&"push") && _args.contains(&"--dry-run") {
+            return self.push_dry_run_ok;
+        }
         false
     }
     fn run_command(
@@ -381,6 +409,17 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         args: &[&str],
         _current_dir: Option<&str>,
     ) -> Option<String> {
+        if program == "git" && args.contains(&"worktree") && args.contains(&"list") {
+            return self
+                .git_worktree_list_available
+                .then(|| "worktree /tmp/repo".to_string());
+        }
+        if program == "git" && args.contains(&"remote") && args.contains(&"get-url") {
+            return self.push_url.clone();
+        }
+        if program == "git" && args.contains(&"branch") && args.contains(&"--show-current") {
+            return self.current_branch.clone();
+        }
         if program == "bash"
             && args.get(1) == Some(&"auth")
             && args.get(2) == Some(&"status")
@@ -396,7 +435,7 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         _args: &[&str],
         _stdin_body: &str,
     ) -> Option<String> {
-        None
+        self.credential_fill.clone()
     }
     fn find_executable(&self, program: &str) -> Option<PathBuf> {
         (program == "gh").then(|| self.gh_path.clone()).flatten()
@@ -453,6 +492,209 @@ fn readiness_accepts_repo_github_fallback_when_gh_is_missing() {
     let gh_auth = inspect_gh_auth(&runtime, &gh_binary, Some("/tmp/repo"));
     assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
     assert_eq!(gh_auth.detail, "GitHub automation authentication succeeded");
+}
+
+fn capability(
+    key: ParallelModeCapabilityKey,
+    state: ParallelModeCapabilityState,
+) -> ParallelModeCapabilitySnapshot {
+    ParallelModeCapabilitySnapshot::new(key, state, "test capability", None)
+}
+
+#[test]
+fn readiness_inspectors_cover_git_branch_and_push_remote_edges() {
+    let missing_worktree = inspect_git_worktree(&FakeReadinessRuntime::default(), "/tmp/repo");
+    assert_eq!(missing_worktree.state, ParallelModeCapabilityState::Blocked);
+    assert!(missing_worktree.detail.contains("unavailable"));
+
+    let agent_repo = TempGitRepo::new("readiness-agent-branch");
+    run_git(
+        &agent_repo.repo_root,
+        &["checkout", "-qb", "akra-agent/slot-1"],
+    );
+    let agent_branch = inspect_akra_branch(
+        &FakeReadinessRuntime::default(),
+        &agent_repo.workspace_dir(),
+    );
+    assert_eq!(agent_branch.state, ParallelModeCapabilityState::Blocked);
+    assert!(
+        agent_branch
+            .next_action
+            .as_deref()
+            .unwrap_or_default()
+            .contains("non-agent workspace")
+    );
+
+    let no_head_runtime = FakeReadinessRuntime {
+        push_remote_ok: true,
+        ..Default::default()
+    };
+    let no_head_branch = inspect_akra_branch(&no_head_runtime, "/tmp/not-a-git-repo");
+    assert_eq!(no_head_branch.state, ParallelModeCapabilityState::Blocked);
+    assert!(
+        no_head_branch
+            .detail
+            .contains("origin/prerelease is missing")
+    );
+
+    let missing_credentials = FakeReadinessRuntime {
+        push_url: Some("https://github.com/owner/repo.git".to_string()),
+        ..Default::default()
+    };
+    let missing_credentials = inspect_push_remote(&missing_credentials, "/tmp/repo");
+    assert_eq!(
+        missing_credentials.state,
+        ParallelModeCapabilityState::Degraded
+    );
+    assert!(
+        missing_credentials
+            .detail
+            .contains("credentials are not available")
+    );
+
+    let missing_username = FakeReadinessRuntime {
+        push_url: Some("https://github.com/owner/repo.git".to_string()),
+        credential_fill: Some("password=token\n".to_string()),
+        ..Default::default()
+    };
+    let missing_username = inspect_push_remote(&missing_username, "/tmp/repo");
+    assert_eq!(
+        missing_username.state,
+        ParallelModeCapabilityState::Degraded
+    );
+    assert!(missing_username.detail.contains("no username"));
+
+    let dry_run_failed = FakeReadinessRuntime {
+        push_url: Some("https://github.com/owner/repo.git".to_string()),
+        credential_fill: Some("username=akra\npassword=token\n".to_string()),
+        current_branch: Some("feature/readiness".to_string()),
+        ..Default::default()
+    };
+    let dry_run_failed = inspect_push_remote(&dry_run_failed, "/tmp/repo");
+    assert_eq!(dry_run_failed.state, ParallelModeCapabilityState::Degraded);
+    assert!(dry_run_failed.detail.contains("dry-run failed"));
+
+    let configured_without_branch = FakeReadinessRuntime {
+        push_url: Some("git@github.com:owner/repo.git".to_string()),
+        ..Default::default()
+    };
+    let configured_without_branch = inspect_push_remote(&configured_without_branch, "/tmp/repo");
+    assert_eq!(
+        configured_without_branch.state,
+        ParallelModeCapabilityState::Ready
+    );
+    assert!(
+        configured_without_branch
+            .detail
+            .contains("no branch was available")
+    );
+
+    let credential_without_branch = FakeReadinessRuntime {
+        push_url: Some("https://github.com/owner/repo.git".to_string()),
+        credential_fill: Some("username=akra\npassword=token\n".to_string()),
+        ..Default::default()
+    };
+    let credential_without_branch = inspect_push_remote(&credential_without_branch, "/tmp/repo");
+    assert_eq!(
+        credential_without_branch.state,
+        ParallelModeCapabilityState::Ready
+    );
+    assert!(
+        credential_without_branch
+            .detail
+            .contains("credential user: akra")
+    );
+}
+
+#[test]
+fn readiness_inspectors_cover_gh_planning_authority_and_command_edges() {
+    let missing_binary = inspect_gh_binary(&FakeReadinessRuntime::default());
+    assert_eq!(missing_binary.state, ParallelModeCapabilityState::Degraded);
+    let auth_waiting = inspect_gh_auth(&FakeReadinessRuntime::default(), &missing_binary, None);
+    assert_eq!(auth_waiting.state, ParallelModeCapabilityState::Degraded);
+    assert!(auth_waiting.detail.contains("unavailable"));
+
+    let gh_installed = FakeReadinessRuntime {
+        gh_path: Some(PathBuf::from("/usr/bin/gh")),
+        ..Default::default()
+    };
+    let gh_binary = inspect_gh_binary(&gh_installed);
+    let gh_unauthenticated = inspect_gh_auth(&gh_installed, &gh_binary, Some("/tmp/repo"));
+    assert_eq!(
+        gh_unauthenticated.state,
+        ParallelModeCapabilityState::Degraded
+    );
+
+    let forced_ready_binary = capability(
+        ParallelModeCapabilityKey::GhBinary,
+        ParallelModeCapabilityState::Ready,
+    );
+    let missing_fallback = inspect_gh_auth(
+        &FakeReadinessRuntime::default(),
+        &forced_ready_binary,
+        Some("/tmp/repo"),
+    );
+    assert_eq!(
+        missing_fallback.state,
+        ParallelModeCapabilityState::Degraded
+    );
+
+    let missing_planning =
+        inspect_planning_projection(&PlanningApplicationProjection::from_runtime_projection(
+            &PlanningRuntimeProjection::uninitialized(),
+        ));
+    assert_eq!(missing_planning.state, ParallelModeCapabilityState::Blocked);
+    assert!(missing_planning.detail.contains("not initialized"));
+
+    let present_uninitialized =
+        PlanningRuntimeProjection::uninitialized().with_workspace_present(true);
+    let present_uninitialized = inspect_planning_projection(
+        &PlanningApplicationProjection::from_runtime_projection(&present_uninitialized),
+    );
+    assert_eq!(
+        present_uninitialized.state,
+        ParallelModeCapabilityState::Blocked
+    );
+
+    let git_ready = capability(
+        ParallelModeCapabilityKey::GitRepository,
+        ParallelModeCapabilityState::Ready,
+    );
+    let planning_blocked = capability(
+        ParallelModeCapabilityKey::Planning,
+        ParallelModeCapabilityState::Blocked,
+    );
+    let authority_waiting = inspect_authority_store(
+        &NoopPlanningAuthorityPort::default(),
+        "/tmp/repo",
+        &git_ready,
+        &planning_blocked,
+    );
+    assert_eq!(
+        authority_waiting.state,
+        ParallelModeCapabilityState::Blocked
+    );
+    assert!(authority_waiting.detail.contains("planning readiness"));
+
+    let planning_ready = capability(
+        ParallelModeCapabilityKey::Planning,
+        ParallelModeCapabilityState::Ready,
+    );
+    let authority_ready = inspect_authority_store(
+        &NoopPlanningAuthorityPort::default(),
+        "/tmp/repo",
+        &git_ready,
+        &planning_ready,
+    );
+    assert_eq!(authority_ready.state, ParallelModeCapabilityState::Ready);
+    assert!(authority_ready.detail.contains("shadow store in sync"));
+
+    assert_eq!(parse_https_remote("https:///owner/repo"), None);
+    assert_eq!(parse_https_remote("https://github.com/"), None);
+    assert_eq!(
+        run_command("sh", ["-c", "printf readiness"], Some("/tmp")),
+        Some("readiness".to_string())
+    );
 }
 
 // distributor/supervisor 테스트는 GitHub side effect의 순서와 branch 인자를 봐야
