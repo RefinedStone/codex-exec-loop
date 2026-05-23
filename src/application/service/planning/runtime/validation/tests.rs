@@ -73,6 +73,31 @@ fn bootstrap_artifacts_validate_successfully() {
     assert!(result.task_authority.is_some());
 }
 
+// raw JSON syntax errors should be reported before domain schema parsing is attempted.
+#[test]
+fn rejects_malformed_task_authority_json() {
+    /*
+     * This fixture does not reach the serde/domain document parser at all. Keeping
+     * malformed JSON on the same report code lets callers show one stable
+     * task-authority parse failure message regardless of parse depth.
+     */
+    let validation_service = PlanningValidationService::new();
+    let directions = test_directions("direction-a");
+    let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
+        directions: &directions,
+        task_authority_json: r#"{"version":1,"tasks":["#,
+        result_output_markdown: valid_result_output_markdown(),
+    });
+
+    assert!(!result.is_valid());
+    assert!(result.task_authority.is_none());
+    assert!(result.report.errors().iter().any(|issue| {
+        issue.file_kind == PlanningFileKind::TaskAuthority
+            && issue.code == "task_authority_parse_failed"
+            && issue.message.contains("failed to parse task authority")
+    }));
+}
+
 // cross-document semantic: 모든 task는 catalog에 존재하는 direction에 붙어 있어야 한다.
 #[test]
 fn rejects_unknown_direction_references() {
@@ -587,5 +612,41 @@ fn rejects_queue_idle_prompt_paths_with_parent_dir_components() {
     assert!(report.errors().iter().any(|issue| {
         issue.file_kind == PlanningFileKind::Directions
             && issue.code == "invalid_queue_idle_prompt_path"
+    }));
+}
+
+// review-and-enqueue needs an explicit prompt source for hidden follow-up proposal work.
+#[test]
+fn rejects_review_and_enqueue_without_queue_idle_prompt_path() {
+    /*
+     * The base workspace document remains valid because supporting-file checks are
+     * filesystem-aware and run as a separate application validation pass. This
+     * assertion keeps the missing prompt-path error attributed to direction
+     * supporting-file validation rather than task authority semantics.
+     */
+    let validation_service = PlanningValidationService::new();
+    let mut directions = test_directions("direction-a");
+    directions.queue_idle = QueueIdleConfig {
+        policy: QueueIdlePolicy::ReviewAndEnqueue,
+        prompt_path: String::new(),
+    };
+    let result = validation_service.validate_workspace_files(PlanningWorkspaceFiles {
+        directions: &directions,
+        task_authority_json: r#"{"version":1,"tasks":[]}"#,
+        result_output_markdown: valid_result_output_markdown(),
+    });
+
+    assert!(result.is_valid(), "{:?}", result.report.issues);
+    let mut report = result.report;
+    let directions = result
+        .directions
+        .expect("directions should parse for supporting file validation");
+    validation_service.validate_direction_supporting_files(&directions, |_| true, &mut report);
+    assert!(report.errors().iter().any(|issue| {
+        issue.file_kind == PlanningFileKind::Directions
+            && issue.code == "missing_queue_idle_prompt_path"
+            && issue
+                .message
+                .contains(".codex-exec-loop/planning/prompts/queue-idle-review.md")
     }));
 }
