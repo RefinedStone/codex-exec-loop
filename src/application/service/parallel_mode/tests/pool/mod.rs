@@ -55,6 +55,38 @@ fn unavailable_pool_board_does_not_report_exhausted() {
     assert!(!pool.exhausted);
 }
 
+#[test]
+fn blocked_readiness_pool_board_reports_supervisor_gate_without_reconcile() {
+    let repo = TempGitRepo::new("pool-readiness-blocked");
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Blocked,
+        vec![ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::GitWorktree,
+            ParallelModeCapabilityState::Blocked,
+            "worktree inventory failed",
+            Some("repair worktree metadata".to_string()),
+        )],
+        Some("worktree inventory failed".to_string()),
+    );
+
+    let pool = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&readiness),
+    );
+
+    assert_eq!(pool.unavailable_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(pool.missing_slots, 0);
+    assert!(pool.reconcile_status.contains("readiness: blocked"));
+    assert!(
+        pool.slots
+            .iter()
+            .all(|slot| slot.owner_label == "supervisor gate")
+    );
+    assert!(!repo.pool_root().exists());
+}
+
 // dispatcher는 planning queue가 더 많은 task를 제안해도 idle slot 수만큼만 후보를
 // 내보내야 한다. 이 테스트는 기본 pool 크기와 active task 순서가 candidate
 // truncation의 기준으로 유지되는지 확인한다.

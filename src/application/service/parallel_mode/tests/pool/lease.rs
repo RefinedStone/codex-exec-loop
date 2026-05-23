@@ -400,6 +400,77 @@ fn resolve_workspace_slot_lease_matches_nested_worktree_directory() {
     );
 }
 
+#[test]
+fn resolve_workspace_slot_lease_returns_none_for_unleased_workspace() {
+    let repo = TempGitRepo::new("unleased-workspace-resolution");
+
+    let resolution = resolve_workspace_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+    )
+    .expect("unleased repo workspace should resolve cleanly");
+
+    assert!(resolution.is_none());
+}
+
+#[test]
+fn resolve_workspace_slot_lease_rejects_non_repository_workspace() {
+    let repo = TempGitRepo::new("non-repo-workspace-resolution");
+    let non_repo = repo.root.join("plain-directory");
+    fs::create_dir_all(&non_repo).expect("plain directory should be created");
+
+    let error = resolve_workspace_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        non_repo.to_str().expect("plain path should be utf-8"),
+    )
+    .expect_err("plain directory should not resolve as a slot lease");
+
+    assert_eq!(error, "repository inspection failed");
+}
+
+#[test]
+fn resolve_workspace_slot_lease_rejects_duplicate_matching_authority_leases() {
+    let repo = TempGitRepo::new("duplicate-workspace-lease-resolution");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let mut duplicate = lease.clone();
+    duplicate.slot_id = "slot-2".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &duplicate)
+        .expect("duplicate path lease should be persisted");
+
+    let error =
+        resolve_workspace_slot_lease(&SqlitePlanningAuthorityAdapter::new(), &lease.worktree_path)
+            .expect_err("duplicate lease paths should be rejected");
+
+    assert!(error.contains("matched multiple slot leases"));
+}
+
+#[test]
+fn resolve_workspace_slot_lease_rejects_branch_drift_for_matching_path() {
+    let repo = TempGitRepo::new("workspace-branch-drift-resolution");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(&lease.worktree_path);
+    run_git(&slot_path, &["checkout", "-b", "manual-drift"]);
+
+    let error =
+        resolve_workspace_slot_lease(&SqlitePlanningAuthorityAdapter::new(), &lease.worktree_path)
+            .expect_err("branch drift should not resolve as the active lease");
+
+    assert!(error.contains("is on `manual-drift`"));
+    assert!(error.contains(&format!("expects `{}`", lease.branch_name)));
+}
+
 // cleanup-ready helper는 branch가 `prerelease`에 통합되기 전에는 아무 것도 바꾸면
 // 안 된다. merge 후에만 running lease를 cleanup-pending으로 전환해 premature slot
 // 회수를 막는다.
