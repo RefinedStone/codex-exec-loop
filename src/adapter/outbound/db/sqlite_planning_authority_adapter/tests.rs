@@ -31,11 +31,14 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
-    OriginSessionKind, PriorityQueueProjection, TaskActor, TaskAuthorityDocument, TaskDefinition,
-    TaskMutationProvenance, TaskStatus,
+    OriginSessionKind, PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask,
+    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
 };
 
-use super::{DISTRIBUTOR_QUEUE_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, open_authority_connection};
+use super::{
+    DISTRIBUTOR_QUEUE_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, open_authority_connection,
+    task_authority_rows::replace_task_authority_tables,
+};
 
 // 테스트마다 SQLite namespace를 분리하는 workspace directory를 만든다. adapter가 workspace path를
 // DB 파일/row scope의 기준으로 쓰므로, 프로세스 id와 nanos를 섞어 병렬 테스트 충돌을 피한다.
@@ -85,11 +88,19 @@ fn set_authority_metadata(workspace_dir: &str, key: &str, value: &str) {
         .expect("authority metadata should upsert");
 }
 
-fn replace_runtime_table_schema(workspace_dir: &str, table_name: &str, columns_sql: &str) {
+fn replace_table_schema(connection: &rusqlite::Connection, table_name: &str, columns_sql: &str) {
     let sql = format!("DROP TABLE {table_name}; CREATE TABLE {table_name} ({columns_sql});");
-    authority_connection(workspace_dir)
+    connection
         .execute_batch(&sql)
         .expect("runtime table schema should be replaced");
+}
+
+fn replace_runtime_table_schema(workspace_dir: &str, table_name: &str, columns_sql: &str) {
+    replace_table_schema(
+        &authority_connection(workspace_dir),
+        table_name,
+        columns_sql,
+    );
 }
 
 fn corrupt_runtime_events_schema(workspace_dir: &str) {
@@ -344,6 +355,137 @@ fn task_authority_snapshot_persists_queryable_provenance_columns() {
             "main-thread-1".to_string(),
             "main-turn-1".to_string(),
         )
+    );
+}
+
+#[test]
+fn task_authority_row_write_errors_keep_operation_context() {
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![TaskDefinition {
+            id: "task-edge".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_relation_note: "covers row error contexts".to_string(),
+            title: "Persist row context".to_string(),
+            description: "Persist relation and projection rows.".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 80,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: vec!["task-parent".to_string()],
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::default(),
+            updated_at: "2026-05-07T09:00:00Z".to_string(),
+        }],
+    };
+    let empty_task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let empty_queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    let edge_workspace = temp_workspace("task-row-error-edge");
+    let mut edge_connection = authority_connection(&edge_workspace);
+    replace_table_schema(&edge_connection, "planning_task_edges", "task_id TEXT");
+    let edge_transaction = edge_connection
+        .transaction()
+        .expect("edge transaction should open");
+    assert_error_contains(
+        replace_task_authority_tables(&edge_transaction, &task_authority, &empty_queue_projection),
+        "failed to persist planning task edge `task-edge:depends_on`",
+    );
+
+    let active_projection_workspace = temp_workspace("task-row-error-active-projection");
+    let mut active_projection_connection = authority_connection(&active_projection_workspace);
+    replace_table_schema(
+        &active_projection_connection,
+        "planning_queue_projection",
+        "bucket TEXT",
+    );
+    let active_queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: vec![PriorityQueueTask {
+            rank: 1,
+            task_id: "task-active".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_title: "Direction 1".to_string(),
+            task_title: "Active projection".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 80,
+            updated_at: "2026-05-07T09:00:00Z".to_string(),
+            rank_reasons: vec!["highest priority".to_string()],
+        }],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    let active_projection_transaction = active_projection_connection
+        .transaction()
+        .expect("active projection transaction should open");
+    assert_error_contains(
+        replace_task_authority_tables(
+            &active_projection_transaction,
+            &empty_task_authority,
+            &active_queue_projection,
+        ),
+        "failed to persist planning queue projection `active:task-active`",
+    );
+
+    let skipped_projection_workspace = temp_workspace("task-row-error-skipped-projection");
+    let mut skipped_projection_connection = authority_connection(&skipped_projection_workspace);
+    replace_table_schema(
+        &skipped_projection_connection,
+        "planning_queue_projection",
+        "bucket TEXT",
+    );
+    let skipped_queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: vec![PriorityQueueSkippedTask {
+            task_id: "task-skipped".to_string(),
+            task_title: "Skipped projection".to_string(),
+            direction_id: "direction-1".to_string(),
+            status: TaskStatus::Blocked,
+            reason: "blocked by dependency".to_string(),
+        }],
+    };
+    let skipped_projection_transaction = skipped_projection_connection
+        .transaction()
+        .expect("skipped projection transaction should open");
+    assert_error_contains(
+        replace_task_authority_tables(
+            &skipped_projection_transaction,
+            &empty_task_authority,
+            &skipped_queue_projection,
+        ),
+        "failed to persist skipped planning queue projection `task-skipped`",
+    );
+
+    let metadata_workspace = temp_workspace("task-row-error-metadata");
+    let mut metadata_connection = authority_connection(&metadata_workspace);
+    replace_table_schema(
+        &metadata_connection,
+        "authority_metadata",
+        "broken_key TEXT",
+    );
+    let metadata_transaction = metadata_connection
+        .transaction()
+        .expect("metadata transaction should open");
+    assert_error_contains(
+        replace_task_authority_tables(
+            &metadata_transaction,
+            &empty_task_authority,
+            &empty_queue_projection,
+        ),
+        "failed to update authority metadata `task_authority_version`",
     );
 }
 
