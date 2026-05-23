@@ -572,8 +572,11 @@ fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
@@ -672,6 +675,18 @@ mod tests {
                 .to_string()
                 .contains("command exited without output")
         );
+
+        let missing_program = run_command(
+            "__codex_exec_loop_missing_program__",
+            &[],
+            path_str(&repo_root),
+        )
+        .expect_err("spawn failure should keep command context");
+        assert!(
+            missing_program
+                .to_string()
+                .contains("failed to run `__codex_exec_loop_missing_program__")
+        );
     }
 
     #[test]
@@ -699,6 +714,42 @@ mod tests {
     }
 
     #[test]
+    fn push_remote_capability_reports_dry_run_failures_for_current_branch() {
+        let repo = unique_temp_dir("github-automation-bad-origin");
+        git(&repo, &["init"]);
+        git(&repo, &["config", "user.name", "RefinedStone"]);
+        git(&repo, &["config", "user.email", "chem.en.9273@gmail.com"]);
+        fs::write(repo.join("README.md"), "seed\n").expect("fixture file should be written");
+        git(&repo, &["add", "README.md"]);
+        git(&repo, &["commit", "-m", "Initial commit"]);
+        git(&repo, &["branch", "-M", "main"]);
+        git(
+            &repo,
+            &["remote", "add", "origin", "/tmp/akra-missing-origin.git"],
+        );
+
+        let capability = GithubAutomationAdapter::inspect_push_remote(path_str(&repo));
+
+        assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
+        assert_eq!(capability.state, ParallelModeCapabilityState::Degraded);
+        assert!(capability.detail.contains("git push --dry-run failed"));
+        assert!(capability.next_action.is_some());
+    }
+
+    #[test]
+    fn push_remote_capability_reports_configured_remote_without_current_branch() {
+        let fixture = GitFixture::new("github-automation-detached-head-capability");
+        git(&fixture.repo, &["checkout", "--detach"]);
+
+        let capability = GithubAutomationAdapter::inspect_push_remote(path_str(&fixture.repo));
+
+        assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
+        assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+        assert!(capability.detail.contains("push remote is configured at"));
+        assert!(capability.next_action.is_none());
+    }
+
+    #[test]
     fn gh_auth_capability_degrades_when_command_surface_is_not_ready() {
         let gh_binary = ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
@@ -713,6 +764,176 @@ mod tests {
         assert_eq!(capability.state, ParallelModeCapabilityState::Degraded);
         assert!(capability.detail.contains("gh auth is unavailable"));
         assert!(capability.next_action.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_capabilities_use_cli_when_gh_is_on_path() {
+        let _guard = github_script_lock()
+            .lock()
+            .expect("github script fixture lock should not be poisoned");
+        let root = unique_temp_dir("github-automation-fake-gh");
+        let bin_dir = root.join("bin");
+        fs::create_dir_all(&bin_dir).expect("fake gh bin directory should be created");
+        write_fake_gh(&bin_dir, 0);
+        let _path_guard = PathEnvGuard::prepend(&bin_dir);
+
+        let gh_binary = GithubAutomationAdapter::inspect_gh_binary();
+
+        assert_eq!(gh_binary.key, ParallelModeCapabilityKey::GhBinary);
+        assert_eq!(gh_binary.state, ParallelModeCapabilityState::Ready);
+        assert!(gh_binary.detail.contains("gh found at"));
+
+        let gh_auth = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&root));
+        assert_eq!(gh_auth.key, ParallelModeCapabilityKey::GhAuth);
+        assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
+
+        write_fake_gh(&bin_dir, 9);
+        let failed_auth = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&root));
+        assert_eq!(failed_auth.key, ParallelModeCapabilityKey::GhAuth);
+        assert_eq!(failed_auth.state, ParallelModeCapabilityState::Degraded);
+        assert!(failed_auth.detail.contains("not authenticated"));
+        assert!(failed_auth.next_action.is_some());
+    }
+
+    #[test]
+    fn default_adapter_inspects_capability_contract_shape() {
+        let _guard = github_script_lock()
+            .lock()
+            .expect("github script fixture lock should not be poisoned");
+        remove_fake_github_script();
+        let fixture = GitFixture::new("github-automation-default-capabilities");
+        #[allow(clippy::default_constructed_unit_structs)]
+        let adapter = GithubAutomationAdapter::default();
+
+        let capabilities = adapter.inspect_capabilities(path_str(&fixture.repo));
+
+        assert_eq!(
+            capabilities.push_remote.key,
+            ParallelModeCapabilityKey::PushRemote
+        );
+        assert_eq!(
+            capabilities.gh_binary.key,
+            ParallelModeCapabilityKey::GhBinary
+        );
+        assert_eq!(capabilities.gh_auth.key, ParallelModeCapabilityKey::GhAuth);
+    }
+
+    #[test]
+    fn pull_request_lifecycle_uses_wrapper_lookup_create_inspect_and_close() {
+        let _guard = github_script_lock()
+            .lock()
+            .expect("github script fixture lock should not be poisoned");
+        let script_path = install_fake_github_script();
+        let repo = unique_temp_dir("github-automation-pr-lifecycle");
+        let adapter = GithubAutomationAdapter::new();
+
+        let existing = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/existing",
+                "Existing",
+                "body",
+            )
+            .expect("existing PR should be returned from list");
+        assert_eq!(existing.number, 41);
+        assert_eq!(existing.head_branch, "feature/existing");
+
+        let created = adapter
+            .ensure_pull_request(path_str(&repo), "prerelease", "feature/new", "New", "body")
+            .expect("create URL fallback should inspect created PR");
+        assert_eq!(created.number, 42);
+        assert_eq!(created.base_branch, "prerelease");
+
+        let created_from_second_lookup = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/race",
+                "Race",
+                "body",
+            )
+            .expect("second lookup should recover a PR created by the wrapper");
+        assert_eq!(created_from_second_lookup.number, 43);
+        assert_eq!(created_from_second_lookup.head_branch, "feature/race");
+
+        let no_url = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/no-url",
+                "No URL",
+                "body",
+            )
+            .expect_err("create without lookup or URL should report ensure failure");
+        assert!(
+            no_url
+                .to_string()
+                .contains("no open PR was found for `feature/no-url`")
+        );
+
+        let invalid_list = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/bad-list",
+                "Bad List",
+                "body",
+            )
+            .expect_err("invalid PR list JSON should include parse context");
+        assert!(
+            invalid_list
+                .to_string()
+                .contains("failed to parse `gh pr list` output while locating `feature/bad-list`")
+        );
+
+        let list_failure = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/list-fail",
+                "List Fail",
+                "body",
+            )
+            .expect_err("PR list command failure should stop ensure before create");
+        assert!(list_failure.to_string().contains("list denied"));
+
+        let create_failure = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/create-fail",
+                "Create Fail",
+                "body",
+            )
+            .expect_err("PR create command failure should be reported");
+        assert!(create_failure.to_string().contains("create denied"));
+
+        let invalid_view = adapter
+            .inspect_pull_request(path_str(&repo), 99)
+            .expect_err("invalid PR JSON should include parse context");
+        assert!(
+            invalid_view
+                .to_string()
+                .contains("failed to parse `gh pr view` output for PR #99")
+        );
+
+        let view_failure = adapter
+            .inspect_pull_request(path_str(&repo), 13)
+            .expect_err("PR view command failure should be reported");
+        assert!(view_failure.to_string().contains("view denied"));
+
+        adapter
+            .close_pull_request(path_str(&repo), 42)
+            .expect("close should delegate to wrapper");
+
+        let close_failure = adapter
+            .close_pull_request(path_str(&repo), 13)
+            .expect_err("PR close command failure should be reported");
+        assert!(close_failure.to_string().contains("close denied"));
+
+        let _ = fs::remove_file(script_path);
     }
 
     #[test]
@@ -803,6 +1024,158 @@ mod tests {
         ));
         fs::create_dir_all(&path).expect("temporary directory should be created");
         path
+    }
+
+    fn github_script_lock() -> &'static Mutex<()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        &LOCK
+    }
+
+    fn install_fake_github_script() -> PathBuf {
+        let script_path = fake_github_script_path();
+        let script_dir = script_path
+            .parent()
+            .expect("fake github script path should have a parent");
+        fs::create_dir_all(script_dir).expect("fake github script directory should be created");
+        fs::write(
+            &script_path,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+case "$args" in
+  "auth status")
+    exit 0
+    ;;
+  pr\ list*feature/existing*)
+    printf '%s\n' '[{"number":41,"url":"https://github.example/pull/41","state":"OPEN","baseRefName":"prerelease","headRefName":"feature/existing","isDraft":false}]'
+    ;;
+  pr\ list*feature/race*)
+    if [[ -f .fake-gh-race-created ]]; then
+      printf '%s\n' '[{"number":43,"url":"https://github.example/pull/43","state":"OPEN","baseRefName":"prerelease","headRefName":"feature/race","isDraft":false}]'
+    else
+      printf '%s\n' '[]'
+    fi
+    ;;
+  pr\ list*feature/bad-list*)
+    printf '%s\n' '[not-json'
+    ;;
+  pr\ list*feature/list-fail*)
+    printf '%s\n' 'list denied' >&2
+    exit 22
+    ;;
+  pr\ list*)
+    printf '%s\n' '[]'
+    ;;
+  pr\ create*feature/race*)
+    touch .fake-gh-race-created
+    printf '%s\n' 'created without url'
+    ;;
+  pr\ create*feature/new*)
+    printf '%s\n' 'https://github.example/pull/42'
+    ;;
+  pr\ create*feature/create-fail*)
+    printf '%s\n' 'create denied' >&2
+    exit 23
+    ;;
+  pr\ create*feature/no-url*)
+    printf '%s\n' 'created without url'
+    ;;
+  pr\ view\ 13*)
+    printf '%s\n' 'view denied' >&2
+    exit 13
+    ;;
+  pr\ view\ 42*)
+    printf '%s\n' '{"number":42,"url":"https://github.example/pull/42","state":"OPEN","baseRefName":"prerelease","headRefName":"feature/new","isDraft":false}'
+    ;;
+  pr\ view\ 99*)
+    printf '%s\n' '{not-json'
+    ;;
+  pr\ close\ 13*)
+    printf '%s\n' 'close denied' >&2
+    exit 14
+    ;;
+  pr\ close\ 42*)
+    printf '%s\n' 'closed'
+    ;;
+  *)
+    printf 'unexpected fake gh-akra args: %s\n' "$args" >&2
+    exit 12
+    ;;
+esac
+"#,
+        )
+        .expect("fake github script should be written");
+        script_path
+    }
+
+    fn remove_fake_github_script() {
+        let _ = fs::remove_file(fake_github_script_path());
+    }
+
+    fn fake_github_script_path() -> PathBuf {
+        std::env::current_exe()
+            .expect("test binary path should be available")
+            .parent()
+            .expect("test binary should have a parent")
+            .join("scripts")
+            .join("gh-akra.sh")
+    }
+
+    #[cfg(unix)]
+    fn write_fake_gh(bin_dir: &Path, auth_status_exit_code: i32) {
+        let gh_path = bin_dir.join("gh");
+        fs::write(
+            &gh_path,
+            format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "auth status" ]]; then
+  exit {auth_status_exit_code}
+fi
+printf 'unexpected fake gh args: %s\n' "$*" >&2
+exit 66
+"#
+            ),
+        )
+        .expect("fake gh should be written");
+        let mut permissions = fs::metadata(&gh_path)
+            .expect("fake gh metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh_path, permissions).expect("fake gh should be executable");
+    }
+
+    #[cfg(unix)]
+    struct PathEnvGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    #[cfg(unix)]
+    impl PathEnvGuard {
+        fn prepend(directory: &Path) -> Self {
+            let previous = std::env::var_os("PATH");
+            let mut paths = vec![directory.to_path_buf()];
+            if let Some(path) = &previous {
+                paths.extend(std::env::split_paths(path));
+            }
+            let joined_path = std::env::join_paths(paths).expect("test PATH should join");
+            unsafe {
+                std::env::set_var("PATH", joined_path);
+            }
+            Self { previous }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PathEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(path) => std::env::set_var("PATH", path),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
     }
 
     fn git(repo: &Path, args: &[&str]) {
