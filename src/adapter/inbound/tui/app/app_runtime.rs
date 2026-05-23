@@ -156,6 +156,149 @@ pub(super) fn core_turn_stream_event_from_application(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
+        ConversationToolActivityKind,
+    };
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+
+    #[test]
+    fn application_stream_events_map_to_core_stream_events() {
+        let activity = ConversationToolActivity {
+            kind: ConversationToolActivityKind::CommandExecution,
+            text: "cargo test".to_string(),
+            file_change_count: 0,
+        };
+        let review = ConversationApprovalReview {
+            target_item_id: "tool-1".to_string(),
+            status: ConversationApprovalReviewStatus::InProgress,
+            risk_level: Some("medium".to_string()),
+            rationale: Some("needs approval".to_string()),
+        };
+        let attachment_profile = TerminalBridgeAttachmentProfile::codex_app_server_launch();
+
+        let cases = vec![
+            (
+                ConversationStreamEvent::attachment_observed(attachment_profile),
+                TurnStreamEvent::AttachmentObserved {
+                    profile: attachment_profile,
+                },
+            ),
+            (
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: "thread-1".to_string(),
+                    title: "Title".to_string(),
+                    cwd: "/repo".to_string(),
+                },
+                TurnStreamEvent::ThreadPrepared {
+                    thread_id: "thread-1".to_string(),
+                    title: "Title".to_string(),
+                    cwd: "/repo".to_string(),
+                },
+            ),
+            (
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-1".to_string(),
+                },
+                TurnStreamEvent::TurnStarted {
+                    turn_id: "turn-1".to_string(),
+                },
+            ),
+            (
+                ConversationStreamEvent::StatusUpdated {
+                    text: "thinking".to_string(),
+                },
+                TurnStreamEvent::StatusUpdated {
+                    text: "thinking".to_string(),
+                },
+            ),
+            (
+                ConversationStreamEvent::AgentMessageDelta {
+                    item_id: "item-1".to_string(),
+                    phase: Some("analysis".to_string()),
+                    delta: "hello".to_string(),
+                },
+                TurnStreamEvent::AgentMessageDelta {
+                    item_id: "item-1".to_string(),
+                    phase: Some("analysis".to_string()),
+                    delta: "hello".to_string(),
+                },
+            ),
+            (
+                ConversationStreamEvent::AgentMessageCompleted {
+                    item_id: "item-2".to_string(),
+                    phase: None,
+                    text: "done".to_string(),
+                },
+                TurnStreamEvent::AgentMessageCompleted {
+                    item_id: "item-2".to_string(),
+                    phase: None,
+                    text: "done".to_string(),
+                },
+            ),
+            (
+                ConversationStreamEvent::ToolActivity {
+                    activity: activity.clone(),
+                },
+                TurnStreamEvent::ToolActivity { activity },
+            ),
+            (
+                ConversationStreamEvent::ApprovalReviewUpdated {
+                    review: review.clone(),
+                },
+                TurnStreamEvent::ApprovalReviewUpdated { review },
+            ),
+            (
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+                },
+                TurnStreamEvent::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+                },
+            ),
+            (
+                ConversationStreamEvent::Failed {
+                    message: "stream failed".to_string(),
+                },
+                TurnStreamEvent::Failed {
+                    message: "stream failed".to_string(),
+                },
+            ),
+        ];
+
+        for (application_event, expected) in cases {
+            assert_eq!(
+                core_turn_stream_event_from_application(application_event),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_mode_event_sink_routes_background_events_to_runtime_channel() {
+        let channels = NativeTuiAppRuntimeChannels::new();
+        let sink = channels.parallel_mode_event_sink();
+
+        sink.send_control_plane_event(
+            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(
+                "parallel notice".to_string(),
+            ),
+        );
+
+        match channels.rx.try_recv().expect("event should be queued") {
+            BackgroundMessage::ParallelModeControlPlaneEvent(
+                ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(message),
+            ) => assert_eq!(message, "parallel notice"),
+            other => panic!("unexpected background message: {other:?}"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
     conversations: NativeTuiConversationHandle,
