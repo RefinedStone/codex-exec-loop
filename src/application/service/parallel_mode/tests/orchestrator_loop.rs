@@ -4,13 +4,16 @@ use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+use crate::application::port::outbound::planning_worker_port::{
+    NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
+};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
 };
 use crate::application::service::planning::{PlanningServices, PlanningTaskIntakeRequest};
+use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
 use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeControlPlaneWorkerEventKind,
     ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
@@ -20,6 +23,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Barrier, mpsc};
 use std::thread;
 use std::time::Duration;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
+
+fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+    tracing::subscriber::with_default(subscriber, body)
+}
 
 #[derive(Debug, Default)]
 struct CountingParallelAgentWorkerPort {
@@ -85,6 +97,17 @@ impl ParallelAgentWorkerPort for CompletingParallelAgentWorkerPort {
     }
 }
 
+struct FailingPlanningWorkerPort;
+
+impl PlanningWorkerPort for FailingPlanningWorkerPort {
+    fn run_planning_session(
+        &self,
+        _request: PlanningWorkerRequest,
+    ) -> anyhow::Result<PlanningWorkerResponse> {
+        Err(anyhow::anyhow!("official refresh worker failed"))
+    }
+}
+
 fn bootstrap_planning_workspace(planning: &PlanningServices, workspace_dir: &str) {
     let stage_result = planning
         .workspace
@@ -140,11 +163,18 @@ fn commit_ready_queue_tasks(planning: &PlanningServices, workspace_dir: &str, co
 fn build_test_planning_services(
     authority: Arc<SqlitePlanningAuthorityAdapter>,
 ) -> PlanningServices {
+    build_test_planning_services_with_worker(authority, Arc::new(NoopPlanningWorkerPort))
+}
+
+fn build_test_planning_services_with_worker(
+    authority: Arc<SqlitePlanningAuthorityAdapter>,
+    worker: Arc<dyn PlanningWorkerPort>,
+) -> PlanningServices {
     PlanningServices::from_ports(
         Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
         authority.clone(),
         authority,
-        Arc::new(NoopPlanningWorkerPort),
+        worker,
     )
 }
 
@@ -646,6 +676,92 @@ fn dispatch_orchestrator_marks_stale_command_blocked_when_queue_has_no_candidate
 }
 
 #[test]
+fn dispatch_orchestrator_reports_excluded_leased_task_when_idle_slots_remain() {
+    let repo = TempGitRepo::new("orchestrator-excluded-leased-task");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    let queue_head = planning_projection
+        .queue_head()
+        .expect("ready task should become queue head");
+
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    service
+        .acquire_slot_lease(
+            &workspace_dir,
+            ParallelModeSlotLeaseRequest::from_task_identity_with_agent_id(
+                &queue_head.task_id,
+                &queue_head.task_title,
+                "agent-existing",
+            ),
+        )
+        .expect("same queue task should already be leased");
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(15),
+        )
+        .expect("dispatch command should enqueue");
+
+    let service = Arc::new(service);
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result = with_akra_event_trace(|| {
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 15,
+            enqueue_trigger: None,
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        })
+    });
+
+    assert!(result.outcome.launched_task_ids.is_empty());
+    assert!(
+        result
+            .outcome
+            .blocked_reason
+            .as_deref()
+            .is_some_and(|reason| reason
+                .contains("no undispatched queue task available for auto dispatch / excluded:"))
+    );
+    assert_eq!(worker_port.launch_count(), 0);
+    assert!(
+        event_receiver
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Blocked
+    );
+    assert!(
+        projections.dispatch_commands[0]
+            .status_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("excluded:"))
+    );
+}
+
+#[test]
 fn completed_worker_stream_records_official_completion_and_sends_worker_event() {
     let repo = TempGitRepo::new("orchestrator-worker-completed");
     let workspace_dir = repo.workspace_dir();
@@ -706,5 +822,75 @@ fn completed_worker_stream_records_official_completion_and_sends_worker_event() 
             .notices
             .iter()
             .any(|notice| notice.contains("commit-ready result entered the distributor queue"))
+    );
+}
+
+#[test]
+fn completed_worker_stream_reports_failed_official_completion_refresh() {
+    let repo = TempGitRepo::new("orchestrator-official-refresh-failed");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services_with_worker(
+        authority.clone(),
+        Arc::new(FailingPlanningWorkerPort),
+    );
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+
+    let service = Arc::new(ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(16),
+        )
+        .expect("dispatch command should enqueue");
+
+    let worker_port = Arc::new(CompletingParallelAgentWorkerPort::default());
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result = with_akra_event_trace(|| {
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 16,
+            enqueue_trigger: None,
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        })
+    });
+
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    let worker_event = match event_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("worker failure event should arrive")
+    {
+        ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
+        ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
+            panic!("unexpected runtime notice: {notice}")
+        }
+    };
+    assert_eq!(
+        worker_event.kind,
+        ParallelModeControlPlaneWorkerEventKind::StreamFailed
+    );
+    assert_eq!(worker_event.epoch_id, 16);
+    assert_eq!(worker_port.launch_count(), 1);
+    assert!(
+        worker_event
+            .notices
+            .iter()
+            .any(|notice| notice.contains("parallel official completion refresh failed")),
+        "notices: {:?}",
+        worker_event.notices
     );
 }
