@@ -45,3 +45,63 @@ pub(super) fn set_queue_idle_prompt_path(
 ) {
     directions.queue_idle.prompt_path = prompt_path.to_string();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{set_direction_detail_doc_path, set_queue_idle_prompt_path, trimmed_non_empty};
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
+        QueueIdleConfig,
+    };
+
+    fn directions() -> DirectionCatalogDocument {
+        DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: "general-workstream".to_string(),
+                title: "General".to_string(),
+                summary: "General planning work.".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        }
+    }
+
+    #[test]
+    fn supporting_file_helpers_trim_update_and_report_unknown_direction() {
+        assert_eq!(trimmed_non_empty(" detail.md "), Some("detail.md"));
+        assert_eq!(trimmed_non_empty(" \n\t "), None);
+
+        let mut directions = directions();
+        set_queue_idle_prompt_path(&mut directions, "prompts/queue-idle.md");
+        assert_eq!(
+            directions.queue_idle.prompt_path,
+            "prompts/queue-idle.md".to_string()
+        );
+
+        let error = set_direction_detail_doc_path(
+            &mut directions,
+            "missing-workstream",
+            "directions/missing.md",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "unknown direction id: missing-workstream"
+        );
+
+        set_direction_detail_doc_path(
+            &mut directions,
+            " general-workstream ",
+            "directions/general.md",
+        )
+        .expect("known direction should update");
+        assert_eq!(
+            directions.directions[0].detail_doc_path,
+            "directions/general.md".to_string()
+        );
+    }
+}
