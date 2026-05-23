@@ -211,3 +211,167 @@ fn direction_state_label(state: DirectionState) -> &'static str {
         DirectionState::Done => "done",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_prompt_fragment;
+    use crate::domain::planning::{
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, PLANNING_FORMAT_VERSION,
+        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
+        QueueIdlePolicy, TaskStatus,
+    };
+
+    fn direction(
+        id: &str,
+        title: &str,
+        state: DirectionState,
+        detail_doc_path: &str,
+    ) -> DirectionDefinition {
+        DirectionDefinition {
+            id: id.to_string(),
+            title: title.to_string(),
+            summary: format!("{title} summary"),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: vec!["scope-a".to_string()],
+            detail_doc_path: detail_doc_path.to_string(),
+            state,
+        }
+    }
+
+    fn queue_task(
+        rank: usize,
+        task_id: &str,
+        title: &str,
+        status: TaskStatus,
+    ) -> PriorityQueueTask {
+        PriorityQueueTask {
+            rank,
+            task_id: task_id.to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_title: "General".to_string(),
+            task_title: title.to_string(),
+            status,
+            combined_priority: 90 - rank as i32,
+            updated_at: "2026-05-23T00:00:00Z".to_string(),
+            rank_reasons: vec![format!("rank reason {rank}")],
+        }
+    }
+
+    fn skipped_task(rank: usize) -> PriorityQueueSkippedTask {
+        PriorityQueueSkippedTask {
+            task_id: format!("skipped-{rank}"),
+            task_title: format!("Skipped {rank}"),
+            direction_id: "paused-workstream".to_string(),
+            status: TaskStatus::Blocked,
+            reason: format!("reason {rank}"),
+        }
+    }
+
+    #[test]
+    fn prompt_fragment_renders_direction_states_queue_idle_and_visible_queue_edges() {
+        let directions = DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig {
+                policy: QueueIdlePolicy::ReviewAndEnqueue,
+                prompt_path: " .codex-exec-loop/planning/prompts/queue-idle.md ".to_string(),
+            },
+            directions: vec![
+                direction(
+                    "general-workstream",
+                    "General",
+                    DirectionState::Active,
+                    " .codex-exec-loop/planning/directions/general.md ",
+                ),
+                direction("paused-workstream", "Paused", DirectionState::Paused, ""),
+                direction("done-workstream", "Done", DirectionState::Done, "   "),
+            ],
+        };
+        let queue_projection = PriorityQueueProjection {
+            next_task: Some(queue_task(1, "task-1", "Next task", TaskStatus::Ready)),
+            active_tasks: (1..=6)
+                .map(|rank| {
+                    queue_task(
+                        rank,
+                        &format!("task-{rank}"),
+                        &format!("Task {rank}"),
+                        TaskStatus::Ready,
+                    )
+                })
+                .collect(),
+            proposed_tasks: (1..=4)
+                .map(|rank| {
+                    queue_task(
+                        rank,
+                        &format!("proposal-{rank}"),
+                        &format!("Proposal {rank}"),
+                        TaskStatus::Proposed,
+                    )
+                })
+                .collect(),
+            skipped_tasks: (1..=4).map(skipped_task).collect(),
+        };
+
+        let fragment = build_prompt_fragment(
+            &directions,
+            &queue_projection,
+            "# Result output\nKeep constraints.",
+        );
+
+        assert!(fragment.contains("state=active"));
+        assert!(fragment.contains("state=paused"));
+        assert!(fragment.contains("state=done"));
+        assert!(
+            fragment.contains("detail_doc_path=.codex-exec-loop/planning/directions/general.md")
+        );
+        assert_eq!(fragment.matches("detail_doc_path=").count(), 1);
+        assert!(fragment.contains("policy=review_and_enqueue"));
+        assert!(fragment.contains("prompt_path=.codex-exec-loop/planning/prompts/queue-idle.md"));
+        assert!(fragment.contains(
+            "next_task=rank 1; id=task-1; title=Next task; direction=general-workstream; status=ready; combined_priority=89"
+        ));
+        assert!(fragment.contains("next_task_rank_reasons=rank reason 1"));
+        assert!(fragment.contains("visible_tasks=top 5 of 6"));
+        assert!(fragment.contains("- rank 5; id=task-5; title=Task 5"));
+        assert!(!fragment.contains("- rank 6; id=task-6; title=Task 6"));
+        assert!(fragment.contains("proposed_tasks=top 3 of 4 promotable"));
+        assert!(fragment.contains("- rank 3; id=proposal-3; title=Proposal 3"));
+        assert!(!fragment.contains("- rank 4; id=proposal-4; title=Proposal 4"));
+        assert!(fragment.contains("skipped_tasks=showing 3 of 4"));
+        assert!(
+            fragment.contains("- id=skipped-3; title=Skipped 3; direction=paused-workstream; status=blocked; reason=reason 3")
+        );
+        assert!(!fragment.contains("skipped-4"));
+        assert!(fragment.contains("[result-output-prompt]\n# Result output\nKeep constraints."));
+        assert!(fragment.contains("[follow-up-proposals]"));
+    }
+
+    #[test]
+    fn prompt_fragment_renders_idle_queue_without_optional_sections() {
+        let directions = DirectionCatalogDocument {
+            version: PLANNING_FORMAT_VERSION,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![direction(
+                "general-workstream",
+                "General",
+                DirectionState::Active,
+                "",
+            )],
+        };
+        let queue_projection = PriorityQueueProjection {
+            next_task: None,
+            active_tasks: Vec::new(),
+            proposed_tasks: Vec::new(),
+            skipped_tasks: Vec::new(),
+        };
+
+        let fragment = build_prompt_fragment(&directions, &queue_projection, "   ");
+
+        assert!(fragment.contains("policy=stop"));
+        assert!(fragment.contains("next_task=none"));
+        assert!(fragment.contains("visible_tasks=none"));
+        assert!(!fragment.contains("prompt_path="));
+        assert!(!fragment.contains("proposed_tasks="));
+        assert!(!fragment.contains("skipped_tasks="));
+        assert!(!fragment.contains("[result-output-prompt]"));
+    }
+}
