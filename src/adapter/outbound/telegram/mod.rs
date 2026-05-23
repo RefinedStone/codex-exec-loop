@@ -181,12 +181,7 @@ impl From<TelegramMessageResponse> for TelegramInboundMessage {
             chat_id: value.chat.id,
             text: value.text,
             // operator-facing sender label은 username을 우선하고, 없으면 Telegram profile 이름으로 fallback한다.
-            sender_display_name: value.from.and_then(|user| {
-                user.username
-                    .or(user.first_name)
-                    .or(user.last_name)
-                    .filter(|value| !value.trim().is_empty())
-            }),
+            sender_display_name: value.from.and_then(sender_display_name),
         }
     }
 }
@@ -199,6 +194,12 @@ struct TelegramUserResponse {
     username: Option<String>,
     first_name: Option<String>,
     last_name: Option<String>,
+}
+fn sender_display_name(user: TelegramUserResponse) -> Option<String> {
+    [user.username, user.first_name, user.last_name]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.trim().is_empty())
 }
 #[derive(Debug, Deserialize)]
 struct TelegramSendMessageResponse {
@@ -225,7 +226,11 @@ fn escape_curl_config_value(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::{TelegramApiEnvelope, TelegramSendMessageResponse, build_curl_config};
+    use super::{
+        TelegramApiEnvelope, TelegramChatResponse, TelegramMessageResponse,
+        TelegramSendMessageResponse, TelegramUpdateResponse, TelegramUserResponse,
+        build_curl_config, escape_curl_config_value,
+    };
 
     #[test]
     fn telegram_envelope_parses_success_payload() {
@@ -274,5 +279,64 @@ mod tests {
 
         assert!(config.contains("bot123456:secret"));
         assert!(config.contains("request = \"POST\""));
+    }
+
+    #[test]
+    fn curl_config_escaping_preserves_json_and_config_boundaries() {
+        // curl config의 quoted value 안에서는 JSON quote와 개행이 config syntax로 새지 않아야 한다.
+        assert_eq!(escape_curl_config_value("a\\b\"c\n\r"), "a\\\\b\\\"c\\n\\r");
+
+        let config = build_curl_config(
+            "https://telegram.example/bot\"token\\x/sendMessage",
+            "{\"text\":\"line 1\nline 2\"}",
+            30,
+        );
+
+        assert!(
+            config.contains("url = \"https://telegram.example/bot\\\"token\\\\x/sendMessage\"")
+        );
+        assert!(config.contains("data = \"{\\\"text\\\":\\\"line 1\\nline 2\\\"}\""));
+    }
+
+    #[test]
+    fn update_response_maps_message_identity_and_sender_fallbacks() {
+        // 공백 username은 표시 가능한 이름이 아니므로 first_name, last_name 순서로 fallback해야 한다.
+        let update = TelegramUpdateResponse {
+            update_id: 7,
+            message: Some(TelegramMessageResponse {
+                message_id: 42,
+                chat: TelegramChatResponse { id: -100 },
+                text: Some("/status".to_string()),
+                from: Some(TelegramUserResponse {
+                    username: Some("   ".to_string()),
+                    first_name: Some("Akra".to_string()),
+                    last_name: Some("Operator".to_string()),
+                }),
+            }),
+        };
+
+        let mapped: crate::application::port::outbound::telegram_bot_port::TelegramUpdate =
+            update.into();
+        let message = mapped.message.expect("message should map");
+
+        assert_eq!(mapped.update_id, 7);
+        assert_eq!(message.message_id, 42);
+        assert_eq!(message.chat_id, -100);
+        assert_eq!(message.text.as_deref(), Some("/status"));
+        assert_eq!(message.sender_display_name.as_deref(), Some("Akra"));
+    }
+
+    #[test]
+    fn update_response_preserves_non_message_updates_for_cursor_progress() {
+        // Telegram update는 message가 없어도 update_id로 cursor를 전진시켜 중복 polling을 피해야 한다.
+        let mapped: crate::application::port::outbound::telegram_bot_port::TelegramUpdate =
+            TelegramUpdateResponse {
+                update_id: 99,
+                message: None,
+            }
+            .into();
+
+        assert_eq!(mapped.update_id, 99);
+        assert!(mapped.message.is_none());
     }
 }
