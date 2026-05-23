@@ -1,6 +1,13 @@
 use super::*;
-use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::planning_authority_port::{
+    NoopPlanningAuthorityPort, PlanningAuthorityPort,
+};
+use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+use std::process::Command;
 use std::sync::Mutex;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 #[derive(Default)]
 struct MirrorRuntime {
@@ -232,6 +239,120 @@ fn reset_report_for_slots(slot_ids: &[&str]) -> ParallelModePoolResetReport {
             ));
     }
     report
+}
+
+fn temp_repo_path(prefix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "akra-pool-{prefix}-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ))
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn run_git(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git command should launch");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_temp_git_repo(prefix: &str) -> PathBuf {
+    let repo = temp_repo_path(prefix);
+    fs::create_dir_all(&repo).expect("repo directory should be created");
+    let output = Command::new("git")
+        .arg("init")
+        .arg(&repo)
+        .output()
+        .expect("git init should launch");
+    assert!(
+        output.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    run_git(&repo, &["config", "user.email", "akra@example.test"]);
+    run_git(&repo, &["config", "user.name", "Akra Test"]);
+    fs::write(repo.join("README.md"), "pool test\n").expect("readme should be written");
+    run_git(&repo, &["add", "README.md"]);
+    run_git(&repo, &["commit", "-m", "Initial commit"]);
+    run_git(&repo, &["branch", "-M", POOL_BASELINE_BRANCH]);
+    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
+    run_git(
+        &repo,
+        &["update-ref", remote_ref.as_str(), POOL_BASELINE_BRANCH],
+    );
+    fs::canonicalize(repo).expect("repo should canonicalize")
+}
+
+fn create_detached_pool_slot(repo: &Path, slot_number: usize) -> PathBuf {
+    let slot_path = derive_default_pool_root(repo).join(slot_id(slot_number));
+    fs::create_dir_all(
+        slot_path
+            .parent()
+            .expect("slot path should have pool parent"),
+    )
+    .expect("pool parent should be created");
+    let slot_path_string = path_string(&slot_path);
+    run_git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            slot_path_string.as_str(),
+            POOL_BASELINE_BRANCH,
+        ],
+    );
+    slot_path
+}
+
+fn create_agent_pool_slot(repo: &Path, slot_number: usize, task_slug: &str) -> PathBuf {
+    let slot_path = derive_default_pool_root(repo).join(slot_id(slot_number));
+    fs::create_dir_all(
+        slot_path
+            .parent()
+            .expect("slot path should have pool parent"),
+    )
+    .expect("pool parent should be created");
+    let branch_name = format!("akra-agent/{}/{task_slug}", slot_id(slot_number));
+    let slot_path_string = path_string(&slot_path);
+    run_git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            branch_name.as_str(),
+            slot_path_string.as_str(),
+            POOL_BASELINE_BRANCH,
+        ],
+    );
+    slot_path
+}
+
+fn remove_pool_artifacts(repo: &Path) {
+    let pool_root = derive_default_pool_root(repo);
+    if let Some(pool_workspace_root) = pool_root.parent().and_then(Path::parent) {
+        let _ = fs::remove_dir_all(pool_workspace_root);
+    }
+    let _ = fs::remove_dir_all(repo);
+}
+
+fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink));
+    tracing::subscriber::with_default(subscriber, body)
 }
 
 #[test]
@@ -466,4 +587,165 @@ fn low_level_context_loaders_report_missing_git_inventory_or_baseline() {
     );
 
     let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn utility_helpers_cover_pool_ids_heads_and_reconcile_action_flags() {
+    assert_eq!(slot_id(7), "slot-7");
+    assert_eq!(short_sha("abcdef1234567890"), "abcdef1");
+
+    assert!(!PoolReconcileExecution::default().has_actions());
+    assert!(
+        PoolReconcileExecution {
+            created_baseline_branch: true,
+            ..Default::default()
+        }
+        .has_actions()
+    );
+    assert!(
+        PoolReconcileExecution {
+            created_pool_root: true,
+            ..Default::default()
+        }
+        .has_actions()
+    );
+    assert!(
+        PoolReconcileExecution {
+            provisioned_slots: 1,
+            ..Default::default()
+        }
+        .has_actions()
+    );
+    assert!(
+        PoolReconcileExecution {
+            cleaned_slots: 1,
+            ..Default::default()
+        }
+        .has_actions()
+    );
+
+    let repo = init_temp_git_repo("utility");
+    let head_sha = resolve_workspace_head_sha(&repo).expect("repo head should resolve");
+
+    assert_eq!(head_sha.len(), 40);
+    assert!(resolve_workspace_head_sha(&repo.join("missing")).is_none());
+
+    remove_pool_artifacts(&repo);
+}
+
+#[test]
+fn resolve_workspace_slot_lease_reports_duplicate_detached_and_branch_mismatch_edges() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let duplicate_repo = init_temp_git_repo("duplicate-lease");
+    let duplicate_workspace = path_string(&duplicate_repo);
+    let mut first_lease = lease(
+        "slot-1",
+        "task-a",
+        ParallelModeSlotLeaseState::Leased,
+        "2020-01-01T00:00:00Z",
+    );
+    first_lease.worktree_path = duplicate_workspace.clone();
+    first_lease.branch_name = POOL_BASELINE_BRANCH.to_string();
+    let mut second_lease = lease(
+        "slot-2",
+        "task-b",
+        ParallelModeSlotLeaseState::Leased,
+        "2020-01-01T00:01:00Z",
+    );
+    second_lease.worktree_path = duplicate_workspace.clone();
+    second_lease.branch_name = POOL_BASELINE_BRANCH.to_string();
+    adapter
+        .upsert_runtime_slot_lease(&duplicate_workspace, &first_lease)
+        .expect("first duplicate lease should be stored");
+    adapter
+        .upsert_runtime_slot_lease(&duplicate_workspace, &second_lease)
+        .expect("second duplicate lease should be stored");
+
+    let duplicate_error = resolve_workspace_slot_lease(&adapter, &duplicate_workspace)
+        .expect_err("duplicate worktree lease should be rejected");
+    assert!(duplicate_error.contains("matched multiple slot leases"));
+
+    let detached_repo = init_temp_git_repo("detached-lease");
+    let detached_workspace = path_string(&detached_repo);
+    let mut detached_lease = lease(
+        "slot-1",
+        "task-detached",
+        ParallelModeSlotLeaseState::Leased,
+        "2020-01-01T00:02:00Z",
+    );
+    detached_lease.worktree_path = detached_workspace.clone();
+    detached_lease.branch_name = POOL_BASELINE_BRANCH.to_string();
+    adapter
+        .upsert_runtime_slot_lease(&detached_workspace, &detached_lease)
+        .expect("detached lease should be stored");
+    run_git(&detached_repo, &["checkout", "--detach", "HEAD"]);
+
+    let detached_error = resolve_workspace_slot_lease(&adapter, &detached_workspace)
+        .expect_err("detached workspace should not resolve as a lease owner");
+    assert!(
+        detached_error.contains("does not currently resolve to a branch")
+            || detached_error.contains("is on `HEAD` but slot lease expects"),
+        "unexpected detached lease error: {detached_error}"
+    );
+
+    let mismatch_repo = init_temp_git_repo("branch-mismatch");
+    let mismatch_workspace = path_string(&mismatch_repo);
+    let mut mismatch_lease = lease(
+        "slot-1",
+        "task-mismatch",
+        ParallelModeSlotLeaseState::Leased,
+        "2020-01-01T00:03:00Z",
+    );
+    mismatch_lease.worktree_path = mismatch_workspace.clone();
+    mismatch_lease.branch_name = "akra-agent/slot-1/task-mismatch".to_string();
+    adapter
+        .upsert_runtime_slot_lease(&mismatch_workspace, &mismatch_lease)
+        .expect("mismatch lease should be stored");
+
+    let mismatch_error = resolve_workspace_slot_lease(&adapter, &mismatch_workspace)
+        .expect_err("branch mismatch should be rejected");
+    assert!(mismatch_error.contains("slot lease expects `akra-agent/slot-1/task-mismatch`"));
+
+    remove_pool_artifacts(&duplicate_repo);
+    remove_pool_artifacts(&detached_repo);
+    remove_pool_artifacts(&mismatch_repo);
+}
+
+#[test]
+fn traced_parallel_enable_reset_covers_live_blocker_and_reset_event_payloads() {
+    let repo = init_temp_git_repo("traced-reset-events");
+    let workspace = path_string(&repo);
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let live_slot_path = create_agent_pool_slot(&repo, 1, "task-live");
+    let reset_slot_path = create_detached_pool_slot(&repo, 2);
+    let mut running_lease = lease(
+        "slot-1",
+        "task-live",
+        ParallelModeSlotLeaseState::Running,
+        "2020-01-01T00:00:00Z",
+    );
+    running_lease.worktree_path = path_string(&live_slot_path);
+    adapter
+        .upsert_runtime_slot_lease(&workspace, &running_lease)
+        .expect("running lease should be stored");
+    fs::write(reset_slot_path.join("scratch.tmp"), "reset me\n")
+        .expect("reset slot scratch file should be written");
+
+    let report = with_akra_event_trace(|| {
+        reset_pool_for_parallel_enable(
+            &adapter,
+            &MirrorRuntime::default(),
+            &workspace,
+            ParallelModePoolResetPolicy::ProtectLive,
+        )
+    })
+    .expect("protect-live reset should report live blocker and reset idle slot");
+
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), 1);
+    assert!(live_slot_path.join(".git").exists());
+    assert!(!reset_slot_path.join("scratch.tmp").exists());
+
+    remove_pool_artifacts(&repo);
 }
