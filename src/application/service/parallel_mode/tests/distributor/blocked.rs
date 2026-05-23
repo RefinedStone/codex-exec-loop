@@ -23,6 +23,29 @@ fn push_ready_pr_unavailable_capabilities() -> GithubAutomationCapabilities {
     )
 }
 
+fn push_unavailable_capabilities() -> GithubAutomationCapabilities {
+    GithubAutomationCapabilities::new(
+        ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::PushRemote,
+            ParallelModeCapabilityState::Blocked,
+            "origin push dry-run failed",
+            Some("restore origin push access".to_string()),
+        ),
+        ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::GhBinary,
+            ParallelModeCapabilityState::Ready,
+            "test gh binary ready",
+            None,
+        ),
+        ParallelModeCapabilitySnapshot::new(
+            ParallelModeCapabilityKey::GhAuth,
+            ParallelModeCapabilityState::Ready,
+            "test gh auth ready",
+            None,
+        ),
+    )
+}
+
 fn enqueue_single_commit_ready_result(
     service: &ParallelModeService,
     repo: &TempGitRepo,
@@ -85,6 +108,47 @@ fn write_slot_git_metadata(slot_path: &Path, file_name: &str) {
     };
     fs::write(git_dir.join(file_name), "synthetic pending operation\n")
         .expect("slot git metadata should be writable");
+}
+
+fn assert_pr_readiness_blocks(prefix: &str, github: FakeGithubAutomationPort, expected_note: &str) {
+    let repo = TempGitRepo::new(prefix);
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-pr-readiness");
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices.iter().any(|notice| notice.contains(expected_note)),
+        "PR readiness block should mention `{expected_note}`: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            format!("ensure-pr:prerelease:{}", lease.branch_name),
+            "inspect-pr:77".to_string(),
+        ]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record.integration_note.contains(expected_note),
+        "queue record should persist the same block note: {}",
+        queue_record.integration_note
+    );
 }
 
 // PR workflow가 required인 상태에서 `gh` 실행과 인증이 degraded라면 distributor는
@@ -425,6 +489,124 @@ fn distributor_blocks_source_push_rejection_without_ensuring_pull_request() {
         queue_records[0]
             .integration_note
             .contains("remote rejected signed commit")
+    );
+}
+
+#[test]
+fn distributor_blocks_before_source_push_when_push_capability_is_unavailable() {
+    let repo = TempGitRepo::new("distributor-push-capability-unavailable");
+    let github = FakeGithubAutomationPort::with_capabilities(push_unavailable_capabilities());
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    enqueue_single_commit_ready_result(&service, &repo, "turn-push-capability");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("push capability is unavailable for distributor delivery")
+                && notice.contains("origin push dry-run failed")
+        }),
+        "push capability failure should block before remote calls: {notices:?}"
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty(),
+        "source push must not run when push capability is unavailable"
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("push capability is unavailable")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_pull_request_ensure_fails_after_source_push() {
+    let repo = TempGitRepo::new("distributor-pr-ensure-failure");
+    let github = FakeGithubAutomationPort::with_ensure_error("base branch unavailable");
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-pr-ensure-failure");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("distributor queue should process");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("pull request ensure failed")
+                && notice.contains("base branch unavailable")
+        }),
+        "PR ensure failure should be persisted as a retryable block: {notices:?}"
+    );
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .clone(),
+        vec![
+            format!("push:{}:false", lease.branch_name),
+            format!("ensure-pr:prerelease:{}", lease.branch_name),
+        ]
+    );
+    let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(
+        queue_record.queue_state,
+        ParallelModeQueueItemState::Blocked
+    );
+    assert!(
+        queue_record
+            .integration_note
+            .contains("pull request ensure failed")
+    );
+}
+
+#[test]
+fn distributor_blocks_when_pull_request_inspection_fails_before_integration() {
+    assert_pr_readiness_blocks(
+        "distributor-pr-inspect-failure",
+        FakeGithubAutomationPort::with_inspect_error("GitHub API timeout"),
+        "pull request #77 could not be inspected: GitHub API timeout",
+    );
+}
+
+#[test]
+fn distributor_blocks_when_pull_request_readiness_drifts() {
+    assert_pr_readiness_blocks(
+        "distributor-pr-closed",
+        FakeGithubAutomationPort::with_inspect_state("CLOSED"),
+        "pull request #77 is not open (`CLOSED`)",
+    );
+    assert_pr_readiness_blocks(
+        "distributor-pr-draft",
+        FakeGithubAutomationPort::with_draft_pull_request(),
+        "pull request #77 is still a draft",
+    );
+    assert_pr_readiness_blocks(
+        "distributor-pr-base-drift",
+        FakeGithubAutomationPort::with_inspect_base_branch("main"),
+        "pull request #77 targets `main` instead of `prerelease`",
+    );
+    assert_pr_readiness_blocks(
+        "distributor-pr-head-drift",
+        FakeGithubAutomationPort::with_inspect_head_branch("akra-agent/slot-9/other"),
+        "pull request #77 head drifted",
     );
 }
 

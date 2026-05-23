@@ -468,6 +468,12 @@ struct FakeGithubAutomationPort {
     source_push_error: Arc<Mutex<Option<String>>>,
     force_push_error: Arc<Mutex<Option<String>>>,
     integration_push_error: Arc<Mutex<Option<String>>>,
+    ensure_error: Arc<Mutex<Option<String>>>,
+    inspect_error: Arc<Mutex<Option<String>>>,
+    inspect_state: Arc<Mutex<Option<String>>>,
+    inspect_draft: Arc<Mutex<Option<bool>>>,
+    inspect_base_branch: Arc<Mutex<Option<String>>>,
+    inspect_head_branch: Arc<Mutex<Option<String>>>,
     close_error: Arc<Mutex<Option<String>>>,
 }
 impl FakeGithubAutomationPort {
@@ -507,6 +513,12 @@ impl FakeGithubAutomationPort {
             source_push_error: Arc::new(Mutex::new(None)),
             force_push_error: Arc::new(Mutex::new(None)),
             integration_push_error: Arc::new(Mutex::new(None)),
+            ensure_error: Arc::new(Mutex::new(None)),
+            inspect_error: Arc::new(Mutex::new(None)),
+            inspect_state: Arc::new(Mutex::new(None)),
+            inspect_draft: Arc::new(Mutex::new(None)),
+            inspect_base_branch: Arc::new(Mutex::new(None)),
+            inspect_head_branch: Arc::new(Mutex::new(None)),
             close_error: Arc::new(Mutex::new(None)),
         }
     }
@@ -543,6 +555,62 @@ impl FakeGithubAutomationPort {
             .integration_push_error
             .lock()
             .expect("fake github integration-push error mutex poisoned") = Some(error.to_string());
+        github
+    }
+
+    fn with_ensure_error(error: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .ensure_error
+            .lock()
+            .expect("fake github ensure error mutex poisoned") = Some(error.to_string());
+        github
+    }
+
+    fn with_inspect_error(error: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_error
+            .lock()
+            .expect("fake github inspect error mutex poisoned") = Some(error.to_string());
+        github
+    }
+
+    fn with_inspect_state(state: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_state
+            .lock()
+            .expect("fake github inspect state mutex poisoned") = Some(state.to_string());
+        github
+    }
+
+    fn with_draft_pull_request() -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_draft
+            .lock()
+            .expect("fake github inspect draft mutex poisoned") = Some(true);
+        github
+    }
+
+    fn with_inspect_base_branch(base_branch: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_base_branch
+            .lock()
+            .expect("fake github inspect base branch mutex poisoned") =
+            Some(base_branch.to_string());
+        github
+    }
+
+    fn with_inspect_head_branch(head_branch: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_head_branch
+            .lock()
+            .expect("fake github inspect head branch mutex poisoned") =
+            Some(head_branch.to_string());
         github
     }
 
@@ -609,6 +677,14 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             .lock()
             .expect("fake github operations mutex poisoned")
             .push(format!("ensure-pr:{base_branch}:{head_branch}"));
+        if let Some(error) = self
+            .ensure_error
+            .lock()
+            .expect("fake github ensure error mutex poisoned")
+            .clone()
+        {
+            anyhow::bail!(error);
+        }
         Ok(GithubAutomationPullRequest::new(
             self.ensured_pull_request.number,
             self.ensured_pull_request.url.clone(),
@@ -623,29 +699,60 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         _repo_root: &str,
         pr_number: u64,
     ) -> anyhow::Result<GithubAutomationPullRequest> {
-        let base_branch = self
+        let ensured_base_branch = self
             .base_branch
             .lock()
             .expect("fake github base branch mutex poisoned")
             .clone()
             .unwrap_or_else(|| POOL_BASELINE_BRANCH.to_string());
-        let head_branch = self
+        let ensured_head_branch = self
             .head_branch
             .lock()
             .expect("fake github head branch mutex poisoned")
             .clone()
             .unwrap_or_else(|| self.ensured_pull_request.head_branch.clone());
+        let base_branch = self
+            .inspect_base_branch
+            .lock()
+            .expect("fake github inspect base branch mutex poisoned")
+            .clone()
+            .unwrap_or(ensured_base_branch);
+        let head_branch = self
+            .inspect_head_branch
+            .lock()
+            .expect("fake github inspect head branch mutex poisoned")
+            .clone()
+            .unwrap_or(ensured_head_branch);
+        let state = self
+            .inspect_state
+            .lock()
+            .expect("fake github inspect state mutex poisoned")
+            .clone()
+            .unwrap_or_else(|| "OPEN".to_string());
+        let is_draft = self
+            .inspect_draft
+            .lock()
+            .expect("fake github inspect draft mutex poisoned")
+            .unwrap_or(false);
         self.operations
             .lock()
             .expect("fake github operations mutex poisoned")
             .push(format!("inspect-pr:{pr_number}"));
+        if let Some(error) = self
+            .inspect_error
+            .lock()
+            .expect("fake github inspect error mutex poisoned")
+            .clone()
+        {
+            anyhow::bail!(error);
+        }
         Ok(GithubAutomationPullRequest::new(
             pr_number,
             format!("https://github.com/RefinedStone/codex-exec-loop/pull/{pr_number}"),
-            "OPEN",
+            state,
             base_branch,
             head_branch,
-            false,
+            is_draft,
         ))
     }
     fn push_integration_branch(&self, _repo_root: &str, branch_name: &str) -> anyhow::Result<()> {
