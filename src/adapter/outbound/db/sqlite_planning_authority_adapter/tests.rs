@@ -85,6 +85,72 @@ fn set_authority_metadata(workspace_dir: &str, key: &str, value: &str) {
         .expect("authority metadata should upsert");
 }
 
+fn replace_runtime_table_schema(workspace_dir: &str, table_name: &str, columns_sql: &str) {
+    let sql = format!("DROP TABLE {table_name}; CREATE TABLE {table_name} ({columns_sql});");
+    authority_connection(workspace_dir)
+        .execute_batch(&sql)
+        .expect("runtime table schema should be replaced");
+}
+
+fn corrupt_runtime_events_schema(workspace_dir: &str) {
+    replace_runtime_table_schema(
+        workspace_dir,
+        "runtime_events",
+        "sequence INTEGER PRIMARY KEY",
+    );
+}
+
+fn install_failing_delete_trigger(workspace_dir: &str, table_name: &str, trigger_name: &str) {
+    let sql = format!(
+        "CREATE TRIGGER {trigger_name}
+         BEFORE DELETE ON {table_name}
+         BEGIN
+             SELECT RAISE(FAIL, 'forced delete failure');
+         END;"
+    );
+    authority_connection(workspace_dir)
+        .execute_batch(&sql)
+        .expect("failing delete trigger should install");
+}
+
+fn dispatch_command_snapshot(seed: u64) -> ParallelModeDispatchCommandSnapshot {
+    ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some(format!("queue-head-{seed}")),
+        Some(seed),
+        "2026-05-08T00:00:00+00:00",
+    )
+}
+
+fn insert_pending_dispatch_command_row(
+    workspace_dir: &str,
+    command: &ParallelModeDispatchCommandSnapshot,
+) {
+    let payload_json =
+        serde_json::to_string(command).expect("dispatch command payload should serialize");
+    authority_connection(workspace_dir)
+        .execute(
+            "INSERT INTO runtime_dispatch_commands
+                (command_id, command_state, created_at, content)
+             VALUES (?1, ?2, ?3, ?4)",
+            (
+                command.command_id.as_str(),
+                ParallelModeDispatchCommandState::Pending.label(),
+                command.created_at.as_str(),
+                payload_json.as_str(),
+            ),
+        )
+        .expect("pending dispatch command row should insert");
+}
+
+fn assert_error_contains<T>(result: anyhow::Result<T>, expected: &str) {
+    let Err(error) = result else {
+        panic!("expected error containing `{expected}`");
+    };
+    let message = format!("{error:?}");
+    assert!(message.contains(expected), "{message}");
+}
+
 fn insert_invalid_slot_marker(workspace_dir: &str, slot_id: &str) {
     let connection = authority_connection(workspace_dir);
     connection
@@ -1596,6 +1662,849 @@ fn stale_distributor_claims_invalid_slots_pool_reset_and_zero_limit_events_are_p
             "blank task cleanup",
         )
         .expect("blank task cleanup should be a no-op");
+}
+
+#[test]
+fn pool_reset_report_clears_only_successful_slots_and_reads_unfiltered_events() {
+    let workspace_dir = temp_workspace("runtime-reset-report-mixed");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let success_lease = slot_lease_for_task(
+        "slot-success",
+        "task-success",
+        ParallelModeSlotLeaseState::Running,
+    );
+    let blocked_lease = slot_lease_for_task(
+        "slot-blocked",
+        "task-blocked",
+        ParallelModeSlotLeaseState::Running,
+    );
+    let failed_lease = slot_lease_for_task(
+        "slot-failed",
+        "task-failed",
+        ParallelModeSlotLeaseState::Running,
+    );
+
+    for lease in [&success_lease, &blocked_lease, &failed_lease] {
+        adapter
+            .upsert_runtime_slot_lease(&workspace_dir, lease)
+            .expect("slot lease should persist before mixed reset");
+        insert_invalid_slot_marker(&workspace_dir, &lease.slot_id);
+    }
+    adapter
+        .upsert_runtime_session_detail(
+            &workspace_dir,
+            &running_session_detail(
+                "session-success",
+                "task-success",
+                "2026-05-04T12:00:00+00:00",
+            ),
+        )
+        .expect("reset session should persist");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-success", "session-success", "task-success"),
+        )
+        .expect("reset queue should persist");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-blocked", "session-blocked", "task-blocked"),
+        )
+        .expect("blocked queue should persist");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-success", "owner-success")
+            .expect("success queue claim should acquire")
+    );
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-blocked", "owner-blocked")
+            .expect("blocked queue claim should acquire")
+    );
+
+    let mut report = ParallelModePoolResetReport::new(
+        ParallelModePoolResetRunId::new("mixed-reset-run"),
+        ParallelModePoolResetPolicy::ProtectLive,
+    );
+    report
+        .slot_reports
+        .push(ParallelModePoolResetSlotReport::new(
+            "slot-success",
+            ParallelModePoolResetSlotAction::Reset,
+            ParallelModePoolResetSlotOutcome::Succeeded,
+            "reset completed",
+        ));
+    report
+        .slot_reports
+        .push(ParallelModePoolResetSlotReport::new(
+            "slot-blocked",
+            ParallelModePoolResetSlotAction::PreserveLive,
+            ParallelModePoolResetSlotOutcome::Blocked,
+            "live turn running",
+        ));
+    report
+        .slot_reports
+        .push(ParallelModePoolResetSlotReport::new(
+            "slot-failed",
+            ParallelModePoolResetSlotAction::Reset,
+            ParallelModePoolResetSlotOutcome::Failed,
+            "worktree reset failed",
+        ));
+    report
+        .slot_reports
+        .push(ParallelModePoolResetSlotReport::new(
+            "slot-missing",
+            ParallelModePoolResetSlotAction::SkipMissing,
+            ParallelModePoolResetSlotOutcome::Skipped,
+            "slot missing",
+        ));
+    report
+        .reset_session_keys
+        .push("session-success".to_string());
+    report
+        .reset_queue_item_ids
+        .push("queue-success".to_string());
+
+    adapter
+        .apply_parallel_pool_reset_report(&workspace_dir, &report)
+        .expect("mixed pool reset report should apply");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load after mixed reset");
+    assert!(!snapshot.slot_leases.contains_key("slot-success"));
+    assert!(snapshot.slot_leases.contains_key("slot-blocked"));
+    assert!(snapshot.slot_leases.contains_key("slot-failed"));
+    assert!(!snapshot.invalid_slot_leases.contains("slot-success"));
+    assert!(snapshot.invalid_slot_leases.contains("slot-blocked"));
+    assert!(snapshot.invalid_slot_leases.contains("slot-failed"));
+    assert!(snapshot.session_details.is_empty());
+    assert_eq!(snapshot.distributor_queue_records.len(), 1);
+    assert_eq!(
+        snapshot.distributor_queue_records[0].queue_item_id,
+        "queue-blocked"
+    );
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(
+                &workspace_dir,
+                "queue-success",
+                "owner-success-after-reset",
+            )
+            .expect("success queue claim should be cleared")
+    );
+    assert!(
+        !adapter
+            .try_acquire_distributor_queue_claim(
+                &workspace_dir,
+                "queue-blocked",
+                "owner-blocked-after-reset",
+            )
+            .expect("blocked queue claim should remain")
+    );
+
+    let events = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::recent(50),
+        )
+        .expect("unfiltered runtime event log should load");
+    assert!(events.total_event_count >= snapshot.runtime_events.len());
+    assert!(events.entries.iter().any(|event| {
+        event.event_kind == "parallel_pool_reset_report_applied"
+            && event.summary.contains("live_blockers: 1")
+            && event.summary.contains("failures: 1")
+    }));
+}
+
+#[test]
+fn runtime_task_cleanup_trims_deduplicates_and_clears_multiple_tasks() {
+    let workspace_dir = temp_workspace("runtime-task-cleanup-multi");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    for (slot_id, task_id, session_key, queue_item_id) in [
+        ("slot-a", "task-a", "session-a", "queue-a"),
+        ("slot-b", "task-b", "session-b", "queue-b"),
+        ("slot-c", "task-c", "session-c", "queue-c"),
+    ] {
+        adapter
+            .upsert_runtime_slot_lease(
+                &workspace_dir,
+                &slot_lease_for_task(slot_id, task_id, ParallelModeSlotLeaseState::Running),
+            )
+            .expect("task cleanup slot lease should persist");
+        insert_invalid_slot_marker(&workspace_dir, slot_id);
+        adapter
+            .upsert_runtime_session_detail(
+                &workspace_dir,
+                &failed_start_session_detail(session_key, task_id, "2026-05-04T12:00:00+00:00"),
+            )
+            .expect("task cleanup session should persist");
+        adapter
+            .upsert_runtime_task_dispatch_block(
+                &workspace_dir,
+                &ParallelModeTaskDispatchBlockSnapshot::new(
+                    task_id,
+                    "2026-05-04T11:55:00+00:00",
+                    "2026-05-04T12:00:00+00:00",
+                    ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+                ),
+            )
+            .expect("task cleanup dispatch block should persist");
+        adapter
+            .upsert_runtime_distributor_queue_record(
+                &workspace_dir,
+                &queue_record_for_task(queue_item_id, session_key, task_id),
+            )
+            .expect("task cleanup queue should persist");
+        assert!(
+            adapter
+                .try_acquire_distributor_queue_claim(&workspace_dir, queue_item_id, "owner")
+                .expect("task cleanup queue claim should acquire")
+        );
+    }
+
+    adapter
+        .clear_parallel_runtime_projections_for_tasks(
+            &workspace_dir,
+            &[
+                " task-b ".to_string(),
+                "task-a".to_string(),
+                "task-a".to_string(),
+                String::new(),
+            ],
+            "multi task cleanup",
+        )
+        .expect("multi-task runtime cleanup should apply");
+
+    let snapshot = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load after multi-task cleanup");
+    assert_eq!(
+        snapshot
+            .slot_leases
+            .values()
+            .map(|lease| lease.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-c"]
+    );
+    assert_eq!(
+        snapshot
+            .session_details
+            .iter()
+            .map(|detail| detail.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-c"]
+    );
+    assert_eq!(
+        snapshot
+            .task_dispatch_blocks
+            .iter()
+            .map(|block| block.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-c"]
+    );
+    assert_eq!(
+        snapshot
+            .distributor_queue_records
+            .iter()
+            .map(|record| record.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-c"]
+    );
+    assert!(!snapshot.invalid_slot_leases.contains("slot-a"));
+    assert!(!snapshot.invalid_slot_leases.contains("slot-b"));
+    assert!(snapshot.invalid_slot_leases.contains("slot-c"));
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-a", "owner-after")
+            .expect("task-a queue claim should clear")
+    );
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-b", "owner-after")
+            .expect("task-b queue claim should clear")
+    );
+    assert!(
+        !adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-c", "owner-after")
+            .expect("task-c queue claim should remain")
+    );
+    assert!(snapshot.runtime_events.iter().any(|event| {
+        event.event_kind == "parallel_runtime_task_cleanup"
+            && event.summary.contains("tasks: 2")
+            && event.summary.contains("claims: 2")
+    }));
+}
+
+#[test]
+fn runtime_projection_write_error_contexts_report_broken_tables() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let enqueue_workspace = temp_workspace("runtime-write-error-dispatch-enqueue");
+    replace_runtime_table_schema(
+        &enqueue_workspace,
+        "runtime_dispatch_commands",
+        "command_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter
+            .enqueue_runtime_dispatch_command(&enqueue_workspace, &dispatch_command_snapshot(801)),
+        "failed to enqueue runtime dispatch command",
+    );
+
+    let revive_workspace = temp_workspace("runtime-write-error-dispatch-revive");
+    let revive_command = dispatch_command_snapshot(802);
+    adapter
+        .enqueue_runtime_dispatch_command(&revive_workspace, &revive_command)
+        .expect("revive seed should enqueue");
+    let mut blocked = adapter
+        .try_claim_next_runtime_dispatch_command(&revive_workspace, "owner-revive")
+        .expect("revive seed should claim")
+        .expect("revive seed should exist");
+    blocked.mark_blocked("waiting for retry", "2026-05-08T00:00:10+00:00");
+    adapter
+        .update_runtime_dispatch_command(&revive_workspace, &blocked)
+        .expect("revive seed should become terminal");
+    authority_connection(&revive_workspace)
+        .execute_batch(
+            "CREATE TRIGGER fail_dispatch_reenqueue_update
+             BEFORE UPDATE ON runtime_dispatch_commands
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced dispatch update failure');
+             END;",
+        )
+        .expect("dispatch update trigger should install");
+    assert_error_contains(
+        adapter.enqueue_runtime_dispatch_command(&revive_workspace, &revive_command),
+        "failed to revive terminal runtime dispatch command",
+    );
+
+    let claim_workspace = temp_workspace("runtime-write-error-dispatch-claim");
+    replace_runtime_table_schema(
+        &claim_workspace,
+        "runtime_dispatch_commands",
+        "command_id TEXT PRIMARY KEY, command_state TEXT NOT NULL, created_at TEXT NOT NULL, content TEXT NOT NULL",
+    );
+    insert_pending_dispatch_command_row(&claim_workspace, &dispatch_command_snapshot(803));
+    assert_error_contains(
+        adapter.try_claim_next_runtime_dispatch_command(&claim_workspace, "owner-claim"),
+        "failed to claim runtime dispatch command",
+    );
+
+    let update_workspace = temp_workspace("runtime-write-error-dispatch-update");
+    replace_runtime_table_schema(
+        &update_workspace,
+        "runtime_dispatch_commands",
+        "command_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.update_runtime_dispatch_command(&update_workspace, &dispatch_command_snapshot(804)),
+        "failed to update runtime dispatch command",
+    );
+
+    let slot_workspace = temp_workspace("runtime-write-error-slot-invalid");
+    replace_runtime_table_schema(
+        &slot_workspace,
+        "runtime_invalid_slot_leases",
+        "broken_slot_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.upsert_runtime_slot_lease(
+            &slot_workspace,
+            &slot_lease_for_task(
+                "slot-broken-invalid",
+                "task-broken-invalid",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        ),
+        "failed to clear invalid runtime slot lease `slot-broken-invalid`",
+    );
+
+    let session_workspace = temp_workspace("runtime-write-error-session");
+    replace_runtime_table_schema(
+        &session_workspace,
+        "runtime_session_details",
+        "session_key TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.upsert_runtime_session_detail(
+            &session_workspace,
+            &running_session_detail(
+                "session-broken",
+                "task-broken-session",
+                "2026-05-04T12:00:00+00:00",
+            ),
+        ),
+        "failed to persist runtime session detail `session-broken`",
+    );
+
+    let block_workspace = temp_workspace("runtime-write-error-block");
+    replace_runtime_table_schema(
+        &block_workspace,
+        "runtime_task_dispatch_blocks",
+        "task_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.upsert_runtime_task_dispatch_block(
+            &block_workspace,
+            &ParallelModeTaskDispatchBlockSnapshot::new(
+                "task-broken-block",
+                "2026-05-04T11:55:00+00:00",
+                "2026-05-04T12:00:00+00:00",
+                ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+            ),
+        ),
+        "failed to persist runtime task dispatch block `task-broken-block`",
+    );
+
+    let queue_workspace = temp_workspace("runtime-write-error-queue");
+    replace_runtime_table_schema(
+        &queue_workspace,
+        "runtime_distributor_queue",
+        "queue_item_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.upsert_runtime_distributor_queue_record(
+            &queue_workspace,
+            &queue_record_for_task("queue-broken", "session-broken", "task-broken-queue"),
+        ),
+        "failed to persist runtime distributor queue record `queue-broken`",
+    );
+}
+
+#[test]
+fn runtime_projection_event_append_errors_keep_projection_context() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let enqueue_workspace = temp_workspace("runtime-event-error-dispatch-enqueue");
+    corrupt_runtime_events_schema(&enqueue_workspace);
+    assert_error_contains(
+        adapter
+            .enqueue_runtime_dispatch_command(&enqueue_workspace, &dispatch_command_snapshot(811)),
+        "failed to append runtime event `dispatch_command_enqueued`",
+    );
+
+    let claim_workspace = temp_workspace("runtime-event-error-dispatch-claim");
+    adapter
+        .enqueue_runtime_dispatch_command(&claim_workspace, &dispatch_command_snapshot(812))
+        .expect("claim event seed should enqueue");
+    corrupt_runtime_events_schema(&claim_workspace);
+    assert_error_contains(
+        adapter.try_claim_next_runtime_dispatch_command(&claim_workspace, "owner-event"),
+        "failed to append runtime event `dispatch_command_claimed`",
+    );
+
+    let update_workspace = temp_workspace("runtime-event-error-dispatch-update");
+    corrupt_runtime_events_schema(&update_workspace);
+    assert_error_contains(
+        adapter.update_runtime_dispatch_command(&update_workspace, &dispatch_command_snapshot(813)),
+        "failed to append runtime event `dispatch_command_updated`",
+    );
+
+    let slot_workspace = temp_workspace("runtime-event-error-slot-upsert");
+    corrupt_runtime_events_schema(&slot_workspace);
+    assert_error_contains(
+        adapter.upsert_runtime_slot_lease(
+            &slot_workspace,
+            &slot_lease_for_task(
+                "slot-event",
+                "task-event-slot",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        ),
+        "failed to append runtime event `slot_lease_upsert`",
+    );
+
+    let remove_workspace = temp_workspace("runtime-event-error-slot-remove");
+    adapter
+        .upsert_runtime_slot_lease(
+            &remove_workspace,
+            &slot_lease_for_task(
+                "slot-remove-event",
+                "task-remove-event",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        )
+        .expect("remove event seed should persist");
+    corrupt_runtime_events_schema(&remove_workspace);
+    assert_error_contains(
+        SqlitePlanningAuthorityAdapter::remove_runtime_slot_lease(
+            &remove_workspace,
+            "slot-remove-event",
+        ),
+        "failed to append runtime event `slot_lease_removed`",
+    );
+
+    let reset_workspace = temp_workspace("runtime-event-error-reset");
+    corrupt_runtime_events_schema(&reset_workspace);
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections(&reset_workspace, "broken event table"),
+        "failed to append runtime event `parallel_runtime_reset`",
+    );
+
+    let task_cleanup_workspace = temp_workspace("runtime-event-error-task-cleanup");
+    corrupt_runtime_events_schema(&task_cleanup_workspace);
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections_for_tasks(
+            &task_cleanup_workspace,
+            &["task-event-cleanup".to_string()],
+            "broken event table",
+        ),
+        "failed to append runtime event `parallel_runtime_task_cleanup`",
+    );
+
+    let pool_reset_workspace = temp_workspace("runtime-event-error-pool-reset");
+    corrupt_runtime_events_schema(&pool_reset_workspace);
+    let report = ParallelModePoolResetReport::new(
+        ParallelModePoolResetRunId::new("event-error-reset"),
+        ParallelModePoolResetPolicy::ForceDisposable,
+    );
+    assert_error_contains(
+        adapter.apply_parallel_pool_reset_report(&pool_reset_workspace, &report),
+        "failed to append runtime event `parallel_pool_reset_report_applied`",
+    );
+
+    let session_workspace = temp_workspace("runtime-event-error-session");
+    corrupt_runtime_events_schema(&session_workspace);
+    assert_error_contains(
+        adapter.upsert_runtime_session_detail(
+            &session_workspace,
+            &running_session_detail(
+                "session-event",
+                "task-event-session",
+                "2026-05-04T12:00:00+00:00",
+            ),
+        ),
+        "failed to append runtime event `session_detail_upsert`",
+    );
+
+    let block_workspace = temp_workspace("runtime-event-error-block");
+    corrupt_runtime_events_schema(&block_workspace);
+    assert_error_contains(
+        adapter.upsert_runtime_task_dispatch_block(
+            &block_workspace,
+            &ParallelModeTaskDispatchBlockSnapshot::new(
+                "task-event-block",
+                "2026-05-04T11:55:00+00:00",
+                "2026-05-04T12:00:00+00:00",
+                ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+            ),
+        ),
+        "failed to append runtime event `task_dispatch_block_upsert`",
+    );
+
+    let queue_workspace = temp_workspace("runtime-event-error-queue");
+    corrupt_runtime_events_schema(&queue_workspace);
+    assert_error_contains(
+        adapter.upsert_runtime_distributor_queue_record(
+            &queue_workspace,
+            &queue_record_for_task("queue-event", "session-event", "task-event-queue"),
+        ),
+        "failed to append runtime event `distributor_queue_upsert`",
+    );
+
+    let abandoned_workspace = temp_workspace("runtime-event-error-official-abandon");
+    adapter
+        .reserve_next_official_refresh_order(&abandoned_workspace)
+        .expect("head order should reserve before abandoned event failure");
+    adapter
+        .reserve_next_official_refresh_order(&abandoned_workspace)
+        .expect("tail order should reserve before abandoned event failure");
+    corrupt_runtime_events_schema(&abandoned_workspace);
+    assert_error_contains(
+        adapter.abandon_next_official_refresh_order(&abandoned_workspace, "broken event table"),
+        "failed to append runtime event `official_refresh_abandoned`",
+    );
+}
+
+#[test]
+fn runtime_projection_cleanup_error_contexts_report_sqlite_failures() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let reserve_workspace = temp_workspace("runtime-cleanup-error-reserve-metadata");
+    authority_connection(&reserve_workspace)
+        .execute_batch(
+            "CREATE TRIGGER fail_next_official_order_metadata
+             BEFORE INSERT ON authority_metadata
+             WHEN NEW.key = 'next_official_refresh_order'
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced metadata failure');
+             END;",
+        )
+        .expect("next official metadata trigger should install");
+    assert_error_contains(
+        adapter.reserve_next_official_refresh_order(&reserve_workspace),
+        "failed to update authority metadata `next_official_refresh_order`",
+    );
+
+    let release_workspace = temp_workspace("runtime-cleanup-error-release-metadata");
+    let release_order = adapter
+        .reserve_next_official_refresh_order(&release_workspace)
+        .expect("release order should reserve");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&release_workspace, release_order, "release-owner")
+            .expect("release order should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    authority_connection(&release_workspace)
+        .execute_batch(
+            "CREATE TRIGGER fail_next_executable_release_metadata
+             BEFORE INSERT ON authority_metadata
+             WHEN NEW.key = 'next_executable_refresh_order'
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced metadata failure');
+             END;",
+        )
+        .expect("release metadata trigger should install");
+    assert_error_contains(
+        adapter.release_official_refresh_claim(&release_workspace, release_order, "release-owner"),
+        "failed to update authority metadata `next_executable_refresh_order`",
+    );
+
+    let abandon_workspace = temp_workspace("runtime-cleanup-error-abandon-metadata");
+    adapter
+        .reserve_next_official_refresh_order(&abandon_workspace)
+        .expect("abandon head should reserve");
+    adapter
+        .reserve_next_official_refresh_order(&abandon_workspace)
+        .expect("abandon tail should reserve");
+    authority_connection(&abandon_workspace)
+        .execute_batch(
+            "CREATE TRIGGER fail_next_executable_abandon_metadata
+             BEFORE INSERT ON authority_metadata
+             WHEN NEW.key = 'next_executable_refresh_order'
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced metadata failure');
+             END;",
+        )
+        .expect("abandon metadata trigger should install");
+    assert_error_contains(
+        adapter.abandon_next_official_refresh_order(&abandon_workspace, "metadata failure"),
+        "failed to update authority metadata `next_executable_refresh_order`",
+    );
+
+    let pool_queue_workspace = temp_workspace("runtime-cleanup-error-pool-queue");
+    replace_runtime_table_schema(
+        &pool_queue_workspace,
+        "runtime_distributor_queue",
+        "broken_queue_id TEXT PRIMARY KEY",
+    );
+    let mut pool_queue_report = ParallelModePoolResetReport::new(
+        ParallelModePoolResetRunId::new("pool-queue-error"),
+        ParallelModePoolResetPolicy::ForceDisposable,
+    );
+    pool_queue_report
+        .reset_queue_item_ids
+        .push("queue-pool-error".to_string());
+    assert_error_contains(
+        adapter.apply_parallel_pool_reset_report(&pool_queue_workspace, &pool_queue_report),
+        "failed to clear reset distributor queue item `queue-pool-error`",
+    );
+
+    let pool_claim_workspace = temp_workspace("runtime-cleanup-error-pool-claim");
+    replace_runtime_table_schema(
+        &pool_claim_workspace,
+        "runtime_claims",
+        "broken_claim_id TEXT PRIMARY KEY",
+    );
+    let mut pool_claim_report = ParallelModePoolResetReport::new(
+        ParallelModePoolResetRunId::new("pool-claim-error"),
+        ParallelModePoolResetPolicy::ForceDisposable,
+    );
+    pool_claim_report
+        .reset_queue_item_ids
+        .push("queue-claim-error".to_string());
+    assert_error_contains(
+        adapter.apply_parallel_pool_reset_report(&pool_claim_workspace, &pool_claim_report),
+        "failed to clear reset distributor claim `queue-claim-error`",
+    );
+
+    let task_invalid_workspace = temp_workspace("runtime-cleanup-error-task-invalid");
+    adapter
+        .upsert_runtime_slot_lease(
+            &task_invalid_workspace,
+            &slot_lease_for_task(
+                "slot-cleanup-invalid",
+                "task-cleanup-invalid",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        )
+        .expect("task invalid seed slot should persist");
+    replace_runtime_table_schema(
+        &task_invalid_workspace,
+        "runtime_invalid_slot_leases",
+        "broken_slot_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections_for_tasks(
+            &task_invalid_workspace,
+            &["task-cleanup-invalid".to_string()],
+            "broken invalid slot table",
+        ),
+        "failed to clear invalid runtime slot lease `slot-cleanup-invalid`",
+    );
+
+    let task_session_workspace = temp_workspace("runtime-cleanup-error-task-session");
+    replace_runtime_table_schema(
+        &task_session_workspace,
+        "runtime_session_details",
+        "session_key TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections_for_tasks(
+            &task_session_workspace,
+            &["task-cleanup-session".to_string()],
+            "broken session table",
+        ),
+        "failed to clear runtime session details for `task-cleanup-session`",
+    );
+
+    let task_block_workspace = temp_workspace("runtime-cleanup-error-task-block");
+    replace_runtime_table_schema(
+        &task_block_workspace,
+        "runtime_task_dispatch_blocks",
+        "broken_task_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections_for_tasks(
+            &task_block_workspace,
+            &["task-cleanup-block".to_string()],
+            "broken block table",
+        ),
+        "failed to clear runtime task dispatch blocks for `task-cleanup-block`",
+    );
+
+    let task_queue_workspace = temp_workspace("runtime-cleanup-error-task-queue");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &task_queue_workspace,
+            &queue_record_for_task(
+                "queue-cleanup-delete",
+                "session-cleanup-delete",
+                "task-cleanup-queue",
+            ),
+        )
+        .expect("task queue seed should persist");
+    install_failing_delete_trigger(
+        &task_queue_workspace,
+        "runtime_distributor_queue",
+        "fail_task_queue_delete",
+    );
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections_for_tasks(
+            &task_queue_workspace,
+            &["task-cleanup-queue".to_string()],
+            "queue delete trigger",
+        ),
+        "failed to clear runtime distributor queue records for `task-cleanup-queue`",
+    );
+
+    let task_claim_workspace = temp_workspace("runtime-cleanup-error-task-claim");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &task_claim_workspace,
+            &queue_record_for_task(
+                "queue-cleanup-claim",
+                "session-cleanup-claim",
+                "task-cleanup-claim",
+            ),
+        )
+        .expect("task claim queue seed should persist");
+    replace_runtime_table_schema(
+        &task_claim_workspace,
+        "runtime_claims",
+        "broken_claim_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections_for_tasks(
+            &task_claim_workspace,
+            &["task-cleanup-claim".to_string()],
+            "broken claim table",
+        ),
+        "failed to clear runtime queue claim `queue-cleanup-claim`",
+    );
+
+    let preserve_workspace = temp_workspace("runtime-cleanup-error-preserve-block");
+    adapter
+        .upsert_runtime_session_detail(
+            &preserve_workspace,
+            &failed_start_session_detail(
+                "session-preserve",
+                "task-preserve",
+                "2026-05-04T12:00:00+00:00",
+            ),
+        )
+        .expect("preserve seed session should persist");
+    replace_runtime_table_schema(
+        &preserve_workspace,
+        "runtime_task_dispatch_blocks",
+        "task_id TEXT PRIMARY KEY",
+    );
+    assert_error_contains(
+        adapter.clear_parallel_runtime_projections(&preserve_workspace, "broken block table"),
+        "failed to preserve failed-start task dispatch block `task-preserve`",
+    );
+
+    let stale_queue_workspace = temp_workspace("runtime-cleanup-error-stale-queue-claim");
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(
+                &stale_queue_workspace,
+                "queue-stale-delete",
+                "owner-old",
+            )
+            .expect("stale queue seed claim should acquire")
+    );
+    set_claim_timestamp(
+        &stale_queue_workspace,
+        DISTRIBUTOR_QUEUE_CLAIM_KIND,
+        "queue-stale-delete",
+        "2000-01-01T00:00:00+00:00",
+    );
+    install_failing_delete_trigger(
+        &stale_queue_workspace,
+        "runtime_claims",
+        "fail_stale_queue_claim_delete",
+    );
+    assert_error_contains(
+        adapter.try_acquire_distributor_queue_claim(
+            &stale_queue_workspace,
+            "queue-stale-delete",
+            "owner-new",
+        ),
+        "failed to clear stale runtime claim `distributor-queue-head:queue-stale-delete`",
+    );
+
+    let stale_official_workspace = temp_workspace("runtime-cleanup-error-stale-official-claim");
+    let stale_order = adapter
+        .reserve_next_official_refresh_order(&stale_official_workspace)
+        .expect("stale official order should reserve");
+    adapter
+        .reserve_next_official_refresh_order(&stale_official_workspace)
+        .expect("stale official tail should reserve");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&stale_official_workspace, stale_order, "owner-old")
+            .expect("stale official claim should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    set_claim_timestamp(
+        &stale_official_workspace,
+        "official-refresh",
+        OFFICIAL_REFRESH_SCOPE_KEY,
+        "2000-01-01T00:00:00+00:00",
+    );
+    install_failing_delete_trigger(
+        &stale_official_workspace,
+        "runtime_claims",
+        "fail_stale_official_claim_delete",
+    );
+    assert_error_contains(
+        adapter.abandon_next_official_refresh_order(&stale_official_workspace, "stale failure"),
+        "failed to clear stale runtime claim `official-refresh:official-refresh`",
+    );
 }
 
 #[test]
