@@ -81,10 +81,11 @@ where
         .await
         .with_context(|| format!("failed to bind admin server on 127.0.0.1:{}", args.port))?;
 
-    println!(
-        "local planning admin server listening on http://127.0.0.1:{}",
-        args.port
-    );
+    let bound_port = listener
+        .local_addr()
+        .context("failed to read admin server local address")?
+        .port();
+    println!("local planning admin server listening on http://127.0.0.1:{bound_port}");
 
     axum::serve(listener, build_router(state))
         .with_graceful_shutdown(shutdown_signal())

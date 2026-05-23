@@ -73,9 +73,11 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_entrypoint.rs`
 - `src/adapter/inbound/tui/app/shell_frontend.rs`
 - `src/adapter/inbound/tui/app/shell_layout.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/directions.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_editor_inputs.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_existing_workspace.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_existing_workspace_inputs.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_init_copy.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_runtime.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_session.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession/tests.rs`

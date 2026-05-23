@@ -125,3 +125,123 @@ pub(crate) fn build_directions_maintenance_overlay_view(
         DirectionsMaintenanceOverlayStep::ManualEditor => build_manual_editor_overlay_view(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::{AkraTheme, DetailDocConfirmChoice};
+    use super::*;
+    use crate::application::service::planning::{
+        DirectionsMaintenanceDirectionSummary, DirectionsSupportingFileStatus,
+    };
+
+    #[test]
+    fn overview_copy_reports_parse_error_and_disables_unsafe_detail_repair() {
+        let view = build_overview_overlay_view(
+            1,
+            2,
+            4,
+            "review",
+            "broken",
+            ".codex-exec-loop/planning/prompts/queue-idle.md",
+            Some("line 3: invalid direction"),
+        );
+
+        assert!(
+            section_text(&view.status_lines).contains("4 total / 1 missing docs / 2 broken docs")
+        );
+        assert!(section_text(&view.status_lines).contains("directions parse error"));
+        assert!(section_text(&view.option_lines).contains("repair detail docs"));
+        assert_eq!(view.option_lines[1].spans[0].style, AkraTheme::subtle());
+        assert_eq!(view.option_lines[2].spans[0].style, AkraTheme::subtle());
+    }
+
+    #[test]
+    fn detail_doc_projection_marks_selected_direction_by_stable_id() {
+        let missing = direction_summary(
+            "dir-alpha",
+            "Alpha",
+            None,
+            DirectionsSupportingFileStatus::MissingMapping,
+        );
+        let broken = direction_summary(
+            "dir-beta",
+            "Beta",
+            Some(".codex-exec-loop/planning/directions/dir-beta.md"),
+            DirectionsSupportingFileStatus::BrokenMapping,
+        );
+
+        let projection = build_detail_doc_selection_projection(&[&missing, &broken], Some(&broken));
+
+        assert_eq!(projection.selected_direction_title.as_deref(), Some("Beta"));
+        assert!(
+            line_text(&projection.option_lines[0])
+                .contains("id=dir-alpha / status=unset / path=<unset>")
+        );
+        assert!(line_text(&projection.option_lines[1]).contains(
+            "id=dir-beta / status=broken / path=.codex-exec-loop/planning/directions/dir-beta.md"
+        ));
+        assert_eq!(
+            projection.option_lines[1].spans[0].style,
+            AkraTheme::selected()
+        );
+
+        let empty_projection = build_detail_doc_selection_projection(&[], None);
+        assert!(
+            line_text(&empty_projection.option_lines[0])
+                .contains("Every direction already has a healthy detail-doc mapping")
+        );
+        assert_eq!(empty_projection.selected_direction_title, None);
+    }
+
+    #[test]
+    fn detail_doc_copy_keeps_selection_confirm_and_editor_steps_distinct() {
+        let selection =
+            build_detail_doc_selection_overlay_view(vec![Line::from("Dir row")], Some("Alpha"));
+        assert!(section_text(&selection.status_lines).contains("selected: Alpha"));
+        assert!(section_text(&selection.summary_lines).contains("detail_doc_path"));
+
+        let confirm = build_detail_doc_confirm_overlay_view(
+            "Alpha",
+            "dir-alpha",
+            DetailDocConfirmChoice::Yes,
+        );
+        assert!(section_text(&confirm.summary_lines).contains("direction: Alpha"));
+        assert!(
+            section_text(&confirm.summary_lines)
+                .contains(".codex-exec-loop/planning/directions/dir-alpha.md")
+        );
+        assert_eq!(
+            confirm.option_lines[0].spans[0].style,
+            AkraTheme::selected()
+        );
+
+        let manual = build_manual_editor_overlay_view();
+        assert!(section_text(&manual.header_lines).contains("staged editor"));
+        assert!(section_text(&manual.option_lines).contains("Ctrl+S to save + validate"));
+    }
+
+    fn direction_summary(
+        id: &str,
+        title: &str,
+        path: Option<&str>,
+        status: DirectionsSupportingFileStatus,
+    ) -> DirectionsMaintenanceDirectionSummary {
+        DirectionsMaintenanceDirectionSummary {
+            id: id.to_string(),
+            title: title.to_string(),
+            detail_doc_path: path.map(str::to_string),
+            detail_doc_status: status,
+        }
+    }
+
+    fn section_text(lines: &[Line<'_>]) -> String {
+        lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+}

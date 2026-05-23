@@ -51,3 +51,50 @@ pub(super) fn build_simple_review_overlay_view(
 pub(super) fn build_manual_editor_overlay_view() -> PlanningInitOverlayView {
     review::build_manual_editor_overlay_view()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::text::Line;
+
+    #[test]
+    fn mode_and_detail_selection_copy_tracks_focused_route() {
+        let simple = build_mode_selection_overlay_view(PlanningInitModeSelection::Simple);
+        assert!(section_text(&simple.option_lines).contains("simple mode"));
+        assert!(section_text(&simple.status_lines).contains("current selection: simple mode"));
+
+        let detail = build_mode_selection_overlay_view(PlanningInitModeSelection::Detail);
+        assert!(section_text(&detail.status_lines).contains("current selection: detail mode"));
+        assert!(section_text(&detail.key_lines).contains("Enter continues"));
+
+        let worker_detail =
+            build_detail_selection_overlay_view(PlanningInitDetailSelection::WorkerAssisted);
+        assert!(
+            section_text(&worker_detail.status_lines)
+                .contains("current selection: worker-assisted (disabled)")
+        );
+        assert!(section_text(&worker_detail.option_lines).contains("future guided drafting flow"));
+        assert!(section_text(&worker_detail.key_lines).contains("Backspace/Left goes back"));
+    }
+
+    #[test]
+    fn manual_editor_copy_points_back_to_dedicated_editor_surface() {
+        let view = build_manual_editor_overlay_view();
+
+        assert!(section_text(&view.header_lines).contains("operator inspection"));
+        assert!(section_text(&view.summary_lines).contains("dedicated planning draft editor view"));
+        assert!(section_text(&view.option_lines).contains("Ctrl+S saves"));
+        assert!(section_text(&view.status_lines).contains("editing the staged planning draft"));
+    }
+
+    fn section_text(lines: &[Line<'_>]) -> String {
+        lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+}
