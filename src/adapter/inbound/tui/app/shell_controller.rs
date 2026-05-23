@@ -641,3 +641,361 @@ impl NativeTuiApp {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::core::app::StartupReadySnapshot;
+    use crate::domain::startup_diagnostics::StartupDiagnostics;
+    use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+
+    fn key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> event::KeyEvent {
+        event::KeyEvent::new(code, modifiers)
+    }
+
+    fn startup_ready_snapshot(can_continue: bool) -> Box<StartupReadySnapshot> {
+        Box::new(StartupReadySnapshot::from_diagnostics(StartupDiagnostics {
+            cwd: "/tmp/root".to_string(),
+            codex_binary_ok: true,
+            codex_binary_detail: "ok".to_string(),
+            workspace_ok: true,
+            workspace_path: "/tmp/root".to_string(),
+            workspace_detail: "ok".to_string(),
+            attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+            initialize_ok: true,
+            initialize_detail: "ok".to_string(),
+            account_ok: can_continue,
+            account_detail: if can_continue {
+                "ok"
+            } else {
+                "missing account"
+            }
+            .to_string(),
+            warnings: Vec::new(),
+            schema_snapshot: "schema".to_string(),
+        }))
+    }
+
+    fn auto_follow_origin() -> PromptOrigin {
+        PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            completed_turn_id: "turn-1".to_string(),
+            mode_label: "planning queue".to_string(),
+            transcript_text: "queued transcript".to_string(),
+            debug_detail: None,
+            handoff_task: None,
+        }))
+    }
+
+    fn command(input: &str) -> InlineShellCommandInput {
+        InlineShellCommandInput::parse(input).expect("inline shell command should parse")
+    }
+
+    fn ready_conversation(app: &NativeTuiApp) -> &ConversationViewModel {
+        match &app.conversation_state {
+            ConversationState::Ready(conversation) => conversation,
+            other => panic!("expected ready conversation, got {other:?}"),
+        }
+    }
+
+    fn ready_conversation_mut(app: &mut NativeTuiApp) -> &mut ConversationViewModel {
+        match &mut app.conversation_state {
+            ConversationState::Ready(conversation) => conversation,
+            other => panic!("expected ready conversation, got {other:?}"),
+        }
+    }
+
+    fn status_text(app: &NativeTuiApp) -> &str {
+        &ready_conversation(app).status_text
+    }
+
+    #[test]
+    fn startup_action_availability_drives_submission_status_copy() {
+        let mut app = test_native_tui_app();
+
+        app.startup_state = StartupState::Idle;
+        assert_eq!(
+            app.shell_action_availability(),
+            ShellActionAvailability::Pending
+        );
+        assert!(!app.shell_action_availability().allows_actions());
+        assert_eq!(
+            app.submission_blocked_status(auto_follow_origin()),
+            "auto-follow paused while startup checks are still running"
+        );
+
+        app.startup_state = StartupState::Loading;
+        assert_eq!(
+            app.submission_blocked_status(PromptOrigin::Manual),
+            "startup checks still running; open diagnostics with Ctrl+d"
+        );
+
+        app.startup_state = StartupState::Failed("boom".to_string());
+        assert_eq!(
+            app.submission_blocked_status(auto_follow_origin()),
+            "auto-follow paused because startup diagnostics need attention"
+        );
+
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(false));
+        assert!(!app.can_open_session_list());
+        assert_eq!(
+            app.shell_action_availability(),
+            ShellActionAvailability::Blocked
+        );
+
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        assert!(app.can_open_session_list());
+        assert_eq!(
+            app.shell_action_availability(),
+            ShellActionAvailability::Ready
+        );
+        assert!(app.shell_action_availability().allows_actions());
+        assert_eq!(
+            app.shell_action_availability().status_text(),
+            "startup ready"
+        );
+        assert_eq!(app.submission_blocked_status(PromptOrigin::Manual), "ready");
+    }
+
+    #[test]
+    fn close_shell_overlay_resets_overlay_local_buffers() {
+        let mut app = test_native_tui_app();
+
+        for overlay in [
+            ShellOverlay::DirectionsMaintenance,
+            ShellOverlay::PlanningInit,
+            ShellOverlay::ModelSelection,
+            ShellOverlay::ViewSelection,
+            ShellOverlay::LanguageSelection,
+            ShellOverlay::ParallelPeek,
+            ShellOverlay::Queue,
+        ] {
+            app.shell_overlay = overlay;
+            app.close_shell_overlay();
+            assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        }
+    }
+
+    #[test]
+    fn inline_commands_cover_argument_status_and_stop_paths() {
+        let mut app = test_native_tui_app();
+
+        app.set_parallel_mode_enabled_for_test(true);
+        app.execute_inline_shell_command_input(command(":sessions"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Supersession);
+        assert!(status_text(&app).contains("opened supersession control tower"));
+
+        app.set_parallel_mode_enabled_for_test(false);
+        app.execute_inline_shell_command_input(command(":help"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+        assert!(status_text(&app).contains("opened shell command help"));
+
+        app.execute_inline_shell_command_input(command(":turns 4"));
+        assert_eq!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .max_auto_turns_label(),
+            "4"
+        );
+
+        app.execute_inline_shell_command_input(command(":model default"));
+        assert_eq!(app.turn_options.model, None);
+        assert!(status_text(&app).contains("model reset to app-server default"));
+
+        app.execute_inline_shell_command_input(command(":view unsupported"));
+        assert_eq!(app.shell_overlay, ShellOverlay::ViewSelection);
+        assert!(status_text(&app).contains("view unchanged"));
+
+        app.execute_inline_shell_command_input(command(":language klingon"));
+        assert_eq!(app.shell_overlay, ShellOverlay::LanguageSelection);
+        assert!(status_text(&app).contains("language unchanged"));
+
+        app.execute_inline_shell_command_input(command(":think"));
+        assert!(status_text(&app).contains("think override unchanged"));
+
+        app.execute_inline_shell_command_input(command(":think unknown"));
+        assert!(status_text(&app).contains("supported values"));
+
+        app.execute_inline_shell_command_input(command(":stop"));
+        assert!(status_text(&app).contains("no active turn is running"));
+
+        ready_conversation_mut(&mut app).record_turn_started("turn-1".to_string());
+        app.execute_inline_shell_command_input(command(":stop"));
+        assert!(status_text(&app).contains("active app-server sessions"));
+    }
+
+    #[test]
+    fn prompt_input_wrappers_and_palette_acceptance_route_through_input_reducer() {
+        let mut app = test_native_tui_app();
+
+        assert!(!app.insert_input_text(String::new()));
+
+        app.shell_overlay = ShellOverlay::Queue;
+        assert!(!app.can_edit_prompt_input());
+        assert!(!app.insert_input_text("blocked".to_string()));
+
+        app.shell_overlay = ShellOverlay::Supersession;
+        app.set_parallel_mode_enabled_for_test(true);
+        assert!(!app.can_edit_prompt_input());
+
+        app.shell_overlay = ShellOverlay::Hidden;
+        assert!(app.can_edit_prompt_input());
+        assert!(app.insert_input_text("abc".to_string()));
+        app.move_input_cursor(InputCursorMovement::LineStart);
+        app.push_input_character('z');
+        app.move_input_cursor(InputCursorMovement::BufferEnd);
+        app.insert_input_newline();
+        app.delete_previous_input_word();
+        app.pop_input_character();
+        app.delete_next_input_character();
+        app.clear_prompt_input();
+        assert!(ready_conversation(&app).input_buffer.is_empty());
+
+        assert!(!app.move_inline_command_palette_selection(1));
+        assert!(!app.dismiss_inline_command_palette());
+        assert!(!app.accept_inline_command_palette_selection());
+
+        app.push_input_character(':');
+        app.push_input_character('t');
+        assert!(app.is_inline_command_palette_active());
+        assert!(app.accept_inline_command_palette_selection());
+        assert!(ready_conversation(&app).input_buffer.starts_with(":turns"));
+
+        app.clear_prompt_input();
+        app.push_input_character(':');
+        app.push_input_character('h');
+        assert!(app.move_inline_command_palette_selection(0));
+        assert!(app.accept_inline_command_palette_selection());
+        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+    }
+
+    #[test]
+    fn exit_confirmation_and_shell_overlay_key_routes_are_scoped() {
+        let mut app = test_native_tui_app();
+
+        assert_eq!(
+            app.handle_exit_confirmation_key(key(KeyCode::Char('y'))),
+            None
+        );
+
+        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        assert_eq!(
+            app.handle_exit_confirmation_key(modified_key(
+                KeyCode::Char('y'),
+                KeyModifiers::CONTROL
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_exit_confirmation_key(modified_key(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
+            Some(true)
+        );
+
+        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        assert_eq!(
+            app.handle_exit_confirmation_key(key(KeyCode::Char('n'))),
+            Some(false)
+        );
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+
+        app.exit_confirmation_state = ExitConfirmationState::Visible;
+        assert_eq!(
+            app.handle_exit_confirmation_key(key(KeyCode::Char('x'))),
+            Some(false)
+        );
+
+        app.shell_overlay = ShellOverlay::Hidden;
+        assert!(!app.handle_shell_overlay_key(key(KeyCode::Esc)));
+
+        app.shell_overlay = ShellOverlay::Startup;
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('r'))));
+        assert!(matches!(app.startup_state, StartupState::Loading));
+
+        app.shell_overlay = ShellOverlay::Startup;
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('o'), KeyModifiers::CONTROL))
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::Sessions);
+
+        app.shell_overlay = ShellOverlay::Sessions;
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+
+        app.show_model_selection_overlay();
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.model_selection_overlay_ui_state.step(),
+            ModelSelectionStep::Effort
+        );
+
+        app.show_view_selection_overlay();
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+
+        app.show_language_selection_overlay();
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+
+        app.handle_ctrl_c();
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Visible);
+
+        app.shell_overlay = ShellOverlay::Queue;
+        app.handle_ctrl_c();
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    }
+
+    #[test]
+    fn selection_overlay_keymaps_cover_navigation_numbers_enter_and_back() {
+        let mut app = test_native_tui_app();
+
+        assert!(!app.handle_model_selection_overlay_key(key(KeyCode::Enter)));
+        app.show_model_selection_overlay();
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Down)));
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Up)));
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Char('2'))));
+        assert_eq!(
+            app.model_selection_overlay_ui_state.step(),
+            ModelSelectionStep::Effort
+        );
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Backspace)));
+        assert_eq!(
+            app.model_selection_overlay_ui_state.step(),
+            ModelSelectionStep::Model
+        );
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.model_selection_overlay_ui_state.step(),
+            ModelSelectionStep::Effort
+        );
+        assert!(app.handle_model_selection_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.turn_options.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            app.turn_options.reasoning_effort,
+            Some(ConversationReasoningEffort::High)
+        );
+
+        assert!(!app.handle_view_selection_overlay_key(key(KeyCode::Enter)));
+        app.show_view_selection_overlay();
+        assert!(app.handle_view_selection_overlay_key(key(KeyCode::Down)));
+        assert!(app.handle_view_selection_overlay_key(key(KeyCode::Up)));
+        assert!(app.handle_view_selection_overlay_key(key(KeyCode::Char('3'))));
+        assert_eq!(app.conversation_view_mode, ConversationViewMode::Detail);
+        app.show_view_selection_overlay();
+        assert!(app.handle_view_selection_overlay_key(key(KeyCode::Enter)));
+
+        assert!(!app.handle_language_selection_overlay_key(key(KeyCode::Enter)));
+        app.show_language_selection_overlay();
+        assert!(app.handle_language_selection_overlay_key(key(KeyCode::Down)));
+        assert!(app.handle_language_selection_overlay_key(key(KeyCode::Up)));
+        assert!(app.handle_language_selection_overlay_key(key(KeyCode::Char('1'))));
+        assert_eq!(app.tui_language, TuiLanguage::English);
+        app.show_language_selection_overlay();
+        assert!(app.handle_language_selection_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.tui_language, TuiLanguage::English);
+    }
+}
