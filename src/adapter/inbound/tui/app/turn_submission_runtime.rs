@@ -930,6 +930,60 @@ mod tests {
     }
 
     #[test]
+    fn start_turn_submission_handles_inline_blank_and_unready_states() {
+        let workspace = TempWorkspace::new("turn-submit-start-entry");
+        let mut inline_app = make_test_app(&workspace);
+        set_input(&mut inline_app, ":view");
+
+        inline_app.start_turn_submission();
+
+        assert_eq!(inline_app.shell_overlay, ShellOverlay::ViewSelection);
+        assert!(inline_app.pending_manual_prompt_preparation.is_none());
+
+        let mut blank_app = make_test_app(&workspace);
+        set_input(&mut blank_app, "   ");
+
+        blank_app.start_turn_submission();
+
+        assert!(blank_app.pending_manual_prompt_preparation.is_none());
+        assert!(ready_conversation(&blank_app).messages.is_empty());
+
+        let mut loading_app = make_test_app(&workspace);
+        loading_app.conversation_state = ConversationState::Loading;
+
+        loading_app.start_turn_submission();
+
+        assert!(matches!(
+            loading_app.conversation_state,
+            ConversationState::Loading
+        ));
+    }
+
+    #[test]
+    fn execute_runtime_effects_cover_stream_and_post_turn_dispatch_arms() {
+        let workspace = TempWorkspace::new("turn-submit-effect-arms");
+        let mut app = make_test_app(&workspace);
+
+        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::StartStream {
+            workspace_directory: workspace.path_str().to_string(),
+            thread_id: None,
+            prompt: "ship it".to_string(),
+            prompt_origin: PromptOrigin::Manual,
+        });
+        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::EvaluatePostTurn {
+            workspace_directory: workspace.path_str().to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: None,
+        });
+
+        assert!(matches!(
+            app.conversation_state,
+            ConversationState::Ready(_)
+        ));
+    }
+
+    #[test]
     fn submit_prompt_respects_startup_readiness_gates() {
         let workspace = TempWorkspace::new("turn-submit-startup-gates");
         let mut pending_app = make_test_app(&workspace);
@@ -1010,6 +1064,25 @@ mod tests {
         ready_empty_app.resolve_startup_submit_queue();
 
         assert!(!ready_conversation(&ready_empty_app).startup_submit_armed);
+    }
+
+    #[test]
+    fn resolve_startup_submit_queue_replays_ready_buffered_prompt() {
+        let workspace = TempWorkspace::new("turn-submit-startup-replay");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "  queued prompt  ");
+        app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+            status_text: "queued".to_string(),
+        });
+
+        app.resolve_startup_submit_queue();
+
+        let pending = app
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .expect("ready replay should prepare the queued manual prompt");
+        assert_eq!(pending.transcript_text, "queued prompt");
+        assert!(!pending.parallel_mode_enabled_at_submission);
     }
 
     #[test]
@@ -1110,6 +1183,198 @@ mod tests {
     }
 
     #[test]
+    fn apply_manual_prompt_preparation_ignores_stale_success_review_and_failure_results() {
+        let workspace = TempWorkspace::new("turn-submit-prep-stale-extra");
+        let task = sample_handoff_task();
+
+        let mut stale_success_app = make_test_app(&workspace);
+        set_input(&mut stale_success_app, "newer text");
+        let previous_status = ready_conversation(&stale_success_app).status_text.clone();
+        stale_success_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::PromptReady {
+                transcript_text: "older text".to_string(),
+                runtime_projection: runtime_projection(),
+                intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
+                    updated_task_id: task.task_id.clone(),
+                    committed_planning_revision: 8,
+                    handoff: handoff("wrapped", "older text", Some(task.clone())),
+                }),
+            },
+        );
+        assert_eq!(
+            ready_conversation(&stale_success_app).status_text,
+            previous_status
+        );
+        assert!(ready_conversation(&stale_success_app).messages.is_empty());
+
+        let mut stale_review_app = make_test_app(&workspace);
+        set_input(&mut stale_review_app, "newer text");
+        stale_review_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::BootstrapReviewRequired {
+                transcript_text: "older text".to_string(),
+                runtime_projection: runtime_projection(),
+                review: ManualPlanningBootstrapReview {
+                    draft_name: "simple-draft".to_string(),
+                    staged_file_count: 2,
+                    validation_report: PlanningValidationReport::default(),
+                },
+            },
+        );
+        assert_eq!(stale_review_app.shell_overlay, ShellOverlay::Hidden);
+
+        let mut stale_failure_app = make_test_app(&workspace);
+        set_input(&mut stale_failure_app, "newer text");
+        let previous_status = ready_conversation(&stale_failure_app).status_text.clone();
+        stale_failure_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::BootstrapFailed {
+                transcript_text: "older text".to_string(),
+                runtime_projection: runtime_projection(),
+                kind: ManualPlanningBootstrapFailureKind::Promote,
+                reason: "should not surface".to_string(),
+            },
+        );
+        assert_eq!(
+            ready_conversation(&stale_failure_app).status_text,
+            previous_status
+        );
+    }
+
+    #[test]
+    fn remaining_edges_cover_unready_empty_stale_handoffs_and_fake_port_methods() {
+        let workspace = TempWorkspace::new("turn-submit-remaining-edges");
+        let task = sample_handoff_task();
+
+        let mut loading_queue_app = make_test_app(&workspace);
+        loading_queue_app.conversation_state = ConversationState::Loading;
+        loading_queue_app.resolve_startup_submit_queue();
+        assert!(matches!(
+            loading_queue_app.conversation_state,
+            ConversationState::Loading
+        ));
+
+        let mut empty_prompt_app = make_test_app(&workspace);
+        empty_prompt_app.submit_manual_prompt_from_text("   ".to_string());
+        assert!(empty_prompt_app.pending_manual_prompt_preparation.is_none());
+
+        let mut loading_submit_app = make_test_app(&workspace);
+        loading_submit_app.conversation_state = ConversationState::Loading;
+        loading_submit_app.submit_manual_prompt_from_text("ship it".to_string());
+        assert_eq!(
+            loading_submit_app
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .map(|pending| pending.transcript_text.as_str()),
+            Some("ship it")
+        );
+
+        let mut clear_pending_app = make_test_app(&workspace);
+        set_input(&mut clear_pending_app, "reject me");
+        clear_pending_app.submit_manual_prompt_from_text("reject me".to_string());
+        assert!(
+            clear_pending_app
+                .pending_manual_prompt_preparation
+                .is_some()
+        );
+        clear_pending_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::Rejected {
+                transcript_text: "reject me".to_string(),
+                runtime_projection: runtime_projection(),
+                reason: "no task".to_string(),
+            },
+        );
+        assert!(
+            clear_pending_app
+                .pending_manual_prompt_preparation
+                .is_none()
+        );
+
+        let mut stale_handoff_app = make_test_app(&workspace);
+        set_input(&mut stale_handoff_app, "outer");
+        let previous_status = ready_conversation(&stale_handoff_app).status_text.clone();
+        stale_handoff_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::PromptReady {
+                transcript_text: "outer".to_string(),
+                runtime_projection: runtime_projection(),
+                intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
+                    committed_task_id: task.task_id.clone(),
+                    committed_planning_revision: 9,
+                    handoff: handoff("wrapped", "inner", Some(task.clone())),
+                }),
+            },
+        );
+        assert_eq!(
+            ready_conversation(&stale_handoff_app).status_text,
+            previous_status
+        );
+        assert!(ready_conversation(&stale_handoff_app).messages.is_empty());
+
+        let mut parallel_stale_handoff_app = make_test_app(&workspace);
+        parallel_stale_handoff_app.set_parallel_mode_enabled_for_test(true);
+        set_input(&mut parallel_stale_handoff_app, "outer parallel");
+        parallel_stale_handoff_app.submit_manual_prompt_from_text("outer parallel".to_string());
+        parallel_stale_handoff_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::PromptReady {
+                transcript_text: "outer parallel".to_string(),
+                runtime_projection: runtime_projection(),
+                intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
+                    updated_task_id: "task-stale".to_string(),
+                    committed_planning_revision: 10,
+                    handoff: handoff("wrapped", "inner parallel", Some(task)),
+                }),
+            },
+        );
+        let event_lines = parallel_stale_handoff_app
+            .parallel_supervisor_event_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!event_lines.contains("updated task task-stale"));
+
+        let mut loading_match_app = make_test_app(&workspace);
+        loading_match_app.conversation_state = ConversationState::Loading;
+        assert!(!loading_match_app.manual_prompt_preparation_still_matches_input("ship it"));
+
+        let mut manual_submit_app = make_test_app(&workspace);
+        set_input(&mut manual_submit_app, "manual prompt");
+        assert!(
+            manual_submit_app.submit_prompt("  manual prompt  ".to_string(), PromptOrigin::Manual,)
+        );
+
+        let mut intake_submit_app = make_test_app(&workspace);
+        assert!(intake_submit_app.submit_prompt(
+            "wrapped intake".to_string(),
+            PromptOrigin::ManualIntake(Box::new(super::super::ManualIntakeSubmitContext {
+                transcript_text: "operator transcript".to_string(),
+                handoff_task: None,
+                parallel_mode_enabled_at_submission: false,
+            })),
+        ));
+
+        let port = FakeAppServerPort;
+        assert!(port.load_startup_context().is_ok());
+        assert!(
+            port.load_session_catalog(SessionCatalogRequest::for_workspace(
+                1,
+                workspace.path_str().to_string()
+            ))
+            .is_ok()
+        );
+        assert_eq!(
+            port.load_conversation_snapshot("thread-1")
+                .expect("fake snapshot should load")
+                .thread_id,
+            "thread-1"
+        );
+        assert!(port.request_stop_all_sessions().is_ok());
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert!(
+            port.run_turn_stream("thread-1", "prompt", Default::default(), tx,)
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn apply_manual_prompt_preparation_routes_manual_intake_outcomes() {
         let workspace = TempWorkspace::new("turn-submit-manual-intake");
         let task = sample_handoff_task();
@@ -1175,6 +1440,100 @@ mod tests {
                     .text,
                 "make task"
             );
+        }
+    }
+
+    #[test]
+    fn manual_intake_covers_task_updates_parallel_failures_and_fallback_title() {
+        let workspace = TempWorkspace::new("turn-submit-intake-edges");
+        let task = sample_handoff_task();
+        let mut updated_app = make_test_app(&workspace);
+        set_input(&mut updated_app, "refresh task");
+
+        updated_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            transcript_text: "refresh task".to_string(),
+            runtime_projection: runtime_projection(),
+            intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
+                updated_task_id: task.task_id.clone(),
+                committed_planning_revision: 8,
+                handoff: handoff("wrapped update", "refresh task", Some(task.clone())),
+            }),
+        });
+
+        assert_eq!(
+            ready_conversation(&updated_app).last_planning_task_handoff(),
+            Some(&task)
+        );
+        assert_eq!(
+            ready_conversation(&updated_app).status_text,
+            "starting turn"
+        );
+
+        let mut parallel_updated_app = make_test_app(&workspace);
+        parallel_updated_app.set_parallel_mode_enabled_for_test(true);
+        set_input(&mut parallel_updated_app, "parallel update");
+        parallel_updated_app.submit_manual_prompt_from_text("parallel update".to_string());
+
+        parallel_updated_app.apply_manual_prompt_preparation(
+            ManualPromptPreparationResult::PromptReady {
+                transcript_text: "parallel update".to_string(),
+                runtime_projection: runtime_projection(),
+                intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
+                    updated_task_id: "task-2".to_string(),
+                    committed_planning_revision: 11,
+                    handoff: handoff("wrapped update", "parallel update", None),
+                }),
+            },
+        );
+
+        let event_lines = parallel_updated_app
+            .parallel_supervisor_event_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(event_lines.contains("Task Intake: updated task task-2 / rev 11 / untitled task"));
+
+        for outcome in [
+            ManualPromptIntakeOutcome::Rejected {
+                reason: "too broad".to_string(),
+            },
+            ManualPromptIntakeOutcome::Failed {
+                reason: "worker crashed".to_string(),
+            },
+        ] {
+            let mut failure_app = make_test_app(&workspace);
+            failure_app.set_parallel_mode_enabled_for_test(true);
+            let prompt = "parallel intake failure prompt with enough words to truncate in events";
+            set_input(&mut failure_app, prompt);
+            failure_app.submit_manual_prompt_from_text(prompt.to_string());
+            let expected_reason = match &outcome {
+                ManualPromptIntakeOutcome::Rejected { reason }
+                | ManualPromptIntakeOutcome::Failed { reason } => reason.clone(),
+                _ => unreachable!("test only uses failure outcomes"),
+            };
+
+            failure_app.apply_manual_prompt_preparation(
+                ManualPromptPreparationResult::PromptReady {
+                    transcript_text: prompt.to_string(),
+                    runtime_projection: runtime_projection(),
+                    intake: Box::new(outcome),
+                },
+            );
+
+            let conversation = ready_conversation(&failure_app);
+            assert_eq!(conversation.input_buffer, "");
+            assert_eq!(
+                conversation.status_text,
+                format!("parallel task intake failed / {expected_reason}")
+            );
+            let event_lines = failure_app
+                .parallel_supervisor_event_lines()
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(event_lines.contains("Task Intake: task generation failed"));
         }
     }
 
@@ -1307,6 +1666,98 @@ mod tests {
         assert!(debug_detail.contains("planning worker summary: accepted task"));
         assert!(debug_detail.contains("worker prompt"));
         assert!(debug_detail.contains("worker response"));
+    }
+
+    #[test]
+    fn helper_functions_cover_slot_handoff_origins_truncation_and_debug_absence() {
+        let workspace = TempWorkspace::new("turn-submit-helper-edges");
+        let mut app = make_test_app(&workspace);
+        let task = sample_handoff_task();
+        ready_conversation_mut(&mut app).record_manual_intake_handoff(Some(&task));
+        app.set_parallel_mode_enabled_for_test(true);
+
+        let auto_request = app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            Some("thread-1".to_string()),
+            "continue queued task".to_string(),
+            &auto_follow_origin(),
+        );
+        assert_eq!(
+            auto_request.slot_lease_handoff,
+            Some(ParallelTurnSlotLeaseHandoff::new(
+                task.task_id.clone(),
+                task.task_title.clone(),
+            ))
+        );
+
+        let mut no_task_app = make_test_app(&workspace);
+        no_task_app.set_parallel_mode_enabled_for_test(true);
+        let no_task_request = no_task_app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            None,
+            "manual prompt".to_string(),
+            &PromptOrigin::Manual,
+        );
+        assert_eq!(no_task_request.slot_lease_handoff, None);
+
+        no_task_app.conversation_state = ConversationState::Loading;
+        let loading_request = no_task_app.build_turn_submission_request(
+            workspace.path_str().to_string(),
+            None,
+            "manual prompt".to_string(),
+            &PromptOrigin::Manual,
+        );
+        assert_eq!(loading_request.slot_lease_handoff, None);
+
+        let manual_intake_origin =
+            PromptOrigin::ManualIntake(Box::new(super::super::ManualIntakeSubmitContext {
+                transcript_text: "operator text".to_string(),
+                handoff_task: None,
+                parallel_mode_enabled_at_submission: false,
+            }));
+        assert_eq!(prompt_origin_label(&manual_intake_origin), "ManualIntake");
+        assert_eq!(prompt_origin_label(&auto_follow_origin()), "AutoFollow");
+        assert_eq!(
+            core_prompt_origin(&auto_follow_origin()),
+            CorePromptOrigin::AutoFollow
+        );
+        assert!(prompt_origin_allows_parallel_slot_handoff(
+            &auto_follow_origin(),
+            true
+        ));
+        assert!(!prompt_origin_allows_parallel_slot_handoff(
+            &auto_follow_origin(),
+            false
+        ));
+        assert_eq!(truncate_parallel_prompt_event_text("  abc  ", 8), "abc");
+        assert_eq!(
+            truncate_parallel_prompt_event_text("abcdefghijklmnopqrstuvwxyz", 5),
+            "ab..."
+        );
+        assert_eq!(
+            truncate_parallel_prompt_event_text("abcdefghijklmnopqrstuvwxyz", 2),
+            "..."
+        );
+
+        let mut lines = vec!["header".to_string()];
+        append_debug_detail_preview_block(&mut lines, "body:", Some("   "));
+        assert_eq!(lines, vec!["header".to_string()]);
+
+        assert_eq!(
+            app.build_auto_follow_transcript_debug_detail("ordinary prompt"),
+            None
+        );
+        app.planning_worker_visibility = PlanningWorkerVisibility::Debug;
+        assert_eq!(
+            app.build_auto_follow_transcript_debug_detail(QUEUED_TASK_TRANSCRIPT_TEXT),
+            None
+        );
+        app.planning_worker_panel_state.last_summary = Some("   ".to_string());
+        let debug_detail = app
+            .build_auto_follow_transcript_debug_detail(QUEUED_TASK_TRANSCRIPT_TEXT)
+            .expect("blank summary still records the worker status line");
+        assert!(debug_detail.contains("planning worker temporary session"));
+        assert!(!debug_detail.contains("planning worker summary"));
     }
 
     #[test]
