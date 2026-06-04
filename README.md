@@ -24,6 +24,24 @@ the same application services instead of carrying separate planning logic.
 | Operator surfaces | Native TUI, non-TUI CLI, local Axum/Askama admin UI and JSON API, Telegram bot runner, and JSON planning-tool automation. |
 | Distribution | Native release archives, npm split packages, platform bundles, validation capture scripts, native PR checks, and tag-triggered GitHub Release/npm workflows. |
 
+## Why It Matters For Open Source Maintainers
+
+Akra is not a general chat wrapper. It is an open-source maintainer workflow client for people who
+need Codex to help with repeated repository operations while preserving local control.
+
+- PR review and delivery: parallel mode leases local worktree slots, tracks worker session detail,
+  pushes source branches, drives PR automation, integrates reviewed commits into `prerelease`, and
+  cleans up finished slots.
+- Issue and task triage: accepted planning authority turns operator intent, proposed work, and
+  runtime task intake into a validated queue rather than a loose prompt backlog.
+- Release workflow: native bundle packaging, npm staging, GitHub Release assets, checksum
+  verification, and platform validation records are first-class repository surfaces.
+- Maintainer safety: GitHub identity verification, loopback-only admin binding, CSRF protection,
+  Telegram allowlists, explicit reset confirmations, architecture-boundary tests, and isolated
+  worktrees keep automation accountable.
+- Codex interoperability: the runtime is built on official `codex app-server` flow while keeping
+  adapters, ports, durable planning authority, and terminal UI contracts open for inspection.
+
 Current operator-facing behavior is tracked in
 [docs/supersession/current-contract.md](docs/supersession/current-contract.md). Architecture details
 are under [docs/design/](docs/design/).
@@ -506,3 +524,5 @@ Useful GitHub review/polling variables:
   shipped parallel board shape.
 - [docs/plan/13-native-packaging-and-operator-runbook.md](docs/plan/13-native-packaging-and-operator-runbook.md):
   native bundle, npm, release, and operator handoff.
+- [docs/plan/14-codex-for-oss-application.md](docs/plan/14-codex-for-oss-application.md):
+  Codex for Open Source application positioning and form-answer draft.

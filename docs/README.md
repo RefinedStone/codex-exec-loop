@@ -40,6 +40,8 @@ and one-off research notes are not kept in this tree.
   validation matrix and capture profiles
 - [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md):
   native bundle, npm, release, and operator handoff runbook
+- [plan/14-codex-for-oss-application.md](plan/14-codex-for-oss-application.md): Codex for Open
+  Source application positioning and form-answer draft
 - [validation/README.md](validation/README.md): real validation artifact index
 - [validation/terminal-ui-testing-methodology.md](validation/terminal-ui-testing-methodology.md):
   terminal UI test design for rendering, scrollback, resize, and snapshots
