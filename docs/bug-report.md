@@ -11,6 +11,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `schema/` | Completed | 2026-06-08 | app-server protocol schema snapshot and schema consumers inspected. |
 | `templates/` | Completed | 2026-06-08 | admin Askama templates, template resources, and admin template consumers inspected. |
 | `assets/` | Completed | 2026-06-08 | admin game assets, embedded graphics, and app-server skill assets inspected. |
+| `.github/` | Completed | 2026-06-08 | PR template and GitHub Actions workflows inspected. |
 
 ## `npm/`
 
@@ -358,3 +359,62 @@ assets/admin/graphics/sprite_fd_control_desk.png
 - The current skill asset test checks for broad contract phrases but does not parse the JSON examples in `SKILL.md`.
 - Admin graphic route tests verify static route availability, but not that the TypeScript diorama asset map and Rust route table are exactly the same set.
 - No CI guard flags tracked admin graphics that have no runtime reference or manifest entry.
+
+## `.github/`
+
+### Scope
+
+- Inspected files: `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/native-pr-checks.yml`, `.github/workflows/release-native-assets.yml`.
+- Inspected delegated scripts: `scripts/check_native_pr.sh`, `scripts/validate_native_release_version.sh`, and `npm/scripts/stage-npm-packages.mjs`.
+- Validation run: `bash scripts/validate_native_release_version.sh --tag v1.3.3`.
+- Validation run: `bash scripts/validate_native_release_version.sh --tag 1.3.3`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### GITHUB-001: required PR checks do not exercise npm or admin game packaging
+
+- Severity: High
+- Evidence: `.github/workflows/native-pr-checks.yml:41-43` delegates the whole PR gate to `bash scripts/check_native_pr.sh`. That script currently runs only TUI layering, Rust formatting, Rust tests, and Rust clippy at `scripts/check_native_pr.sh:20-23`.
+- Missing coverage evidence: the workflow does not run `npm test --prefix npm`, `npm --prefix assets/admin/game run check`, `npm --prefix assets/admin/game run build`, or npm package staging tests, even though the repository ships npm packages and checked-in admin game assets.
+- Why this is a bug: changes to `npm/`, `assets/admin/game/`, or release staging can pass the required Native PR Checks while breaking install/runtime packaging surfaces.
+- User impact: a PR can be green on GitHub and still ship a broken npm wrapper, stale admin game bundle, or invalid platform package staging.
+- Suggested fix: extend `scripts/check_native_pr.sh` or the workflow to run the npm package tests and admin game check/build. If runtime cost is a concern, use path-aware jobs but keep them required for matching paths.
+
+#### GITHUB-002: release tags can be duplicated with and without a `v` prefix
+
+- Severity: Medium
+- Evidence: `.github/workflows/release-native-assets.yml:4-6` triggers on every pushed tag. `scripts/validate_native_release_version.sh:53` strips one leading `v`, and `npm/scripts/stage-npm-packages.mjs:47-49` does the same for npm package versions.
+- Reproduction used during audit:
+
+```bash
+bash scripts/validate_native_release_version.sh --tag v1.3.3
+bash scripts/validate_native_release_version.sh --tag 1.3.3
+```
+
+- Observed output: both commands accepted the same Cargo version and printed `release_version=1.3.3`.
+- Why this is a logic gap: pushing both `v1.3.3` and `1.3.3` can create two GitHub Release records for the same package version. npm staging normalizes both to `1.3.3`, so the second tag can only skip or collide with already-published npm versions.
+- User impact: release history can show duplicate native releases for one version while npm has only one immutable package version.
+- Suggested fix: enforce a single tag convention in the workflow trigger and validator, for example `tags: ["v*"]` plus a validator that rejects unprefixed tags.
+
+#### GITHUB-003: a tag workflow can succeed while npm publication is skipped
+
+- Severity: Medium
+- Evidence: `publish-release` creates or updates the GitHub Release before npm publication at `.github/workflows/release-native-assets.yml:110-149`. The later `publish-npm` job treats a missing `NPM_TOKEN` as success by writing `configured=false` and exiting `0` at `.github/workflows/release-native-assets.yml:175-178`, which skips every npm staging and publish step.
+- Why this is a usage gap: the workflow name and release notes describe an automated native/npm release, but a repository without `NPM_TOKEN` still gets a green tag workflow and GitHub Release assets only.
+- User impact: operators can believe a tag completed the full distribution flow while `@refinedstone/akra` was never published for that version.
+- Suggested fix: make npm publication an explicit workflow mode. If npm is required for release tags, fail when `NPM_TOKEN` is missing. If npm is optional, rename the job/release notes and emit a visible GitHub step summary that says npm was skipped.
+
+#### GITHUB-004: the release workflow has mixed line endings
+
+- Severity: Low
+- Evidence: `file .github/workflows/release-native-assets.yml` reports `ASCII text, with CRLF, LF line terminators`. A CRLF scan found CRLF lines in the same workflow while other chunks are LF-only.
+- Why this is a maintenance gap: editing the workflow on different platforms can create noisy diffs unrelated to release logic, and local tooling can rewrite large portions of the file unexpectedly.
+- User impact: review signal drops on future release workflow changes, especially when a small YAML edit appears as broad line-ending churn.
+- Suggested fix: normalize `.github/workflows/release-native-assets.yml` to LF and add a `.gitattributes` rule for workflow files.
+
+### Test Gaps
+
+- `actionlint` is not part of the local or GitHub PR gate, so workflow expression and action-input mistakes are not caught before merge.
+- The PR gate does not cover npm package tests, admin game build freshness, or npm staging.
+- No workflow test or script asserts a single accepted release tag convention.
