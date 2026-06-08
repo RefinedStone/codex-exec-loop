@@ -17,6 +17,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `.codex-exec-loop/` | Completed | 2026-06-08 | tracked planning seed prompts, direction detail docs, and release followup prompts inspected. |
 | `.gemini/` | Completed | 2026-06-08 | Gemini-specific styleguide and repository references inspected. |
 | `artifacts/` | Completed | 2026-06-08 | tracked terminal bridge readiness captures and repository references inspected. |
+| `tmp/` | Completed | 2026-06-08 | tracked temporary PNG payload and repository references inspected. |
 
 ## `npm/`
 
@@ -640,3 +641,46 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - No artifact manifest check requires tracked evidence directories to explain scenario, command, date, source commit, and current status.
 - No scrubber or lint check flags TTY paths, process IDs, pane IDs, or other local terminal identifiers in tracked artifacts.
 - No check distinguishes intentionally raw terminal captures from normalized reviewable text.
+
+## `tmp/`
+
+### Scope
+
+- Inspected files: `tmp/img.png`.
+- Inspected repository references and ignore rules: `.gitignore`, `README.md`, `docs/`, `scripts/`, `src/`, `templates/`, and `assets/`.
+- Validation run: `git ls-files tmp`.
+- Validation run: `file tmp/img.png && sips -g pixelWidth -g pixelHeight tmp/img.png`.
+- Reference check: `rg -n "tmp/img\\.png|img\\.png" -S . --glob "!target/**" --glob "!.git/**" --glob "!docs/bug-report.md"`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### TMP-001: a temporary screenshot is tracked as source without any references
+
+- Severity: Medium
+- Evidence: `git ls-files tmp` returns only `tmp/img.png`. `file tmp/img.png` identifies it as a 1536 x 1024 RGB PNG, and `du -h tmp/img.png` reports about 2.4 MiB. `rg -n "tmp/img\\.png|img\\.png" -S . --glob "!target/**" --glob "!.git/**" --glob "!docs/bug-report.md"` returns no references.
+- Why this is a usage gap: a directory named `tmp/` implies disposable local output, but the image is checked into source control and has no consumer, manifest, README, or test relationship.
+- User impact: clones and reviews carry a multi-megabyte binary payload that maintainers cannot safely classify as runtime asset, evidence, or accidental scratch output.
+- Suggested fix: remove the file if it is scratch output. If it is intentional evidence, move it under a documented artifact or visual-regression directory with a README explaining source, date, expected use, and regeneration steps.
+
+#### TMP-002: `tmp/` is not ignored, so future local scratch files can be committed accidentally
+
+- Severity: Medium
+- Evidence: `.gitignore:1-10` ignores `logs/`, `artifacts/`, `.codex`, `.idea/`, `target/`, `dist/`, npm staging/vendor directories, `.codex-exec-loop/runtime/`, and `.reference`, but it does not ignore `tmp/`.
+- Why this is a bug: the current tracked PNG proves that scratch output can enter the repository, and the ignore rules do not prevent the next generated file from being staged.
+- User impact: future local screenshots, debug dumps, or generated binary files can become review noise or leak environment-specific state.
+- Suggested fix: add a `tmp/` ignore rule after moving or deleting the intentional tracked file. If a tracked fixture directory is needed, use a non-temporary name and document it.
+
+#### TMP-003: the screenshot can be mistaken for a current visual baseline
+
+- Severity: Low
+- Evidence: visual inspection of `tmp/img.png` shows a graphic admin dashboard screenshot with fixed labels such as `AKRA v0.9.0-beta`, `Lv. 24`, and dashboard metrics. The current crate version is `1.3.3` in `Cargo.toml:3`, and similar hard-coded admin copy is already present in `templates/admin/base.html:974-991`.
+- Why this is a maintenance gap: without context, reviewers may treat the image as an expected current UI baseline, even though it appears stale and is not tied to an automated screenshot test.
+- User impact: visual regressions can be argued from an unmanaged screenshot rather than a reproducible test artifact.
+- Suggested fix: either delete the screenshot or move it into a documented visual reference set with the source route, app version, viewport, fixture data, and regeneration command.
+
+### Test Gaps
+
+- No repository hygiene check prevents tracked files under `tmp/`.
+- No binary-asset manifest check requires purpose and regeneration metadata for large PNGs outside asset directories.
+- No visual regression workflow ties admin dashboard screenshots to reproducible fixture data.
