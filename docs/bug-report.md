@@ -18,6 +18,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `.gemini/` | Completed | 2026-06-08 | Gemini-specific styleguide and repository references inspected. |
 | `artifacts/` | Completed | 2026-06-08 | tracked terminal bridge readiness captures and repository references inspected. |
 | `tmp/` | Completed | 2026-06-08 | tracked temporary PNG payload and repository references inspected. |
+| `docs/` | Completed | 2026-06-08 | project docs, validation matrix, release runbook, and OSS application draft inspected. |
 
 ## `npm/`
 
@@ -684,3 +685,55 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - No repository hygiene check prevents tracked files under `tmp/`.
 - No binary-asset manifest check requires purpose and regeneration metadata for large PNGs outside asset directories.
 - No visual regression workflow ties admin dashboard screenshots to reproducible fixture data.
+
+## `docs/`
+
+### Scope
+
+- Inspected files under `docs/`, with focus on `docs/README.md`, `docs/plan/12-platform-validation-matrix.md`, `docs/plan/13-native-packaging-and-operator-runbook.md`, `docs/plan/14-codex-for-oss-application.md`, and `docs/validation/*`.
+- Inspected related root docs: `README.md` and `AGENTS.md`.
+- Validation run: `bash scripts/summarize_native_validation.sh`.
+- Validation run: `bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty`.
+- Reference scan: `rg -n "TODO|FIXME|stale|obsolete|deprecated|tmux|terminal bridge|v0\\.9|0\\.9\\.0|1\\.3\\.3|npm|NPM_TOKEN|plan_priority_queue|directions\\.toml|file-backed|DB authority|latest|2026-04|2026-05|2026-06" docs README.md AGENTS.md -S --glob "!docs/bug-report.md"`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### DOCS-001: required terminal-baseline validation is documented but has zero passing rows
+
+- Severity: High
+- Evidence: `docs/plan/12-platform-validation-matrix.md:51-60` marks macOS Terminal.app, macOS iTerm2, Windows Terminal PowerShell, and Windows Terminal WSL bash as required `terminal-baseline` rows. `docs/validation/README.md:19-25` says to use `bash scripts/summarize_native_validation.sh` before calling the matrix complete.
+- Validation evidence: `bash scripts/summarize_native_validation.sh` reports `required pass: 0/8`, `required missing: 8`, and no passing required baseline rows.
+- Why this is a bug: the docs define a required validation gate, but the checked-in validation directory cannot satisfy it. There is no top-level warning that terminal-baseline coverage is currently empty.
+- User impact: maintainers can cite the validation matrix or committed validation records while the required baseline rows are completely missing.
+- Suggested fix: add a visible validation status section that records the current summary output and distinguishes missing required baseline rows from completed coverage. Alternatively, downgrade uncollected rows or make the required baseline a CI/reporting gate.
+
+#### DOCS-002: prompt-input-delay records are mostly blockers but the docs do not surface that status
+
+- Severity: Medium
+- Evidence: `docs/plan/12-platform-validation-matrix.md:156-165` defines five required `prompt-input-delay-pty` rows. The current checked-in validation files contain one pass and four blockers, and `bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty` reports `required pass: 1/5` and `required non-pass: 4`.
+- Why this is a usage gap: the raw records are present, but the docs do not provide a current status rollup near the matrix. A reader has to run the helper to learn that most required rows are blockers.
+- User impact: prompt latency or PTY-related work can be treated as validated even though the recorded matrix still describes unresolved blockers.
+- Suggested fix: commit a small generated or manually refreshed summary under `docs/validation/README.md`, and require PRs touching terminal behavior to update it when the helper output changes.
+
+#### DOCS-003: release docs omit the duplicate-tag and optional-npm-publish risks
+
+- Severity: Medium
+- Evidence: `README.md:444-447` says release tags build native bundles, create or update the GitHub Release, and publish npm packages when `NPM_TOKEN` is configured. `docs/plan/13-native-packaging-and-operator-runbook.md:180-200` says accepted tags are any pushed tag and that npm platform packages are published before the main package.
+- Why this is a logic gap: the docs do not warn that both `v<version>` and bare `<version>` tags are accepted by the current validator, and they do not say that a missing `NPM_TOKEN` makes the npm job skip successfully after GitHub Release assets are created.
+- User impact: release operators can create duplicate GitHub Releases for one package version or mistake a green tag workflow for a full npm release.
+- Suggested fix: document the single intended tag convention and the npm publish mode explicitly. If npm publishing is required, state that missing `NPM_TOKEN` must fail the release; if optional, document GitHub-only release semantics.
+
+#### DOCS-004: the OSS application draft stores time-sensitive public metrics
+
+- Severity: Low
+- Evidence: `docs/plan/14-codex-for-oss-application.md:32-40` stores public signals "As of 2026-06-04", including GitHub stars, forks, open issues, and npm downloads. The same section includes refresh commands at `docs/plan/14-codex-for-oss-application.md:41-48`.
+- Why this is a maintenance gap: the document is a form draft, but the time-sensitive metrics sit in checked-in prose and can become stale quickly after the stated date.
+- User impact: future submissions or README copy can accidentally reuse outdated usage signals.
+- Suggested fix: keep the dated snapshot only as historical evidence and add a clear "refresh before use" warning to the form draft body, or move mutable metrics into a generated note that is not treated as current project truth.
+
+### Test Gaps
+
+- No docs check fails when required validation matrix rows have zero passing records.
+- No docs status artifact records the current `summarize_native_validation.sh` output for reviewers.
+- No release-doc check verifies that tag convention and npm publish behavior match the workflow and validation scripts.
