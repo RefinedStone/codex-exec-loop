@@ -8,6 +8,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | --- | --- | --- | --- |
 | `npm/` | Completed | 2026-06-08 | npm package runtime shim, platform mapping, package staging, and npm tests inspected. |
 | `scripts/` | Completed | 2026-06-08 | release scripts, validation scripts, GitHub wrapper, and worktree cleanup inspected. |
+| `schema/` | Completed | 2026-06-08 | app-server protocol schema snapshot and schema consumers inspected. |
 
 ## `npm/`
 
@@ -174,3 +175,78 @@ Required Rows
 - Missing-value parser behavior is not covered for release scripts or `gh-akra.sh`.
 - `cleanup_merged_worktrees.sh` does not appear to have tests for explicit target misspellings, unmerged explicit targets, or remote branch deletion behavior.
 - `summarize_native_validation.sh` has Rust integration coverage for profile filtering, but no test that the default success status is safe or intentionally non-gating when required rows are missing.
+
+## `schema/`
+
+### Scope
+
+- Inspected files: `schema/codex_app_server_protocol.v2.schemas.json`.
+- Inspected consumers: `src/domain/startup_diagnostics.rs` and `src/adapter/outbound/app_server/protocol/contract_tests.rs`.
+- Validation run: `jq empty schema/codex_app_server_protocol.v2.schemas.json`.
+- Validation run: `cargo test schema_notification_vocabulary_requires_adapter_classification --lib`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### SCHEMA-001: numeric Rust integer formats are not enforceable by draft-07 validators
+
+- Severity: High
+- Evidence: the schema declares draft-07 at the root, but uses non-standard `format` values such as `uint`, `uint16`, `uint32`, `uint64`, `int32`, and `int64`. A query found 62 integer fields with these formats and no `maximum` constraint.
+- Example evidence:
+
+```bash
+jq '.definitions.ThreadRollbackParams.properties.numTurns' schema/codex_app_server_protocol.v2.schemas.json
+```
+
+```json
+{
+  "description": "The number of turns to drop from the end of the thread. Must be >= 1\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
+  "type": "integer",
+  "format": "uint32",
+  "minimum": 0
+}
+```
+
+- Why this is a bug: JSON Schema draft-07 treats `format` as annotation unless a validator opts into custom format logic. Even when format validation is enabled, `uint32` and `uint64` are not standard draft-07 formats. A standard validator can accept an integer that Rust deserialization later rejects for overflowing `u32`, `u64`, `i32`, or `i64`.
+- The same example also contradicts itself: the description says the rollback count must be `>= 1`, while the schema sets `minimum` to `0`.
+- User impact: external clients or generated tests that rely on this checked-in schema can produce payloads that validate but fail against the actual app-server/client contract.
+- Suggested fix: add explicit `maximum` and `minimum` bounds for all fixed-width integer fields, or publish the custom format vocabulary and ship validator support with the schema snapshot.
+
+#### SCHEMA-002: the checked-in protocol snapshot has no provenance, version, or stable identifier
+
+- Severity: Medium
+- Evidence: the root object has `$schema`, `title`, and `type`, but no `$id`, `description`, generator metadata, source commit, app-server version, or snapshot checksum.
+- Reproduction used during audit:
+
+```bash
+jq '{schema: .["$schema"], id: .["$id"], title, description, generated: .["x-generated-from"], version: .version}' schema/codex_app_server_protocol.v2.schemas.json
+```
+
+- Observed output:
+
+```json
+{
+  "schema": "http://json-schema.org/draft-07/schema#",
+  "id": null,
+  "title": "CodexAppServerProtocolV2",
+  "description": null,
+  "generated": null,
+  "version": null
+}
+```
+
+- User impact: when an app-server protocol mismatch appears, support can only compare the file path and current repository contents. The binary startup label is also based on path plus byte length, so two different snapshots with the same byte length would be indistinguishable in logs.
+- Suggested fix: add stable provenance fields such as `$id`, `x-generated-from`, `x-source-revision`, `x-generated-at`, or `x-content-sha256`. Include the same checksum in the startup diagnostics label.
+
+#### SCHEMA-003: the schema snapshot is minified, making protocol reviews hard to audit
+
+- Severity: Low
+- Evidence: `schema/codex_app_server_protocol.v2.schemas.json` is a single-line 173,208-byte JSON file. Pretty-printing it with `python3 -m json.tool` expands it to 12,773 lines and 445,000 bytes.
+- User impact: PR review and line-level diagnosis are poor. A large protocol change appears as one changed line, and report references cannot point to useful local lines inside the schema.
+- Suggested fix: store the schema in a stable pretty-printed form, or commit both the minified runtime snapshot and a formatted review copy. Add a check that fails when generated formatting is not stable.
+
+### Test Gaps
+
+- Current Rust coverage confirms the checked-in `ServerNotification.oneOf` vocabulary is classified, but it does not validate numeric bounds or schema compatibility with a standard JSON Schema validator.
+- No test asserts schema provenance fields or startup diagnostics checksum stability.
+- No formatter/generator check prevents the schema from remaining a one-line diff-hostile artifact.
