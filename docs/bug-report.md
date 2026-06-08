@@ -12,6 +12,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `templates/` | Completed | 2026-06-08 | admin Askama templates, template resources, and admin template consumers inspected. |
 | `assets/` | Completed | 2026-06-08 | admin game assets, embedded graphics, and app-server skill assets inspected. |
 | `.github/` | Completed | 2026-06-08 | PR template and GitHub Actions workflows inspected. |
+| `examples/` | Completed | 2026-06-08 | bundled prompt example and native release references inspected. |
 
 ## `npm/`
 
@@ -418,3 +419,46 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - `actionlint` is not part of the local or GitHub PR gate, so workflow expression and action-input mistakes are not caught before merge.
 - The PR gate does not cover npm package tests, admin game build freshness, or npm staging.
 - No workflow test or script asserts a single accepted release tag convention.
+
+## `examples/`
+
+### Scope
+
+- Inspected files: `examples/initial_prompt.txt`.
+- Inspected release references: `scripts/package_native_release.sh`, `README.md`, and `docs/plan/13-native-packaging-and-operator-runbook.md`.
+- Validation run: `rg -n "initial_prompt" -S --glob "!docs/bug-report.md" .`.
+- Validation run: `git ls-files examples`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### EXAMPLES-001: bundled example prompt is not discoverable from docs or code
+
+- Severity: Medium
+- Evidence: `examples/initial_prompt.txt` is the only tracked file under `examples/`. `scripts/package_native_release.sh:221-222` copies the tracked `examples/` directory into every native release bundle, while `README.md:108-110` and `docs/plan/13-native-packaging-and-operator-runbook.md:38-46` only list `examples/` as a bundle content item.
+- Reference evidence: `rg -n "initial_prompt" -S --glob "!docs/bug-report.md" .` returns no references, so no code path, README section, or runbook step names the file or explains how to use it.
+- Why this is a usage gap: users receive a release artifact that looks intentional, but the project never explains whether the prompt should be pasted into `akra`, used as a planning seed, edited before use, or treated as a smoke-test sample.
+- User impact: the example can silently rot, and operators looking for a supported starter prompt have to infer the intended workflow from a three-line text file.
+- Suggested fix: add `examples/README.md` or a release runbook section that names every bundled example, its target workflow, and the exact command or UI action that consumes it.
+
+#### EXAMPLES-002: the prompt asks for autonomous work without the repository delivery guardrails
+
+- Severity: Medium
+- Evidence: `examples/initial_prompt.txt:1-3` asks the agent to choose the most important task in the repository and proceed, then summarize the result. It does not mention worktree isolation, branch base, commit/push/PR delivery, or cleanup. By contrast, `AGENTS.md:1-4` requires a worktree for every change and `commit -> push -> PR(prerelease) -> rebase merge(prerelease)` for meaningful work, and `docs/plan/04-worktree-branch-rules.md:7-10` requires `origin/prerelease`, sibling worktrees, and one reviewable slice per branch.
+- Why this is a logic gap: the bundled starter prompt can trigger broad autonomous changes, but it omits the safety and delivery rules that make those changes reviewable in this repository.
+- User impact: an operator following only the example can get local unreviewed edits, branches based from the wrong ref, or completed work that never reaches the `prerelease` integration flow.
+- Suggested fix: rewrite the example as a scoped operational prompt that explicitly requires reading `AGENTS.md`, creating a worktree from `origin/prerelease`, opening a PR to `prerelease`, and cleaning up after merge. If the file is meant to be generic, rename it and add warnings that repository-specific rules still apply.
+
+#### EXAMPLES-003: the only bundled example is Korean-only in an English release surface
+
+- Severity: Low
+- Evidence: `examples/initial_prompt.txt:1-3` is Korean-only, while the release-facing bundle documentation around it is English in `README.md:108-110` and `docs/plan/13-native-packaging-and-operator-runbook.md:38-46`.
+- Why this is a usability gap: non-Korean operators can see that examples are shipped, but the only actual example cannot be understood without translation and has no language marker in the filename.
+- User impact: the example directory is less useful for OSS users and release consumers who otherwise interact with the English README/runbook.
+- Suggested fix: add an English equivalent, use language-qualified filenames such as `initial_prompt.ko.txt` and `initial_prompt.en.txt`, and document both in `examples/README.md`.
+
+### Test Gaps
+
+- No release packaging check verifies that bundled examples are documented by name.
+- No prompt contract test verifies that operational examples include the repository's required worktree and PR delivery constraints.
+- No localization or filename convention check prevents shipping a single-language example without a language marker.
