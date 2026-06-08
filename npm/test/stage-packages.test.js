@@ -113,7 +113,33 @@ test("stage-npm-packages copies only runtime assets into platform vendors", () =
       );
       assert(!files.some((file) => file.includes("node_modules")));
       assert(!files.some((file) => file.startsWith("assets/admin/")));
+
+      const packageJson = JSON.parse(
+        fs.readFileSync(
+          path.join(outDir, "platforms", config.packageAlias, "package.json"),
+          "utf8",
+        ),
+      );
+      assert.equal(packageJson.name, "@refinedstone/akra");
+      assert.equal(packageJson.version, `0.1.0-${config.packageVersionSuffix}`);
+      assert.deepEqual(packageJson.os, [config.os]);
+      assert.deepEqual(packageJson.cpu, [config.cpu]);
     }
+
+    const mainPackageJson = JSON.parse(
+      fs.readFileSync(path.join(outDir, "main", "package.json"), "utf8"),
+    );
+    assert.equal(mainPackageJson.name, "@refinedstone/akra");
+    assert.equal(mainPackageJson.version, "0.1.0");
+    assert.deepEqual(
+      mainPackageJson.optionalDependencies,
+      Object.fromEntries(
+        PLATFORM_CONFIGS.map((config) => [
+          config.packageAlias,
+          `npm:@refinedstone/akra@0.1.0-${config.packageVersionSuffix}`,
+        ]),
+      ),
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -16,8 +16,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate-release:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check tag matches Cargo.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/validate_native_release_version.sh --tag "${GITHUB_REF_NAME}"
+
   build-native-assets:
     name: Build ${{ matrix.label }}
+    needs:
+      - validate-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -163,6 +178,15 @@ jobs:
             exit 0
           fi
 
+          if ! npm_user="$(npm whoami 2>/tmp/npm-whoami.err)"; then
+            printf '%s\n' \
+              "NPM_TOKEN is configured but npm authentication failed." \
+              "Replace the repository secret with an npm automation token that can publish @refinedstone/akra." >&2
+            cat /tmp/npm-whoami.err >&2
+            exit 1
+          fi
+
+          echo "npm authenticated as ${npm_user}"
           echo "configured=true" >> "${GITHUB_OUTPUT}"
 
       - name: Download packaged assets
@@ -211,7 +235,13 @@ jobs:
               return 0
             fi
 
-            npm publish "${package_dir}" --access public
+            if ! npm publish "${package_dir}" --access public; then
+              printf '%s\n' \
+                "npm publish failed for ${name}@${version}." \
+                "Check that NPM_TOKEN has publish access to @refinedstone/akra in the npm registry." \
+                "If this is a corrected republish, create a new tag version because npm versions are immutable." >&2
+              exit 1
+            fi
           }
 
           publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-linux-x64"
@@ -233,4 +263,10 @@ jobs:
             exit 0
           fi
 
-          npm publish "${package_dir}" --access public
+          if ! npm publish "${package_dir}" --access public; then
+            printf '%s\n' \
+              "npm publish failed for ${package_name}@${package_version}." \
+              "Check that NPM_TOKEN has publish access to @refinedstone/akra in the npm registry." \
+              "If this is a corrected republish, create a new tag version because npm versions are immutable." >&2
+            exit 1
+          fi
