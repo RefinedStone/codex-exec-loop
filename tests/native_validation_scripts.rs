@@ -50,6 +50,61 @@ fn summarize(records_dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("summary output should be utf8")
 }
 
+fn run_release_version_check(tag: &str, manifest_body: &str) -> std::process::Output {
+    let dir = make_records_dir();
+    let manifest_path = dir.join("Cargo.toml");
+    fs::write(&manifest_path, manifest_body).expect("manifest fixture should be written");
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("bash")
+        .arg(repo_root.join("scripts/validate_native_release_version.sh"))
+        .arg("--tag")
+        .arg(tag)
+        .arg("--manifest")
+        .arg(&manifest_path)
+        .output()
+        .expect("release version validation script should run");
+    fs::remove_dir_all(dir).expect("validation temp dir should be removed");
+    output
+}
+
+#[test]
+fn release_version_check_accepts_matching_v_tag() {
+    let output = run_release_version_check(
+        "v1.3.4",
+        r#"[package]
+name = "codex-exec-loop-native"
+version = "1.3.4"
+"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "release version check failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("release_version=1.3.4"));
+    assert!(stdout.contains("crate_version=1.3.4"));
+}
+
+#[test]
+fn release_version_check_rejects_mismatched_tag() {
+    let output = run_release_version_check(
+        "v1.3.4",
+        r#"[package]
+name = "codex-exec-loop-native"
+version = "1.3.3"
+"#,
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("release tag and Cargo.toml version do not match"));
+    assert!(stderr.contains("tag version: 1.3.4"));
+    assert!(stderr.contains("Cargo.toml version: 1.3.3"));
+}
+
 #[test]
 fn prompt_input_delay_profile_counts_tmux_detached_pty_row() {
     let records_dir = make_records_dir();
