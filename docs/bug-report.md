@@ -9,6 +9,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `npm/` | Completed | 2026-06-08 | npm package runtime shim, platform mapping, package staging, and npm tests inspected. |
 | `scripts/` | Completed | 2026-06-08 | release scripts, validation scripts, GitHub wrapper, and worktree cleanup inspected. |
 | `schema/` | Completed | 2026-06-08 | app-server protocol schema snapshot and schema consumers inspected. |
+| `templates/` | Completed | 2026-06-08 | admin Askama templates, template resources, and admin template consumers inspected. |
 
 ## `npm/`
 
@@ -250,3 +251,48 @@ jq '{schema: .["$schema"], id: .["$id"], title, description, generated: .["x-gen
 - Current Rust coverage confirms the checked-in `ServerNotification.oneOf` vocabulary is classified, but it does not validate numeric bounds or schema compatibility with a standard JSON Schema validator.
 - No test asserts schema provenance fields or startup diagnostics checksum stability.
 - No formatter/generator check prevents the schema from remaining a one-line diff-hostile artifact.
+
+## `templates/`
+
+### Scope
+
+- Inspected files: `templates/admin/*.html`, `templates/admin/partials/draft_status.html`, `templates/admin/resources/**`.
+- Inspected consumers: `src/adapter/inbound/admin_api/views.rs`, `src/adapter/inbound/admin_api/pages.rs`, `src/adapter/inbound/admin_api/static_assets.rs`, `src/adapter/inbound/admin_api/tests.rs`, `assets/admin/game/akra-diorama.js`, and `scripts/check_admin_graphic_visual.sh`.
+- Validation run: `cargo test admin_html_page_routes_render_live_templates --lib`.
+- Validation run: `cargo test akra_graphic_dashboard_visual_contract_has_regression_guardrails --lib`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### TEMPLATES-001: admin pages depend on public CDNs at runtime
+
+- Severity: Medium
+- Evidence: `templates/admin/base.html:11` loads the graphic admin font from jsDelivr. The same base template loads PixiJS from cdnjs and HTMX from unpkg at `templates/admin/base.html:839-840`, then dynamically imports CodeMirror modules from esm.sh at `templates/admin/base.html:911-915`.
+- Related evidence: local static assets are embedded through `src/adapter/inbound/admin_api/static_assets.rs:5-14` and `src/adapter/inbound/admin_api/static_assets.rs:48`, and the graphic dashboard loads local `/admin/assets/game/akra-diorama.js` at `templates/admin/akra_dashboard.html:1973`. The vendor browser dependencies are the main assets that still come from the network.
+- Why this is a usage gap: the admin surface is documented and shaped as a local operator console, but every admin page makes third-party requests before the operator interacts with it. Offline, firewalled, or privacy-sensitive environments lose the custom font, HTMX validation flow, CodeMirror enhancement, and potentially the Pixi-based diorama.
+- User impact: an operator can see a degraded or partially non-interactive admin UI even though the native binary and local embedded assets are present. The browser also leaks admin page access timing to third-party CDNs.
+- Suggested fix: vendor the exact browser dependencies under `assets/admin/vendor/`, serve them through the existing admin static asset boundary, and load PixiJS only on the graphic dashboard pages that need it.
+
+#### TEMPLATES-002: the graphic sidebar reports hard-coded success and version state
+
+- Severity: Medium
+- Evidence: `templates/admin/base.html:970-992` renders fixed achievement/status copy such as `Lv. 24`, `+120 today`, `AKRA v0.9.0-beta`, and the Korean equivalent of `all systems normal`. `src/adapter/inbound/admin_api/views.rs:18-40` shows the graphic templates already receive real `AkraAdminDashboardView` data, but the shared base sidebar does not use any dynamic dashboard health field.
+- Related test evidence: `src/adapter/inbound/admin_api/tests.rs:1479` asserts that the base template keeps `AKRA v0.9.0-beta`, so current tests preserve at least part of the hard-coded sidebar state.
+- Why this is a bug: operator chrome should not claim all systems are normal or display stale version/progress values independently of the actual planning/runtime/distributor state.
+- User impact: during a blocked pool, failed worker, stale dashboard snapshot, or version mismatch, the always-green sidebar can contradict the main dashboard and make the operator trust the wrong status signal.
+- Suggested fix: move sidebar status data into an explicit layout view model, or replace the hard-coded achievement area with neutral static branding that cannot be read as live health.
+
+#### TEMPLATES-003: editor mutation URLs rebuild raw draft names instead of using an encoded route field
+
+- Severity: Low
+- Evidence: `templates/admin/editor.html:7`, `templates/admin/editor.html:26`, `templates/admin/editor.html:28`, and `templates/admin/editor.html:37` interpolate `{{ session.draft_name }}` directly into form, formaction, and HTMX URLs.
+- Related evidence: `src/adapter/inbound/admin_api/pages.rs:787-811` has a dedicated `draft_editor_location` helper that percent-encodes `draft_name` for redirects, but `render_editor_page` passes only the raw `PlanningAdminSessionView` into the template at `src/adapter/inbound/admin_api/pages.rs:814-831`. `PlanningAdminSessionView` stores only `draft_name` and not a pre-encoded action URL at `src/application/service/planning/admin/surface.rs:211-216`.
+- Why this is a logic gap: current generated draft names are safe timestamp slugs, but the load and mutation routes treat the path value as a general draft handle. If an imported, restored, or manually staged draft name ever contains characters that need URL path encoding, the create/load redirect can work while the rendered save/validate/promote buttons point at a different route.
+- User impact: a valid editor session can become unsaveable from the browser, or a mutation can target the wrong draft handle after the page is rendered.
+- Suggested fix: add encoded action paths to the editor view model or expose a small template-safe route helper, then assert rendered editor actions for draft names containing spaces, slashes, and percent-like characters.
+
+### Test Gaps
+
+- Existing admin template tests mostly assert static substrings. They do not fail when the base template adds new third-party CDN dependencies.
+- The visual regression script verifies served local graphic assets, but it does not cover an offline/no-CDN browser run.
+- No rendered-template test asserts that editor save, validate, promote, and HTMX URLs are percent-encoded consistently with `draft_editor_location`.
