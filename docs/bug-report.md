@@ -16,6 +16,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `tests/` | Completed | 2026-06-08 | integration tests for architecture boundaries, binary entrypoints, and native validation scripts inspected. |
 | `.codex-exec-loop/` | Completed | 2026-06-08 | tracked planning seed prompts, direction detail docs, and release followup prompts inspected. |
 | `.gemini/` | Completed | 2026-06-08 | Gemini-specific styleguide and repository references inspected. |
+| `artifacts/` | Completed | 2026-06-08 | tracked terminal bridge readiness captures and repository references inspected. |
 
 ## `npm/`
 
@@ -596,3 +597,46 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - No docs or lint check verifies that tracked agent-specific guidance files are referenced from the main contributor instructions.
 - No repository rule check ensures secondary agent guides include the required worktree and PR delivery contract.
 - No toolchain policy check ties Rust syntax guidance to a declared minimum compiler version.
+
+## `artifacts/`
+
+### Scope
+
+- Inspected files: `artifacts/terminal-bridge-readiness-2026-04-23/*`.
+- Inspected repository references from `docs/`, `src/`, `scripts/`, `README.md`, and `AGENTS.md`.
+- Reference check: `rg -n "terminal-bridge-readiness|artifacts/terminal-bridge|05-stream\\.pipe|approval-prompt|missing-capture" docs src scripts README.md AGENTS.md -S --glob "!docs/bug-report.md"`.
+- Validation run: `find artifacts -type f -print0 | xargs -0 file`.
+- Reference check: `LC_ALL=C rg -n "\\x1b|/dev/pts|pid=|session=|approve\\?|server exited|can't find window" artifacts -S`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### ARTIFACTS-001: tracked terminal captures have no manifest or documentation entrypoint
+
+- Severity: Medium
+- Evidence: `artifacts/terminal-bridge-readiness-2026-04-23/` contains 16 tracked capture files, but `rg -n "terminal-bridge-readiness|artifacts/terminal-bridge|05-stream\\.pipe|approval-prompt|missing-capture" docs src scripts README.md AGENTS.md -S --glob "!docs/bug-report.md"` returns no references.
+- Why this is a usage gap: the captures look like validation evidence, but the repository does not explain the scenario, command sequence, expected pass/fail interpretation, related code path, or whether the dated artifact is still current.
+- User impact: reviewers cannot tell whether the files are required regression evidence, obsolete research output, or accidental local logs.
+- Suggested fix: add `artifacts/terminal-bridge-readiness-2026-04-23/README.md` with the scenario, source commit, capture commands, expected observations, and current relevance. If the evidence is obsolete, move it to docs or remove it from tracked source.
+
+#### ARTIFACTS-002: captures preserve local process and terminal identifiers
+
+- Severity: Medium
+- Evidence: `artifacts/terminal-bridge-readiness-2026-04-23/01-pane-discovery.txt:1` records `tty=/dev/pts/10`, `pid=1621979`, and a local tmux session/window name. `artifacts/terminal-bridge-readiness-2026-04-23/12-recovery-anchor.txt:1` records `pane_id=%2`, `tty=/dev/pts/12`, and `pid=1622004`.
+- Why this is a bug: tracked artifacts should be scrubbed or intentionally synthetic. Local process IDs, pane IDs, and TTY paths are not reproducible evidence and can leak operator environment details when copied from a real terminal.
+- User impact: future captures may accidentally commit more sensitive local context because the current directory normalizes committing raw terminal metadata.
+- Suggested fix: replace local identifiers with stable placeholders, and add a capture-scrubbing checklist for terminal artifacts before they are committed.
+
+#### ARTIFACTS-003: raw terminal escape sequences make text captures look like binary payloads
+
+- Severity: Low
+- Evidence: `find artifacts -type f -print0 | xargs -0 file` reports several `.txt` captures as `RAGE Package Format (RPF)`, and reports stream logs as `ASCII text, with escape sequences`. `LC_ALL=C rg -n "\\x1b" artifacts -S` finds bracketed-paste escape sequences in `05-stream.pipe.log`, `06-stream-at-0.5s.log`, and `07-stream-at-1.8s.log`.
+- Why this is a maintenance gap: generic review and security tooling can misclassify these text fixtures, while human reviewers see noisy control bytes instead of the behavioral evidence.
+- User impact: diffs, grep output, and artifact scans are harder to interpret, which lowers confidence in terminal-readiness evidence.
+- Suggested fix: keep raw captures only when necessary, but also commit normalized `.txt` summaries without escape bytes and document which file is authoritative.
+
+### Test Gaps
+
+- No artifact manifest check requires tracked evidence directories to explain scenario, command, date, source commit, and current status.
+- No scrubber or lint check flags TTY paths, process IDs, pane IDs, or other local terminal identifiers in tracked artifacts.
+- No check distinguishes intentionally raw terminal captures from normalized reviewable text.
