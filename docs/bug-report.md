@@ -15,6 +15,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `examples/` | Completed | 2026-06-08 | bundled prompt example and native release references inspected. |
 | `tests/` | Completed | 2026-06-08 | integration tests for architecture boundaries, binary entrypoints, and native validation scripts inspected. |
 | `.codex-exec-loop/` | Completed | 2026-06-08 | tracked planning seed prompts, direction detail docs, and release followup prompts inspected. |
+| `.gemini/` | Completed | 2026-06-08 | Gemini-specific styleguide and repository references inspected. |
 
 ## `npm/`
 
@@ -553,3 +554,45 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - No repository check verifies that tracked `.codex-exec-loop/planning` files match the DB-backed planning artifact contract.
 - No consistency check flags unreferenced direction detail docs under the canonical direction detail directory.
 - No release packaging test asserts that bundled followup prompts mention only supported planning authority paths.
+
+## `.gemini/`
+
+### Scope
+
+- Inspected files: `.gemini/styleguide.md`.
+- Inspected repository rule references: `AGENTS.md`, `README.md`, and `Cargo.toml`.
+- Reference check: `rg --hidden -n "Gemini|gemini|styleguide|Styleguide|\\.gemini" -S . --glob "!.git" --glob "!target/**" --glob "!docs/bug-report.md"`.
+- Reference check: `rg -n "rust-version|edition|MSRV|let_chains|let chains|Rust" Cargo.toml README.md docs AGENTS.md .gemini/styleguide.md -S --glob "!docs/bug-report.md"`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### GEMINI-001: the Gemini styleguide is tracked but not discoverable from project docs
+
+- Severity: Medium
+- Evidence: `.gemini/styleguide.md` is the only tracked file under `.gemini/` and is only five lines long. `rg --hidden -n "Gemini|gemini|styleguide|Styleguide|\\.gemini" -S . --glob "!.git" --glob "!target/**" --glob "!docs/bug-report.md"` finds no project reference outside the file itself.
+- Why this is a usage gap: contributors cannot tell whether this file is active review policy, an abandoned Gemini CLI artifact, or a local preference accidentally committed to the repository.
+- User impact: Gemini-assisted reviews may follow rules that Codex/CI/human contributors do not know exist, while non-Gemini contributors never see the same guidance.
+- Suggested fix: either document `.gemini/styleguide.md` from `AGENTS.md` or `docs/agent/`, or remove it if it is no longer an active project input.
+
+#### GEMINI-002: the styleguide omits the repository's required delivery workflow
+
+- Severity: Medium
+- Evidence: `.gemini/styleguide.md:1-5` only requires Korean review/application/refutation text and mentions one Rust syntax point. It does not mention worktrees, `origin/prerelease`, commit/push/PR/rebase-merge delivery, or worktree cleanup. Those are mandatory in `AGENTS.md:1-4` and further detailed in `AGENTS.md:31-33`.
+- Why this is a logic gap: an agent or reviewer that reads only the Gemini styleguide can perform changes in the integration checkout or stop after local edits, violating the repository's current delivery contract.
+- User impact: Gemini-assisted edits can leave unreviewed local changes or branches that never land in `prerelease`, even while appearing to follow the tracked `.gemini` instructions.
+- Suggested fix: make the Gemini file a thin pointer to `AGENTS.md`, or duplicate the minimum worktree/PR/cleanup contract with a warning that `AGENTS.md` is authoritative.
+
+#### GEMINI-003: Rust syntax guidance is tied to "latest Rust" without a pinned toolchain
+
+- Severity: Low
+- Evidence: `.gemini/styleguide.md:4-5` asks reviewers to use the latest Rust syntax and specifically blesses `if let` combined with `&&`. `Cargo.toml:1-5` declares package metadata and `edition = "2024"`, but there is no `rust-version` key in the manifest and no `.gemini` note naming the minimum supported compiler.
+- Why this is a maintenance gap: syntax guidance without an MSRV or toolchain baseline can drift ahead of the compiler used by CI, release packaging, or contributors.
+- User impact: reviews can accept code because it is valid on a latest local compiler while another maintainer's documented setup fails to build it.
+- Suggested fix: define the supported Rust toolchain in `Cargo.toml` or a checked-in toolchain policy, then make `.gemini/styleguide.md` refer to that baseline instead of "latest Rust" generally.
+
+### Test Gaps
+
+- No docs or lint check verifies that tracked agent-specific guidance files are referenced from the main contributor instructions.
+- No repository rule check ensures secondary agent guides include the required worktree and PR delivery contract.
+- No toolchain policy check ties Rust syntax guidance to a declared minimum compiler version.
