@@ -7,6 +7,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | Directory | Status | Completed at | Notes |
 | --- | --- | --- | --- |
 | `npm/` | Completed | 2026-06-08 | npm package runtime shim, platform mapping, package staging, and npm tests inspected. |
+| `scripts/` | Completed | 2026-06-08 | release scripts, validation scripts, GitHub wrapper, and worktree cleanup inspected. |
 
 ## `npm/`
 
@@ -83,3 +84,93 @@ exit=0
 - `npm/test/runtime.test.js` covers binary path selection and unsupported platform mapping, but does not execute `npm/bin/akra.js` as a subprocess.
 - No test asserts parent exit status when the native binary exits by signal.
 - No test asserts the CLI text emitted for missing optional dependency, missing binary, or unsupported platform failures.
+
+## `scripts/`
+
+### Scope
+
+- Inspected files: `scripts/capture_native_validation.ps1`, `scripts/capture_native_validation.sh`, `scripts/check_admin_graphic_visual.sh`, `scripts/check_native_pr.sh`, `scripts/check_tui_layering.sh`, `scripts/cleanup_merged_worktrees.sh`, `scripts/gh-akra.sh`, `scripts/package_native_release.sh`, `scripts/planning-tool.sh`, `scripts/summarize_native_validation.sh`, `scripts/validate_native_release_version.sh`, `scripts/verify_native_release.sh`.
+- Validation run: `bash -n scripts/*.sh`.
+- Validation run: `cargo test --test native_validation_scripts`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### SCRIPTS-001: several operator scripts fail silently when an option value is missing
+
+- Severity: Medium
+- Evidence: `scripts/package_native_release.sh:30`, `scripts/verify_native_release.sh:25`, `scripts/validate_native_release_version.sh:23`, and `scripts/gh-akra.sh:14` read `${2-}` and immediately `shift 2` without a local `require_value` check.
+- Reproduction used during audit:
+
+```bash
+bash -c 'bash scripts/package_native_release.sh --target; printf "status=%s\n" "$?"' 2>&1
+bash -c 'bash scripts/verify_native_release.sh --archive; printf "status=%s\n" "$?"' 2>&1
+bash -c 'bash scripts/validate_native_release_version.sh --tag; printf "status=%s\n" "$?"' 2>&1
+bash -c 'bash scripts/gh-akra.sh --github-login; printf "status=%s\n" "$?"' 2>&1
+```
+
+- Observed output: each command returned only `status=1` with no script-specific usage message.
+- User impact: release and GitHub automation failures become hard to diagnose when the operator mistypes a command or a CI variable expands to an empty value.
+- Suggested fix: share the `require_value` helper pattern already used by `scripts/capture_native_validation.sh:24` and `scripts/cleanup_merged_worktrees.sh:27`, then test each public option parser with missing values.
+
+#### SCRIPTS-002: explicit worktree cleanup targets can be missing while the command still succeeds
+
+- Severity: Medium
+- Evidence: `scripts/cleanup_merged_worktrees.sh:225` enables targeted mode when `--branch` or `--path` is supplied, but `process_entry` only iterates existing `git worktree list --porcelain` entries. There is no final check that every explicit target matched a worktree.
+- Reproduction used during audit:
+
+```bash
+bash scripts/cleanup_merged_worktrees.sh --branch definitely-not-a-real-branch
+```
+
+- Observed output:
+
+```text
+[skip] not in explicit target set :: ... (prerelease)
+[skip] not in explicit target set :: ... (report/scripts-bug-audit)
+[skip] not in explicit target set :: ... (test/native-coverage-planning-reset-shell)
+dry-run complete: 0 eligible, 3 skipped
+```
+
+- User impact: an operator or automation job can believe a finished lane was cleaned up even when the branch/path argument was misspelled or already absent. In cleanup workflows, a false-success result leaves stale worktrees and remote branches behind.
+- Suggested fix: track matched explicit branches/paths and exit non-zero when any requested target is not found, unless a new `--ignore-missing-targets` option is explicitly provided.
+
+#### SCRIPTS-003: explicit cleanup bypasses merge ancestry checks before deleting branches
+
+- Severity: High
+- Evidence: `scripts/cleanup_merged_worktrees.sh:14` documents that explicit targets do not require ancestor detection, and `scripts/cleanup_merged_worktrees.sh:277` skips `branch_is_merged_into_base` when `explicitly_targeted=true`. `scripts/cleanup_merged_worktrees.sh:123` then uses `git branch -D`, and `scripts/cleanup_merged_worktrees.sh:129` deletes the remote branch when it exists.
+- Why this is a logic gap: the script is named `cleanup_merged_worktrees`, but explicit cleanup can remove a clean, unmerged branch from both local and remote state. The current behavior is useful for disposable lanes, but it is a dangerous default for a command name that implies merged-only cleanup.
+- User impact: a typo or premature cleanup command can delete reviewable work that has not actually reached `prerelease`, especially after a clean worktree has no local changes.
+- Suggested fix: require ancestor detection for explicit targets by default, and move the current behavior behind an explicit flag such as `--allow-unmerged-explicit` or `--force-unmerged`.
+
+#### SCRIPTS-004: native validation summary is non-failing by default even when all required rows are missing
+
+- Severity: Low
+- Evidence: `scripts/summarize_native_validation.sh:236` defaults to `docs/validation`, `scripts/summarize_native_validation.sh:239` sets `fail_on_incomplete=0`, and `scripts/summarize_native_validation.sh:474` exits non-zero only when `--fail-on-incomplete` is supplied.
+- Reproduction used during audit:
+
+```bash
+bash -c 'bash scripts/summarize_native_validation.sh >/tmp/akra-summary.out; status=$?; printf "status=%s\n" "$status"; sed -n "1,18p" /tmp/akra-summary.out'
+```
+
+- Observed output started with:
+
+```text
+status=0
+Native Validation Summary
+records dir: docs/validation
+check profile: terminal-baseline
+
+Required Rows
+- missing  macOS / Terminal.app / zsh / inline
+...
+```
+
+- User impact: a human can run the documented summary command, see a successful shell status, and miss that validation coverage is incomplete. This matters because the terminal validation docs tell operators to summarize coverage before calling a matrix complete.
+- Suggested fix: keep the current read-only summary mode if desired, but print a visible warning when required rows are incomplete. Use `--fail-on-incomplete` in any docs or scripts that describe a gate.
+
+### Test Gaps
+
+- Missing-value parser behavior is not covered for release scripts or `gh-akra.sh`.
+- `cleanup_merged_worktrees.sh` does not appear to have tests for explicit target misspellings, unmerged explicit targets, or remote branch deletion behavior.
+- `summarize_native_validation.sh` has Rust integration coverage for profile filtering, but no test that the default success status is safe or intentionally non-gating when required rows are missing.
