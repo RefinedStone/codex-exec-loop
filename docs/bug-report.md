@@ -13,6 +13,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `assets/` | Completed | 2026-06-08 | admin game assets, embedded graphics, and app-server skill assets inspected. |
 | `.github/` | Completed | 2026-06-08 | PR template and GitHub Actions workflows inspected. |
 | `examples/` | Completed | 2026-06-08 | bundled prompt example and native release references inspected. |
+| `tests/` | Completed | 2026-06-08 | integration tests for architecture boundaries, binary entrypoints, and native validation scripts inspected. |
 
 ## `npm/`
 
@@ -462,3 +463,47 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - No release packaging check verifies that bundled examples are documented by name.
 - No prompt contract test verifies that operational examples include the repository's required worktree and PR delivery constraints.
 - No localization or filename convention check prevents shipping a single-language example without a language marker.
+
+## `tests/`
+
+### Scope
+
+- Inspected files: `tests/architecture_boundaries.rs`, `tests/binary_entrypoints.rs`, and `tests/native_validation_scripts.rs`.
+- Inspected related CI entrypoint: `scripts/check_native_pr.sh`.
+- Validation run: `. "$HOME/.cargo/env" && cargo test --test architecture_boundaries --test binary_entrypoints --test native_validation_scripts`.
+- Reference check: `rg -n "npm/bin|akra\\.js|SIGTERM|SIGHUP|resolveBinaryPath|npm" tests -S`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### TESTS-001: integration tests do not exercise the shipped npm wrapper or signal contract
+
+- Severity: High
+- Evidence: `tests/binary_entrypoints.rs:7-10` binds only Cargo-built Rust binaries through `CARGO_BIN_EXE_codex-exec-loop-native`, `CARGO_BIN_EXE_akra`, `CARGO_BIN_EXE_akra-admin`, and `CARGO_BIN_EXE_akra-telegram`. The tests then check help text, unsupported command errors, admin ephemeral port startup, interrupt shutdown, and telegram bootstrap errors at `tests/binary_entrypoints.rs:12-86`.
+- Missing coverage evidence: `rg -n "npm/bin|akra\\.js|SIGTERM|SIGHUP|resolveBinaryPath|npm" tests -S` returns no matches, so the integration suite never launches `npm/bin/akra.js`, never checks platform package resolution, and never verifies the wrapper's signal exit behavior.
+- Why this is a bug: the repository ships both native binaries and an npm entrypoint, but the root integration test suite only proves the Cargo binaries. Wrapper regressions can remain invisible to `cargo test` and to the current native PR gate.
+- User impact: installed npm users can see different exit codes, stack traces, or missing-binary diagnostics than developers see from the Rust binaries.
+- Suggested fix: add an integration or npm-driven test that launches `node npm/bin/akra.js` against a fixture native binary, covers missing optional package diagnostics, and asserts signal exits map to non-success process outcomes.
+
+#### TESTS-002: release version tests do not pin a single tag convention
+
+- Severity: Medium
+- Evidence: `tests/native_validation_scripts.rs:70-89` accepts only a matching `v1.3.4` happy path, and `tests/native_validation_scripts.rs:91-106` rejects only a mismatched `v1.3.4` tag. There is no test for an unprefixed matching tag such as `1.3.4`.
+- Related script evidence: `scripts/validate_native_release_version.sh:10-12` documents both `--tag v1.3.4` and `--tag 1.3.4 --manifest Cargo.toml`, while `scripts/validate_native_release_version.sh:53` strips one leading `v`.
+- Why this is a logic gap: the tests prove version equality, not release identity. They do not force the project to choose whether tags must be `v<version>` or bare `<version>`, which leaves duplicate release tags possible.
+- User impact: a maintainer can push two different tag names for the same package version and still satisfy the tested validator behavior.
+- Suggested fix: add explicit tests for the accepted tag convention and rejected alternatives. If `v` tags are the intended public contract, test that a bare matching tag fails with a clear diagnostic.
+
+#### TESTS-003: architecture boundary guards use raw text scanning instead of Rust-aware parsing
+
+- Severity: Medium
+- Evidence: `tests/architecture_boundaries.rs:1580-1623` enforces allowed crate references by scanning each source line for `crate::`; `tests/architecture_boundaries.rs:1672-1683` returns every raw substring from `crate::` to the end of the line. `tests/architecture_boundaries.rs:1798-1858` builds production lines with a hand-rolled filter, and `tests/architecture_boundaries.rs:1878-1881` skips only comment-only lines.
+- Why this is a test bug: forbidden tokens inside string literals or inline comments can trip architecture tests even when no dependency exists, while semantic dependency forms outside the literal patterns are not checked as Rust syntax. This makes a high-value architecture gate noisy and easier to accidentally game.
+- User impact: maintainers can lose trust in the gate after harmless copy or diagnostic strings fail it, and boundary reviews still need manual source-graph reasoning despite the test name implying stronger enforcement.
+- Suggested fix: move the boundary checks to a Rust-aware parser such as `syn` for imports/paths, or at least strip string literals and inline comments before pattern matching. Keep the current text checks only as a lightweight fallback.
+
+### Test Gaps
+
+- No root integration test covers the npm-installed command path.
+- No release validation test asserts that duplicate `v` and non-`v` tag forms cannot both pass.
+- No fixture verifies the architecture scanner's behavior on strings, inline comments, aliases, or multi-reference lines.
