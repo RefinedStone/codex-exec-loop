@@ -19,6 +19,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `artifacts/` | Completed | 2026-06-08 | tracked terminal bridge readiness captures and repository references inspected. |
 | `tmp/` | Completed | 2026-06-08 | tracked temporary PNG payload and repository references inspected. |
 | `docs/` | Completed | 2026-06-08 | project docs, validation matrix, release runbook, and OSS application draft inspected. |
+| `src/` | Completed | 2026-06-08 | source adapters, admin draft flow, GitHub automation, and review polling inspected. |
 
 ## `npm/`
 
@@ -737,3 +738,48 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - No docs check fails when required validation matrix rows have zero passing records.
 - No docs status artifact records the current `summarize_native_validation.sh` output for reviewers.
 - No release-doc check verifies that tag convention and npm publish behavior match the workflow and validation scripts.
+
+## `src/`
+
+### Scope
+
+- Inspected source under `src/`, with focus on outbound adapters, admin draft routes, planning workspace storage, GitHub automation, review polling, and subprocess handling.
+- Evidence scans: `rg -n "Command::new|gh|draft_name|csrf|token|wait_with_output|\\.output\\(" src`.
+- Line evidence captured with `nl -ba` for the files cited below.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### SRC-001: admin draft names are trusted as storage identifiers
+
+- Severity: High
+- Evidence: `src/adapter/inbound/admin_api/pages.rs:572-590` and `src/adapter/inbound/admin_api/api.rs:176-193` take `draft_name` directly from the route path and pass it into `PlanningAdminDraftLoadRequest`. Save, validate, and promote routes repeat the same pattern at `src/adapter/inbound/admin_api/pages.rs:624-706` and `src/adapter/inbound/admin_api/api.rs:196-263`.
+- Evidence: `src/application/service/planning/admin/draft_session.rs:70-72`, `src/application/service/planning/admin/draft_session.rs:82-88`, and `src/application/service/planning/admin/draft_session.rs:100-107` pass that `draft_name` into workspace operations without validating a draft-id grammar.
+- Evidence: `src/adapter/outbound/filesystem/planning_workspace.rs:56-60` builds the draft directory with `Path::new(workspace_dir).join(PLANNING_DRAFTS_DIRECTORY).join(draft_name)`. In direct-filesystem mode, `src/adapter/outbound/filesystem/planning_workspace.rs:306-317` and `src/adapter/outbound/filesystem/planning_workspace.rs:389-392` create or write under that path.
+- Why this is a bug: `active_path` is normalized, but the draft namespace key is not. Generated draft names are safe, but public admin/API routes also accept caller-supplied draft names. A malformed draft name can become a filesystem path segment in direct mode, or a confusing DB/display identifier in repo-scoped mode.
+- User impact: local admin users and automation can target draft names that do not follow the generated `admin-...` contract. In non-git/direct workspaces this can escape the intended draft directory; in git-backed workspaces it can create unreadable or misleading draft records.
+- Suggested fix: add a shared draft-name validator before facade calls and before workspace adapter joins. Accept only the generated draft id grammar or a conservative segment grammar such as ASCII alnum plus `._-`, with no slash, backslash, colon, control characters, empty values, or `.`/`..`. Return `400` from inbound handlers for invalid names, and add HTML/API tests for encoded slash and parent-directory attempts.
+
+#### SRC-002: PR creation sends full PR title/body through argv and failure labels
+
+- Severity: Medium
+- Evidence: `src/adapter/outbound/github/automation.rs:321-337` calls `bash scripts/gh-akra.sh pr create` with `--title title` and `--body body` as command arguments.
+- Evidence: `src/adapter/outbound/github/automation.rs:500-509` includes `args.join(" ")` in command failure errors. `src/adapter/outbound/github/automation.rs:521-534` also passes the same joined argument string as the subprocess timeout label and spawn context. `src/subprocess.rs:63-70` formats that label into timeout errors.
+- Why this is a bug: PR bodies are generated from task and delivery context, so they can contain user prompts, local paths, issue details, or copied diagnostics. Passing them as argv exposes them to process listings while the command runs, and the joined command label can echo the whole body into logs/errors on failure or timeout.
+- User impact: a failed or slow GitHub automation operation can leak large private planning context into terminal logs, admin status, TUI notices, or support screenshots. Long multiline PR bodies also make failure messages noisy and hard to diagnose.
+- Suggested fix: pass PR body through stdin or a temporary body file, and redact title/body in command labels. Keep a structured operation label like `bash scripts/gh-akra.sh pr create --base <base> --head <head> --title <redacted> --body <redacted>`. Add a unit test that simulates a failed `pr create` and asserts sensitive body text is absent from the error.
+
+#### SRC-003: GitHub review credential discovery can block without the shared subprocess timeout
+
+- Severity: Medium
+- Evidence: `src/adapter/outbound/github/review_poller.rs:167-176` runs `git ... .output()` directly while resolving repo metadata. `src/adapter/outbound/github/review_poller.rs:240-246` runs `gh auth token` directly with `.output()`. `src/adapter/outbound/github/review_poller.rs:278-300` spawns `git credential fill` and waits with `child.wait_with_output()`.
+- Why this is a bug: these calls bypass the shared timeout in `src/subprocess.rs`. The adapter does set `GIT_TERMINAL_PROMPT=0` for `git credential fill`, but a credential helper, `gh`, or local git command can still hang due to platform credential UI, locked keychain, broken helper configuration, or network-backed helpers.
+- User impact: review polling discovery can stall the TUI or background review integration instead of degrading to "no review poller available." This is especially painful because review polling is a convenience path, not a core startup requirement.
+- Suggested fix: route these subprocesses through the shared `subprocess::command_output` / `wait_with_output` helpers or a review-poller-specific timeout, keep stdin null where possible, and treat timeout as `Ok(None)` for credential discovery. Add fake `gh` and fake credential-helper tests that sleep longer than the timeout and verify discovery returns promptly.
+
+### Test Gaps
+
+- No admin route test sends encoded slash, backslash, `..`, empty, or control-character draft names and asserts `400`.
+- No workspace adapter test proves `draft_name` cannot escape `.codex-exec-loop/planning/drafts` in direct-filesystem mode.
+- No GitHub automation test asserts PR body/title text is redacted from argv-derived error labels.
+- No review-poller test covers hanging `gh auth token` or `git credential fill` helpers under the shared subprocess timeout.
