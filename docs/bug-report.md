@@ -10,6 +10,7 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 | `scripts/` | Completed | 2026-06-08 | release scripts, validation scripts, GitHub wrapper, and worktree cleanup inspected. |
 | `schema/` | Completed | 2026-06-08 | app-server protocol schema snapshot and schema consumers inspected. |
 | `templates/` | Completed | 2026-06-08 | admin Askama templates, template resources, and admin template consumers inspected. |
+| `assets/` | Completed | 2026-06-08 | admin game assets, embedded graphics, and app-server skill assets inspected. |
 
 ## `npm/`
 
@@ -296,3 +297,64 @@ jq '{schema: .["$schema"], id: .["$id"], title, description, generated: .["x-gen
 - Existing admin template tests mostly assert static substrings. They do not fail when the base template adds new third-party CDN dependencies.
 - The visual regression script verifies served local graphic assets, but it does not cover an offline/no-CDN browser run.
 - No rendered-template test asserts that editor save, validate, promote, and HTMX URLs are percent-encoded consistently with `draft_editor_location`.
+
+## `assets/`
+
+### Scope
+
+- Inspected files: `assets/admin/game/*`, `assets/admin/game/src/akra-diorama.ts`, `assets/admin/game/scripts/promote-build.mjs`, `assets/admin/graphics/*.png`, `assets/app-server/skills/akra-planning-queue-mutation/SKILL.md`.
+- Inspected consumers: `src/adapter/inbound/admin_api/static_assets.rs`, `src/adapter/inbound/admin_api/tests.rs`, `src/adapter/outbound/app_server/planning_worker_skill.rs`, `src/application/service/planning/task_mutation/commands.rs`, `scripts/check_admin_graphic_visual.sh`, and `npm/scripts/stage-npm-packages.mjs`.
+- Validation run: `npm --prefix assets/admin/game ci`.
+- Validation run: `npm --prefix assets/admin/game run check`.
+- Validation run: `npm --prefix assets/admin/game run build`.
+- Validation run: `cargo test queue_mutation_skill_documents_evaluator_contract --lib`.
+- Validation run: `cargo test admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names --lib`.
+- Validation run: `cargo test admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names --lib`.
+- The audit did not inspect other top-level directories in this pass.
+
+### Findings
+
+#### ASSETS-001: the bundled planning skill shows an invalid fallback command shape
+
+- Severity: High
+- Evidence: `assets/app-server/skills/akra-planning-queue-mutation/SKILL.md:42-46` first requires exactly one JSON object containing `planning_task_commands`, but `assets/app-server/skills/akra-planning-queue-mutation/SKILL.md:48-53` then shows fallback commands as standalone top-level objects such as `{"op":"create_task","title":"..."}`.
+- Parser evidence: `src/application/service/planning/task_mutation/commands.rs:63-77` only deserializes documents shaped as `{"planning_task_commands":{"version":1,"commands":[{"op":"create_task", ...}]}}`. It only enters command extraction when a candidate JSON object has a `planning_task_commands` key at `src/application/service/planning/task_mutation/commands.rs:127`.
+- Test evidence: `src/application/service/planning/task_mutation/tests.rs:620-643` confirms wrapped commands without the `op` tag are invalid and the later valid shape must include the `planning_task_commands.commands[]` envelope.
+- Why this is a bug: the skill is the runtime asset attached before hidden planning worker prompts. If the planning tool is unavailable and the worker follows the fallback example literally, the host will not apply the intended task mutation.
+- User impact: post-turn planning can silently fail to create or update the next task exactly when it is relying on the fallback path.
+- Suggested fix: replace the fallback example with a full valid envelope, for example `{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"..."}]}}`. Add a test that extracts every JSON example in the skill and verifies fallback examples parse as commands.
+
+#### ASSETS-002: large unreferenced admin graphics remain in the tracked asset set
+
+- Severity: Medium
+- Evidence: a filename reference scan across `assets`, `src`, `templates`, `scripts`, `docs`, `README.md`, and `tests` found zero references to these tracked files:
+
+```text
+assets/admin/graphics/isometric_agent_character_1.png
+assets/admin/graphics/isometric_office_props_1.png
+assets/admin/graphics/isometric_pixel_sprites_1.png
+assets/admin/graphics/isometric_server_rack_1.png
+assets/admin/graphics/isometric_tiles_partitions_1.png
+assets/admin/graphics/isometric_workstation_1.png
+assets/admin/graphics/sprite_fd_control_desk.png
+```
+
+- Size evidence: those seven files total 8,410,147 bytes, or about 8.02 MiB. The tracked `assets/admin/graphics` directory is about 23.17 MiB, so unreferenced graphics account for roughly one third of the tracked admin graphics payload.
+- Why this is a usage gap: there is no manifest that marks these files as source art, reference art, or runtime assets. A maintainer cannot tell whether removing them would break the product, while clone and review size continue to grow.
+- User impact: repository checkout, archive review, and asset audits are heavier than necessary, and unused artwork can be mistaken for supported runtime assets.
+- Suggested fix: either remove unused files, move source/reference art under a clearly documented non-runtime directory, or add an asset manifest that records purpose, owner, and runtime inclusion status.
+
+#### ASSETS-003: admin game asset names are duplicated without a single manifest
+
+- Severity: Low
+- Evidence: `assets/admin/game/src/akra-diorama.ts:271-283` hard-codes the browser asset URL map, while `src/adapter/inbound/admin_api/static_assets.rs:53-75` independently maps route names to embedded PNG bytes. The Vite build can type-check the string map, but it cannot prove that every URL is served by the Rust route.
+- Related test evidence: `src/adapter/inbound/admin_api/tests.rs:854-920` checks that a fixed Rust-side list of known assets is servable, and `scripts/check_admin_graphic_visual.sh:153-160` fetches a narrower visual subset. These checks do not derive the expected set from the TypeScript asset map itself.
+- Why this is a logic gap: adding, renaming, or deleting a sprite requires updating at least the TypeScript asset map, the Rust static asset match, and tests/scripts by hand. A drift can compile cleanly and only show up as missing sprites in the browser.
+- User impact: the graphic admin dashboard can degrade visually after an otherwise successful Rust and TypeScript build.
+- Suggested fix: introduce a small checked-in manifest for admin graphic assets and generate or validate both the TypeScript URL map and Rust static route table from it. At minimum, add a test that parses `akra-diorama.ts` asset filenames and verifies every referenced file is served by the admin asset route.
+
+### Test Gaps
+
+- The current skill asset test checks for broad contract phrases but does not parse the JSON examples in `SKILL.md`.
+- Admin graphic route tests verify static route availability, but not that the TypeScript diorama asset map and Rust route table are exactly the same set.
+- No CI guard flags tracked admin graphics that have no runtime reference or manifest entry.
