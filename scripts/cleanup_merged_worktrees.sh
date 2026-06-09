@@ -12,9 +12,11 @@ Options:
                         Default: origin/prerelease
   --remote <name>       Remote to delete merged branch refs from. Default: origin
   --branch <name>       Clean up this finished branch explicitly. May be repeated.
-                        Explicit targets only need a clean worktree; they do not
-                        require ancestor detection against --base.
   --path <path>         Clean up this finished worktree path explicitly. May be repeated.
+  --allow-unmerged-explicit
+                        Allow explicit targets to be removed even when the
+                        branch is not merged into --base. Use only for abandoned
+                        lanes whose local and remote branch refs are disposable.
   --force-dirty         Allow explicit targets to be removed even when the
                         worktree is dirty. Use only after the lane is finished
                         and any remaining local changes are disposable.
@@ -140,6 +142,7 @@ report_cleanup() {
 }
 
 apply_mode=false
+allow_unmerged_explicit=false
 force_dirty=false
 base_ref="origin/prerelease"
 remote_name="origin"
@@ -152,6 +155,10 @@ while (($# > 0)); do
   case "$1" in
     --apply)
       apply_mode=true
+      shift
+      ;;
+    --allow-unmerged-explicit)
+      allow_unmerged_explicit=true
       shift
       ;;
     --force-dirty)
@@ -233,6 +240,7 @@ process_entry() {
   local path="$1"
   local branch_ref="$2"
   local branch_name
+  local branch_merged=false
   local explicitly_targeted=false
   local path_missing=false
 
@@ -274,10 +282,22 @@ process_entry() {
     return 0
   fi
 
-  if [[ "${explicitly_targeted}" != "true" ]] && ! branch_is_merged_into_base "${branch_name}"; then
-    report_cleanup "skip" "branch not merged into ${base_ref}" "${path}" "${branch_name}"
-    skipped_count=$((skipped_count + 1))
-    return 0
+  if branch_is_merged_into_base "${branch_name}"; then
+    branch_merged=true
+  fi
+
+  if [[ "${branch_merged}" != "true" ]]; then
+    if [[ "${explicitly_targeted}" == "true" && "${allow_unmerged_explicit}" == "true" ]]; then
+      report_cleanup "warn" "explicit target is not merged into ${base_ref}; allowed by --allow-unmerged-explicit" "${path}" "${branch_name}"
+    else
+      report_cleanup "skip" "branch not merged into ${base_ref}" "${path}" "${branch_name}"
+      skipped_count=$((skipped_count + 1))
+      return 0
+    fi
+  fi
+
+  if [[ "${explicitly_targeted}" == "true" && "${allow_unmerged_explicit}" == "true" && "${path_missing}" == "true" ]]; then
+    report_cleanup "warn" "missing explicit target is allowed by --allow-unmerged-explicit" "${path}" "${branch_name}"
   fi
 
   if [[ "${path_missing}" == "true" ]]; then

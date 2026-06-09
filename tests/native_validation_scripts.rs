@@ -67,6 +67,109 @@ fn run_release_version_check(tag: &str, manifest_body: &str) -> std::process::Ou
     output
 }
 
+fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git command should run")
+}
+
+fn assert_success(output: &std::process::Output, context: &str) {
+    assert!(
+        output.status.success(),
+        "{context} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn make_cleanup_worktree_fixture() -> (PathBuf, PathBuf, PathBuf) {
+    let root = make_records_dir();
+    let repo = root.join("repo");
+    let feature_worktree = root.join("feature-worktree");
+    fs::create_dir(&repo).expect("repo fixture dir should be created");
+
+    assert_success(
+        &Command::new("git")
+            .arg("init")
+            .arg(&repo)
+            .output()
+            .expect("git init should run"),
+        "git init",
+    );
+    assert_success(
+        &run_git(&repo, &["config", "user.email", "akra-test@example.com"]),
+        "configure git user.email",
+    );
+    assert_success(
+        &run_git(&repo, &["config", "user.name", "Akra Test"]),
+        "configure git user.name",
+    );
+
+    fs::write(repo.join("README.md"), "initial\n").expect("initial fixture should be written");
+    assert_success(
+        &run_git(&repo, &["add", "README.md"]),
+        "stage initial fixture",
+    );
+    assert_success(
+        &run_git(&repo, &["commit", "-m", "initial"]),
+        "commit initial fixture",
+    );
+    assert_success(
+        &run_git(&repo, &["branch", "-M", "main"]),
+        "rename base branch",
+    );
+    assert_success(
+        &Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("worktree")
+            .arg("add")
+            .arg("-b")
+            .arg("feature")
+            .arg(&feature_worktree)
+            .arg("HEAD")
+            .output()
+            .expect("git worktree add should run"),
+        "create feature worktree",
+    );
+
+    fs::write(feature_worktree.join("feature.txt"), "feature\n")
+        .expect("feature fixture should be written");
+    assert_success(
+        &run_git(&feature_worktree, &["add", "feature.txt"]),
+        "stage feature fixture",
+    );
+    assert_success(
+        &run_git(&feature_worktree, &["commit", "-m", "feature"]),
+        "commit feature fixture",
+    );
+
+    (root, repo, feature_worktree)
+}
+
+fn run_cleanup(repo: &Path, args: &[&str]) -> std::process::Output {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    Command::new("bash")
+        .arg(repo_root.join("scripts/cleanup_merged_worktrees.sh"))
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("cleanup worktree script should run")
+}
+
+fn branch_exists(repo: &Path, branch_name: &str) -> bool {
+    let ref_name = format!("refs/heads/{branch_name}");
+    run_git(
+        repo,
+        &["show-ref", "--verify", "--quiet", ref_name.as_str()],
+    )
+    .status
+    .success()
+}
+
 #[test]
 fn release_version_check_accepts_matching_v_tag() {
     let output = run_release_version_check(
@@ -103,6 +206,76 @@ version = "1.3.3"
     assert!(stderr.contains("release tag and Cargo.toml version do not match"));
     assert!(stderr.contains("tag version: 1.3.4"));
     assert!(stderr.contains("Cargo.toml version: 1.3.3"));
+}
+
+#[test]
+fn cleanup_explicit_unmerged_branch_is_skipped_by_default() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+
+    let output = run_cleanup(&repo, &["--apply", "--base", "main", "--branch", "feature"]);
+
+    assert_success(&output, "cleanup explicit unmerged branch");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[skip] branch not merged into main"));
+    assert!(stdout.contains("cleanup complete: removed 0 worktree(s)"));
+    assert!(feature_worktree.is_dir());
+    assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_force_dirty_does_not_bypass_unmerged_guard() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+    fs::write(feature_worktree.join("dirty.txt"), "dirty\n")
+        .expect("dirty fixture should be written");
+
+    let output = run_cleanup(
+        &repo,
+        &[
+            "--apply",
+            "--base",
+            "main",
+            "--branch",
+            "feature",
+            "--force-dirty",
+        ],
+    );
+
+    assert_success(&output, "cleanup explicit dirty unmerged branch");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[skip] branch not merged into main"));
+    assert!(feature_worktree.is_dir());
+    assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_allow_unmerged_explicit_removes_disposable_branch() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+
+    let output = run_cleanup(
+        &repo,
+        &[
+            "--apply",
+            "--base",
+            "main",
+            "--branch",
+            "feature",
+            "--allow-unmerged-explicit",
+        ],
+    );
+
+    assert_success(&output, "cleanup explicitly allowed unmerged branch");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[warn] explicit target is not merged into main"));
+    assert!(stdout.contains("removing worktree"));
+    assert!(stdout.contains("cleanup complete: removed 1 worktree(s)"));
+    assert!(!feature_worktree.exists());
+    assert!(!branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
 }
 
 #[test]

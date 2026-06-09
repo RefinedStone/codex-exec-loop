@@ -147,14 +147,6 @@ dry-run complete: 0 eligible, 3 skipped
 - User impact: an operator or automation job can believe a finished lane was cleaned up even when the branch/path argument was misspelled or already absent. In cleanup workflows, a false-success result leaves stale worktrees and remote branches behind.
 - Suggested fix: track matched explicit branches/paths and exit non-zero when any requested target is not found, unless a new `--ignore-missing-targets` option is explicitly provided.
 
-#### SCRIPTS-003: explicit cleanup bypasses merge ancestry checks before deleting branches
-
-- Severity: High
-- Evidence: `scripts/cleanup_merged_worktrees.sh:14` documents that explicit targets do not require ancestor detection, and `scripts/cleanup_merged_worktrees.sh:277` skips `branch_is_merged_into_base` when `explicitly_targeted=true`. `scripts/cleanup_merged_worktrees.sh:123` then uses `git branch -D`, and `scripts/cleanup_merged_worktrees.sh:129` deletes the remote branch when it exists.
-- Why this is a logic gap: the script is named `cleanup_merged_worktrees`, but explicit cleanup can remove a clean, unmerged branch from both local and remote state. The current behavior is useful for disposable lanes, but it is a dangerous default for a command name that implies merged-only cleanup.
-- User impact: a typo or premature cleanup command can delete reviewable work that has not actually reached `prerelease`, especially after a clean worktree has no local changes.
-- Suggested fix: require ancestor detection for explicit targets by default, and move the current behavior behind an explicit flag such as `--allow-unmerged-explicit` or `--force-unmerged`.
-
 #### SCRIPTS-004: native validation summary is non-failing by default even when all required rows are missing
 
 - Severity: Low
@@ -184,7 +176,7 @@ Required Rows
 ### Test Gaps
 
 - Missing-value parser behavior is not covered for release scripts or `gh-akra.sh`.
-- `cleanup_merged_worktrees.sh` does not appear to have tests for explicit target misspellings, unmerged explicit targets, or remote branch deletion behavior.
+- `cleanup_merged_worktrees.sh` does not appear to have tests for explicit target misspellings or remote branch deletion behavior.
 - `summarize_native_validation.sh` has Rust integration coverage for profile filtering, but no test that the default success status is safe or intentionally non-gating when required rows are missing.
 
 ## `schema/`
