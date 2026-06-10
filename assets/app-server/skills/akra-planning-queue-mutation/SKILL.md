@@ -45,11 +45,10 @@ Always include exactly one fenced JSON object containing `planning_task_commands
 {"planning_task_commands":{"version":1,"commands":[]}}
 ```
 
-If and only if the tool was unavailable and a mutation still needs to be applied by the host, include flat command objects with a top-level `op` field:
+If and only if the tool was unavailable and a mutation still needs to be applied by the host, include flat command objects with a top-level `op` field inside the `commands` array:
 
 ```json
-{"op":"create_task","title":"..."}
-{"op":"update_task","task_id":"..."}
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"...","direction_id":"...","direction_relation_note":"..."},{"op":"update_task","task_id":"...","status":"ready"}]}}
 ```
 
 Do not wrap commands as `{"create_task":{...}}` or `{"update_task":{...}}`.

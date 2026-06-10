@@ -80,6 +80,10 @@ fn installed_skill_asset_root() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use crate::application::service::planning::{
+        PlanningTaskCommandExtraction, extract_planning_task_commands,
+    };
+
     use super::{PLANNING_QUEUE_MUTATION_SKILL_NAME, PlanningWorkerSkillAdapter, skill_path};
 
     /*
@@ -115,14 +119,75 @@ mod tests {
      */
     #[test]
     fn queue_mutation_skill_documents_evaluator_contract() {
-        let skill =
-            std::fs::read_to_string(skill_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))))
-                .expect("planning queue mutation skill asset should be readable");
+        let skill = planning_queue_mutation_skill();
 
         assert!(skill.contains("post-turn planning evaluator"));
         assert!(skill.contains("not as a TODO extractor"));
         assert!(skill.contains("not completion authority"));
         assert!(skill.contains("PlanningTaskMutationService"));
         assert!(skill.contains("planning_task_commands"));
+    }
+
+    #[test]
+    fn queue_mutation_skill_json_examples_parse_as_task_commands() {
+        let skill = planning_queue_mutation_skill();
+        let examples = fenced_json_examples(&skill);
+
+        assert!(
+            examples.len() >= 2,
+            "skill should document empty and fallback command examples"
+        );
+
+        let mut non_empty_command_examples = 0usize;
+        for example in examples {
+            match extract_planning_task_commands(example) {
+                PlanningTaskCommandExtraction::Commands(commands) => {
+                    if !commands.is_empty() {
+                        non_empty_command_examples += 1;
+                    }
+                }
+                PlanningTaskCommandExtraction::InvalidCommands {
+                    error,
+                    rejected_json,
+                } => panic!(
+                    "skill JSON example is an invalid command document: {error}; {rejected_json:?}"
+                ),
+                PlanningTaskCommandExtraction::None => {
+                    panic!("skill JSON example did not contain planning_task_commands: {example}")
+                }
+            }
+        }
+
+        assert!(
+            non_empty_command_examples > 0,
+            "fallback command example should include at least one mutation command"
+        );
+    }
+
+    fn planning_queue_mutation_skill() -> String {
+        std::fs::read_to_string(skill_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))))
+            .expect("planning queue mutation skill asset should be readable")
+    }
+
+    fn fenced_json_examples(markdown: &str) -> Vec<&str> {
+        let mut examples = Vec::new();
+        let mut remainder = markdown;
+        while let Some(start) = remainder.find("```") {
+            remainder = &remainder[start + 3..];
+            let Some(header_end) = remainder.find('\n') else {
+                break;
+            };
+            let fence_info = remainder[..header_end].trim();
+            let after_header = &remainder[header_end + 1..];
+            let Some(end) = after_header.find("```") else {
+                break;
+            };
+            if fence_info.split_whitespace().next() == Some("json") {
+                examples.push(after_header[..end].trim());
+            }
+            remainder = &after_header[end + 3..];
+        }
+
+        examples
     }
 }

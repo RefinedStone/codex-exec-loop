@@ -315,16 +315,6 @@ jq '{schema: .["$schema"], id: .["$id"], title, description, generated: .["x-gen
 
 ### Findings
 
-#### ASSETS-001: the bundled planning skill shows an invalid fallback command shape
-
-- Severity: High
-- Evidence: `assets/app-server/skills/akra-planning-queue-mutation/SKILL.md:42-46` first requires exactly one JSON object containing `planning_task_commands`, but `assets/app-server/skills/akra-planning-queue-mutation/SKILL.md:48-53` then shows fallback commands as standalone top-level objects such as `{"op":"create_task","title":"..."}`.
-- Parser evidence: `src/application/service/planning/task_mutation/commands.rs:63-77` only deserializes documents shaped as `{"planning_task_commands":{"version":1,"commands":[{"op":"create_task", ...}]}}`. It only enters command extraction when a candidate JSON object has a `planning_task_commands` key at `src/application/service/planning/task_mutation/commands.rs:127`.
-- Test evidence: `src/application/service/planning/task_mutation/tests.rs:620-643` confirms wrapped commands without the `op` tag are invalid and the later valid shape must include the `planning_task_commands.commands[]` envelope.
-- Why this is a bug: the skill is the runtime asset attached before hidden planning worker prompts. If the planning tool is unavailable and the worker follows the fallback example literally, the host will not apply the intended task mutation.
-- User impact: post-turn planning can silently fail to create or update the next task exactly when it is relying on the fallback path.
-- Suggested fix: replace the fallback example with a full valid envelope, for example `{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"..."}]}}`. Add a test that extracts every JSON example in the skill and verifies fallback examples parse as commands.
-
 #### ASSETS-002: large unreferenced admin graphics remain in the tracked asset set
 
 - Severity: Medium
