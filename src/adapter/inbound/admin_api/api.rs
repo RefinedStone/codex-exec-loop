@@ -4,7 +4,7 @@ use super::forms::{
 };
 use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
-    verify_header_csrf,
+    verify_draft_name_path, verify_header_csrf,
 };
 use crate::adapter::inbound::admin_api::akra_dashboard::{
     EventFeedView, RuntimeEventView, build_akra_dashboard_view, build_akra_events_view,
@@ -182,6 +182,7 @@ pub(super) async fn load_draft_api(
      * draft_name은 stable route identity에서 오고, query parameter는 interpretation branch를 선택한다.
      * editor page route와 같은 형태이며, draft kind를 filesystem-facing name에 encoding하지 않게 한다.
      */
+    verify_draft_name_path(&draft_name)?;
     let session = state
         .facade
         .load_draft_session(PlanningAdminDraftLoadRequest {
@@ -206,6 +207,7 @@ pub(super) async fn save_draft_api(
      * 담은 refreshed session이 더 중요하다.
      */
     verify_header_csrf(&jar, &headers)?;
+    verify_draft_name_path(&draft_name)?;
     let (_, session) = state
         .facade
         .save_draft(PlanningAdminDraftMutationRequest {
@@ -231,6 +233,7 @@ pub(super) async fn validate_draft_api(
      * operator가 방금 제출한 정확한 payload에 대한 report를 만들기 위해서다.
      */
     verify_header_csrf(&jar, &headers)?;
+    verify_draft_name_path(&draft_name)?;
     let (_, session) = state
         .facade
         .save_draft(PlanningAdminDraftMutationRequest {
@@ -256,6 +259,7 @@ pub(super) async fn promote_draft_api(
      * validation report internals를 몰라도 표시할 수 있는 field로 outcome을 압축한다.
      */
     verify_header_csrf(&jar, &headers)?;
+    verify_draft_name_path(&draft_name)?;
     let (result, session) = state
         .facade
         .promote_draft(PlanningAdminDraftMutationRequest {

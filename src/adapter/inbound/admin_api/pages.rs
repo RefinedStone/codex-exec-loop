@@ -4,7 +4,7 @@ use super::forms::{
 };
 use super::helpers::{
     encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
-    notice_location, render_fragment, render_html, verify_form_csrf,
+    notice_location, render_fragment, render_html, verify_draft_name_path, verify_form_csrf,
 };
 use super::views::{
     AkraDashboardTemplate, AkraMetricsTemplate, AppServerPromptLogView, AppServerPromptsTemplate,
@@ -579,6 +579,7 @@ pub(super) async fn editor_page(
      * 설명한다. 이렇게 하면 queue, full-planning, direction-detail draft가 같은 editor route를 공유하면서도
      * service가 load branch를 정확히 선택할 수 있다.
      */
+    verify_draft_name_path(&draft_name)?;
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let session = state
         .facade
@@ -635,6 +636,7 @@ pub(super) async fn save_draft_page(
      * editor page 전체를 다시 렌더링한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
+    verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let (_, session) = state
         .facade
@@ -668,6 +670,7 @@ pub(super) async fn validate_draft_page(
      * HTMX와 full page response가 같은 session을 받으므로 inline status와 editor shell의 validation copy도 같은 source를 쓴다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
+    verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let (_, session) = state
         .facade
@@ -700,6 +703,7 @@ pub(super) async fn promote_draft_page(
      * detailed validation과 file state는 refreshed session 안에 남겨 template이 같은 editor context에서 표시한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
+    verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let (result, session) = state
         .facade

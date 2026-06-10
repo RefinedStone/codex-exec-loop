@@ -122,8 +122,9 @@ pub use self::shared::auto_follow_copy::QUEUED_TASK_TRANSCRIPT_TEXT;
 pub use self::shared::contract::{
     ACTIVE_PLANNING_FILE_PATHS, DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
     PLANNING_DIRECTION_DOCS_DIRECTORY, PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY,
-    PLANNING_REJECTED_DIRECTORY, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
-    default_direction_detail_doc_path,
+    PLANNING_REJECTED_DIRECTORY, PlanningDraftNameError, RESULT_OUTPUT_FILE_PATH,
+    canonical_active_planning_file_path, default_direction_detail_doc_path,
+    validate_planning_draft_name,
 };
 // task mutation 타입은 task 생성/수정 명령 추출, preview, commit 결과를 외부 입력 처리 경로에 제공한다.
 pub use self::task_mutation::{

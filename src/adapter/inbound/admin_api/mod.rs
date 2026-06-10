@@ -27,7 +27,9 @@ mod static_assets;
 mod tests;
 mod views;
 
-use self::helpers::{ensure_csrf_cookie, internal_server_error, verify_header_csrf};
+use self::helpers::{
+    ensure_csrf_cookie, internal_server_error, verify_draft_name_path, verify_header_csrf,
+};
 
 const DEFAULT_PORT: u16 = 18442;
 #[derive(Clone)]

@@ -11,7 +11,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 };
 use crate::application::service::planning::{
     ACTIVE_PLANNING_FILE_PATHS, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
-    RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
+    RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path, validate_planning_draft_name,
 };
 
 /*
@@ -53,11 +53,12 @@ impl FilesystemPlanningWorkspaceAdapter {
             .filter(|store| store.is_git_backed_workspace(workspace_dir))
     }
 
-    fn draft_directory(workspace_dir: &str, draft_name: &str) -> PathBuf {
+    fn draft_directory(workspace_dir: &str, draft_name: &str) -> Result<PathBuf> {
         // draft는 promotion 전 operator가 inspect/reject할 수 있도록 candidate workspace 아래 staged tree로 둔다.
-        Path::new(workspace_dir)
+        validate_draft_name(draft_name)?;
+        Ok(Path::new(workspace_dir)
             .join(PLANNING_DRAFTS_DIRECTORY)
-            .join(draft_name)
+            .join(draft_name))
     }
 
     fn rejected_directory(&self, workspace_dir: &str, archive_name: &str) -> PathBuf {
@@ -151,7 +152,7 @@ impl FilesystemPlanningWorkspaceAdapter {
         // staged draft tree는 planning root prefix를 제거한 상대 경로를 써서 compact하고 이동 가능한 proposal tree로 만든다.
         let relative_path = Self::draft_relative_path(active_path)?;
         let relative_path = Path::new(&relative_path);
-        Ok(Self::draft_directory(workspace_dir, draft_name).join(relative_path))
+        Ok(Self::draft_directory(workspace_dir, draft_name)?.join(relative_path))
     }
 
     fn draft_relative_path(active_path: &str) -> Result<String> {
@@ -270,6 +271,11 @@ fn looks_like_windows_absolute_path(path: &str) -> bool {
     bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
 
+fn validate_draft_name(draft_name: &str) -> Result<()> {
+    validate_planning_draft_name(draft_name)
+        .map_err(|error| anyhow::anyhow!("invalid planning draft name `{draft_name}`: {error}"))
+}
+
 impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
     fn stage_planning_draft_files(
         &self,
@@ -286,6 +292,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
          * 이렇게 해야 repo-scoped store와 direct mode가 서로 다른 physical staging location을 쓰더라도
          * PlanningDraftStageRecord의 active_path vocabulary는 promotion/load UI에서 하나로 유지된다.
          */
+        validate_draft_name(draft_name)?;
         let canonical_files = files
             .iter()
             .map(|file| {
@@ -303,7 +310,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             );
         }
 
-        let draft_directory = Self::draft_directory(workspace_dir, draft_name);
+        let draft_directory = Self::draft_directory(workspace_dir, draft_name)?;
         fs::create_dir_all(&draft_directory)
             .with_context(|| format!("failed to create {}", draft_directory.display()))?;
 
@@ -340,6 +347,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
          * repo-scoped mode와 direct mode의 저장 위치는 다르지만 sort order는 같은 helper를 써서 UI ordering을 안정화한다.
          * known planning file이 먼저 오면 operator가 핵심 prompt/result file을 매번 같은 위치에서 확인할 수 있다.
          */
+        validate_draft_name(draft_name)?;
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             let mut loaded = store.load_repo_scoped_draft_files(workspace_dir, draft_name)?;
             loaded.staged_files.sort_by(|left, right| {
@@ -349,7 +357,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             return Ok(loaded);
         }
 
-        let draft_directory = Self::draft_directory(workspace_dir, draft_name);
+        let draft_directory = Self::draft_directory(workspace_dir, draft_name)?;
         let mut staged_files = Vec::new();
         Self::read_all_draft_files(&draft_directory, &draft_directory, &mut staged_files)?;
         staged_files.sort_by(|left, right| {
@@ -376,6 +384,7 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
          * active planning file은 promotion 전까지 untouched로 남아야 validation 실패나 operator 취소가 authority state를
          * 오염시키지 않는다. return 값은 실제 staged path라서 UI/debug surface가 "어디를 썼는가"를 보여줄 수 있다.
          */
+        validate_draft_name(draft_name)?;
         let active_path = Self::canonical_draft_active_path(active_path)?;
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             return store.replace_repo_scoped_draft_file(
@@ -610,8 +619,10 @@ fn write_optional_workspace_file(
 mod tests {
     use super::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_workspace_port::{
-        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+        PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
+    use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn workspace_load_record_excludes_task_authority_artifacts() {
@@ -644,6 +655,67 @@ mod tests {
             loaded.result_output_markdown.as_deref(),
             Some("# Result Output Prompt")
         );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn draft_storage_rejects_names_that_are_not_single_segments() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-draft-name-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let workspace_dir = workspace.to_str().expect("workspace path should be utf8");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let stage_error = adapter
+            .stage_planning_draft_files(
+                workspace_dir,
+                "../outside",
+                &[PlanningDraftFileRecord {
+                    active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                    body: "# Result Output Prompt\n".to_string(),
+                }],
+            )
+            .expect_err("escaped draft name should not stage");
+        assert!(
+            stage_error
+                .to_string()
+                .contains("invalid planning draft name `../outside`")
+        );
+        assert!(
+            !workspace.join(".codex-exec-loop/planning/outside").exists(),
+            "invalid draft name must not escape the drafts directory"
+        );
+
+        let load_error = adapter
+            .load_planning_draft_files(workspace_dir, "bad/name")
+            .expect_err("slash draft name should not load");
+        assert!(
+            load_error
+                .to_string()
+                .contains("invalid planning draft name `bad/name`")
+        );
+
+        let replace_error = adapter
+            .replace_planning_draft_file(
+                workspace_dir,
+                "bad:name",
+                RESULT_OUTPUT_FILE_PATH,
+                "# Edited\n",
+            )
+            .expect_err("colon draft name should not replace");
+        assert!(
+            replace_error
+                .to_string()
+                .contains("invalid planning draft name `bad:name`")
+        );
+
         let _ = std::fs::remove_dir_all(&workspace);
     }
 }

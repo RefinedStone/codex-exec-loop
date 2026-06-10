@@ -742,16 +742,6 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 
 ### Findings
 
-#### SRC-001: admin draft names are trusted as storage identifiers
-
-- Severity: High
-- Evidence: `src/adapter/inbound/admin_api/pages.rs:572-590` and `src/adapter/inbound/admin_api/api.rs:176-193` take `draft_name` directly from the route path and pass it into `PlanningAdminDraftLoadRequest`. Save, validate, and promote routes repeat the same pattern at `src/adapter/inbound/admin_api/pages.rs:624-706` and `src/adapter/inbound/admin_api/api.rs:196-263`.
-- Evidence: `src/application/service/planning/admin/draft_session.rs:70-72`, `src/application/service/planning/admin/draft_session.rs:82-88`, and `src/application/service/planning/admin/draft_session.rs:100-107` pass that `draft_name` into workspace operations without validating a draft-id grammar.
-- Evidence: `src/adapter/outbound/filesystem/planning_workspace.rs:56-60` builds the draft directory with `Path::new(workspace_dir).join(PLANNING_DRAFTS_DIRECTORY).join(draft_name)`. In direct-filesystem mode, `src/adapter/outbound/filesystem/planning_workspace.rs:306-317` and `src/adapter/outbound/filesystem/planning_workspace.rs:389-392` create or write under that path.
-- Why this is a bug: `active_path` is normalized, but the draft namespace key is not. Generated draft names are safe, but public admin/API routes also accept caller-supplied draft names. A malformed draft name can become a filesystem path segment in direct mode, or a confusing DB/display identifier in repo-scoped mode.
-- User impact: local admin users and automation can target draft names that do not follow the generated `admin-...` contract. In non-git/direct workspaces this can escape the intended draft directory; in git-backed workspaces it can create unreadable or misleading draft records.
-- Suggested fix: add a shared draft-name validator before facade calls and before workspace adapter joins. Accept only the generated draft id grammar or a conservative segment grammar such as ASCII alnum plus `._-`, with no slash, backslash, colon, control characters, empty values, or `.`/`..`. Return `400` from inbound handlers for invalid names, and add HTML/API tests for encoded slash and parent-directory attempts.
-
 #### SRC-002: PR creation sends full PR title/body through argv and failure labels
 
 - Severity: Medium
@@ -771,7 +761,5 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 
 ### Test Gaps
 
-- No admin route test sends encoded slash, backslash, `..`, empty, or control-character draft names and asserts `400`.
-- No workspace adapter test proves `draft_name` cannot escape `.codex-exec-loop/planning/drafts` in direct-filesystem mode.
 - No GitHub automation test asserts PR body/title text is redacted from argv-derived error labels.
 - No review-poller test covers hanging `gh auth token` or `git credential fill` helpers under the shared subprocess timeout.

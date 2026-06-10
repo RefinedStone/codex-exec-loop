@@ -679,6 +679,22 @@ fn repo_scoped_workspace_port_delegates_active_and_draft_operations() {
     assert_eq!(loaded.staged_files.len(), 1);
     assert_eq!(loaded.staged_files[0].body, "updated draft result");
 
+    let invalid_error = port
+        .stage_repo_scoped_draft_files(
+            &workspace_dir,
+            "../outside",
+            &[PlanningDraftFileRecord {
+                active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                body: "escaped draft result output".to_string(),
+            }],
+        )
+        .expect_err("invalid repo-scoped draft name should not stage");
+    assert!(
+        invalid_error
+            .to_string()
+            .contains("invalid planning draft name `../outside`")
+    );
+
     port.remove_active_planning_entry(&workspace_dir, RESULT_OUTPUT_FILE_PATH)
         .expect("active file should remove through repo-scoped port");
     assert_eq!(

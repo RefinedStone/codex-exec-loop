@@ -24,6 +24,7 @@ use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
     PlanningDraftStageRecord, PlanningStagedFileRecord,
 };
+use crate::application::service::planning::validate_planning_draft_name;
 
 use super::store::upsert_authority_metadata;
 use super::workspace_paths::{draft_directory_display_path, draft_display_path};
@@ -53,6 +54,7 @@ impl SqlitePlanningAuthorityAdapter {
         draft_name: &str,
         files: &[PlanningDraftFileRecord],
     ) -> Result<PlanningDraftStageRecord> {
+        validate_draft_name(draft_name)?;
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
@@ -128,6 +130,7 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
         draft_name: &str,
     ) -> Result<PlanningDraftLoadRecord> {
+        validate_draft_name(draft_name)?;
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         /*
@@ -207,6 +210,7 @@ impl SqlitePlanningAuthorityAdapter {
         active_path: &str,
         body: &str,
     ) -> Result<String> {
+        validate_draft_name(draft_name)?;
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
@@ -254,4 +258,9 @@ fn upsert_draft_entry(transaction: &rusqlite::Transaction<'_>, draft_name: &str)
         )
         .with_context(|| format!("failed to update staged draft `{draft_name}`"))?;
     Ok(())
+}
+
+fn validate_draft_name(draft_name: &str) -> Result<()> {
+    validate_planning_draft_name(draft_name)
+        .map_err(|error| anyhow!("invalid planning draft name `{draft_name}`: {error}"))
 }

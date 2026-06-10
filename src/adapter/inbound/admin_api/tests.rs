@@ -595,6 +595,61 @@ async fn admin_json_draft_routes_round_trip_through_router() {
 }
 
 #[tokio::test]
+async fn admin_json_draft_routes_reject_malformed_draft_names() {
+    let workspace = TempAdminWorkspace::new("draft-name-json");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+
+    for uri in [
+        "/api/planning/drafts/%2E%2E?kind=full_planning",
+        "/api/planning/drafts/%2E%2E%2Foutside?kind=full_planning",
+        "/api/planning/drafts/bad%5Cname?kind=full_planning",
+        "/api/planning/drafts/bad%3Aname?kind=full_planning",
+        "/api/planning/drafts/bad%20name?kind=full_planning",
+        "/api/planning/drafts/bad%0Aname?kind=full_planning",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .expect("draft load request should build"),
+            )
+            .await
+            .expect("draft load request should be served");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
+
+    for (method, uri) in [
+        (Method::PUT, "/api/planning/drafts/%2E%2E%2Foutside"),
+        (
+            Method::POST,
+            "/api/planning/drafts/%2E%2E%2Foutside/validate",
+        ),
+        (
+            Method::POST,
+            "/api/planning/drafts/%2E%2E%2Foutside/promote",
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(json_request(
+                method,
+                uri,
+                json!({ "kind": "full_planning", "files": [] }),
+                Some(&cookie),
+                Some(&csrf_token),
+            ))
+            .await
+            .expect("draft mutation request should be served");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn admin_akra_events_api_rejects_unbounded_limits() {
     let workspace = TempAdminWorkspace::new("events-limit");
     let router = admin_test_router(&workspace);
@@ -1329,6 +1384,55 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
         .expect("draft promote should be served");
     assert_eq!(promoted.status(), StatusCode::OK);
     assert!(text_body(promoted).await.contains("file_result_output"));
+}
+
+#[tokio::test]
+async fn admin_html_draft_routes_reject_malformed_draft_names() {
+    let workspace = TempAdminWorkspace::new("draft-name-html");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
+
+    for uri in [
+        "/admin/drafts/%2E%2E?kind=full_planning",
+        "/admin/drafts/%2E%2E%2Foutside?kind=full_planning",
+        "/admin/drafts/bad%0Aname?kind=full_planning",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .expect("editor page request should build"),
+            )
+            .await
+            .expect("editor page request should be served");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
+
+    for uri in [
+        "/admin/drafts/%2E%2E%2Foutside/save",
+        "/admin/drafts/%2E%2E%2Foutside/validate",
+        "/admin/drafts/%2E%2E%2Foutside/promote",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(html_form_request(
+                uri,
+                encoded_form(&[
+                    ("csrf_token", csrf_token.as_str()),
+                    ("kind", "full_planning"),
+                    ("file_result_output", "# Invalid draft name\n"),
+                ]),
+                Some(&cookie),
+                false,
+            ))
+            .await
+            .expect("draft mutation request should be served");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
 }
 
 #[test]

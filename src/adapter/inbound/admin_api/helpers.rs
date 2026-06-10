@@ -1,3 +1,4 @@
+use crate::application::service::planning::validate_planning_draft_name;
 use askama::Template;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -79,6 +80,10 @@ pub(super) fn verify_header_csrf(
     } else {
         Err(StatusCode::FORBIDDEN)
     }
+}
+
+pub(super) fn verify_draft_name_path(draft_name: &str) -> std::result::Result<(), StatusCode> {
+    validate_planning_draft_name(draft_name).map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 // cookie, hidden form field, request header를 통해 echo해도 되는 opaque token을 만든다.

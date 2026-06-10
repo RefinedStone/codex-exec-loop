@@ -15,7 +15,7 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::application::service::planning::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_PROMPTS_DIRECTORY, PlanningDraftEditorFile, PlanningDraftPromoteResult,
-    PlanningDraftSaveResult, RESULT_OUTPUT_FILE_PATH,
+    PlanningDraftSaveResult, RESULT_OUTPUT_FILE_PATH, validate_planning_draft_name,
 };
 use crate::domain::planning::{DirectionCatalogDocument, PlanningFileKind, PlanningWorkspaceFiles};
 
@@ -64,6 +64,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftLoadRequest,
     ) -> Result<PlanningAdminSessionView> {
+        ensure_valid_draft_name(&request.draft_name)?;
         // draft load도 default authority를 먼저 보장한다. editor가 단순히 staged file을 여는 작업처럼 보여도
         // session view에는 validation과 queue preview가 포함되므로 half-initialized workspace를 기준으로 계산하면 안 된다.
         self.ensure_default_authority()?;
@@ -76,6 +77,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<(PlanningDraftSaveResult, PlanningAdminSessionView)> {
+        ensure_valid_draft_name(&request.draft_name)?;
         // save는 현재 editor surface에 보이는 file만 저장한다. draft directory 안에 다른 staged artifact가 있더라도
         // specialized editor가 숨겨진 파일을 body 없음으로 덮어쓰지 않게 visible-file resolution을 먼저 수행한다.
         let visible_files = self.resolve_mutated_visible_files(&request)?;
@@ -95,6 +97,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<(PlanningDraftPromoteResult, PlanningAdminSessionView)> {
+        ensure_valid_draft_name(&request.draft_name)?;
         // promote도 save와 같은 visible-file resolution을 사용한다. 저장과 승격이 서로 다른 file selection 정책을
         // 가지면 "저장은 되었지만 promote 때 다른 파일이 반영되는" 위험이 생기므로 두 경로를 같은 helper에 묶는다.
         let visible_files = self.resolve_mutated_visible_files(&request)?;
@@ -114,6 +117,7 @@ impl PlanningAdminFacadeService {
         &self,
         request: &PlanningAdminDraftMutationRequest,
     ) -> Result<Vec<PlanningDraftEditorFile>> {
+        ensure_valid_draft_name(&request.draft_name)?;
         // posted editor body와 storage의 staged record를 병합한다. request는 key/body만 알고 있고 active/staged path
         // pairing은 workspace storage가 authority이므로, path는 loaded record에서 보존하고 body만 request 값으로 교체한다.
         let loaded = self
@@ -349,6 +353,11 @@ fn missing_core_draft_file_error(path: &'static str, file_kind: PlanningFileKind
         },
         path
     )
+}
+
+fn ensure_valid_draft_name(draft_name: &str) -> Result<()> {
+    validate_planning_draft_name(draft_name)
+        .map_err(|error| anyhow!("invalid planning draft name `{draft_name}`: {error}"))
 }
 
 fn file_key_for_kind(
@@ -678,6 +687,40 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "direction detail drafts require direction_id"
+        );
+    }
+
+    #[test]
+    fn draft_session_rejects_malformed_draft_names_before_workspace_access() {
+        let fixture = TestAdminFixture::new("admin-invalid-draft-name");
+
+        let load_error = fixture
+            .facade
+            .load_draft_session(PlanningAdminDraftLoadRequest {
+                draft_name: "../outside".to_string(),
+                kind: PlanningAdminDraftKind::FullPlanning,
+                direction_id: None,
+            })
+            .expect_err("malformed load draft name should fail");
+        assert!(
+            load_error
+                .to_string()
+                .contains("invalid planning draft name `../outside`")
+        );
+
+        let save_error = fixture
+            .facade
+            .save_draft(PlanningAdminDraftMutationRequest {
+                draft_name: "bad:name".to_string(),
+                kind: PlanningAdminDraftKind::FullPlanning,
+                direction_id: None,
+                files: Vec::new(),
+            })
+            .expect_err("malformed save draft name should fail");
+        assert!(
+            save_error
+                .to_string()
+                .contains("invalid planning draft name `bad:name`")
         );
     }
 
