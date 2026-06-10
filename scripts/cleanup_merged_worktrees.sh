@@ -101,6 +101,22 @@ branch_is_merged_into_base() {
   git merge-base --is-ancestor "${branch_name}" "${base_ref}"
 }
 
+branch_changes_are_in_base() {
+  local branch_name="$1"
+  local cherry_output
+  local line
+
+  if ! cherry_output="$(git cherry "${base_ref}" "${branch_name}")"; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "${line}" == +* ]]; then
+      return 1
+    fi
+  done <<< "${cherry_output}"
+  return 0
+}
+
 remote_branch_exists() {
   local branch_name="$1"
   git show-ref --verify --quiet "refs/remotes/${remote_name}/${branch_name}"
@@ -240,7 +256,7 @@ process_entry() {
   local path="$1"
   local branch_ref="$2"
   local branch_name
-  local branch_merged=false
+  local branch_integrated=false
   local explicitly_targeted=false
   local path_missing=false
 
@@ -283,10 +299,12 @@ process_entry() {
   fi
 
   if branch_is_merged_into_base "${branch_name}"; then
-    branch_merged=true
+    branch_integrated=true
+  elif [[ "${explicitly_targeted}" == "true" ]] && branch_changes_are_in_base "${branch_name}"; then
+    branch_integrated=true
   fi
 
-  if [[ "${branch_merged}" != "true" ]]; then
+  if [[ "${branch_integrated}" != "true" ]]; then
     if [[ "${explicitly_targeted}" == "true" && "${allow_unmerged_explicit}" == "true" ]]; then
       report_cleanup "warn" "explicit target is not merged into ${base_ref}; allowed by --allow-unmerged-explicit" "${path}" "${branch_name}"
     else
@@ -294,10 +312,6 @@ process_entry() {
       skipped_count=$((skipped_count + 1))
       return 0
     fi
-  fi
-
-  if [[ "${explicitly_targeted}" == "true" && "${allow_unmerged_explicit}" == "true" && "${path_missing}" == "true" ]]; then
-    report_cleanup "warn" "missing explicit target is allowed by --allow-unmerged-explicit" "${path}" "${branch_name}"
   fi
 
   if [[ "${path_missing}" == "true" ]]; then

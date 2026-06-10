@@ -16,10 +16,13 @@ pub const DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH: &str =
 pub const PLANNING_DRAFTS_DIRECTORY: &str = ".codex-exec-loop/planning/drafts";
 // rejected directory는 validation이나 operator review에서 받아들이지 않은 planning output을 보관한다.
 pub const PLANNING_REJECTED_DIRECTORY: &str = ".codex-exec-loop/planning/rejected";
+// draft name은 filesystem directory segment로도 쓰이므로 common filesystem filename limit 아래에 둔다.
+pub const PLANNING_DRAFT_NAME_MAX_BYTES: usize = 255;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanningDraftNameError {
     Empty,
+    TooLong,
     DotSegment,
     InvalidCharacter(char),
 }
@@ -28,6 +31,10 @@ impl fmt::Display for PlanningDraftNameError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => formatter.write_str("draft name must not be empty"),
+            Self::TooLong => write!(
+                formatter,
+                "draft name is too long (max {PLANNING_DRAFT_NAME_MAX_BYTES} bytes)"
+            ),
             Self::DotSegment => formatter.write_str("draft name must not be . or .."),
             Self::InvalidCharacter(character) => write!(
                 formatter,
@@ -47,6 +54,9 @@ pub fn validate_planning_draft_name(draft_name: &str) -> Result<(), PlanningDraf
      */
     if draft_name.is_empty() {
         return Err(PlanningDraftNameError::Empty);
+    }
+    if draft_name.len() > PLANNING_DRAFT_NAME_MAX_BYTES {
+        return Err(PlanningDraftNameError::TooLong);
     }
     if draft_name == "." || draft_name == ".." {
         return Err(PlanningDraftNameError::DotSegment);
@@ -76,8 +86,8 @@ pub fn default_direction_detail_doc_path(direction_id: &str) -> String {
 mod tests {
     // test는 canonical lookup 함수와 expected canonical constant만 사용해 public contract를 검증한다.
     use super::{
-        PlanningDraftNameError, RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path,
-        validate_planning_draft_name,
+        PLANNING_DRAFT_NAME_MAX_BYTES, PlanningDraftNameError, RESULT_OUTPUT_FILE_PATH,
+        canonical_active_planning_file_path, validate_planning_draft_name,
     };
 
     // 이 test는 absolute active file은 canonical path로 인정하고, legacy/raw authority 또는 일반
@@ -117,10 +127,15 @@ mod tests {
                 "{valid} should be accepted"
             );
         }
+        assert!(validate_planning_draft_name(&"a".repeat(PLANNING_DRAFT_NAME_MAX_BYTES)).is_ok());
 
         assert_eq!(
             validate_planning_draft_name(""),
             Err(PlanningDraftNameError::Empty)
+        );
+        assert_eq!(
+            validate_planning_draft_name(&"a".repeat(PLANNING_DRAFT_NAME_MAX_BYTES + 1)),
+            Err(PlanningDraftNameError::TooLong)
         );
         assert_eq!(
             validate_planning_draft_name("."),

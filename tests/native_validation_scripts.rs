@@ -252,6 +252,39 @@ fn cleanup_force_dirty_does_not_bypass_unmerged_guard() {
 }
 
 #[test]
+fn cleanup_explicit_rebase_merged_branch_is_removed_by_patch_equivalence() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+    fs::write(repo.join("base.txt"), "base moved independently\n")
+        .expect("base fixture should be written");
+    assert_success(&run_git(&repo, &["add", "base.txt"]), "stage base fixture");
+    assert_success(
+        &run_git(&repo, &["commit", "-m", "base moved"]),
+        "commit base fixture",
+    );
+    assert_success(
+        &run_git(&repo, &["cherry-pick", "feature"]),
+        "cherry-pick feature patch onto base",
+    );
+    assert!(
+        !run_git(&repo, &["merge-base", "--is-ancestor", "feature", "main"])
+            .status
+            .success(),
+        "fixture should model a rebase-merge style integration, not ancestry"
+    );
+
+    let output = run_cleanup(&repo, &["--apply", "--base", "main", "--branch", "feature"]);
+
+    assert_success(&output, "cleanup explicit patch-equivalent branch");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("removing worktree"));
+    assert!(stdout.contains("cleanup complete: removed 1 worktree(s)"));
+    assert!(!feature_worktree.exists());
+    assert!(!branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
 fn cleanup_allow_unmerged_explicit_removes_disposable_branch() {
     let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
 
