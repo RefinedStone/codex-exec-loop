@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,9 +53,14 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 
 child.on("exit", (code, signal) => {
   if (signal) {
-    process.kill(process.pid, signal);
+    process.exit(exitCodeForSignal(signal));
     return;
   }
 
   process.exit(code ?? 1);
 });
+
+function exitCodeForSignal(signal) {
+  const signalNumber = osConstants.signals?.[signal];
+  return typeof signalNumber === "number" ? 128 + signalNumber : 1;
+}

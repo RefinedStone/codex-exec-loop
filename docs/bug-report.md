@@ -31,50 +31,6 @@ This document records a directory-by-directory audit of usage pitfalls, bugs, an
 
 ### Findings
 
-#### NPM-001: signal exits from the native binary can be reported as success
-
-- Severity: High
-- Evidence: `npm/bin/akra.js:49` registers handlers for `SIGINT`, `SIGTERM`, and `SIGHUP`; `npm/bin/akra.js:53` then handles a child signal exit by calling `process.kill(process.pid, signal)`.
-- Why this is a bug: because the parent process already has a listener for the same signal, the self-signal is caught by the forwarding handler instead of restoring Node's default signal termination behavior. A native binary that exits from `SIGTERM` can leave the wrapper alive until the event loop drains, and the wrapper can then exit with code `0`.
-- Reproduction used during audit:
-
-```bash
-node --input-type=module - <<'NODE'
-import { spawn } from "node:child_process";
-const child = spawn(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"], { stdio: "ignore" });
-const forwardSignal = (signal) => {
-  if (child.killed) return;
-  try { child.kill(signal); } catch {}
-};
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(signal, () => forwardSignal(signal));
-}
-child.on("exit", (code, signal) => {
-  console.log(JSON.stringify({ code, signal, killed: child.killed }));
-  if (signal) {
-    process.kill(process.pid, signal);
-    setTimeout(() => console.log("still-alive"), 100);
-    return;
-  }
-  process.exit(code ?? 1);
-});
-setTimeout(() => console.log("timeout"), 500);
-NODE
-echo exit=$?
-```
-
-- Observed output:
-
-```text
-{"code":null,"signal":"SIGTERM","killed":false}
-still-alive
-timeout
-exit=0
-```
-
-- User impact: shell scripts, CI, service managers, and package-manager wrappers can treat an interrupted or terminated `akra` run as successful. This is most visible for cancellation, terminal shutdown, or supervisor-initiated termination.
-- Suggested fix: before re-sending the signal to the parent, remove the installed signal listeners or translate the signal into the conventional exit code `128 + signalNumber`. Add a subprocess test that launches `npm/bin/akra.js` against a fixture binary that terminates via `SIGTERM`.
-
 #### NPM-002: binary resolution failures surface as raw Node exceptions
 
 - Severity: Medium
