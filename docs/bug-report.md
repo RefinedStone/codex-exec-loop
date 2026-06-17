@@ -456,31 +456,13 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 
 ### Scope
 
-- Inspected files: `.codex-exec-loop/followups/*.md`, `.codex-exec-loop/planning/directions.toml`, `.codex-exec-loop/planning/directions/*.md`, `.codex-exec-loop/planning/prompts/queue-idle-review.md`, and `.codex-exec-loop/planning/result-output.md`.
+- Inspected files: `.codex-exec-loop/followups/*.md`, `.codex-exec-loop/planning/directions/*.md`, `.codex-exec-loop/planning/prompts/queue-idle-review.md`, and `.codex-exec-loop/planning/result-output.md`.
 - Inspected related design and packaging references: `docs/design/06-planning-runtime-and-draft-editor.md` and `scripts/package_native_release.sh`.
 - Validation run: `git ls-files .codex-exec-loop`.
-- Reference check: `find .codex-exec-loop/planning/directions -type f | sort` compared with `rg -n "detail_doc_path" .codex-exec-loop/planning/directions.toml`.
 - Reference check: `find . -name 'plan_priority_queue.md' -o -path './.codex-exec-loop/followups/*'`.
 - The audit did not inspect other top-level directories in this pass.
 
 ### Findings
-
-#### CODEX-LOOP-001: tracked `directions.toml` contradicts the DB-backed authority model
-
-- Severity: High
-- Evidence: `docs/design/06-planning-runtime-and-draft-editor.md:10-14` says git-backed workspaces persist planning authority in SQLite and that tracked planning files remain prompts, direction detail docs, and result-output guidance only. The artifact table at `docs/design/06-planning-runtime-and-draft-editor.md:21-24` lists SQLite direction authority plus detail docs, `result-output.md`, and `queue-idle-review.md`, but not a tracked `directions.toml`.
-- Contradicting file evidence: `git ls-files .codex-exec-loop/planning` still includes `.codex-exec-loop/planning/directions.toml`. That file contains queue-idle policy and a direction state at `.codex-exec-loop/planning/directions.toml:3-22`.
-- Why this is a logic gap: the repository ships a file that looks like direction authority even though the runtime design says accepted DB direction authority is the source of truth. Operators and workers can read or edit the wrong artifact.
-- User impact: a maintainer may update `directions.toml` expecting planning behavior to change, while the actual queue and direction state comes from the SQLite authority store.
-- Suggested fix: either remove `directions.toml` from the tracked active seed, move it under a clearly named legacy/example path, or add a validator that fails when tracked file-backed direction authority exists beside the DB-backed contract.
-
-#### CODEX-LOOP-002: two tracked direction detail docs are orphaned from the direction map
-
-- Severity: Medium
-- Evidence: `.codex-exec-loop/planning/directions/` contains three tracked detail docs: `claude-first-headless-cli-runner.md`, `context-first-architecture-and-doc-coherence.md`, and `terminal-agent-bridge-research-and-capability-boundary.md`. `.codex-exec-loop/planning/directions.toml:21` references only `context-first-architecture-and-doc-coherence.md`.
-- Why this is a usage gap: a tracked detail doc under the canonical direction detail directory looks active, but it has no local direction mapping in the tracked seed. Unless the DB authority separately points to it, it will not be discoverable from the file-backed map.
-- User impact: operators can spend time maintaining direction documents that are not part of the active planning authority path.
-- Suggested fix: add a consistency check that every tracked `.codex-exec-loop/planning/directions/*.md` file is either referenced by accepted DB direction authority or explicitly marked as archived/research-only. For file seeds, keep a manifest that distinguishes active, proposed, and archived direction docs.
 
 #### CODEX-LOOP-003: release-bundled followup prompts still point to a legacy queue file
 
