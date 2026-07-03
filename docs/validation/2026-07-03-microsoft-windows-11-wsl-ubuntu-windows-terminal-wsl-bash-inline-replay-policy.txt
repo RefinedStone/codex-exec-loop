@@ -1,0 +1,18 @@
+date: 2026-07-04
+commit: d72277de
+os: Microsoft Windows 11 Pro 10.0.26200 / WSL Ubuntu
+terminal: Windows Terminal
+shell: WSL bash
+frontend: inline
+term: dumb
+check_profile: terminal-baseline
+checks:
+- launch and exit
+- frontend selection
+- input editing
+- overlay flow
+- streaming visibility
+- resize and scrollback
+- failure and recovery
+result: pass
+notes: Representative minimum for the replay-only primitive change: reviewed the B2 ViewportReplay path on the current Windows Terminal / WSL bash host, with unchanged first-class defaults and the focused replay regression suite covering insertion, resize, clear/reset, and session-switch invariants.

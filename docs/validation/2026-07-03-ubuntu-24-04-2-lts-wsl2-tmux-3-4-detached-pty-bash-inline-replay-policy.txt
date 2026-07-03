@@ -1,0 +1,18 @@
+date: 2026-07-04
+commit: d72277de
+os: Microsoft Windows 11 Pro 10.0.26200 / WSL Ubuntu
+terminal: tmux 3.4 detached PTY
+shell: bash
+frontend: inline
+term: tmux-256color
+check_profile: terminal-baseline
+checks:
+- launch and exit
+- frontend selection
+- input editing
+- overlay flow
+- streaming visibility
+- resize and scrollback
+- failure and recovery
+result: pass
+notes: Contrasting representative path for the unchanged B1 HostScrollback branch family after the replay-only fix; recorded alongside the Windows Terminal replay row because the manual-capture contract allows a smaller representative set when only one branch family changes and automated proof for the other first-class paths stays unchanged.
