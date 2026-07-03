@@ -25,7 +25,7 @@ mod backend;
 mod history_flush;
 
 pub(super) use self::backend::{InlineResizeBackend, InlineTerminalBackend};
-use self::history_flush::{HistoryFlushResult, HistoryFlushState};
+use self::history_flush::HistoryFlushState;
 
 /* Inline mode uses ratatui's inline viewport while also writing durable history
  * into the host scrollback. This adapter keeps those two surfaces synchronized:
@@ -45,6 +45,31 @@ pub(super) fn terminal_options_for_render_mode(
         InlineHistoryRenderMode::ViewportReplay => Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
     };
     TerminalOptions { viewport }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InlineTerminalSyncPolicy {
+    render_mode: InlineHistoryRenderMode,
+    insert_mode: HistoryInsertionMode,
+    parallel_mode_enabled: bool,
+}
+
+impl InlineTerminalSyncPolicy {
+    fn from_app(app: &NativeTuiApp) -> Self {
+        Self {
+            render_mode: app.inline_history_render_mode,
+            insert_mode: app.history_insert_mode,
+            parallel_mode_enabled: app.parallel_mode_enabled(),
+        }
+    }
+
+    fn writes_host_scrollback(self) -> bool {
+        self.render_mode.writes_host_scrollback()
+    }
+
+    fn host_insert_mode(self) -> Option<HistoryInsertionMode> {
+        self.writes_host_scrollback().then_some(self.insert_mode)
+    }
 }
 
 pub(super) struct InlineTerminalAdapter<B: InlineResizeBackend> {
@@ -150,14 +175,10 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<bool, B::Error> {
     // Capture render settings before mutating terminal state so one transaction uses
-    // a stable history insertion mode and render mode.
-    let (render_mode, insert_mode, parallel_mode_enabled) = {
+    // a stable compatibility policy snapshot instead of ad hoc env-owned fields.
+    let policy = {
         let app = runtime.app_mut();
-        (
-            app.inline_history_render_mode,
-            app.history_insert_mode,
-            app.parallel_mode_enabled(),
-        )
+        InlineTerminalSyncPolicy::from_app(app)
     };
     /*
      * Autoresize can itself move the inline viewport. It happens before history
@@ -169,16 +190,29 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     let viewport_area = current_viewport_area(terminal);
     let cursor_position = terminal.get_cursor_position()?;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
-    inline_terminal.viewport.insert_mode = insert_mode;
     let current_lines = current_inline_history_lines_for_viewport(runtime.app_mut(), viewport_area);
-    let writes_host_scrollback = render_mode.writes_host_scrollback();
-    let parallel_history_pending = parallel_mode_enabled
-        && writes_host_scrollback
+    let Some(insert_mode) = policy.host_insert_mode() else {
+        /*
+         * ViewportReplay keeps transcript rows inside ratatui rendering and must not
+         * mutate host scrollback just because stale host-only row accounting survived
+         * from an earlier host-scrollback transaction.
+         */
+        inline_terminal
+            .history_flush
+            .remember_without_flush(&current_lines);
+        let tail_frame_changed = inline_terminal.should_draw_inline_frame(
+            runtime.app_mut(),
+            viewport_area.width,
+            viewport_area.height,
+        );
+        return Ok(tail_frame_changed);
+    };
+    inline_terminal.viewport.insert_mode = insert_mode;
+    let parallel_history_pending = policy.parallel_mode_enabled
         && inline_terminal
             .history_flush
             .has_pending_lines(&current_lines);
-    let parallel_history_fit_would_scroll = parallel_mode_enabled
-        && writes_host_scrollback
+    let parallel_history_fit_would_scroll = policy.parallel_mode_enabled
         && inline_terminal.history_flush.visible_history_rows > viewport_area.top();
     if parallel_history_pending || parallel_history_fit_would_scroll {
         /*
@@ -205,26 +239,14 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         inline_terminal.invalidate_back_buffer();
     }
 
-    let history_sync = if writes_host_scrollback {
-        /*
-         * HostScrollback mode writes only the history delta. The tail frame stays
-         * in the inline viewport so the operator can scroll back through durable
-         * transcript rows without duplicating the live status panel.
-         */
-        inline_terminal
-            .history_flush
-            .sync(terminal, &current_lines, insert_mode)?
-    } else {
-        /*
-         * ViewportReplay keeps transcript rows inside ratatui rendering. The
-         * flush state still remembers the line set so switching back to host
-         * scrollback does not replay old history as if it were new.
-         */
-        inline_terminal
-            .history_flush
-            .remember_without_flush(&current_lines);
-        HistoryFlushResult::default()
-    };
+    /*
+     * HostScrollback mode writes only the history delta. The tail frame stays
+     * in the inline viewport so the operator can scroll back through durable
+     * transcript rows without duplicating the live status panel.
+     */
+    let history_sync = inline_terminal
+        .history_flush
+        .sync(terminal, &current_lines, insert_mode)?;
     if history_sync.inserted() {
         inline_terminal.invalidate_back_buffer();
     }

@@ -1202,6 +1202,31 @@ fn viewport_replay_sync_skips_host_scrollback_insertions() {
     );
 }
 #[test]
+fn viewport_replay_ignores_stale_host_scrollback_row_accounting() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    append_history_message(
+        &mut app,
+        "replay mode should not consume stale host scrollback accounting",
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_viewport = InlineTerminalState::default();
+    inline_viewport.history_flush.visible_history_rows = 12;
+    let scrollback_rows_before = terminal.backend().inner().scrollback().area.height;
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+
+    assert_eq!(
+        terminal.backend().inner().scrollback().area.height,
+        scrollback_rows_before,
+        "viewport replay should not append blank host scrollback rows when stale host accounting survives: {:?}",
+        tui_testkit::inline_scrollback_text(&terminal)
+    );
+}
+#[test]
 fn viewport_replay_keeps_inline_viewport_for_shell_positioning() {
     assert_eq!(
         terminal_options_for_render_mode(InlineHistoryRenderMode::ViewportReplay).viewport,
