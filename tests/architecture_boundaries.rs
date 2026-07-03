@@ -958,7 +958,15 @@ fn tui_temporal_regressions_use_shared_frame_recorder_contract() {
         "Parallel event stream | frame recorder proves",
         "## Current-Stack Default And Compatibility Ownership",
         "## Compatibility-Tier Ownership Table",
+        "Stay on the current Ratatui/Crossterm stack by default.",
         "Option A proof hardening is the default",
+        "blocked unless the Decision Record explicitly proves the Round 6 trigger evidence",
+        "Default `InlineHistoryRenderMode`",
+        "Default `HistoryInsertionMode`",
+        "Terminal primitive behavior ownership",
+        "Reviewer gate / release semantics",
+        "## Manual Capture Contract",
+        "### Reviewer gate",
         "Manual capture is required **only** for primitive-sensitive changes",
     ] {
         assert!(
@@ -1074,9 +1082,16 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         "## Primary Proof Matrix — Invariant × First-Class Environment",
         "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
         "I1 | History/live-tail separation and no duplicate replay",
+        "I2 | Resize leaves no stale rows or duplicated live tail",
+        "I3 | Scrollback insertion / clear-reset restores clean header and viewport",
+        "I4 | Thread/session switch does not leak transcript or deferred history",
+        "I5 | `ViewportReplay` remains explicit-only and does not write committed history to host scrollback",
         "I6 | Standard and fallback insertion modes each preserve viewport state correctly",
         "B1 HostScrollback",
+        "B2 ViewportReplay",
+        "B3 StandardScrollRegion",
         "B4 NewlineFallback",
+        "activate Option B.",
     ] {
         assert!(
             matrix.contains(required_matrix_text),
@@ -1233,6 +1248,8 @@ fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
         "## Compatibility-Tier Ownership Table",
         "### First-class environment key",
         "### Branch-family key",
+        "## Manual Capture Contract",
+        "### Reviewer gate",
         "### When all four first-class environments are required",
         "### When a smaller representative set is sufficient",
     ] {
