@@ -38,6 +38,15 @@ Manual terminal capture stays primitive-sensitive only.
 - Compatibility-path family summary: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.
 - Required Decision Record axes: `bug-class recurrence across compatibility boundaries`, `fallback masking risk`, `future test-growth cost`, `maintainability cost`.
 
+## Responsibility Candidate Summary
+
+| Surface | Keep owning | Candidate extraction / clarification |
+| --- | --- | --- |
+| `NativeTuiApp` | authoritative conversation/session/planning/runtime state, operator mode state, env-derived mode values | must not grow new terminal-primitive orchestration beyond current state/config ownership |
+| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, cursor-sensitive effects | may be named more explicitly only if Option B later activates |
+| Render/layout boundary | typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | must stay distinct from terminal primitive emission and from application/core state authority |
+| Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | remains a conditional extraction candidate only when the Decision Record proves Round 6 trigger evidence |
+
 
 ## Test Layers
 
