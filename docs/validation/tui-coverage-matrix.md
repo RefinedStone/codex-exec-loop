@@ -18,10 +18,68 @@ native TUI behavior.
 - `insta` snapshots pin stable full-frame surfaces only after targeted assertions protect the
   behavior.
 - vt100-backed tests cover ANSI, cursor, clear, wrapping, and terminal scrollback behavior.
-- Repo-facing native runtime validation Decision Records must use the proof shape
-  `invariant × first-class environment × branch family`.
+## Proof Contract Markers
 
+Option A remains the current-stack default on the existing Ratatui/Crossterm structure. This
+matrix materializes the release-blocking proof shape for that stack; it does not by itself
+activate Option B.
+The current stack as the default posture remains explicit in this matrix for repo-facing proof.
 
+### First-class environment key
+
+- **E1** = Windows Terminal + WSL bash + inline
+- **E2** = Windows Terminal + PowerShell + inline
+- **E3** = tmux detached PTY + inline
+- **E4** = direct Linux terminal + inline
+
+### Branch-family key
+
+- **B1** = `HostScrollback`
+- **B2** = `ViewportReplay`
+- **B3** = `StandardScrollRegion`
+- **B4** = `NewlineFallback`
+- Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.
+
+## Primary Proof Matrix — Invariant × First-Class Environment
+
+| Invariant ID | Invariant | E1 | E2 | E3 | E4 | Automated proof layer | Manual capture required? |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| I1 | History/live-tail separation and no duplicate replay | release-blocking | release-blocking | release-blocking | release-blocking | direct frame recorder + `TestBackend`; vt100 if primitive path changed | yes if scrollback/viewport/insertion primitive behavior changed |
+| I2 | Resize leaves no stale rows or duplicated live tail | release-blocking | release-blocking | release-blocking | release-blocking | direct frame recorder + vt100/backend resize + scheduler/runtime tests | yes if resize/viewport primitive behavior changed |
+| I3 | Scrollback insertion / clear-reset restores clean header and viewport | release-blocking | release-blocking | release-blocking | release-blocking | `TestBackend` + vt100 + frame recorder for temporal cases | yes if clear/reset/scrollback primitive behavior changed |
+| I4 | Thread/session switch does not leak transcript or deferred history | release-blocking | release-blocking | release-blocking | release-blocking | reducer/runtime tests; frame recorder if redraw-order leakage is involved | no by default; yes only if primitive reset/viewport behavior changed |
+| I5 | `ViewportReplay` remains explicit-only and does not write committed history to host scrollback | representative | representative | representative | representative | `TestBackend` + frame recorder | yes only if viewport primitive behavior changed |
+| I6 | Standard and fallback insertion modes each preserve viewport state correctly | release-blocking where default or explicitly claimed; representative otherwise | release-blocking where default or explicitly claimed; representative otherwise | release-blocking where default or explicitly claimed; representative otherwise | release-blocking where default or explicitly claimed; representative otherwise | `TestBackend` + vt100 | yes if insertion strategy or escape-sequence behavior changed |
+
+## Linked Branch-Family Applicability Table — Invariant × Branch Family
+
+| Invariant ID | B1 HostScrollback | B2 ViewportReplay | B3 StandardScrollRegion | B4 NewlineFallback | Target test family / entrypoint |
+| --- | --- | --- | --- | --- | --- |
+| I1 | primary required | representative required | applicable where history flush uses standard insertion | applicable where history flush uses fallback insertion | `src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs`: `host_history_sync_keeps_live_agent_delta_out_of_inserted_history`, `host_scrollback_preserves_multiturn_history_beyond_screen_cap_without_duplicates`, `parallel_stream_preserves_initial_status_rows_as_runtime_events_advance` |
+| I2 | required | required | required when resize intersects standard insertion path | required when resize intersects fallback insertion path | `inline_terminal_adapter/tests.rs`: `viewport_replay_resize_does_not_push_tail_into_scrollback`, `host_scrollback_resize_does_not_push_tail_into_scrollback`, `draw_internal_resize_does_not_push_tail_into_scrollback`, `vt100_terminal_app_preserves_newline_fallback_history_after_live_resize`; `shell_runtime/tests/scheduler.rs` |
+| I3 | applicable when committed history writes to host scrollback | applicable if clear/reset semantics diverge in replay path | primary required | primary required where default/claimed | `history_insertion.rs` tests: `standard_scroll_region_inserts_history_before_inline_viewport`, `newline_fallback_inserts_history_without_scroll_regions`, cursor restore tests; `inline_terminal_adapter/tests.rs` back-buffer invalidation tests |
+| I4 | applicable after switch if host history flush exists | applicable after switch if replay viewport state exists | branch relevance only if reset path touches standard insertion | branch relevance only if reset path touches fallback insertion | `shell_runtime/tests/input.rs`, flow tests, conversation/runtime entrypoints listed in this matrix |
+| I5 | not primary | primary required | not primary | not primary | `inline_terminal_adapter/tests.rs`: `viewport_replay_sync_skips_host_scrollback_insertions`, `viewport_replay_keeps_inline_viewport_for_shell_positioning` |
+| I6 | branch relevance only when host history uses insertion strategy | branch relevance only if replay path still exercises insertion semantics | primary required | primary required | `history_insertion.rs` tests for standard/newline fallback, wide-char, wrapped suffix, cursor restore; vt100 fallback regressions in `inline_terminal_adapter/tests.rs` |
+
+## Joined Proof Shape
+
+Read the durable proof contract as a join:
+
+1. choose an **Invariant ID** from the primary environment matrix
+2. read its obligation across **E1-E4**
+3. join that same **Invariant ID** to the linked branch-family table for **B1-B4** applicability
+   and target entrypoints
+
+This keeps **invariant × first-class environment × branch family** explicit instead of leaving the
+environment or branch dimension in prose.
+
+## Decision Record Schema Expectation
+
+- Mandatory Decision Record axes: `bug-class recurrence across compatibility boundaries`, `fallback masking risk`, `future test-growth cost`, `maintainability cost`.
+- Compatibility-tier ownership table shape: `Current owner / source`, `Decision point`, `First-class default`, `Fallback / experimental handling`, `Override mechanism`, `Downgrade semantics`, `Proof obligation`.
+- Manual terminal capture stays primitive-sensitive only and is not automatic Option B activation.
+- Primitive-sensitive trigger wording: `escape sequences`, `viewport mode`, `clear or restore behavior`, `host scrollback behavior`.
 ## Surface Matrix
 
 | Surface | Source scope | Automated entry points | Current contract | Next-priority gaps |
@@ -120,25 +178,6 @@ The architecture guard owns the source allowlist. Exceptions must stay narrow an
 At the time of this matrix, only module-declaration glue may be exempted directly; test fixtures,
 snapshots, and `tui_testkit` are treated as test-support paths rather than production coverage gaps.
 
-## Native Runtime Validation Proof Contract
-
-Keep the current stack as the default posture for TUI proof: `tui_testkit::InlineFrameRecorder`,
-Ratatui `TestBackend`, vt100-backed tests, and targeted snapshots remain the primary evidence.
-Manual terminal capture stays primitive-sensitive only; it is additive when the change alters
-escape sequences, viewport mode, clear or restore behavior, or host scrollback behavior.
-
-Decision Record schema expectation:
-
-- `invariant`: the named contract row or guard wording being proven.
-- First-class environment keys: `windows-terminal-wsl-inline`,
-  `windows-terminal-powershell-inline`, `linux-tmux-detached-pty-inline`,
-  `linux-direct-inline`.
-- Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.
-- Mandatory Decision Record axes: `bug-class recurrence across compatibility boundaries`, `fallback masking risk`, `future test-growth cost`, `maintainability cost`.
-- Compatibility-tier ownership table shape: `current owner / source`, `decision point`,
-  `first-class default`, `fallback / experimental handling`, `override mechanism`,
-  `downgrade semantics`, `proof obligation`.
-- Repo-facing proof stays explicit as `invariant × first-class environment × branch family`.
 ## Validation
 
 Run these for TUI coverage changes:

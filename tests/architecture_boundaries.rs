@@ -956,10 +956,14 @@ fn tui_temporal_regressions_use_shared_frame_recorder_contract() {
         "direct frame recorder: store every rendered buffer",
         "Frame recorder assertions should include",
         "Parallel event stream | frame recorder proves",
+        "## Current-Stack Default And Compatibility Ownership",
+        "## Compatibility-Tier Ownership Table",
+        "Option A proof hardening is the default",
+        "Manual capture is required **only** for primitive-sensitive changes",
     ] {
         assert!(
             docs.contains(required_doc_text),
-            "TUI methodology must require frame-recorder coverage for redraw-order regressions: {required_doc_text}"
+            "TUI methodology must require frame-recorder coverage and concrete proof-contract markers: {required_doc_text}"
         );
     }
 
@@ -1064,14 +1068,21 @@ fn tui_parallel_stream_continuity_is_architecture_contract() {
         );
     }
 
-    assert!(
-        matrix.contains("split scrollback/live-tail streams render as a titleless live tail"),
-        "TUI coverage matrix must name split-stream titleless live-tail behavior"
-    );
-    assert!(
-        matrix.contains("typed render surface routing"),
-        "TUI coverage matrix must name typed render surface routing"
-    );
+    for required_matrix_text in [
+        "split scrollback/live-tail streams render as a titleless live tail",
+        "typed render surface routing",
+        "## Primary Proof Matrix — Invariant × First-Class Environment",
+        "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
+        "I1 | History/live-tail separation and no duplicate replay",
+        "I6 | Standard and fallback insertion modes each preserve viewport state correctly",
+        "B1 HostScrollback",
+        "B4 NewlineFallback",
+    ] {
+        assert!(
+            matrix.contains(required_matrix_text),
+            "TUI coverage matrix must name the durable proof-contract marker: {required_matrix_text}"
+        );
+    }
 
     for required_renderer_text in [
         "fn render_inline_parallel_event_stream",
@@ -1205,16 +1216,31 @@ fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
         "Ratatui `TestBackend`",
         "vt100-backed tests",
         "architecture-test exception",
+        "## Proof Contract Markers",
+        "## Primary Proof Matrix — Invariant × First-Class Environment",
+        "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
+        "## Joined Proof Shape",
+        "I5 | `ViewportReplay` remains explicit-only and does not write committed history to host scrollback",
     ] {
         assert!(
             matrix.contains(required_text),
             "TUI coverage matrix must document the project-wide TUI testing rule: {required_text}"
         );
     }
-    assert!(
-        methodology.contains("docs/validation/tui-coverage-matrix.md"),
-        "TUI methodology must link to the project-wide coverage matrix"
-    );
+    for required_methodology_text in [
+        "docs/validation/tui-coverage-matrix.md",
+        "## Current-Stack Default And Compatibility Ownership",
+        "## Compatibility-Tier Ownership Table",
+        "### First-class environment key",
+        "### Branch-family key",
+        "### When all four first-class environments are required",
+        "### When a smaller representative set is sufficient",
+    ] {
+        assert!(
+            methodology.contains(required_methodology_text),
+            "TUI methodology must document the concrete proof contract marker: {required_methodology_text}"
+        );
+    }
 
     for surface in TUI_COVERAGE_SURFACES {
         assert!(
@@ -1287,24 +1313,24 @@ fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
     });
 
     for required_text in [
-        "## Native Runtime Validation Decision Record Contract",
+        "## Current-Stack Default And Compatibility Ownership",
         "invariant × first-class environment × branch family",
-        "windows-terminal-wsl-inline",
-        "windows-terminal-powershell-inline",
-        "linux-tmux-detached-pty-inline",
-        "linux-direct-inline",
+        "**E1** = Windows Terminal + WSL bash + inline",
+        "**E2** = Windows Terminal + PowerShell + inline",
+        "**E3** = tmux detached PTY + inline",
+        "**E4** = direct Linux terminal + inline",
         "`HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`",
         "bug-class recurrence across compatibility boundaries",
         "fallback masking risk",
         "future test-growth cost",
         "maintainability cost",
-        "`current owner / source`",
-        "`decision point`",
-        "`first-class default`",
-        "`fallback / experimental handling`",
-        "`override mechanism`",
-        "`downgrade semantics`",
-        "`proof obligation`",
+        "Current owner / source",
+        "Decision point",
+        "First-class default",
+        "Fallback / experimental handling",
+        "Override mechanism",
+        "Downgrade semantics",
+        "Proof obligation",
         "current stack remains the default posture",
         "Manual terminal capture stays primitive-sensitive only",
         "escape sequences",
@@ -1319,25 +1345,26 @@ fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
     }
 
     for required_text in [
-        "## Native Runtime Validation Proof Contract",
-        "invariant × first-class environment × branch family",
-        "Decision Record schema expectation",
-        "windows-terminal-wsl-inline",
-        "windows-terminal-powershell-inline",
-        "linux-tmux-detached-pty-inline",
-        "linux-direct-inline",
+        "## Proof Contract Markers",
+        "## Primary Proof Matrix — Invariant × First-Class Environment",
+        "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
+        "## Joined Proof Shape",
+        "**E1** = Windows Terminal + WSL bash + inline",
+        "**E2** = Windows Terminal + PowerShell + inline",
+        "**E3** = tmux detached PTY + inline",
+        "**E4** = direct Linux terminal + inline",
         "Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.",
         "bug-class recurrence across compatibility boundaries",
         "fallback masking risk",
         "future test-growth cost",
         "maintainability cost",
-        "`current owner / source`",
-        "`decision point`",
-        "`first-class default`",
-        "`fallback / experimental handling`",
-        "`override mechanism`",
-        "`downgrade semantics`",
-        "`proof obligation`",
+        "Current owner / source",
+        "Decision point",
+        "First-class default",
+        "Fallback / experimental handling",
+        "Override mechanism",
+        "Downgrade semantics",
+        "Proof obligation",
         "current stack as the default posture",
         "Manual terminal capture stays primitive-sensitive only",
         "escape sequences",
