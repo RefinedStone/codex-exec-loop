@@ -18,6 +18,9 @@ native TUI behavior.
 - `insta` snapshots pin stable full-frame surfaces only after targeted assertions protect the
   behavior.
 - vt100-backed tests cover ANSI, cursor, clear, wrapping, and terminal scrollback behavior.
+- Repo-facing native runtime validation Decision Records must use the proof shape
+  `invariant × first-class environment × branch family`.
+
 
 ## Surface Matrix
 
@@ -117,6 +120,25 @@ The architecture guard owns the source allowlist. Exceptions must stay narrow an
 At the time of this matrix, only module-declaration glue may be exempted directly; test fixtures,
 snapshots, and `tui_testkit` are treated as test-support paths rather than production coverage gaps.
 
+## Native Runtime Validation Proof Contract
+
+Keep the current stack as the default posture for TUI proof: `tui_testkit::InlineFrameRecorder`,
+Ratatui `TestBackend`, vt100-backed tests, and targeted snapshots remain the primary evidence.
+Manual terminal capture stays primitive-sensitive only; it is additive when the change alters
+escape sequences, viewport mode, clear or restore behavior, or host scrollback behavior.
+
+Decision Record schema expectation:
+
+- `invariant`: the named contract row or guard wording being proven.
+- First-class environment keys: `windows-terminal-wsl-inline`,
+  `windows-terminal-powershell-inline`, `linux-tmux-detached-pty-inline`,
+  `linux-direct-inline`.
+- Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.
+- Mandatory Decision Record axes: `bug-class recurrence across compatibility boundaries`, `fallback masking risk`, `future test-growth cost`, `maintainability cost`.
+- Compatibility-tier ownership table shape: `current owner / source`, `decision point`,
+  `first-class default`, `fallback / experimental handling`, `override mechanism`,
+  `downgrade semantics`, `proof obligation`.
+- Repo-facing proof stays explicit as `invariant × first-class environment × branch family`.
 ## Validation
 
 Run these for TUI coverage changes:

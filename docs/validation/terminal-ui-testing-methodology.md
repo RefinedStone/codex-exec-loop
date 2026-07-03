@@ -3,6 +3,26 @@
 Use this method when native TUI changes affect terminal rendering, history insertion, viewport
 state, resize behavior, overlays, prompt editing, or live-tail presentation.
 
+## Native Runtime Validation Decision Record Contract
+
+Repo-facing native runtime validation must describe proof as `invariant × first-class environment × branch family`.
+
+- `invariant` is the named user-visible contract under test; reuse the regression-matrix area name,
+  architecture guard wording, or check-profile contract instead of inventing ad hoc prose.
+- First-class environment keys are `windows-terminal-wsl-inline`,
+  `windows-terminal-powershell-inline`, `linux-tmux-detached-pty-inline`, and
+  `linux-direct-inline`.
+- Branch-family keys are the compatibility-path families: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.
+- The Decision Record schema must hard-code these comparison axes: `bug-class recurrence across compatibility boundaries`, `fallback masking risk`, `future test-growth cost`, and `maintainability cost`.
+- The compatibility-tier ownership table shape must name: `current owner / source`,
+  `decision point`, `first-class default`, `fallback / experimental handling`,
+  `override mechanism`, `downgrade semantics`, and `proof obligation`.
+- The current stack remains the default posture: `tui_testkit::InlineFrameRecorder`, Ratatui
+  `TestBackend`, vt100-backed tests, and targeted snapshots stay primary proof.
+- Manual terminal capture stays primitive-sensitive only: add it when the change alters escape
+  sequences, viewport mode, clear or restore behavior, or host scrollback behavior; do not treat it
+  as automatic Option B activation.
+
 ## Test Layers
 
 Choose the lowest layer that can expose the bug, but prefer temporal evidence when the failure

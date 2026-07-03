@@ -1272,6 +1272,87 @@ fn tui_coverage_matrix_maps_existing_sources_to_automated_entrypoints() {
 }
 
 #[test]
+fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
+    // Static guard: native runtime validation evidence should stay contract-first.
+    // The repo-facing docs must keep the proof schema, environment keys, branch
+    // family keys, and primitive-sensitive manual-capture rule explicit.
+    let repo_root = repo_root();
+    let matrix_path = repo_root.join("docs/validation/tui-coverage-matrix.md");
+    let methodology_path = repo_root.join("docs/validation/terminal-ui-testing-methodology.md");
+    let matrix = fs::read_to_string(&matrix_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", matrix_path.display());
+    });
+    let methodology = fs::read_to_string(&methodology_path).unwrap_or_else(|error| {
+        panic!("failed to read {}: {error}", methodology_path.display());
+    });
+
+    for required_text in [
+        "## Native Runtime Validation Decision Record Contract",
+        "invariant × first-class environment × branch family",
+        "windows-terminal-wsl-inline",
+        "windows-terminal-powershell-inline",
+        "linux-tmux-detached-pty-inline",
+        "linux-direct-inline",
+        "`HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`",
+        "bug-class recurrence across compatibility boundaries",
+        "fallback masking risk",
+        "future test-growth cost",
+        "maintainability cost",
+        "`current owner / source`",
+        "`decision point`",
+        "`first-class default`",
+        "`fallback / experimental handling`",
+        "`override mechanism`",
+        "`downgrade semantics`",
+        "`proof obligation`",
+        "current stack remains the default posture",
+        "Manual terminal capture stays primitive-sensitive only",
+        "escape sequences",
+        "viewport mode",
+        "clear or restore behavior",
+        "host scrollback behavior",
+    ] {
+        assert!(
+            methodology.contains(required_text),
+            "TUI methodology must document native runtime validation proof contract text: {required_text}"
+        );
+    }
+
+    for required_text in [
+        "## Native Runtime Validation Proof Contract",
+        "invariant × first-class environment × branch family",
+        "Decision Record schema expectation",
+        "windows-terminal-wsl-inline",
+        "windows-terminal-powershell-inline",
+        "linux-tmux-detached-pty-inline",
+        "linux-direct-inline",
+        "Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.",
+        "bug-class recurrence across compatibility boundaries",
+        "fallback masking risk",
+        "future test-growth cost",
+        "maintainability cost",
+        "`current owner / source`",
+        "`decision point`",
+        "`first-class default`",
+        "`fallback / experimental handling`",
+        "`override mechanism`",
+        "`downgrade semantics`",
+        "`proof obligation`",
+        "current stack as the default posture",
+        "Manual terminal capture stays primitive-sensitive only",
+        "escape sequences",
+        "viewport mode",
+        "clear or restore behavior",
+        "host scrollback behavior",
+    ] {
+        assert!(
+            matrix.contains(required_text),
+            "TUI coverage matrix must document native runtime validation proof contract text: {required_text}"
+        );
+    }
+}
+
+#[test]
 fn tui_coverage_matrix_lists_existing_tui_test_entrypoints() {
     // Static guard: the matrix is the TUI testing inventory, so every Rust file
     // that owns TUI tests must be listed there explicitly.
