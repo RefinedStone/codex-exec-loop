@@ -11,6 +11,11 @@ blocked unless the Decision Record explicitly proves the Round 6 trigger evidenc
 This contract keeps `invariant × first-class environment × branch family` explicit in repo-facing docs and guards.
 The current stack remains the default posture for native runtime proof.
 Manual terminal capture stays primitive-sensitive only.
+The first-class rendering contract does not replace the broader terminal-baseline rows in
+`docs/plan/12-platform-validation-matrix.md`; primitive-sensitive PRs still satisfy any
+additional required manual rows there, including the current macOS Terminal.app and iTerm2
+baseline rows, until that matrix is revised.
+
 
 ### First-class environment key
 
@@ -194,10 +199,9 @@ Every TUI rendering PR should state which rows it touches.
 
 ## Manual Capture Contract
 
-Manual capture is required **only** for primitive-sensitive changes: scrollback insertion,
-viewport mode behavior, clear/reset behavior, resize-dependent redraw behavior, cursor
-restoration, or emitted escape-sequence behavior.
-This primitive-sensitive rule covers escape sequences, viewport mode, clear or restore behavior, and host scrollback behavior.
+Manual capture is required **only** for primitive-sensitive changes: scrollback insertion or host scrollback behavior,
+viewport mode behavior, clear or restore behavior, resize-dependent redraw behavior, cursor restoration,
+or emitted escape-sequence behavior.
 
 ### Required artifact fields
 

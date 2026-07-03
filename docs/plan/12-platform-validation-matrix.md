@@ -8,6 +8,10 @@ Use this matrix when a change affects terminal behavior:
 - resize, scrollback, or visible cursor behavior
 
 This matrix is about terminal behavior, not feature completeness.
+This matrix stays broader than the first-class rendering contract in
+`docs/validation/terminal-ui-testing-methodology.md`.
+The E1-E4 first-class keys define release-blocking rendering ownership; they do not implicitly
+downgrade the required macOS Terminal.app and iTerm2 terminal-baseline rows listed here.
 
 ## Frontend
 

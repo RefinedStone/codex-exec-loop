@@ -1334,14 +1334,11 @@ fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
         panic!("failed to read {}: {error}", methodology_path.display());
     });
 
-    for required_text in [
-        "## Current-Stack Default And Compatibility Ownership",
-        "invariant × first-class environment × branch family",
+    let common_required_texts = [
         "**E1** = Windows Terminal + WSL bash + inline",
         "**E2** = Windows Terminal + PowerShell + inline",
         "**E3** = tmux detached PTY + inline",
         "**E4** = direct Linux terminal + inline",
-        "`HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`",
         "bug-class recurrence across compatibility boundaries",
         "fallback masking risk",
         "future test-growth cost",
@@ -1353,47 +1350,44 @@ fn native_runtime_validation_proof_contract_is_documented_in_repo_guards() {
         "Override mechanism",
         "Downgrade semantics",
         "Proof obligation",
-        "current stack remains the default posture",
         "Manual terminal capture stays primitive-sensitive only",
         "escape sequences",
         "viewport mode",
         "clear or restore behavior",
         "host scrollback behavior",
-    ] {
+    ];
+    let methodology_specific_texts = [
+        "## Current-Stack Default And Compatibility Ownership",
+        "invariant × first-class environment × branch family",
+        "`HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`",
+        "current stack remains the default posture",
+        "docs/plan/12-platform-validation-matrix.md",
+        "macOS Terminal.app and iTerm2",
+    ];
+    for required_text in common_required_texts
+        .iter()
+        .copied()
+        .chain(methodology_specific_texts.iter().copied())
+    {
         assert!(
             methodology.contains(required_text),
             "TUI methodology must document native runtime validation proof contract text: {required_text}"
         );
     }
 
-    for required_text in [
+    let matrix_specific_texts = [
         "## Proof Contract Markers",
         "## Primary Proof Matrix — Invariant × First-Class Environment",
         "## Linked Branch-Family Applicability Table — Invariant × Branch Family",
         "## Joined Proof Shape",
-        "**E1** = Windows Terminal + WSL bash + inline",
-        "**E2** = Windows Terminal + PowerShell + inline",
-        "**E3** = tmux detached PTY + inline",
-        "**E4** = direct Linux terminal + inline",
         "Branch-family keys: `HostScrollback`, `ViewportReplay`, `StandardScrollRegion`, `NewlineFallback`.",
-        "bug-class recurrence across compatibility boundaries",
-        "fallback masking risk",
-        "future test-growth cost",
-        "maintainability cost",
-        "Current owner / source",
-        "Decision point",
-        "First-class default",
-        "Fallback / experimental handling",
-        "Override mechanism",
-        "Downgrade semantics",
-        "Proof obligation",
         "current stack as the default posture",
-        "Manual terminal capture stays primitive-sensitive only",
-        "escape sequences",
-        "viewport mode",
-        "clear or restore behavior",
-        "host scrollback behavior",
-    ] {
+    ];
+    for required_text in common_required_texts
+        .iter()
+        .copied()
+        .chain(matrix_specific_texts.iter().copied())
+    {
         assert!(
             matrix.contains(required_text),
             "TUI coverage matrix must document native runtime validation proof contract text: {required_text}"
