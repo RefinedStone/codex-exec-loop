@@ -46,10 +46,16 @@ bash scripts/capture_native_validation.sh \
   --output-dir docs/validation
 ```
 
-Summarize recorded coverage:
+Summarize recorded coverage (informational; warns when required rows are incomplete):
 
 ```bash
 bash scripts/summarize_native_validation.sh
+```
+
+Gate recorded coverage explicitly:
+
+```bash
+bash scripts/summarize_native_validation.sh --fail-on-incomplete
 ```
 
 ## Minimum Matrix
@@ -156,6 +162,8 @@ Summarize this profile separately from the broad terminal baseline:
 ```bash
 bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty
 ```
+
+Use the same profile with `--fail-on-incomplete` when this checklist is the release gate.
 
 Required rows:
 

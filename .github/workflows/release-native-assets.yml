@@ -3,7 +3,7 @@ name: Release Native Assets
 on:
   push:
     tags:
-      - "*"
+      - "v*"
 
 permissions:
   contents: write

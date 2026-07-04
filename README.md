@@ -441,10 +441,11 @@ Verify a bundle and archive:
   --bundle-dir dist/native/codex-exec-loop-native-<version>-<target>
 ```
 
-Release tags trigger `.github/workflows/release-native-assets.yml`. The workflow builds Linux,
-Windows, and macOS native bundles, verifies them, creates or updates the GitHub Release, and, when
-`NPM_TOKEN` is configured, publishes npm platform packages before the main `@refinedstone/akra`
-package.
+Release tags using the `v<version>` convention trigger `.github/workflows/release-native-assets.yml`.
+The workflow builds Linux, Windows, and macOS native bundles, verifies them, creates or updates the
+GitHub Release, and, when `NPM_TOKEN` is configured, publishes npm platform packages before the main
+`@refinedstone/akra` package. If `NPM_TOKEN` is absent, the GitHub Release still publishes and npm
+publishing is skipped.
 
 Record terminal validation when a change affects shell rendering, prompt behavior, viewport
 handling, scrollback insertion, resize, overlays, status copy, queue/planning surfaces, or
@@ -459,10 +460,16 @@ bash scripts/capture_native_validation.sh \
   --output-dir docs/validation
 ```
 
-Summarize recorded validation:
+Summarize recorded validation (informational; warns when required rows are incomplete):
 
 ```bash
 bash scripts/summarize_native_validation.sh
+```
+
+Use explicit gate mode when the validation summary must fail the run:
+
+```bash
+bash scripts/summarize_native_validation.sh --fail-on-incomplete
 ```
 
 Validation references:
@@ -502,8 +509,8 @@ Useful GitHub review/polling variables:
 - The checked-in app-server schema snapshot still predates newer approval response methods, so the
   TUI does not expose approve or deny actions.
 - Non-git workspaces do not use the full supersession worktree pool model.
-- Release archive file names use the package version declared in `Cargo.toml`; npm publish staging
-  uses the pushed tag version.
+- Release archive file names use the package version declared in `Cargo.toml`; the release tag must
+  use `v<version>`, and npm publish staging uses that tag version without the leading `v`.
 
 ## Documentation Index
 

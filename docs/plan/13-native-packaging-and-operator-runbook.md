@@ -153,10 +153,16 @@ bash scripts/capture_native_validation.sh \
   --output-dir docs/validation
 ```
 
-Coverage summary:
+Coverage summary (informational; warns when required rows are incomplete):
 
 ```bash
 bash scripts/summarize_native_validation.sh
+```
+
+Coverage gate:
+
+```bash
+bash scripts/summarize_native_validation.sh --fail-on-incomplete
 ```
 
 Markdown summary:
@@ -177,7 +183,8 @@ bash scripts/summarize_native_validation.sh --format markdown
 The repository can publish native bundles directly to GitHub Release assets from a tag push.
 
 - workflow: `.github/workflows/release-native-assets.yml`
-- accepted tags: any pushed tag
+- release tag convention: `v<version>`
+- the workflow strips the leading `v` and requires the remaining version to match `Cargo.toml`
 - published assets:
   - Linux `x86_64-unknown-linux-gnu`
   - Windows `x86_64-pc-windows-msvc`
@@ -194,11 +201,13 @@ The repository can publish native bundles directly to GitHub Release assets from
     - `@refinedstone/akra@<tag-version>-linux-x64`
     - `@refinedstone/akra@<tag-version>-darwin-arm64`
     - `@refinedstone/akra@<tag-version>-win32-x64`
+- when `NPM_TOKEN` is absent, GitHub Release assets still publish and the npm publish jobs are skipped
 
 npm publish notes:
 
 - publish platform packages before the main `@refinedstone/akra` package
 - npm versions are immutable, so a corrected republish needs a new tag version
+- existing npm versions are skipped instead of republished
 - the npm platform package ships the native binary plus runtime app-server skill assets and `scripts/` under `vendor/<target>/akra/`; admin visual assets are embedded in the binary and ignored build output such as `node_modules/`, `.vite/`, and `dist/` must not be published
 
 Typical release flow:

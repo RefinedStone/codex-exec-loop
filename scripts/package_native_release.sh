@@ -14,6 +14,16 @@ Examples:
 EOF
 }
 
+require_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "${value}" ]]; then
+    echo "package_native_release: missing value for ${option}" >&2
+    usage >&2
+    exit 1
+  fi
+}
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 manifest_path="${repo_root}/Cargo.toml"
@@ -28,15 +38,18 @@ out_dir="${repo_root}/dist/native"
 while (($# > 0)); do
   case "$1" in
     --target)
-      target="${2-}"
+      require_value "$1" "${2-}"
+      target="$2"
       shift 2
       ;;
     --out-dir)
-      out_dir="${2-}"
+      require_value "$1" "${2-}"
+      out_dir="$2"
       shift 2
       ;;
     --profile)
-      profile="${2-}"
+      require_value "$1" "${2-}"
+      profile="$2"
       shift 2
       ;;
     -h|--help)
@@ -179,6 +192,7 @@ EOF
 cat > "${bundle_dir}/VERSION.txt" <<EOF
 name=${binary_name}
 version=${version}
+release_tag=v${version}
 target=${artifact_target}
 profile=${profile}
 binary=${binary_file_name}

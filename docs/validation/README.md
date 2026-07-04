@@ -22,7 +22,7 @@ terminal checklist.
 - keep one file per exercised terminal/frontend row, or one compact table for related production
   validation slices
 - preserve the emitted `check_profile` and checklist so rows stay comparable
-- use `bash scripts/summarize_native_validation.sh` before calling the matrix complete
+- use `bash scripts/summarize_native_validation.sh --fail-on-incomplete` when the matrix must act as a gate; the plain summary is informational and warns on incomplete required rows
 
 ## Filename Shape
 
@@ -74,10 +74,16 @@ Windows PowerShell:
   -OutputDir docs\validation
 ```
 
-Coverage summary:
+Coverage summary (informational; warns when required rows are incomplete):
 
 ```bash
 bash scripts/summarize_native_validation.sh
+```
+
+Coverage gate:
+
+```bash
+bash scripts/summarize_native_validation.sh --fail-on-incomplete
 ```
 
 Markdown summary:
