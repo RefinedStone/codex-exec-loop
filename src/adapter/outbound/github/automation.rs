@@ -838,6 +838,16 @@ mod tests {
             .lock()
             .expect("github script fixture lock should not be poisoned");
         let fixture = GitFixture::new("github-automation-auth-missing");
+        git(
+            &fixture.repo,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+
         let bin_dir = fixture
             .repo
             .parent()
@@ -886,6 +896,15 @@ mod tests {
             .lock()
             .expect("github script fixture lock should not be poisoned");
         let fixture = GitFixture::new("github-automation-fake-gh");
+        git(
+            &fixture.repo,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
         let bin_dir = fixture
             .repo
             .parent()
