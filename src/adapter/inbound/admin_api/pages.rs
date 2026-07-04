@@ -8,8 +8,8 @@ use super::helpers::{
 };
 use super::views::{
     AkraDashboardTemplate, AkraMetricsTemplate, AppServerPromptLogView, AppServerPromptsTemplate,
-    ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate, EditorTemplate,
-    TasksTemplate,
+    ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate,
+    EditorActionPaths, EditorTemplate, TasksTemplate,
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
@@ -788,6 +788,14 @@ pub(super) fn nav_for_kind(kind: PlanningAdminDraftKind) -> &'static str {
     }
 }
 
+pub(super) fn draft_mutation_path(draft_name: &str, action: &str) -> String {
+    format!(
+        "/admin/drafts/{}/{}",
+        encode_uri_component(draft_name),
+        action
+    )
+}
+
 fn draft_editor_location(
     draft_name: &str,
     kind: PlanningAdminDraftKind,
@@ -823,6 +831,11 @@ fn render_editor_page(
     session: PlanningAdminSessionView,
 ) -> std::result::Result<Response, StatusCode> {
     // 모든 draft action이 CSRF, nav, workspace context를 같은 방식으로 보존하도록 editor template assembly를 중앙화한다.
+    let action_paths = EditorActionPaths {
+        save: draft_mutation_path(&session.draft_name, "save"),
+        validate: draft_mutation_path(&session.draft_name, "validate"),
+        promote: draft_mutation_path(&session.draft_name, "promote"),
+    };
     render_html(
         jar,
         EditorTemplate {
@@ -831,6 +844,7 @@ fn render_editor_page(
             workspace_dir: workspace_dir.to_string(),
             csrf_token,
             notice,
+            action_paths,
             session,
         },
     )

@@ -156,13 +156,13 @@
         border-top: 1px solid rgba(255,255,255,0.1);
         color: #dce7f6;
       }
-      .graphic-rank {
+      .graphic-callout {
         display: grid;
         grid-template-columns: 48px minmax(0, 1fr);
         gap: 10px;
-        align-items: center;
+        align-items: start;
       }
-      .rank-medal {
+      .graphic-badge {
         display: grid;
         place-items: center;
         width: 44px;
@@ -172,32 +172,22 @@
         background: linear-gradient(135deg, #f4c84a, #35d07f);
         font-weight: 900;
       }
-      .achievement-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 32px);
+      .graphic-chip-row {
+        display: flex;
+        flex-wrap: wrap;
         gap: 8px;
       }
-      .achievement {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        border: 1px solid rgba(255,255,255,0.18);
-        background:
-          radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px),
-          linear-gradient(135deg, #35d07f, #1c4b78);
-        box-shadow: inset 0 0 0 3px rgba(0,0,0,0.18);
-      }
-      .achievement:nth-child(2) { background: radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px), linear-gradient(135deg, #f4c84a, #6d431f); }
-      .achievement:nth-child(3) { background: radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px), linear-gradient(135deg, #9d7cff, #3b266d); }
-      .achievement:nth-child(4) { background: radial-gradient(circle at 50% 42%, rgba(255,255,255,0.78) 0 3px, transparent 4px), linear-gradient(135deg, #ff6b6b, #5b1f2a); }
-      .system-ready-dot {
-        display: inline-block;
-        width: 9px;
-        height: 9px;
-        margin-right: 8px;
+      .graphic-chip {
+        padding: 6px 8px;
         border-radius: 999px;
-        background: #76e37f;
-        box-shadow: 0 0 0 4px rgba(118, 227, 127, 0.12);
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.06);
+        color: #dce7f6;
+        font-size: 12px;
+      }
+      .graphic-note {
+        color: #9eb0c6;
+        line-height: 1.5;
       }
       * { box-sizing: border-box; }
       body {
@@ -949,7 +939,7 @@
         <div class="graphic-brand">
           <span class="graphic-building" aria-hidden="true"></span>
           <div>
-            <div class="brand-title">게임발전국 <span class="graphic-beta">BETA</span></div>
+            <div class="brand-title">게임발전국 <span class="graphic-beta">ADMIN</span></div>
             <div class="eyebrow">AKRA ADMIN CONTROL CENTER</div>
           </div>
         </div>
@@ -967,29 +957,29 @@
         </nav>
         <div class="graphic-progress">
           <div>
-            <div class="nav-label">국가 성과</div>
-            <div class="graphic-rank">
-              <span class="rank-medal">24</span>
+            <div class="nav-label">운영 셸</div>
+            <div class="graphic-callout">
+              <span class="graphic-badge">AK</span>
               <div>
-                <strong>Lv. 24</strong><br>
-                <small>프로젝트 명성 7,340</small><br>
-                <small style="color:#35d07f">+120 오늘</small>
+                <strong>AKRA Admin</strong><br>
+                <small>로컬 운영자를 위한 고정 탐색 셸</small><br>
+                <small class="graphic-note">실시간 상태와 빌드 정보는 각 화면 본문에서 확인</small>
               </div>
             </div>
           </div>
           <div>
-            <div class="nav-label">이번 주 업적</div>
-            <div class="achievement-grid" aria-hidden="true">
-              <span class="achievement"></span>
-              <span class="achievement"></span>
-              <span class="achievement"></span>
-              <span class="achievement"></span>
-              <span class="achievement"></span>
+            <div class="nav-label">바로가기 안내</div>
+            <div class="graphic-chip-row" aria-label="AKRA admin navigation hints">
+              <span class="graphic-chip">대시보드</span>
+              <span class="graphic-chip">워크트리 풀</span>
+              <span class="graphic-chip">작전 방향</span>
+              <span class="graphic-chip">작업 관리</span>
+              <span class="graphic-chip">메트릭스</span>
             </div>
           </div>
           <div>
-            <small>AKRA v0.9.0-beta</small><br>
-            <small><span class="system-ready-dot"></span>모든 시스템 정상</small>
+            <small>AKRA graphic admin shell</small><br>
+            <small class="graphic-note">이 사이드바는 브랜딩과 탐색을 위한 고정 레이아웃입니다.</small>
           </div>
         </div>
         {% else %}
