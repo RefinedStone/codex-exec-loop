@@ -185,6 +185,11 @@ keep_branches=()
 keep_paths=()
 matched_target_branches=()
 matched_target_paths=()
+pending_paths=()
+pending_branches=()
+pending_explicit_flags=()
+pending_missing_path_flags=()
+
 
 
 while (($# > 0)); do
@@ -352,8 +357,10 @@ process_entry() {
 
   if [[ "${path_missing}" == "true" ]]; then
     if [[ "${apply_mode}" == "true" ]]; then
-      apply_cleanup "${path}" "${branch_name}" "${explicitly_targeted}" "true"
-      removed_count=$((removed_count + 1))
+      pending_paths+=("${path}")
+      pending_branches+=("${branch_name}")
+      pending_explicit_flags+=("${explicitly_targeted}")
+      pending_missing_path_flags+=("true")
     else
       report_cleanup "dry-run" "missing worktree path eligible for cleanup" "${path}" "${branch_name}"
       dry_run_count=$((dry_run_count + 1))
@@ -378,13 +385,16 @@ process_entry() {
   fi
 
   if [[ "${apply_mode}" == "true" ]]; then
-    apply_cleanup "${path}" "${branch_name}" "${explicitly_targeted}" "false"
-    removed_count=$((removed_count + 1))
+    pending_paths+=("${path}")
+    pending_branches+=("${branch_name}")
+    pending_explicit_flags+=("${explicitly_targeted}")
+    pending_missing_path_flags+=("false")
   else
     report_cleanup "dry-run" "eligible for cleanup" "${path}" "${branch_name}"
     dry_run_count=$((dry_run_count + 1))
   fi
 }
+
 
 while IFS= read -r line || [[ -n "${line}" ]]; do
   if [[ -z "${line}" ]]; then
@@ -426,6 +436,16 @@ if [[ "${targeted_mode}" == "true" ]]; then
       exit 1
     fi
   fi
+fi
+if [[ "${apply_mode}" == "true" ]]; then
+  for idx in "${!pending_paths[@]}"; do
+    apply_cleanup \
+      "${pending_paths[$idx]}" \
+      "${pending_branches[$idx]}" \
+      "${pending_explicit_flags[$idx]}" \
+      "${pending_missing_path_flags[$idx]}"
+    removed_count=$((removed_count + 1))
+  done
 fi
 if [[ "${apply_mode}" == "true" ]]; then
   git worktree prune
