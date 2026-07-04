@@ -318,8 +318,13 @@ if [[ -d "${records_dir}" ]]; then
     profile_value="$(read_field "${record_file}" "check_profile")"
     result_value="$(read_field "${record_file}" "result")"
     capture_role_value="$(read_field "${record_file}" "capture_role")"
-    record_profile="$(canonical_check_profile "${profile_value:-terminal-baseline}")"
 
+    if [[ -z "${profile_value}" ]]; then
+      unmatched_entries+=("${record_file}|${os_value}|${terminal_value}|${shell_value}|${frontend_value}|${result_value}")
+      continue
+    fi
+
+    record_profile="$(canonical_check_profile "${profile_value}")"
     if [[ "${record_profile}" != "${check_profile}" ]]; then
       continue
     fi

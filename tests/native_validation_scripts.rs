@@ -1044,6 +1044,37 @@ notes: missing checks block
     fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
 }
 
+
+#[test]
+fn missing_check_profile_does_not_count_toward_terminal_baseline() {
+    let records_dir = make_records_dir();
+    write_record(
+        &records_dir,
+        "missing-profile-terminal-app.txt",
+        r#"date: 2026-05-09
+commit: abc123
+os: macOS 14.5
+terminal: Terminal.app
+shell: zsh
+frontend: inline
+term: xterm-256color
+capture_role: counted-row
+checks:
+- launch and exit
+result: pass
+notes: missing check profile
+"#,
+    );
+
+    let output = summarize(&records_dir, &[]);
+
+    assert!(output.contains("required pass: 0/4"));
+    assert!(output.contains("required missing: 4"));
+    assert!(output.contains("Unmatched Records"));
+    assert!(output.contains("missing-profile-terminal-app.txt"));
+
+    fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
+}
 #[test]
 fn default_summary_warns_when_required_rows_are_incomplete() {
     let records_dir = make_records_dir();
