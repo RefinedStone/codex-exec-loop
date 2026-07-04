@@ -676,7 +676,7 @@ impl ParallelModeService {
         snapshot: &PlanningAuthorityRuntimeProjectionSnapshot,
         epoch_id: u64,
     ) -> Option<ParallelModeDispatchCommandSnapshot> {
-        if !snapshot.slot_leases.is_empty() || !snapshot.session_details.is_empty() {
+        if !snapshot.session_details.is_empty() {
             return None;
         }
         snapshot
@@ -757,7 +757,10 @@ impl ParallelModeService {
             .planning_authority
             .load_runtime_projections(workspace_dir)
             .map_err(|error| error.to_string())?;
-        if !snapshot.slot_leases.is_empty() || !snapshot.session_details.is_empty() {
+        let current_task_id = planning_projection
+            .queue_head()
+            .map(|task| task.task_id.clone());
+        if !snapshot.session_details.is_empty() {
             return Ok(false);
         }
         let has_orphaned_running = snapshot.dispatch_commands.iter().any(|command| {
@@ -769,6 +772,22 @@ impl ParallelModeService {
         });
         if !has_orphaned_running {
             return Ok(false);
+        }
+        let matching_slot_ids = current_task_id
+            .as_ref()
+            .map(|task_id| {
+                snapshot
+                    .slot_leases
+                    .values()
+                    .filter(|lease| lease.task_id == *task_id)
+                    .map(|lease| lease.slot_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for slot_id in matching_slot_ids {
+            self.planning_authority
+                .remove_runtime_slot_lease(workspace_dir, &slot_id)
+                .map_err(|error| error.to_string())?;
         }
         self.update_dispatch_command(workspace_dir, &replacement)?;
         Ok(true)
