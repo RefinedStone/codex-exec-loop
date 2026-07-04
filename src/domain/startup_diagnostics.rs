@@ -10,10 +10,7 @@ use std::fmt::Write as _;
 // startup banner가 이 label을 보여 주면 실행 중인 binary가 어떤 schema snapshot으로 빌드됐는지
 // build artifact만 보고 추적할 수 있다.
 const BUNDLED_SCHEMA_SNAPSHOT_PATH: &str = "schema/codex_app_server_protocol.v2.schemas.json";
-const BUNDLED_SCHEMA_SNAPSHOT_ID: &str =
-    "urn:codex-exec-loop-native:app-server-protocol:v2:snapshot";
-const BUNDLED_SCHEMA_SNAPSHOT_VERSION: &str = "v2";
-const BUNDLED_SCHEMA_SNAPSHOT_SOURCE: &str = "codex app-server protocol snapshot";
+
 // `include_str!`은 schema snapshot 내용을 binary에 embed한다. runtime filesystem에 schema 파일이 없어도
 // startup diagnostics는 빌드 시점 snapshot 크기와 출처를 표시할 수 있다.
 const BUNDLED_SCHEMA_SNAPSHOT_CONTENTS: &str =
@@ -68,9 +65,9 @@ impl StartupDiagnostics {
     pub fn bundled_schema_snapshot_label() -> String {
         let checksum = Self::bundled_schema_snapshot_sha256();
         let schema_id = Self::bundled_schema_snapshot_string_field("$id")
-            .unwrap_or_else(|| BUNDLED_SCHEMA_SNAPSHOT_ID.to_string());
+            .unwrap_or_else(|| "schema-id-missing".to_string());
         let version = Self::bundled_schema_snapshot_string_field("version")
-            .unwrap_or_else(|| BUNDLED_SCHEMA_SNAPSHOT_VERSION.to_string());
+            .unwrap_or_else(|| "version-missing".to_string());
         format!(
             "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({version}; {schema_id}; sha256:{}; {} bytes)",
             &checksum[..12],
@@ -120,8 +117,8 @@ mod tests {
     fn bundled_schema_snapshot_label_carries_id_version_and_checksum() {
         let label = StartupDiagnostics::bundled_schema_snapshot_label();
         assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_PATH));
-        assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_ID));
-        assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_VERSION));
+        assert!(label.contains("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot"));
+        assert!(label.contains("v2"));
         assert!(label.contains("sha256:"));
     }
 
@@ -129,15 +126,15 @@ mod tests {
     fn bundled_schema_snapshot_metadata_is_present_in_embedded_schema() {
         assert_eq!(
             StartupDiagnostics::bundled_schema_snapshot_string_field("$id").as_deref(),
-            Some(BUNDLED_SCHEMA_SNAPSHOT_ID)
+            Some("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot")
         );
         assert_eq!(
             StartupDiagnostics::bundled_schema_snapshot_string_field("version").as_deref(),
-            Some(BUNDLED_SCHEMA_SNAPSHOT_VERSION)
+            Some("v2")
         );
         assert_eq!(
             StartupDiagnostics::bundled_schema_snapshot_string_field("x-generated-from").as_deref(),
-            Some(BUNDLED_SCHEMA_SNAPSHOT_SOURCE)
+            Some("codex app-server protocol snapshot")
         );
         assert!(StartupDiagnostics::bundled_schema_snapshot_string_field("description").is_some());
         assert_eq!(

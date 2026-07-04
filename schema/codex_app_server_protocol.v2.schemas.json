@@ -425,7 +425,8 @@
                 "null"
               ],
               "format": "uint64",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 18446744073709551615
             },
             "type": {
               "type": "string",
@@ -1621,7 +1622,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "modelProviders": {
           "description": "Optional provider filter; when set, only sessions recorded under these providers are returned. When present but empty, includes all providers.",
@@ -1682,7 +1684,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         }
       }
     },
@@ -1817,7 +1820,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "threadId": {
           "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
@@ -2743,7 +2747,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         }
       }
     },
@@ -2958,7 +2963,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         }
       }
     },
@@ -2981,7 +2987,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         }
       }
     },
@@ -3067,7 +3074,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         }
       }
     },
@@ -3090,7 +3099,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         }
       }
     },
@@ -3342,7 +3352,8 @@
             "null"
           ],
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 18446744073709551615
         },
         "processId": {
           "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
@@ -3387,7 +3398,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "tty": {
           "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
@@ -3682,7 +3695,8 @@
                     "null"
                   ],
                   "format": "uint16",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 65535
                 }
               }
             }
@@ -3706,7 +3720,8 @@
                     "null"
                   ],
                   "format": "uint16",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 65535
                 }
               }
             }
@@ -3730,7 +3745,8 @@
                     "null"
                   ],
                   "format": "uint16",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 65535
                 }
               }
             }
@@ -3754,7 +3770,8 @@
                     "null"
                   ],
                   "format": "uint16",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 65535
                 }
               }
             }
@@ -4671,7 +4688,9 @@
                 "integer",
                 "null"
               ],
-              "format": "int64"
+              "format": "int64",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
             },
             "exitCode": {
               "description": "The command's exit code.",
@@ -4679,7 +4698,9 @@
                 "integer",
                 "null"
               ],
-              "format": "int32"
+              "format": "int32",
+              "minimum": -2147483648,
+              "maximum": 2147483647
             },
             "id": {
               "type": "string"
@@ -4761,7 +4782,9 @@
                 "integer",
                 "null"
               ],
-              "format": "int64"
+              "format": "int64",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
             },
             "error": {
               "anyOf": [
@@ -4831,7 +4854,9 @@
                 "integer",
                 "null"
               ],
-              "format": "int64"
+              "format": "int64",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
             },
             "id": {
               "type": "string"
@@ -7474,7 +7499,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "title": {
           "type": [
@@ -7817,7 +7844,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "usedPercent": {
           "type": "integer",
@@ -7830,7 +7859,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         }
       }
     },
@@ -8134,14 +8165,18 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "model_context_window": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "model_provider": {
           "type": [
@@ -8929,7 +8964,8 @@
             "null"
           ],
           "format": "uint16",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 65535
         },
         "managedAllowedDomainsOnly": {
           "description": "When true, only managed allowlist entries are respected while managed network enforcement is active.",
@@ -8944,7 +8980,8 @@
             "null"
           ],
           "format": "uint16",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 65535
         },
         "unixSockets": {
           "description": "Canonical unix socket permission map for `experimental_network`.",
@@ -9190,7 +9227,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "total": {
           "$ref": "#/definitions/TokenUsageBreakdown"
@@ -9357,7 +9396,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "displayOrder": {
           "type": "integer",
@@ -9370,7 +9411,9 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "entries": {
           "type": "array",
@@ -9608,7 +9651,8 @@
             "null"
           ],
           "format": "uint8",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 255
         },
         "status": {
           "$ref": "#/definitions/GuardianApprovalReviewStatus"

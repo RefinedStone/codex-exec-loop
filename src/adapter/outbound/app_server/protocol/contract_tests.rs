@@ -560,7 +560,7 @@ fn schema_integer_fields() -> Vec<SchemaIntegerField> {
 fn collect_schema_integer_fields(node: &Value, path: &str, fields: &mut Vec<SchemaIntegerField>) {
     match node {
         Value::Object(object) => {
-            if object.get("type").and_then(Value::as_str) == Some("integer") {
+            if schema_node_is_integer(object) {
                 if let Some(format) = object.get("format").and_then(Value::as_str) {
                     fields.push(SchemaIntegerField {
                         path: path.to_string(),
@@ -592,11 +592,20 @@ fn json_integer(value: Option<&Value>) -> Option<i128> {
     })
 }
 
+fn schema_node_is_integer(object: &serde_json::Map<String, Value>) -> bool {
+    match object.get("type") {
+        Some(Value::String(kind)) => kind == "integer",
+        Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some("integer")),
+        _ => false,
+    }
+}
+
 fn schema_format_bounds(format: &str) -> Option<(i128, i128)> {
     match format {
         "uint" | "uint64" => Some((0, u64::MAX as i128)),
         "uint32" => Some((0, u32::MAX as i128)),
         "uint16" => Some((0, u16::MAX as i128)),
+        "uint8" => Some((0, u8::MAX as i128)),
         "int32" => Some((i32::MIN as i128, i32::MAX as i128)),
         "int64" => Some((i64::MIN as i128, i64::MAX as i128)),
         _ => None,
