@@ -393,7 +393,7 @@ fn cleanup_explicit_missing_target_fails_without_opt_out() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no explicit targets matched any worktree entries"));
+    assert!(stderr.contains("explicit targets not found: branch:definitely-not-a-real-branch"));
     assert!(stderr.contains("--allow-empty-explicit-targets"));
     assert!(feature_worktree.is_dir());
     assert!(branch_exists(&repo, "feature"));
@@ -421,6 +421,34 @@ fn cleanup_explicit_missing_target_can_be_ignored() {
     assert!(stderr.contains("allowed by --allow-empty-explicit-targets"));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("dry-run complete: 0 eligible"));
+
+    assert!(feature_worktree.is_dir());
+    assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_mixed_explicit_targets_fail_when_any_requested_target_is_missing() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+
+    let output = run_cleanup(
+        &repo,
+        &[
+            "--base",
+            "main",
+            "--branch",
+            "feature",
+            "--branch",
+            "definitely-not-a-real-branch",
+        ],
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("explicit targets not found: branch:definitely-not-a-real-branch"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[skip] branch not merged into main"));
     assert!(feature_worktree.is_dir());
     assert!(branch_exists(&repo, "feature"));
 

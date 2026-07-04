@@ -86,6 +86,19 @@ branch_is_targeted() {
   return 1
 }
 
+mark_target_match() {
+  local value="$1"
+  shift
+  local seen
+  for seen in "$@"; do
+    if [[ "${seen}" == "${value}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+
 branch_is_parallel_agent_slot() {
   local candidate="$1"
   [[ "${candidate}" == akra-agent/slot-* ]]
@@ -170,6 +183,9 @@ target_branches=()
 target_paths=()
 keep_branches=()
 keep_paths=()
+matched_target_branches=()
+matched_target_paths=()
+
 
 while (($# > 0)); do
   case "$1" in
@@ -252,7 +268,8 @@ removed_count=0
 dry_run_count=0
 skipped_count=0
 targeted_mode=false
-explicit_match_count=0
+missing_explicit_targets=()
+
 
 if ((${#target_branches[@]} > 0 || ${#target_paths[@]} > 0)); then
   targeted_mode=true
@@ -276,10 +293,19 @@ process_entry() {
   branch_name="${branch_ref#refs/heads/}"
   path="$(canonicalize_path "${path}")"
 
-  if branch_is_targeted "${branch_name}" || path_is_targeted "${path}"; then
+  if branch_is_targeted "${branch_name}"; then
     explicitly_targeted=true
-    explicit_match_count=$((explicit_match_count + 1))
+    if ! mark_target_match "${branch_name}" "${matched_target_branches[@]+${matched_target_branches[@]}}"; then
+      matched_target_branches+=("${branch_name}")
+    fi
   fi
+  if path_is_targeted "${path}"; then
+    explicitly_targeted=true
+    if ! mark_target_match "${path}" "${matched_target_paths[@]+${matched_target_paths[@]}}"; then
+      matched_target_paths+=("${path}")
+    fi
+  fi
+
   if [[ ! -d "${path}" ]]; then
     path_missing=true
   fi
@@ -380,12 +406,25 @@ done < <(git worktree list --porcelain)
 
 process_entry "${current_path}" "${current_branch}"
 
-if [[ "${targeted_mode}" == "true" && ${explicit_match_count} -eq 0 ]]; then
-  if [[ "${allow_empty_explicit_targets}" == "true" ]]; then
-    printf 'cleanup_merged_worktrees: no explicit targets matched any worktree entries; allowed by --allow-empty-explicit-targets\n' >&2
-  else
-    printf 'cleanup_merged_worktrees: no explicit targets matched any worktree entries; rerun with --allow-empty-explicit-targets to allow this\n' >&2
-    exit 1
+if [[ "${targeted_mode}" == "true" ]]; then
+  for branch_name in "${target_branches[@]+${target_branches[@]}}"; do
+    if ! mark_target_match "${branch_name}" "${matched_target_branches[@]+${matched_target_branches[@]}}"; then
+      missing_explicit_targets+=("branch:${branch_name}")
+    fi
+  done
+  for current_path in "${target_paths[@]+${target_paths[@]}}"; do
+    if ! mark_target_match "${current_path}" "${matched_target_paths[@]+${matched_target_paths[@]}}"; then
+      missing_explicit_targets+=("path:${current_path}")
+    fi
+  done
+
+  if ((${#missing_explicit_targets[@]} > 0)); then
+    if [[ "${allow_empty_explicit_targets}" == "true" ]]; then
+      printf 'cleanup_merged_worktrees: explicit targets not found: %s; allowed by --allow-empty-explicit-targets\n' "$(IFS=', '; printf '%s' "${missing_explicit_targets[*]}")" >&2
+    else
+      printf 'cleanup_merged_worktrees: explicit targets not found: %s; rerun with --allow-empty-explicit-targets to allow this\n' "$(IFS=', '; printf '%s' "${missing_explicit_targets[*]}")" >&2
+      exit 1
+    fi
   fi
 fi
 if [[ "${apply_mode}" == "true" ]]; then
