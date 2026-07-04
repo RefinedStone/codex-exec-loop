@@ -43,7 +43,7 @@ Treat the plain summary output as a visibility report, not a release gate, until
 
 No required terminal-baseline row is currently recorded as passing.
 The replay-policy captures below are supplemental representative evidence and do not count toward the baseline row totals.
-For explicit-only representative changes such as replay-policy-only `ViewportReplay` work, these supplemental captures can satisfy review without adding new counted baseline rows when the first-class default path is unchanged and the methodology's smaller-representative-set rule applies.
+They do not waive counted terminal-baseline requirements on their own.
 
 ### Supplemental replay-policy captures
 
@@ -58,6 +58,7 @@ For explicit-only representative changes such as replay-policy-only `ViewportRep
 | Required missing | `0` |
 | Required non-pass | `4` |
 | Optional pass | `0/4` |
+The single tmux `pass` row is the historical counted record currently on file for this profile; rerun the capture under the current helper checklist when fresh approval-grade evidence is required.
 
 Current required blockers still recorded in-tree:
 - `Linux / direct terminal / bash / inline`

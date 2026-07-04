@@ -72,7 +72,7 @@ bash scripts/summarize_native_validation.sh --fail-on-incomplete
 
 The summary helper counts only exact matrix-row captures. Supplemental primitive-sensitive artifacts may stay outside the summary entirely, or appear under `Unmatched Records`, depending on their `check_profile` and row metadata.
 Counted `terminal-baseline` rows are the release gate for shipped/default terminal behavior.
-An explicit-only representative branch such as `ViewportReplay` may rely on supplemental replay-policy captures instead of new counted baseline rows when the first-class default path is unchanged and the methodology's smaller-representative-set rule is satisfied.
+Supplemental replay-policy captures document representative branch-family behavior, but they do not replace counted baseline rows unless a future release-policy decision says otherwise.
 
 ## Minimum Matrix
 
