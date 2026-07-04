@@ -628,7 +628,7 @@ fn dispatch_tick_reports_no_pending_durable_command_without_mutating_queue() {
 }
 
 #[test]
-fn pending_dispatch_wake_surfaces_stale_running_dispatch_command() {
+fn pending_dispatch_wake_uses_durable_command_trigger_and_epoch() {
     let repo = TempGitRepo::new("orchestrator-stale-running-wake");
     let workspace_dir = repo.workspace_dir();
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
@@ -640,14 +640,26 @@ fn pending_dispatch_wake_surfaces_stale_running_dispatch_command() {
         Arc::new(FakeGithubAutomationPort::ready()),
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     );
-    seed_stale_running_dispatch_command(authority.as_ref(), &workspace_dir, 224);
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("stale-head-224".to_string()),
+        Some(77),
+        "2026-05-12T00:00:00Z",
+    );
+    authority
+        .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+        .expect("durable dispatch command should enqueue");
 
     let wake = service
         .pending_dispatch_wake(&workspace_dir, 224)
-        .expect("stale running dispatch command should be inspectable")
-        .expect("stale running dispatch command should trigger a wake");
+        .expect("durable dispatch command should be inspectable")
+        .expect("durable dispatch command should trigger a wake");
     assert_eq!(wake.workspace_directory, workspace_dir);
-    assert_eq!(wake.epoch_id, 224);
+    assert_eq!(
+        wake.trigger,
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion
+    );
+    assert_eq!(wake.epoch_id, 77);
 }
 
 #[test]
@@ -846,6 +858,66 @@ fn dispatch_tick_reclaims_stale_running_dispatch_command_after_restart() {
             event_sender,
         });
 
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    for _ in 0..100 {
+        if worker_port.launch_count() >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(worker_port.launch_count(), 1);
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
+    );
+}
+
+#[test]
+fn dispatch_tick_uses_durable_command_epoch_for_recovered_execution() {
+    let repo = TempGitRepo::new("orchestrator-durable-command-epoch");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("queue-head-durable-epoch".to_string()),
+        Some(77),
+        "2026-05-12T00:00:00Z",
+    );
+    authority
+        .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+        .expect("durable dispatch command should enqueue");
+
+    let service = Arc::new(ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, _event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 224,
+            enqueue_trigger: None,
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(
+        result.outcome.trigger,
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion
+    );
+    assert_eq!(result.outcome.epoch_id, 77);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     for _ in 0..100 {
         if worker_port.launch_count() >= 1 {

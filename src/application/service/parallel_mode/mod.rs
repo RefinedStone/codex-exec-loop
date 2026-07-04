@@ -3,18 +3,19 @@ use crate::application::port::outbound::github_automation_port::{
 };
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
-use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+};
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-    ParallelModeCapabilityState, ParallelModeDispatchCommandSnapshot,
-    ParallelModeDispatchTaskCandidate, ParallelModeOrchestratorState,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
-    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorSnapshot,
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchTaskCandidate,
+    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
+    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEvent,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -615,15 +616,43 @@ impl ParallelModeService {
         workspace_dir: &str,
         epoch_id: u64,
     ) -> Result<Option<ParallelModeControlPlaneWake>, String> {
-        if self.pending_dispatch_command_count(workspace_dir)? == 0 {
+        let snapshot = self
+            .planning_authority
+            .load_runtime_projections(workspace_dir)
+            .map_err(|error| error.to_string())?;
+        let Some(command) = Self::next_claimable_dispatch_command(&snapshot) else {
             return Ok(None);
-        }
+        };
         Ok(Some(ParallelModeControlPlaneWake::new(
             workspace_dir,
-            ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
-            epoch_id,
+            command.trigger,
+            command.epoch_id.unwrap_or(epoch_id),
             None,
         )))
+    }
+
+    fn next_claimable_dispatch_command(
+        snapshot: &PlanningAuthorityRuntimeProjectionSnapshot,
+    ) -> Option<ParallelModeDispatchCommandSnapshot> {
+        if let Some(command) = snapshot.dispatch_commands.iter().find(|command| {
+            command.state == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Pending
+        }) {
+            return Some(command.clone());
+        }
+        snapshot
+            .dispatch_commands
+            .iter()
+            .filter(|command| {
+                command.state
+                    == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Running
+                    && Self::dispatch_command_is_claimable(command)
+            })
+            .min_by(|left, right| {
+                left.updated_at
+                    .cmp(&right.updated_at)
+                    .then_with(|| left.command_id.cmp(&right.command_id))
+            })
+            .cloned()
     }
 
     pub fn update_dispatch_command(

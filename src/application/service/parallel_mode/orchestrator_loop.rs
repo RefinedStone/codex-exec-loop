@@ -97,6 +97,7 @@ impl ParallelModeService {
             }
             let outcome = match self.claim_next_dispatch_command(&workspace_directory) {
                 Ok(Some(mut command)) => {
+                    let command_epoch_id = command.epoch_id.unwrap_or(request.epoch_id);
                     let outcome = dispatch_parallel_queue_pool(
                         self,
                         ParallelModeDispatchExecutionContext {
@@ -107,7 +108,7 @@ impl ParallelModeService {
                             planning: request.planning,
                             event_sender: request.event_sender.clone(),
                             trigger: command.trigger,
-                            epoch_id: request.epoch_id,
+                            epoch_id: command_epoch_id,
                         },
                     );
                     persist_dispatch_command_outcome(
