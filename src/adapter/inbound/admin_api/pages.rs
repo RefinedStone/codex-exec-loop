@@ -877,7 +877,7 @@ fn render_editor_page(
     csrf_token: String,
     notice: Option<String>,
     surface: PlanningAdminSurface,
-    session: PlanningAdminSessionView,
+    mut session: PlanningAdminSessionView,
 ) -> std::result::Result<Response, StatusCode> {
     // 모든 draft action이 CSRF, nav, workspace context를 같은 방식으로 보존하도록 editor template assembly를 중앙화한다.
     let action_paths = EditorActionPaths {
@@ -885,6 +885,7 @@ fn render_editor_page(
         validate: draft_mutation_path(&session.draft_name, "validate"),
         promote: draft_mutation_path(&session.draft_name, "promote"),
     };
+    session.return_path = surface.editor_return_path(session.kind).to_string();
     render_html(
         jar,
         EditorTemplate {
@@ -894,7 +895,6 @@ fn render_editor_page(
             csrf_token,
             notice,
             editor_surface_token: surface.token(),
-            return_path: surface.editor_return_path(session.kind).to_string(),
             action_paths,
             session,
         },
