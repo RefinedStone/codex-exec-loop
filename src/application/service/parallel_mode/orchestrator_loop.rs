@@ -107,6 +107,31 @@ impl ParallelModeService {
                         if let Some(command_epoch_id) = command.epoch_id
                             && command_epoch_id != request.epoch_id
                         {
+                            let replacement = request.enqueue_trigger.map(|enqueue_trigger| {
+                                ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+                                    enqueue_trigger,
+                                    command.queue_head_signature.clone(),
+                                    Some(request.epoch_id),
+                                    Utc::now().to_rfc3339(),
+                                )
+                            });
+                            if let Some(replacement) = replacement {
+                                if let Err(error) =
+                                    self.update_dispatch_command(&workspace_directory, &replacement)
+                                {
+                                    let mut outcome = ParallelModeDispatchOutcome::new(
+                                        request.trigger,
+                                        workspace_directory.clone(),
+                                        request.epoch_id,
+                                    );
+                                    outcome.blocked_reason = Some(format!(
+                                        "stale dispatch command replacement failed: {error}"
+                                    ));
+                                    outcome.status_copy_input = outcome.status_detail();
+                                    break outcome;
+                                }
+                                continue;
+                            }
                             command.mark_canceled(
                                 format!(
                                     "stale durable dispatch command belongs to epoch {command_epoch_id} while current epoch is {}",
@@ -127,27 +152,6 @@ impl ParallelModeService {
                                 ));
                                 outcome.status_copy_input = outcome.status_detail();
                                 break outcome;
-                            }
-                            if let Some(enqueue_trigger) = request.enqueue_trigger {
-                                let runtime_event =
-                                    parallel_runtime_event_for_dispatch_trigger(enqueue_trigger);
-                                if let Err(error) = self.enqueue_dispatch_commands_for_event(
-                                    &workspace_directory,
-                                    runtime_event,
-                                    &planning_projection,
-                                    Some(request.epoch_id),
-                                ) {
-                                    let mut outcome = ParallelModeDispatchOutcome::new(
-                                        request.trigger,
-                                        workspace_directory.clone(),
-                                        request.epoch_id,
-                                    );
-                                    outcome.blocked_reason = Some(format!(
-                                        "stale dispatch command replacement failed: {error}"
-                                    ));
-                                    outcome.status_copy_input = outcome.status_detail();
-                                    break outcome;
-                                }
                             }
                             continue;
                         }
