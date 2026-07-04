@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogPort;
 #[cfg(test)]
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityCommitResult;
 #[cfg(test)]
 use crate::domain::parallel_mode::ParallelModeRuntimeEventsSnapshot;
 use crate::domain::parallel_mode::{
@@ -18,7 +19,10 @@ use crate::domain::parallel_mode::{
 };
 #[cfg(test)]
 use crate::domain::planning::PlanningAuthorityShadowStoreSyncState;
-use crate::domain::planning::{PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection};
+use crate::domain::planning::{
+    DirectionCatalogDocument, PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
+    PriorityQueueProjection, TaskAuthorityDocument,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*
@@ -228,6 +232,20 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
     pub runtime_events: Vec<PlanningAuthorityRuntimeEventRecord>,
 }
 
+#[derive(Debug, Clone, Copy)]
+/*
+ * planning authority 저장소 전체를 한 번에 갱신하기 위한 admin 전용 commit 명령이다.
+ * direction/task authority와 operator-facing result output이 같은 logical edit session에 속할 때,
+ * concrete authority adapter는 이 값을 하나의 durable transaction으로 반영해 split-brain을 막는다.
+ */
+pub struct PlanningAuthorityDocumentCommit<'a> {
+    pub observed_planning_revision: Option<i64>,
+    pub directions: &'a DirectionCatalogDocument,
+    pub task_authority: &'a TaskAuthorityDocument,
+    pub queue_projection: &'a PriorityQueueProjection,
+    pub result_output_markdown: &'a str,
+}
+
 /*
  * `PlanningAuthorityPort`는 planning authority 저장소의 운영 제어면입니다.
  * task/direction 문서 자체는 `PlanningTaskRepositoryPort`가 다루고, 이 포트는 그 문서들이 놓인
@@ -248,6 +266,20 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         // Workspace whose repo root and authority DB location should be inspected.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityShadowStoreInspection>;
+
+    /*
+     * direction/task authority와 operator-facing result output을 하나의 durable authority update로 저장합니다.
+     * 지원하지 않는 adapter는 명시적으로 unsupported를 반환해 caller가 half-commit-safe 경로를 강제하게 합니다.
+     */
+    fn commit_planning_authority_documents(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningAuthorityDocumentCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Err(anyhow!(
+            "planning authority document commits are unsupported by this authority adapter"
+        ))
+    }
 
     /*
      * official completion/refresh 작업에 순번을 부여합니다.

@@ -12,11 +12,12 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
     ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
 };
 use crate::application::port::outbound::planning_authority_port::{
-    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityOfficialRefreshClaimStatus,
-    PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityPort,
+    PlanningAuthorityDistributorQueueRecord, PlanningAuthorityDocumentCommit,
+    PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
+    PlanningAuthorityPort,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
@@ -31,8 +32,10 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
-    OriginSessionKind, PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask,
-    TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
+    DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
+    QueueIdlePolicy, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
+    TaskStatus,
 };
 
 use super::{
@@ -122,6 +125,19 @@ fn install_failing_delete_trigger(workspace_dir: &str, table_name: &str, trigger
     authority_connection(workspace_dir)
         .execute_batch(&sql)
         .expect("failing delete trigger should install");
+}
+
+fn install_failing_insert_trigger(workspace_dir: &str, table_name: &str, trigger_name: &str) {
+    let sql = format!(
+        "CREATE TRIGGER {trigger_name}
+         BEFORE INSERT ON {table_name}
+         BEGIN
+             SELECT RAISE(FAIL, 'forced insert failure');
+         END;"
+    );
+    authority_connection(workspace_dir)
+        .execute_batch(&sql)
+        .expect("failing insert trigger should install");
 }
 
 fn dispatch_command_snapshot(seed: u64) -> ParallelModeDispatchCommandSnapshot {
@@ -220,6 +236,162 @@ fn task_authority_snapshot_is_committed_to_db_tables() {
     // 성공을 막는다. 두 값이 같은 snapshot으로 돌아와야 planning runtime과 repair flow가 같은 authority를 본다.
     assert_eq!(snapshot.task_authority, task_authority);
     assert_eq!(snapshot.queue_projection, queue_projection);
+}
+
+#[test]
+fn authority_document_commit_rolls_back_when_active_document_write_fails() {
+    let workspace_dir = temp_workspace("authority-document-rollback");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let baseline_directions = DirectionCatalogDocument {
+        version: 1,
+        queue_idle: QueueIdleConfig {
+            policy: QueueIdlePolicy::Stop,
+            prompt_path: String::new(),
+        },
+        directions: vec![DirectionDefinition {
+            id: "direction-1".to_string(),
+            title: "Direction 1".to_string(),
+            summary: "Baseline direction".to_string(),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state: DirectionState::Active,
+        }],
+    };
+    let baseline_task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![TaskDefinition {
+            id: "task-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_relation_note: "baseline relation".to_string(),
+            title: "Baseline task".to_string(),
+            description: "Baseline description".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 50,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+            updated_at: "2026-05-07T09:00:00Z".to_string(),
+        }],
+    };
+    let baseline_queue_projection = PriorityQueueProjection {
+        next_task: Some(PriorityQueueTask {
+            rank: 1,
+            task_id: "task-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_title: "Direction 1".to_string(),
+            task_title: "Baseline task".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 50,
+            updated_at: "2026-05-07T09:00:00Z".to_string(),
+            rank_reasons: vec!["baseline".to_string()],
+        }),
+        active_tasks: vec![PriorityQueueTask {
+            rank: 1,
+            task_id: "task-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_title: "Direction 1".to_string(),
+            task_title: "Baseline task".to_string(),
+            status: TaskStatus::Ready,
+            combined_priority: 50,
+            updated_at: "2026-05-07T09:00:00Z".to_string(),
+            rank_reasons: vec!["baseline".to_string()],
+        }],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    let baseline_result = adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: None,
+                directions: &baseline_directions,
+                task_authority: &baseline_task_authority,
+                queue_projection: &baseline_queue_projection,
+                result_output_markdown: "# Result Output\n\nBaseline",
+            },
+        )
+        .expect("baseline authority documents should commit");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision, ..
+    } = baseline_result
+    else {
+        panic!("baseline authority documents should commit");
+    };
+
+    install_failing_insert_trigger(
+        &workspace_dir,
+        "active_documents",
+        "fail_active_documents_insert",
+    );
+    let changed_directions = DirectionCatalogDocument {
+        directions: vec![DirectionDefinition {
+            title: "Changed direction".to_string(),
+            ..baseline_directions.directions[0].clone()
+        }],
+        ..baseline_directions.clone()
+    };
+    let changed_task_authority = TaskAuthorityDocument {
+        tasks: vec![TaskDefinition {
+            title: "Changed task".to_string(),
+            ..baseline_task_authority.tasks[0].clone()
+        }],
+        ..baseline_task_authority.clone()
+    };
+    let changed_queue_projection = PriorityQueueProjection {
+        next_task: Some(PriorityQueueTask {
+            task_title: "Changed task".to_string(),
+            ..baseline_queue_projection
+                .next_task
+                .clone()
+                .expect("baseline next task")
+        }),
+        active_tasks: vec![PriorityQueueTask {
+            task_title: "Changed task".to_string(),
+            ..baseline_queue_projection.active_tasks[0].clone()
+        }],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+
+    assert_error_contains(
+        adapter.commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: Some(planning_revision),
+                directions: &changed_directions,
+                task_authority: &changed_task_authority,
+                queue_projection: &changed_queue_projection,
+                result_output_markdown: "# Result Output\n\nChanged",
+            },
+        ),
+        "failed to store active document `.codex-exec-loop/planning/result-output.md`",
+    );
+
+    let reloaded_direction = adapter
+        .load_direction_authority_snapshot(&workspace_dir)
+        .expect("direction authority should load")
+        .expect("direction authority should exist");
+    let reloaded_task = adapter
+        .load_task_authority_snapshot(&workspace_dir)
+        .expect("task authority should load")
+        .expect("task authority should exist");
+    let reloaded_workspace = adapter
+        .load_active_workspace_files(&workspace_dir)
+        .expect("active workspace should load");
+    assert_eq!(reloaded_direction.directions, baseline_directions);
+    assert_eq!(reloaded_task.task_authority, baseline_task_authority);
+    assert_eq!(reloaded_task.queue_projection, baseline_queue_projection);
+    assert_eq!(
+        reloaded_workspace.result_output_markdown.as_deref(),
+        Some("# Result Output\n\nBaseline")
+    );
 }
 
 #[test]

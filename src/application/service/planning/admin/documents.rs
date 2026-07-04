@@ -4,11 +4,10 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::{PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService};
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityDocumentCommit;
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningAuthoritySnapshotCommit, PlanningTaskAuthorityCommitResult,
-    load_consistent_planning_authority_snapshots,
+    PlanningTaskAuthorityCommitResult, load_consistent_planning_authority_snapshots,
 };
-
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
@@ -111,8 +110,6 @@ impl PlanningAdminFacadeService {
             .priority_queue_service
             .build_projection(&documents.directions, &documents.task_authority)
             .context("failed to rebuild planning queue")?;
-        // admin commit은 direction DB, task DB, result output file 세 저장소를 함께 움직인다. 뒤 단계가 실패하면
-        // 앞 단계가 남긴 반쪽 authority를 되돌릴 수 있도록 현재 snapshot을 먼저 잡아 둔다.
         let rollback_documents = self
             .load_operator_planning_documents()
             .context("failed to snapshot current operator planning documents before commit")?;
@@ -123,35 +120,38 @@ impl PlanningAdminFacadeService {
                 &rollback_documents.task_authority,
             )
             .context("failed to rebuild rollback planning queue")?;
-        let _baseline_planning_revision = rollback_documents
-            .observed_planning_revision
-            .ok_or_else(|| {
-                anyhow!("current planning authority snapshot is missing a planning revision")
-            })?;
-        let (current_planning_revision, authority_commit_changed) = match self
-            .planning_task_repository_port
-            .commit_planning_authority_snapshot(
+        let authority_commit = self
+            .planning_authority_port
+            .commit_planning_authority_documents(
                 self.workspace_dir.as_str(),
-                PlanningAuthoritySnapshotCommit {
+                PlanningAuthorityDocumentCommit {
                     observed_planning_revision: documents.observed_planning_revision,
                     directions: &documents.directions,
                     task_authority: &documents.task_authority,
                     queue_projection: &queue_projection,
+                    result_output_markdown: &documents.result_output_markdown,
                 },
-            )? {
-            PlanningTaskAuthorityCommitResult::Committed {
-                planning_revision,
-                changed,
-            } => (planning_revision, changed),
+            )?;
+        let authority_commit_changed = match authority_commit {
+            PlanningTaskAuthorityCommitResult::Committed { changed, .. } => changed,
             PlanningTaskAuthorityCommitResult::Conflict {
                 observed_planning_revision,
                 current_planning_revision,
-            } => bail!(
-                "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
-            ),
+            } => {
+                bail!(
+                    "planning db changed while editing (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                );
+            }
         };
-        // result_output은 아직 file-backed authority라 DB conflict detection에 참여하지 않는다. 그래서 파일 쓰기
-        // 실패가 생기면 이미 반영된 DB snapshot을 이전 값으로 되돌려 세 저장소가 다시 같은 authority를 가리키게 한다.
+        let workspace_reload = self
+            .planning_workspace_port
+            .load_planning_workspace_files(self.workspace_dir.as_str())?;
+        if workspace_reload.result_output_markdown.as_deref()
+            == Some(documents.result_output_markdown.as_str())
+            || !authority_commit_changed
+        {
+            return Ok(());
+        }
         if let Err(error) = self
             .planning_workspace_port
             .replace_planning_workspace_file(
@@ -160,18 +160,16 @@ impl PlanningAdminFacadeService {
                 Some(&documents.result_output_markdown),
             )
         {
-            if authority_commit_changed {
-                self.rollback_operator_planning_documents(
-                    &rollback_documents,
-                    &rollback_queue_projection,
-                    current_planning_revision,
+            self.rollback_operator_planning_documents(
+                &rollback_documents,
+                &rollback_queue_projection,
+                documents.observed_planning_revision,
+            )
+            .map_err(|rollback_error| {
+                anyhow!(
+                    "failed to persist result output after planning authority commit: {error}; automatic rollback failed: {rollback_error}"
                 )
-                .map_err(|rollback_error| {
-                    anyhow!(
-                        "failed to persist result output after planning authority commit: {error}; automatic rollback failed: {rollback_error}"
-                    )
-                })?;
-            }
+            })?;
             return Err(error.context("failed to persist result output"));
         }
         Ok(())
@@ -181,17 +179,18 @@ impl PlanningAdminFacadeService {
         &self,
         rollback_documents: &PlanningOperatorPlanningDocuments,
         rollback_queue_projection: &PriorityQueueProjection,
-        observed_planning_revision: i64,
+        observed_planning_revision: Option<i64>,
     ) -> Result<()> {
         match self
-            .planning_task_repository_port
-            .commit_planning_authority_snapshot(
+            .planning_authority_port
+            .commit_planning_authority_documents(
                 self.workspace_dir.as_str(),
-                PlanningAuthoritySnapshotCommit {
-                    observed_planning_revision: Some(observed_planning_revision),
+                PlanningAuthorityDocumentCommit {
+                    observed_planning_revision,
                     directions: &rollback_documents.directions,
                     task_authority: &rollback_documents.task_authority,
                     queue_projection: rollback_queue_projection,
+                    result_output_markdown: &rollback_documents.result_output_markdown,
                 },
             )? {
             PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
@@ -445,7 +444,9 @@ mod tests {
     use super::*;
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+    use crate::application::port::outbound::planning_authority_port::{
+        NoopPlanningAuthorityPort, PlanningAuthorityPort,
+    };
     use crate::application::port::outbound::planning_task_repository_port::{
         PlanningDirectionAuthorityCommit, PlanningTaskRepositoryPort,
     };
@@ -457,7 +458,7 @@ mod tests {
         TaskDefinition, TaskMutationProvenance, TaskStatus,
     };
     use std::fs;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -698,14 +699,17 @@ mod tests {
     }
 
     #[test]
-    fn operator_document_commit_rolls_back_authority_when_result_output_write_fails() {
-        let base_workspace_port: Arc<dyn PlanningWorkspacePort> =
+    fn operator_document_commit_surfaces_authority_commit_failure_without_mutation() {
+        let workspace_port: Arc<dyn PlanningWorkspacePort> =
             Arc::new(FilesystemPlanningWorkspaceAdapter::new());
-        let failing_workspace_port: Arc<dyn PlanningWorkspacePort> =
-            Arc::new(FailingResultOutputWorkspacePort::new(base_workspace_port));
-        let fixture = TestAdminFixture::new_with_workspace_port(
-            "admin-documents-result-output-rollback",
-            failing_workspace_port,
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let authority_port: Arc<dyn PlanningAuthorityPort> =
+            Arc::new(NoopPlanningAuthorityPort::default());
+        let fixture = TestAdminFixture::new_with_ports(
+            "admin-documents-authority-commit-failure",
+            workspace_port,
+            authority_port,
+            sqlite,
         );
         let mut documents = fixture
             .facade
@@ -713,23 +717,23 @@ mod tests {
             .expect("seeded operator documents should load");
         let original_documents = documents.clone();
         documents.result_output_markdown =
-            "# Result Output\n\nShould roll back after file failure.".to_string();
+            "# Result Output\n\nAuthority commit should fail before mutation.".to_string();
         documents.directions.directions[0].title = "Changed direction title".to_string();
 
         let error = fixture
             .facade
             .commit_operator_planning_documents(documents)
-            .expect_err("result output write failure should abort the commit");
+            .expect_err("authority commit failure should abort the commit");
         assert!(
             error
                 .to_string()
-                .contains("failed to persist result output")
+                .contains("planning authority document commits are unsupported")
         );
 
         let reloaded = fixture
             .facade
             .load_operator_planning_documents()
-            .expect("documents should reload after rollback");
+            .expect("documents should reload after authority failure");
         assert_eq!(reloaded.directions, original_documents.directions);
         assert_eq!(reloaded.task_authority, original_documents.task_authority);
         assert_eq!(
@@ -916,142 +920,6 @@ mod tests {
             }
         }
     }
-
-    struct FailingResultOutputWorkspacePort {
-        inner: Arc<dyn PlanningWorkspacePort>,
-        fail_next_write: Mutex<bool>,
-    }
-
-    impl FailingResultOutputWorkspacePort {
-        fn new(inner: Arc<dyn PlanningWorkspacePort>) -> Self {
-            Self {
-                inner,
-                fail_next_write: Mutex::new(true),
-            }
-        }
-    }
-
-    impl PlanningWorkspacePort for FailingResultOutputWorkspacePort {
-        fn stage_planning_draft_files(
-            &self,
-            workspace_dir: &str,
-            draft_name: &str,
-            files: &[crate::application::port::outbound::planning_workspace_port::PlanningDraftFileRecord],
-        ) -> Result<
-            crate::application::port::outbound::planning_workspace_port::PlanningDraftStageRecord,
-        > {
-            self.inner
-                .stage_planning_draft_files(workspace_dir, draft_name, files)
-        }
-
-        fn load_planning_draft_files(
-            &self,
-            workspace_dir: &str,
-            draft_name: &str,
-        ) -> Result<
-            crate::application::port::outbound::planning_workspace_port::PlanningDraftLoadRecord,
-        > {
-            self.inner
-                .load_planning_draft_files(workspace_dir, draft_name)
-        }
-
-        fn replace_planning_draft_file(
-            &self,
-            workspace_dir: &str,
-            draft_name: &str,
-            active_path: &str,
-            body: &str,
-        ) -> Result<String> {
-            self.inner
-                .replace_planning_draft_file(workspace_dir, draft_name, active_path, body)
-        }
-
-        fn load_planning_workspace_files(
-            &self,
-            workspace_dir: &str,
-        ) -> Result<crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord>{
-            self.inner.load_planning_workspace_files(workspace_dir)
-        }
-
-        fn load_planning_workspace_candidate_files(
-            &self,
-            workspace_dir: &str,
-        ) -> Result<crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord>{
-            self.inner
-                .load_planning_workspace_candidate_files(workspace_dir)
-        }
-
-        fn commit_planning_workspace_files(
-            &self,
-            workspace_dir: &str,
-            record: &crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord,
-        ) -> Result<()> {
-            self.inner
-                .commit_planning_workspace_files(workspace_dir, record)
-        }
-
-        fn load_optional_planning_file(
-            &self,
-            workspace_dir: &str,
-            relative_path: &str,
-        ) -> Result<Option<String>> {
-            self.inner
-                .load_optional_planning_file(workspace_dir, relative_path)
-        }
-
-        fn load_optional_planning_candidate_file(
-            &self,
-            workspace_dir: &str,
-            relative_path: &str,
-        ) -> Result<Option<String>> {
-            self.inner
-                .load_optional_planning_candidate_file(workspace_dir, relative_path)
-        }
-
-        fn replace_planning_workspace_file(
-            &self,
-            workspace_dir: &str,
-            relative_path: &str,
-            body: Option<&str>,
-        ) -> Result<()> {
-            let mut should_fail = self
-                .fail_next_write
-                .lock()
-                .expect("workspace failure flag should not be poisoned");
-            if *should_fail && relative_path == RESULT_OUTPUT_FILE_PATH && body.is_some() {
-                *should_fail = false;
-                return Err(anyhow::Error::msg("forced result output write failure"));
-            }
-            drop(should_fail);
-            self.inner
-                .replace_planning_workspace_file(workspace_dir, relative_path, body)
-        }
-
-        fn remove_planning_workspace_entry(
-            &self,
-            workspace_dir: &str,
-            relative_path: &str,
-        ) -> Result<()> {
-            self.inner
-                .remove_planning_workspace_entry(workspace_dir, relative_path)
-        }
-
-        fn archive_rejected_planning_file(
-            &self,
-            workspace_dir: &str,
-            archive_name: &str,
-            active_path: &str,
-            body: &str,
-        ) -> Result<String> {
-            self.inner.archive_rejected_planning_file(
-                workspace_dir,
-                archive_name,
-                active_path,
-                body,
-            )
-        }
-    }
-
     struct TempPlanningWorkspace {
         path: String,
     }
