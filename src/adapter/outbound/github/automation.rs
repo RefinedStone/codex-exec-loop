@@ -6,11 +6,13 @@ parallel-mode orchestration은 branch push, PR 생성/조회, capability inspect
 GitHub CLI가 있으면 로컬 인증을 그대로 활용하고, 없으면 wrapper script가 git credential 기반 REST
 fallback을 제공한다.
 */
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
+
 use serde::Deserialize;
 
 use crate::application::port::outbound::github_automation_port::{
@@ -451,7 +453,20 @@ impl TemporaryTextFile {
                 .unwrap_or_default()
                 .as_nanos()
         ));
-        fs::write(&path, contents).with_context(|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).with_context(|| {
+            format!(
+                "failed to create temporary GitHub automation file `{}`",
+                path.display()
+            )
+        })?;
+        file.write_all(contents.as_bytes()).with_context(|| {
             format!(
                 "failed to write temporary GitHub automation file `{}`",
                 path.display()
@@ -657,9 +672,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        GithubAutomationAdapter, GithubPullRequestJson, parse_pull_request_number_from_url,
-        run_command, run_git, run_git_stdout,
+        GithubAutomationAdapter, GithubPullRequestJson, TemporaryTextFile,
+        parse_pull_request_number_from_url, run_command, run_git, run_git_stdout,
     };
+
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationPort, GithubAutomationPullRequest,
     };
@@ -1077,6 +1093,24 @@ mod tests {
         assert!(!error_text.contains(sensitive_body));
 
         let _ = fs::remove_file(script_path);
+    }
+
+    #[test]
+    fn temporary_pr_body_file_uses_private_permissions() {
+        let file = TemporaryTextFile::new("github-pr-body-test", "secret body")
+            .expect("temporary body file should be created");
+        let contents =
+            fs::read_to_string(file.path()).expect("temporary body file should be readable");
+        assert_eq!(contents, "secret body");
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(file.path())
+                .expect("temporary body file metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 
     #[test]
