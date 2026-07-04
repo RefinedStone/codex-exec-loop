@@ -122,6 +122,16 @@ read_field() {
   sed -n "s/^${field}:[[:space:]]*//p" "${file}" | head -n 1
 }
 
+has_checks_block() {
+  local file="$1"
+  awk '
+    /^checks:[[:space:]]*$/ { in_checks=1; next }
+    /^[A-Za-z0-9_-]+:[[:space:]]*/ { if (in_checks) exit(found ? 0 : 1) }
+    in_checks && /^-[[:space:]]/ { found=1 }
+    END { if (in_checks) exit(found ? 0 : 1); exit 1 }
+  ' "${file}"
+}
+
 row_key() {
   printf '%s|%s|%s|%s' "$1" "$2" "$3" "$4"
 }
@@ -320,7 +330,12 @@ if [[ -d "${records_dir}" ]]; then
       "$(canonical_shell "${shell_value}")" \
       "$(canonical_frontend "${frontend_value}")")"
 
-    if [[ "${capture_role_value}" == "supplemental-unmatched" ]]; then
+    if [[ "${capture_role_value}" != "counted-row" ]]; then
+      unmatched_entries+=("${record_file}|${os_value}|${terminal_value}|${shell_value}|${frontend_value}|${result_value}")
+      continue
+    fi
+
+    if ! has_checks_block "${record_file}"; then
       unmatched_entries+=("${record_file}|${os_value}|${terminal_value}|${shell_value}|${frontend_value}|${result_value}")
       continue
     fi
