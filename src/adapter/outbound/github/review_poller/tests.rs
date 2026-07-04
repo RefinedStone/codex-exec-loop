@@ -734,6 +734,45 @@ fn git_credential_files_cover_home_fallback() {
 }
 
 #[test]
+fn windows_git_credential_candidates_stay_on_current_user_profile() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let users_root = unique_temp_dir("review-poller-windows-credential-candidates");
+    let alice_home = users_root.join("Alice");
+    let akra_home = users_root.join("akra");
+    fs::create_dir_all(&alice_home).expect("other Windows home should exist");
+    fs::create_dir_all(&akra_home).expect("current Windows home should exist");
+    fs::write(
+        alice_home.join(".git-credentials"),
+        "https://alice:alice-token-123@github.com\n",
+    )
+    .expect("other-user credential fixture should be written");
+    fs::write(
+        akra_home.join(".git-credentials"),
+        "https://akra:akra-token-123@github.com\n",
+    )
+    .expect("current-user credential fixture should be written");
+    let _env = EnvVarGuard::apply(&[
+        ("HOME", None),
+        ("USERPROFILE", None),
+        ("USER", Some("akra")),
+        ("USERNAME", None),
+    ]);
+
+    let candidates =
+        GithubReviewPollerAdapter::git_credential_file_candidates_for_root(&users_root)
+            .expect("candidate lookup should not fail");
+    assert_eq!(candidates, vec![akra_home.join(".git-credentials")]);
+
+    let token =
+        GithubReviewPollerAdapter::read_git_credential_file_token_from_candidates(candidates)
+            .expect("current-user credential lookup should not fail");
+    assert_eq!(token.as_deref(), Some("akra-token-123"));
+    let _ = fs::remove_dir_all(&users_root);
+}
+
+#[test]
 fn windows_home_resolution_covers_absent_permission_and_error_edges() {
     let empty_root = unique_temp_dir("review-poller-windows-users-empty");
     fs::create_dir_all(&empty_root).expect("empty users root should be created");

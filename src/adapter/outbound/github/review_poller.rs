@@ -362,12 +362,19 @@ impl GithubReviewPollerAdapter {
     }
 
     fn read_git_credential_file_token() -> Result<Option<String>> {
-        for candidate in Self::git_credential_file_candidates() {
-            let path = Path::new(&candidate);
+        Self::read_git_credential_file_token_from_candidates(
+            Self::git_credential_file_candidates_for_root(Path::new(WINDOWS_USERS_ROOT))?,
+        )
+    }
+
+    fn read_git_credential_file_token_from_candidates(
+        candidates: Vec<PathBuf>,
+    ) -> Result<Option<String>> {
+        for path in candidates {
             if !path.is_file() {
                 continue;
             }
-            let contents = fs::read_to_string(path)
+            let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             for line in contents.lines().map(str::trim) {
                 if !line.starts_with("https://") || !line.contains("@github.com") {
@@ -381,36 +388,34 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
-    fn git_credential_file_candidates() -> Vec<String> {
+    fn git_credential_file_candidates_for_root(users_root: &Path) -> Result<Vec<PathBuf>> {
         let mut candidates = Vec::new();
         if let Some(home) = std::env::var_os("HOME") {
-            candidates.push(
-                PathBuf::from(home)
-                    .join(".git-credentials")
-                    .display()
-                    .to_string(),
+            Self::push_unique_path(
+                &mut candidates,
+                PathBuf::from(home).join(".git-credentials"),
             );
         }
         if let Some(userprofile) = std::env::var_os("USERPROFILE") {
-            candidates.push(
-                PathBuf::from(userprofile)
-                    .join(".git-credentials")
-                    .display()
-                    .to_string(),
+            Self::push_unique_path(
+                &mut candidates,
+                PathBuf::from(userprofile).join(".git-credentials"),
             );
         }
-        if let Ok(entries) = fs::read_dir(WINDOWS_USERS_ROOT) {
-            let mut windows_candidates = entries
-                .flatten()
-                .map(|entry| entry.path().join(".git-credentials"))
-                .filter(|path| path.is_file())
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>();
-            windows_candidates.sort();
-            candidates.extend(windows_candidates);
+        if let Some(path) =
+            Self::resolve_windows_credential_path_for_current_user_in_root(users_root)?
+        {
+            Self::push_unique_path(&mut candidates, path);
         }
-        candidates
+        Ok(candidates)
     }
+
+    fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
         /*
         credential file은 이 adapter 밖의 git/helper script가 관리하므로 trailing newline이나 빈 줄이 있을 수 있다.
@@ -450,7 +455,13 @@ impl GithubReviewPollerAdapter {
         }))
     }
     fn resolve_windows_credential_path_for_current_user() -> Result<Option<PathBuf>> {
-        let users_root = Path::new(WINDOWS_USERS_ROOT);
+        Self::resolve_windows_credential_path_for_current_user_in_root(Path::new(
+            WINDOWS_USERS_ROOT,
+        ))
+    }
+    fn resolve_windows_credential_path_for_current_user_in_root(
+        users_root: &Path,
+    ) -> Result<Option<PathBuf>> {
         if !users_root.exists() {
             return Ok(None);
         }
@@ -465,10 +476,12 @@ impl GithubReviewPollerAdapter {
         Ok(Some(user_home.join(".git-credentials")))
     }
     fn current_user_name() -> Option<String> {
-        std::env::var("USER")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+        ["USER", "USERNAME"].into_iter().find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
     }
     fn resolve_current_user_windows_home(
         users_root: &Path,
