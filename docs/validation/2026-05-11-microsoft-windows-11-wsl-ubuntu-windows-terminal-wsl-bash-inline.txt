@@ -5,6 +5,7 @@ terminal: Windows Terminal
 shell: WSL bash
 frontend: inline
 term: xterm-256color
+capture_role: counted-row
 check_profile: prompt-input-delay-pty
 checks:
 - launch with detached PTY backend
