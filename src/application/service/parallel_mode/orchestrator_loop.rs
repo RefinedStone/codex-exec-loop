@@ -77,24 +77,30 @@ impl ParallelModeService {
         let readiness_snapshot = self.inspect_readiness(&workspace_directory, &planning_projection);
 
         let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
-            if let Some(enqueue_trigger) = request.enqueue_trigger {
+            let enqueue_error = if let Some(enqueue_trigger) = request.enqueue_trigger {
                 let runtime_event = parallel_runtime_event_for_dispatch_trigger(enqueue_trigger);
-                if let Err(error) = self.enqueue_dispatch_commands_for_event(
+                match self.enqueue_dispatch_commands_for_event(
                     &workspace_directory,
                     runtime_event,
                     &planning_projection,
                     Some(request.epoch_id),
                 ) {
-                    event_log::emit_lazy("parallel_dispatch_command_enqueue_failed", || {
-                        serde_json::json!({
-                            "trigger": enqueue_trigger.label(),
-                            "workspace": &workspace_directory,
-                            "epoch_id": request.epoch_id,
-                            "error": error,
-                        })
-                    });
+                    Ok(_) => None,
+                    Err(error) => {
+                        event_log::emit_lazy("parallel_dispatch_command_enqueue_failed", || {
+                            serde_json::json!({
+                                "trigger": enqueue_trigger.label(),
+                                "workspace": &workspace_directory,
+                                "epoch_id": request.epoch_id,
+                                "error": &error,
+                            })
+                        });
+                        Some(format!("dispatch command enqueue failed: {error}"))
+                    }
                 }
-            }
+            } else {
+                None
+            };
             let outcome = loop {
                 match self.claim_next_dispatch_command(&workspace_directory) {
                     Ok(Some(mut command)) => {
@@ -174,7 +180,9 @@ impl ParallelModeService {
                             request.epoch_id,
                         );
                         outcome.blocked_reason =
-                            Some("no pending durable dispatch command".to_string());
+                            Some(enqueue_error.unwrap_or_else(|| {
+                                "no pending durable dispatch command".to_string()
+                            }));
                         outcome.status_copy_input = outcome.status_detail();
                         break outcome;
                     }

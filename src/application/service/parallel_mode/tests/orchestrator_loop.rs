@@ -844,9 +844,12 @@ fn dispatch_tick_reports_enqueue_and_claim_failures_without_launching_workers() 
             event_sender,
         })
     });
-    assert_eq!(
-        enqueue_result.outcome.blocked_reason.as_deref(),
-        Some("no pending durable dispatch command")
+    assert!(
+        enqueue_result
+            .outcome
+            .blocked_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("dispatch command enqueue failed"))
     );
     assert!(
         event_receiver
