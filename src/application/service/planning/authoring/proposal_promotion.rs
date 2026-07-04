@@ -5,7 +5,9 @@ use chrono::{SecondsFormat, Utc};
 
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    load_consistent_planning_authority_snapshots,
 };
+
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -205,14 +207,13 @@ impl PlanningProposalPromotionService {
         workspace_record: &PlanningWorkspaceLoadRecord,
     ) -> Result<(DirectionCatalogDocument, TaskAuthorityDocument, i64)> {
         // 이 service가 mutate하는 문서는 task authority뿐이므로 그 revision이 write guard가 된다.
-        let snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)?
-            .ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
+        let (directions_snapshot, snapshot) = load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_dir,
+        )?;
+        let snapshot = snapshot.ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
         // direction authority는 task direction link 검증과 queue projection rebuild를 위해 읽는다.
-        let directions_snapshot = self
-            .planning_task_repository_port
-            .load_direction_authority_snapshot(workspace_dir)?
+        let directions_snapshot = directions_snapshot
             .ok_or_else(|| anyhow!("planning direction authority is unavailable"))?;
         // validation은 task document를 workspace file에서 읽을 때와 같은 JSON form으로 기대한다.
         let task_authority_json = serde_json::to_string(&snapshot.task_authority)?;

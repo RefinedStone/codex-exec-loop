@@ -12,7 +12,10 @@ use self::prompts::{
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityPort,
 };
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskRepositoryPort, load_consistent_planning_authority_snapshots,
+};
+
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
 };
@@ -631,40 +634,27 @@ impl PlanningWorkerOrchestrationService {
     ) -> PlanningWorkerAuthorityPromptContext {
         // prompt authority context는 read-only이고 best-effort다. 두 DB snapshot이 모두 있으면 worker는 정확한 accepted
         // authority와 queue projection을 받고, 아니면 명시적인 load status를 받는다.
-        match (
-            self.planning_task_repository_port
-                .load_direction_authority_snapshot(workspace_directory),
-            self.planning_task_repository_port
-                .load_task_authority_snapshot(workspace_directory),
+        match load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_directory,
         ) {
-            (Ok(Some(direction_snapshot)), Ok(Some(task_snapshot))) => {
-                PlanningWorkerAuthorityPromptContext {
-                    status_lines: vec![
-                        "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
-                        format!(
-                            "direction_revision={}",
-                            direction_snapshot.planning_revision
-                        ),
-                        format!("task_revision={}", task_snapshot.planning_revision),
-                    ],
-                    direction_authority_json: serde_json::to_string_pretty(
-                        &direction_snapshot.directions,
-                    )
+            Ok((Some(direction_snapshot), Some(task_snapshot))) => PlanningWorkerAuthorityPromptContext {
+                status_lines: vec![
+                    "source_of_truth=accepted DB direction authority, accepted DB task authority, and DB queue projection below".to_string(),
+                    format!("direction_revision={}", direction_snapshot.planning_revision),
+                    format!("task_revision={}", task_snapshot.planning_revision),
+                ],
+                direction_authority_json: serde_json::to_string_pretty(&direction_snapshot.directions)
                     .ok(),
-                    task_authority_json: serde_json::to_string_pretty(
-                        &task_snapshot.task_authority,
-                    )
+                task_authority_json: serde_json::to_string_pretty(&task_snapshot.task_authority)
                     .ok(),
-                    queue_projection_json: serde_json::to_string_pretty(
-                        &task_snapshot.queue_projection,
-                    )
+                queue_projection_json: serde_json::to_string_pretty(&task_snapshot.queue_projection)
                     .ok(),
-                }
-            }
-            (direction_result, task_result) => {
+            },
+            Ok((direction_snapshot, task_snapshot)) => {
                 // section을 생략하는 것보다 status-only context가 낫다. worker가 workspace file에서 authority를 추론하지 않게 알려 준다.
-                let direction_status = authority_load_status(direction_result);
-                let task_status = authority_load_status(task_result);
+                let direction_status = authority_load_status(Ok(direction_snapshot));
+                let task_status = authority_load_status(Ok(task_snapshot));
                 PlanningWorkerAuthorityPromptContext {
                     status_lines: vec![
                         "source_of_truth=accepted DB authority only".to_string(),
@@ -676,6 +666,16 @@ impl PlanningWorkerOrchestrationService {
                     queue_projection_json: None,
                 }
             }
+            Err(error) => PlanningWorkerAuthorityPromptContext {
+                status_lines: vec![
+                    "source_of_truth=accepted DB authority only".to_string(),
+                    format!("direction_authority=error: {error}"),
+                    format!("task_authority=error: {error}"),
+                ],
+                direction_authority_json: None,
+                task_authority_json: None,
+                queue_projection_json: None,
+            },
         }
     }
     fn build_rejected_command_result(
@@ -692,12 +692,10 @@ impl PlanningWorkerOrchestrationService {
         };
         // repair 품질은 현재 accepted authority에 의존하므로 이 load는 실패 가능성을 그대로 전파한다.
         // misleading empty context로 repair prompt를 만드는 것보다 명확하다.
-        let direction_snapshot = self
-            .planning_task_repository_port
-            .load_direction_authority_snapshot(workspace_directory)?;
-        let task_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_directory)?;
+        let (direction_snapshot, task_snapshot) = load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_directory,
+        )?;
         let direction_authority_json = direction_snapshot
             .as_ref()
             .map(|snapshot| serde_json::to_string_pretty(&snapshot.directions))

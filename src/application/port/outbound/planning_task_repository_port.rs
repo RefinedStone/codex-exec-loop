@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::domain::planning::{
     DirectionCatalogDocument, PriorityQueueProjection, TaskAuthorityDocument,
@@ -127,6 +127,45 @@ pub trait PlanningTaskRepositoryPort: Send + Sync {
 
     // workspace의 task authority snapshot을 제거한다. direction snapshot과 별도로 초기화할 수 있다.
     fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> Result<()>;
+}
+
+const CONSISTENT_AUTHORITY_SNAPSHOT_LOAD_ATTEMPTS: usize = 3;
+
+pub fn load_consistent_planning_authority_snapshots(
+    repository: &dyn PlanningTaskRepositoryPort,
+    workspace_dir: &str,
+) -> Result<(
+    Option<PlanningDirectionAuthoritySnapshot>,
+    Option<PlanningTaskAuthoritySnapshot>,
+)> {
+    let mut last_direction_snapshot = None;
+    let mut last_task_snapshot = None;
+
+    for _ in 0..CONSISTENT_AUTHORITY_SNAPSHOT_LOAD_ATTEMPTS {
+        let direction_snapshot = repository.load_direction_authority_snapshot(workspace_dir)?;
+        let task_snapshot = repository.load_task_authority_snapshot(workspace_dir)?;
+        let direction_revision = direction_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.planning_revision);
+        let task_revision = task_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.planning_revision);
+        if direction_revision == task_revision {
+            return Ok((direction_snapshot, task_snapshot));
+        }
+        last_direction_snapshot = direction_snapshot;
+        last_task_snapshot = task_snapshot;
+    }
+
+    let direction_revision = last_direction_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.planning_revision);
+    let task_revision = last_task_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.planning_revision);
+    Err(anyhow!(
+        "planning authority changed while loading direction/task snapshots (direction revision {direction_revision:?}, task revision {task_revision:?}); reload and retry"
+    ))
 }
 
 #[derive(Debug, Default)]

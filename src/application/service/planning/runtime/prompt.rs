@@ -9,7 +9,10 @@
  * DB ledger를 JSON으로 직렬화해 validator에 넣고, result-output 같은 operator instruction만
  * workspace 파일에서 읽는다.
  */
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskRepositoryPort, load_consistent_planning_authority_snapshots,
+};
+
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -103,22 +106,21 @@ impl PlanningPromptService {
         // runtime validation은 task-ledger 파일이 아니라 accepted DB authority를 사용한다.
         // 다만 validator의 입력 계약은 file-shaped workspace bundle이므로 여기서 adapter처럼
         // 두 authority plane을 한 구조로 묶는다.
-        let task_authority_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_dir)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "planning task authority is unavailable; initialize or repair the planning database"
-                )
-            })?;
-        let direction_authority_snapshot = self
-            .planning_task_repository_port
-            .load_direction_authority_snapshot(workspace_dir)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "planning direction authority is unavailable; initialize or repair the planning database"
-                )
-            })?;
+        let (direction_authority_snapshot, task_authority_snapshot) =
+            load_consistent_planning_authority_snapshots(
+                self.planning_task_repository_port.as_ref(),
+                workspace_dir,
+            )?;
+        let direction_authority_snapshot = direction_authority_snapshot.ok_or_else(|| {
+            anyhow::anyhow!(
+                "planning direction authority is unavailable; initialize or repair the planning database"
+            )
+        })?;
+        let task_authority_snapshot = task_authority_snapshot.ok_or_else(|| {
+            anyhow::anyhow!(
+                "planning task authority is unavailable; initialize or repair the planning database"
+            )
+        })?;
         let authority_task_authority_json =
             serde_json::to_string(&task_authority_snapshot.task_authority)
                 .context("failed to serialize task authority ledger")?;

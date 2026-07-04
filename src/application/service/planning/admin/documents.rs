@@ -6,8 +6,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use super::{PlanningAdminDirectionMutationRequest, PlanningAdminFacadeService};
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
-    PlanningTaskAuthorityCommitResult,
+    PlanningTaskAuthorityCommitResult, load_consistent_planning_authority_snapshots,
 };
+
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
@@ -58,18 +59,17 @@ impl PlanningAdminFacadeService {
         let result_output_markdown = workspace.result_output_markdown.ok_or_else(|| {
             anyhow!("default planning authority seed did not provide result output")
         })?;
-        let direction_authority_snapshot = self
-            .planning_task_repository_port
-            .load_direction_authority_snapshot(self.workspace_dir.as_str())?
-            .ok_or_else(|| {
-                anyhow!("default planning authority seed did not provide direction authority")
-            })?;
-        let task_authority_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(self.workspace_dir.as_str())?
-            .ok_or_else(|| {
-                anyhow!("default planning authority seed did not provide task authority")
-            })?;
+        let (direction_authority_snapshot, task_authority_snapshot) =
+            load_consistent_planning_authority_snapshots(
+                self.planning_task_repository_port.as_ref(),
+                self.workspace_dir.as_str(),
+            )?;
+        let direction_authority_snapshot = direction_authority_snapshot.ok_or_else(|| {
+            anyhow!("default planning authority seed did not provide direction authority")
+        })?;
+        let task_authority_snapshot = task_authority_snapshot.ok_or_else(|| {
+            anyhow!("default planning authority seed did not provide task authority")
+        })?;
         Ok(PlanningOperatorPlanningDocuments {
             directions: direction_authority_snapshot.directions,
             task_authority: task_authority_snapshot.task_authority,

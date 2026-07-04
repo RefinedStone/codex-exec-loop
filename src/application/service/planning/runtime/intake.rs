@@ -4,7 +4,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 
-use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskRepositoryPort, load_consistent_planning_authority_snapshots,
+};
+
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
 };
@@ -339,22 +342,21 @@ impl PlanningTaskIntakeService {
             RESULT_OUTPUT_FILE_PATH,
             workspace_record.result_output_markdown.as_deref(),
         )?;
-        let direction_snapshot = self
-            .planning_task_repository_port
-            .load_direction_authority_snapshot(&request.workspace_directory)?
-            .ok_or_else(|| {
-                anyhow!(
-                    "Planning direction authority is unavailable; initialize or repair the planning database before adding tasks."
-                )
-            })?;
-        let repository_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(&request.workspace_directory)?
-            .ok_or_else(|| {
-                anyhow!(
-                    "Planning task authority is unavailable; initialize or repair the planning database before adding tasks."
-                )
-            })?;
+        let (direction_snapshot, repository_snapshot) =
+            load_consistent_planning_authority_snapshots(
+                self.planning_task_repository_port.as_ref(),
+                &request.workspace_directory,
+            )?;
+        let direction_snapshot = direction_snapshot.ok_or_else(|| {
+            anyhow!(
+                "Planning direction authority is unavailable; initialize or repair the planning database before adding tasks."
+            )
+        })?;
+        let repository_snapshot = repository_snapshot.ok_or_else(|| {
+            anyhow!(
+                "Planning task authority is unavailable; initialize or repair the planning database before adding tasks."
+            )
+        })?;
         let task_authority_json = serde_json::to_string_pretty(&repository_snapshot.task_authority)
             .context("failed to serialize task authority ledger")?;
         let validation_result =

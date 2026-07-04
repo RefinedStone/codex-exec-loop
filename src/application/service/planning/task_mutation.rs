@@ -1,6 +1,8 @@
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    load_consistent_planning_authority_snapshots,
 };
+
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningActiveDirectionPolicy,
     PlanningTaskIdPolicy, PlanningTaskMutationPolicy, PlanningTaskReferencePolicy,
@@ -310,15 +312,15 @@ impl PlanningTaskMutationService {
     }
     fn load_context(&self, workspace_directory: &str) -> Result<PlanningTaskMutationContext> {
         // task validation은 direction id와 현재 planning format에 의존하므로 direction/task
-        // authority를 같은 context로 읽는다.
-        let direction_snapshot = self
-            .planning_task_repository_port
-            .load_direction_authority_snapshot(workspace_directory)?
+        // authority를 같은 revision으로 읽는다. 둘 중 하나라도 더 새 revision이면 reload/retry가 필요하다.
+        let (direction_snapshot, task_snapshot) = load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_directory,
+        )?;
+        let direction_snapshot = direction_snapshot
             .ok_or_else(|| anyhow!("planning direction authority is unavailable"))?;
-        let task_snapshot = self
-            .planning_task_repository_port
-            .load_task_authority_snapshot(workspace_directory)?
-            .ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
+        let task_snapshot =
+            task_snapshot.ok_or_else(|| anyhow!("planning task authority is unavailable"))?;
         if direction_snapshot.directions.version != PLANNING_FORMAT_VERSION {
             bail!(
                 "unsupported direction authority version {}; expected {}",
