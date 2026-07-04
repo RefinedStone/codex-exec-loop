@@ -391,10 +391,23 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
 
     // direction snapshot을 workspace 단위로 제거한다.
     fn clear_direction_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
-        noop_direction_authority_store()
+        let mut revision_store = noop_planning_revision_store()
             .lock()
-            .expect("noop direction authority store should not be poisoned")
-            .remove(workspace_dir);
+            .expect("noop planning revision store should not be poisoned");
+        let mut direction_store = noop_direction_authority_store()
+            .lock()
+            .expect("noop direction authority store should not be poisoned");
+        let mut task_store = noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned");
+        let removed = direction_store.remove(workspace_dir);
+        if removed.is_some() {
+            let planning_revision = revision_store.get(workspace_dir).copied().unwrap_or(0) + 1;
+            revision_store.insert(workspace_dir.to_string(), planning_revision);
+            if let Some(task_snapshot) = task_store.get_mut(workspace_dir) {
+                task_snapshot.planning_revision = planning_revision;
+            }
+        }
         Ok(())
     }
 
@@ -474,10 +487,23 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
 
     // task authority snapshot을 workspace 단위로 제거한다.
     fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
-        noop_task_authority_store()
+        let mut revision_store = noop_planning_revision_store()
             .lock()
-            .expect("noop task authority store should not be poisoned")
-            .remove(workspace_dir);
+            .expect("noop planning revision store should not be poisoned");
+        let mut direction_store = noop_direction_authority_store()
+            .lock()
+            .expect("noop direction authority store should not be poisoned");
+        let mut task_store = noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned");
+        let removed = task_store.remove(workspace_dir);
+        if removed.is_some() {
+            let planning_revision = revision_store.get(workspace_dir).copied().unwrap_or(0) + 1;
+            revision_store.insert(workspace_dir.to_string(), planning_revision);
+            if let Some(direction_snapshot) = direction_store.get_mut(workspace_dir) {
+                direction_snapshot.planning_revision = planning_revision;
+            }
+        }
         Ok(())
     }
 }
