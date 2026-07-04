@@ -27,7 +27,7 @@ terminal checklist.
 ## Current Status
 
 Current checked-in validation coverage is not matrix-complete yet.
-Treat the plain summary output as a visibility report, not a release gate, until the missing required rows are recorded.
+Treat the plain summary output as a visibility report, not a release gate, until all required rows pass.
 
 ### `terminal-baseline` snapshot
 
