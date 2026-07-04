@@ -1409,7 +1409,6 @@ fn editor_template_uses_shared_encoded_mutation_paths() {
         csrf_token: "csrf".to_string(),
         notice: None,
         editor_surface_token: Some("akra"),
-        return_path: "/admin/akra/directions".to_string(),
         action_paths: action_paths.clone(),
         session: PlanningAdminSessionView {
             kind: PlanningAdminDraftKind::FullPlanning,
@@ -1417,7 +1416,7 @@ fn editor_template_uses_shared_encoded_mutation_paths() {
             draft_name: draft_name.to_string(),
             draft_directory: "/workspace/drafts/synthetic".to_string(),
             editor_heading: "Full Planning Draft".to_string(),
-            return_path: "/admin".to_string(),
+            return_path: "/admin/akra/directions".to_string(),
             files: vec![PlanningAdminDraftFileView {
                 key: PlanningAdminFileKey::ResultOutput,
                 label: "Result Output".to_string(),
