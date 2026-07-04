@@ -706,6 +706,7 @@ fn pending_dispatch_wake_skips_stale_epoch_command_and_surfaces_current_one() {
         ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
     );
     assert_eq!(wake.epoch_id, 224);
+    assert_eq!(wake.enqueue_trigger, None);
 
     let projections = authority
         .load_runtime_projections(&workspace_dir)
@@ -713,11 +714,51 @@ fn pending_dispatch_wake_skips_stale_epoch_command_and_surfaces_current_one() {
     assert_eq!(projections.dispatch_commands.len(), 2);
     assert_eq!(
         projections.dispatch_commands[0].state,
-        ParallelModeDispatchCommandState::Canceled
+        ParallelModeDispatchCommandState::Pending
     );
     assert_eq!(
         projections.dispatch_commands[1].state,
         ParallelModeDispatchCommandState::Pending
+    );
+}
+
+#[test]
+fn pending_dispatch_wake_returns_recovery_wake_for_stale_epoch_only_command() {
+    let repo = TempGitRepo::new("orchestrator-stale-epoch-recovery-wake");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    authority
+        .enqueue_runtime_dispatch_command(
+            &workspace_dir,
+            &ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+                ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                Some("stale-head-77-only".to_string()),
+                Some(77),
+                "2026-05-12T00:00:00Z",
+            ),
+        )
+        .expect("stale durable dispatch command should enqueue");
+
+    let wake = service
+        .pending_dispatch_wake(&workspace_dir, 224)
+        .expect("stale durable dispatch command should be inspectable")
+        .expect("stale durable dispatch command should trigger a recovery wake");
+    assert_eq!(
+        wake.trigger,
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion
+    );
+    assert_eq!(wake.epoch_id, 224);
+    assert_eq!(
+        wake.enqueue_trigger,
+        Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion)
     );
 }
 
