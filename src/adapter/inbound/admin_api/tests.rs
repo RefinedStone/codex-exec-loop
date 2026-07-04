@@ -2,11 +2,16 @@ use super::helpers::{
     encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
     notice_location, render_fragment, render_html, verify_form_csrf, verify_header_csrf,
 };
-use super::pages::{extract_file_updates, nav_for_kind};
+use super::pages::{draft_mutation_path, extract_file_updates, nav_for_kind};
+use super::views::{EditorActionPaths, EditorTemplate};
 use super::{build_admin_state, build_router, parse_args, parse_reset_target};
-use crate::application::service::planning::{
-    PlanningAdminDraftKind, PlanningAdminFileKey, PlanningResetTarget,
+use crate::application::service::planning::admin::{
+    PlanningAdminDraftFileView, PlanningAdminValidationView,
 };
+use crate::application::service::planning::{
+    PlanningAdminDraftKind, PlanningAdminFileKey, PlanningAdminSessionView, PlanningResetTarget,
+};
+use askama::Template;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
@@ -1327,11 +1332,16 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
         .expect("editor page request should be served");
     assert_eq!(loaded.status(), StatusCode::OK);
     let loaded_body = text_body(loaded).await;
+    let save_uri = format!("{editor_path}/save");
+    let validate_uri = format!("{editor_path}/validate");
+    let promote_uri = format!("{editor_path}/promote");
     assert!(loaded_body.contains("file_result_output"));
-    assert!(loaded_body.contains("action=\"/admin/drafts/"));
+    assert!(loaded_body.contains(&format!("action=\"{save_uri}\"")));
+    assert!(loaded_body.contains(&format!("formaction=\"{validate_uri}\"")));
+    assert!(loaded_body.contains(&format!("hx-post=\"{validate_uri}\"")));
+    assert!(loaded_body.contains(&format!("formaction=\"{promote_uri}\"")));
 
     let draft_body = "# Planning\n\n## Result\n\nHTML draft round trip\n";
-    let save_uri = format!("{editor_path}/save");
     let saved = router
         .clone()
         .oneshot(html_form_request(
@@ -1349,7 +1359,6 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
     assert_eq!(saved.status(), StatusCode::OK);
     assert!(text_body(saved).await.contains("draft saved"));
 
-    let validate_uri = format!("{editor_path}/validate");
     let validated = router
         .clone()
         .oneshot(html_form_request(
@@ -1367,7 +1376,6 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
     assert_eq!(validated.status(), StatusCode::OK);
     assert!(text_body(validated).await.contains("draft validated"));
 
-    let promote_uri = format!("{editor_path}/promote");
     let promoted = router
         .clone()
         .oneshot(html_form_request(
@@ -1384,6 +1392,53 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
         .expect("draft promote should be served");
     assert_eq!(promoted.status(), StatusCode::OK);
     assert!(text_body(promoted).await.contains("file_result_output"));
+}
+
+#[test]
+fn editor_template_uses_shared_encoded_mutation_paths() {
+    let draft_name = "draft name/with?encoding#needed";
+    let action_paths = EditorActionPaths {
+        save: draft_mutation_path(draft_name, "save"),
+        validate: draft_mutation_path(draft_name, "validate"),
+        promote: draft_mutation_path(draft_name, "promote"),
+    };
+    let rendered = EditorTemplate {
+        page_title: "Editor".to_string(),
+        current_nav: nav_for_kind(PlanningAdminDraftKind::FullPlanning),
+        workspace_dir: "/workspace".to_string(),
+        csrf_token: "csrf".to_string(),
+        notice: None,
+        action_paths: action_paths.clone(),
+        session: PlanningAdminSessionView {
+            kind: PlanningAdminDraftKind::FullPlanning,
+            direction_id: None,
+            draft_name: draft_name.to_string(),
+            draft_directory: "/workspace/drafts/synthetic".to_string(),
+            editor_heading: "Full Planning Draft".to_string(),
+            return_path: "/admin".to_string(),
+            files: vec![PlanningAdminDraftFileView {
+                key: PlanningAdminFileKey::ResultOutput,
+                label: "Result Output".to_string(),
+                active_path: "planning/result_output.md".to_string(),
+                editor_language: "markdown".to_string(),
+                body: "# Synthetic".to_string(),
+            }],
+            validation: PlanningAdminValidationView {
+                is_valid: true,
+                error_count: 0,
+                warning_count: 0,
+                issues: Vec::new(),
+            },
+            queue_preview: None,
+        },
+    }
+    .render()
+    .expect("editor template should render");
+    assert!(rendered.contains(&format!("action=\"{}\"", action_paths.save)));
+    assert!(rendered.contains(&format!("formaction=\"{}\"", action_paths.validate)));
+    assert!(rendered.contains(&format!("hx-post=\"{}\"", action_paths.validate)));
+    assert!(rendered.contains(&format!("formaction=\"{}\"", action_paths.promote)));
+    assert!(!rendered.contains(&format!("action=\"/admin/drafts/{draft_name}/save\"")));
 }
 
 #[tokio::test]
@@ -1580,7 +1635,10 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(BASE_TEMPLATE.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)"));
     assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
     assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
-    assert!(BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
+    assert!(BASE_TEMPLATE.contains("AKRA graphic admin shell"));
+    assert!(BASE_TEMPLATE.contains("실시간 상태와 빌드 정보는 각 화면 본문에서 확인"));
+    assert!(!BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
+    assert!(!BASE_TEMPLATE.contains("모든 시스템 정상"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_POLL_MS"));

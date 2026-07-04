@@ -274,6 +274,13 @@ pub(super) struct AppServerPromptsTemplate {
     pub(super) prompt_log: AppServerPromptLogView,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct EditorActionPaths {
+    pub(super) save: String,
+    pub(super) validate: String,
+    pub(super) promote: String,
+}
+
 // editor는 session-scoped 화면이다. draft file, validation, queue preview, active file state가 하나의 read model로 이동한다.
 #[derive(Template)]
 #[template(path = "admin/editor.html")]
@@ -283,6 +290,8 @@ pub(super) struct EditorTemplate {
     pub(super) workspace_dir: String,
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
+    // mutation path는 session title/path copy와 달리 adapter가 encode한 route string을 넘겨 template이 raw draft name을 다시 조립하지 않게 한다.
+    pub(super) action_paths: EditorActionPaths,
     // session view를 통째로 넘겨 template이 active file, validation, queue preview를 얻기 위해 service를 다시 부르지 않게 한다.
     pub(super) session: PlanningAdminSessionView,
 }

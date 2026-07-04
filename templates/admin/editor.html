@@ -4,7 +4,7 @@
   <article class="card span-8">
     <h2>{{ session.editor_heading }}</h2>
     <p class="mono">{{ session.draft_name }}</p>
-    <form method="post" action="/admin/drafts/{{ session.draft_name }}/save" class="stack">
+    <form method="post" action="{{ action_paths.save }}" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="kind" value="{{ session.kind }}">
       {% if let Some(direction_id) = session.direction_id %}
@@ -23,9 +23,9 @@
         <button type="submit">Save Draft</button>
         <button
           type="submit"
-          formaction="/admin/drafts/{{ session.draft_name }}/validate"
+          formaction="{{ action_paths.validate }}"
           class="secondary"
-          hx-post="/admin/drafts/{{ session.draft_name }}/validate"
+          hx-post="{{ action_paths.validate }}"
           hx-target="#draft-status-panel"
           hx-swap="outerHTML"
           hx-include="closest form"
@@ -34,7 +34,7 @@
         </button>
         <button
           type="submit"
-          formaction="/admin/drafts/{{ session.draft_name }}/promote"
+          formaction="{{ action_paths.promote }}"
           class="warn"
           data-confirm="Promote this draft into active planning files?"
         >
