@@ -66,6 +66,7 @@ pub(super) struct DirectionsTemplate {
     pub(super) notice: Option<String>,
     pub(super) direction_upsert_path: &'static str,
     pub(super) direction_delete_path: &'static str,
+    pub(super) draft_surface_token: Option<&'static str>,
     // direction edit 중에도 validation/runtime 영향이 보이도록 editing table 옆에 overview를 유지한다.
     pub(super) overview: PlanningAdminOverview,
     // management는 page-wide read model이다. direction form도 task/direction cross reference를 같은 projection에서 가져와야 한다.
@@ -290,6 +291,8 @@ pub(super) struct EditorTemplate {
     pub(super) workspace_dir: String,
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
+    pub(super) editor_surface_token: Option<&'static str>,
+    pub(super) return_path: String,
     // mutation path는 session title/path copy와 달리 adapter가 encode한 route string을 넘겨 template이 raw draft name을 다시 조립하지 않게 한다.
     pub(super) action_paths: EditorActionPaths,
     // session view를 통째로 넘겨 template이 active file, validation, queue preview를 얻기 위해 service를 다시 부르지 않게 한다.

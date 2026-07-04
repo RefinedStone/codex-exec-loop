@@ -27,6 +27,8 @@ pub(super) struct EditorQuery {
     pub(super) direction_id: Option<String>,
     #[serde(default)]
     pub(super) notice: Option<String>,
+    #[serde(default)]
+    pub(super) surface: Option<String>,
 }
 
 /*
@@ -42,6 +44,8 @@ pub(super) struct CreateDraftForm {
     pub(super) kind: PlanningAdminDraftKind,
     #[serde(default)]
     pub(super) direction_id: Option<String>,
+    #[serde(default)]
+    pub(super) surface: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -50,6 +54,8 @@ pub(super) struct DraftMutationForm {
     pub(super) kind: PlanningAdminDraftKind,
     #[serde(default)]
     pub(super) direction_id: Option<String>,
+    #[serde(default)]
+    pub(super) surface: Option<String>,
     /*
      * editor는 file_result_output 같은 dynamic field name으로 editable file을 렌더링한다.
      * Axum은 그 이름들을 fixed struct로 deserialize할 수 없으므로 unknown field를 flatten해 보관한다.

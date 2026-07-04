@@ -1408,6 +1408,8 @@ fn editor_template_uses_shared_encoded_mutation_paths() {
         workspace_dir: "/workspace".to_string(),
         csrf_token: "csrf".to_string(),
         notice: None,
+        editor_surface_token: Some("akra"),
+        return_path: "/admin/akra/directions".to_string(),
         action_paths: action_paths.clone(),
         session: PlanningAdminSessionView {
             kind: PlanningAdminDraftKind::FullPlanning,
@@ -1438,7 +1440,83 @@ fn editor_template_uses_shared_encoded_mutation_paths() {
     assert!(rendered.contains(&format!("formaction=\"{}\"", action_paths.validate)));
     assert!(rendered.contains(&format!("hx-post=\"{}\"", action_paths.validate)));
     assert!(rendered.contains(&format!("formaction=\"{}\"", action_paths.promote)));
+    assert!(rendered.contains(r#"name="surface" value="akra""#));
+    assert!(rendered.contains(r#"href="/admin/akra/directions""#));
     assert!(!rendered.contains(&format!("action=\"/admin/drafts/{draft_name}/save\"")));
+}
+
+#[tokio::test]
+async fn akra_html_draft_routes_preserve_surface_continuity() {
+    let workspace = TempAdminWorkspace::new("akra-html-drafts");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
+
+    let created = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/drafts",
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "queue_idle_prompt"),
+                ("surface", "akra"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("akra draft create should be served");
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    let editor_location = created
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .expect("akra draft create should redirect to editor")
+        .to_string();
+    assert!(editor_location.contains("surface=akra"));
+    let editor_path = editor_location
+        .split('?')
+        .next()
+        .expect("editor location should include path");
+
+    let loaded = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(editor_location.as_str())
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("AKRA editor page request should build"),
+        )
+        .await
+        .expect("AKRA editor page request should be served");
+    assert_eq!(loaded.status(), StatusCode::OK);
+    let loaded_body = text_body(loaded).await;
+    let validate_uri = format!("{editor_path}/validate");
+    assert!(loaded_body.contains(r#"name="surface" value="akra""#));
+    assert!(loaded_body.contains(r#"href="/admin/akra/directions""#));
+    assert!(loaded_body.contains(&format!("formaction=\"{validate_uri}\"")));
+    assert!(loaded_body.contains(&format!("hx-post=\"{validate_uri}\"")));
+
+    let validated = router
+        .clone()
+        .oneshot(html_form_request(
+            &validate_uri,
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "queue_idle_prompt"),
+                ("surface", "akra"),
+                ("file_queue_idle_prompt", "Queue prompt draft"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("AKRA draft validate should be served");
+    assert_eq!(validated.status(), StatusCode::OK);
+    let validated_body = text_body(validated).await;
+    assert!(validated_body.contains(r#"href="/admin/akra/directions""#));
+    assert!(validated_body.contains(r#"name="surface" value="akra""#));
 }
 
 #[tokio::test]

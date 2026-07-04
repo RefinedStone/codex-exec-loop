@@ -100,6 +100,10 @@
     <form method="post" action="/admin/drafts">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="kind" value="queue_idle_prompt">
+      {% if let Some(surface) = draft_surface_token %}
+      <input type="hidden" name="surface" value="{{ surface }}">
+      {% endif %}
+
       <button type="submit" class="secondary">Queue prompt</button>
     </form>
     <form method="post" action="/admin/files/export">
@@ -227,6 +231,9 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="kind" value="direction_detail">
             <input type="hidden" name="direction_id" value="{{ direction.id }}">
+            {% if let Some(surface) = draft_surface_token %}
+            <input type="hidden" name="surface" value="{{ surface }}">
+            {% endif %}
             <button type="submit" class="secondary">Edit detail doc</button>
           </form>
           <form method="post" action="{{ direction_delete_path }}">

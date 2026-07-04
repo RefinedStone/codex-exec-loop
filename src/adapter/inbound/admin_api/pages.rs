@@ -48,6 +48,20 @@ enum PlanningAdminSurface {
 }
 
 impl PlanningAdminSurface {
+    fn from_token(token: Option<&str>) -> Self {
+        match token {
+            Some("akra") => Self::Akra,
+            _ => Self::Default,
+        }
+    }
+
+    fn token(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Akra => Some("akra"),
+        }
+    }
+
     fn directions_title(self) -> &'static str {
         match self {
             Self::Default => "Directions",
@@ -115,6 +129,24 @@ impl PlanningAdminSurface {
         match self {
             Self::Default => "/admin/tasks/delete",
             Self::Akra => "/admin/akra/tasks/delete",
+        }
+    }
+
+    fn editor_nav(self, kind: PlanningAdminDraftKind) -> &'static str {
+        match (self, kind) {
+            (Self::Akra, PlanningAdminDraftKind::FullPlanning) => "akra_dashboard",
+            (Self::Akra, PlanningAdminDraftKind::QueueIdlePrompt)
+            | (Self::Akra, PlanningAdminDraftKind::DirectionDetail) => "akra_directions",
+            (Self::Default, _) => nav_for_kind(kind),
+        }
+    }
+
+    fn editor_return_path(self, kind: PlanningAdminDraftKind) -> &'static str {
+        match (self, kind) {
+            (Self::Akra, PlanningAdminDraftKind::FullPlanning) => "/admin/akra",
+            (Self::Akra, PlanningAdminDraftKind::QueueIdlePrompt)
+            | (Self::Akra, PlanningAdminDraftKind::DirectionDetail) => self.directions_path(),
+            (Self::Default, _) => kind.return_path(),
         }
     }
 }
@@ -259,6 +291,7 @@ async fn render_directions_page(
             notice: query.get("notice").cloned(),
             direction_upsert_path: surface.direction_upsert_path(),
             direction_delete_path: surface.direction_delete_path(),
+            draft_surface_token: surface.token(),
             overview,
             management,
         },
@@ -581,6 +614,7 @@ pub(super) async fn editor_page(
      */
     verify_draft_name_path(&draft_name)?;
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    let surface = PlanningAdminSurface::from_token(query.surface.as_deref());
     let session = state
         .facade
         .load_draft_session(PlanningAdminDraftLoadRequest {
@@ -594,6 +628,7 @@ pub(super) async fn editor_page(
         state.facade.workspace_dir(),
         csrf_token,
         query.notice,
+        surface,
         session,
     )
 }
@@ -609,11 +644,13 @@ pub(super) async fn create_draft_page(
      * 이후 save/validate/promote는 같은 path/query identity를 다시 읽어 같은 planning branch의 session을 갱신한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
+    let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
     let session = state
         .facade
         .create_draft_session(form.kind, form.direction_id.as_deref())
         .map_err(internal_server_error)?;
     Ok(Redirect::to(&draft_editor_location(
+        surface,
         &session.draft_name,
         session.kind,
         session.direction_id.as_deref(),
@@ -638,6 +675,7 @@ pub(super) async fn save_draft_page(
     verify_form_csrf(&jar, &form.csrf_token)?;
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
+    let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
     let (_, session) = state
         .facade
         .save_draft(page_mutation_request(draft_name, form))
@@ -653,6 +691,7 @@ pub(super) async fn save_draft_page(
         state.facade.workspace_dir(),
         csrf_token,
         Some("draft saved".to_string()),
+        surface,
         session,
     )
 }
@@ -672,6 +711,7 @@ pub(super) async fn validate_draft_page(
     verify_form_csrf(&jar, &form.csrf_token)?;
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
+    let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
     let (_, session) = state
         .facade
         .save_draft(page_mutation_request(draft_name, form))
@@ -687,6 +727,7 @@ pub(super) async fn validate_draft_page(
         state.facade.workspace_dir(),
         csrf_token,
         Some("draft validated".to_string()),
+        surface,
         session,
     )
 }
@@ -705,6 +746,7 @@ pub(super) async fn promote_draft_page(
     verify_form_csrf(&jar, &form.csrf_token)?;
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
+    let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
     let (result, session) = state
         .facade
         .promote_draft(page_mutation_request(draft_name, form))
@@ -722,6 +764,7 @@ pub(super) async fn promote_draft_page(
         state.facade.workspace_dir(),
         csrf_token,
         notice,
+        surface,
         session,
     )
 }
@@ -797,6 +840,7 @@ pub(super) fn draft_mutation_path(draft_name: &str, action: &str) -> String {
 }
 
 fn draft_editor_location(
+    surface: PlanningAdminSurface,
     draft_name: &str,
     kind: PlanningAdminDraftKind,
     direction_id: Option<&str>,
@@ -816,6 +860,10 @@ fn draft_editor_location(
         location.push_str("&direction_id=");
         location.push_str(&encode_uri_component(direction_id));
     }
+    if let Some(surface_token) = surface.token() {
+        location.push_str("&surface=");
+        location.push_str(surface_token);
+    }
     if let Some(notice) = notice {
         location.push_str("&notice=");
         location.push_str(&encode_uri_component(notice));
@@ -828,6 +876,7 @@ fn render_editor_page(
     workspace_dir: &str,
     csrf_token: String,
     notice: Option<String>,
+    surface: PlanningAdminSurface,
     session: PlanningAdminSessionView,
 ) -> std::result::Result<Response, StatusCode> {
     // 모든 draft action이 CSRF, nav, workspace context를 같은 방식으로 보존하도록 editor template assembly를 중앙화한다.
@@ -840,10 +889,12 @@ fn render_editor_page(
         jar,
         EditorTemplate {
             page_title: session.editor_heading.clone(),
-            current_nav: nav_for_kind(session.kind),
+            current_nav: surface.editor_nav(session.kind),
             workspace_dir: workspace_dir.to_string(),
             csrf_token,
             notice,
+            editor_surface_token: surface.token(),
+            return_path: surface.editor_return_path(session.kind).to_string(),
             action_paths,
             session,
         },
