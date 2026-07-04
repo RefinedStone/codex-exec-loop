@@ -61,21 +61,32 @@ while (($# > 0)); do
   esac
 done
 
+auth_status_only=false
+if [[ "${1-}:${2-}" == "auth:status" ]]; then
+  auth_status_only=true
+fi
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "${repo_root}" ]]; then
-  usage_error "not inside a git repository"
+  if [[ "${auth_status_only}" == "true" ]]; then
+    repo_root="${PWD}"
+    git_dir=""
+    git_common_dir=""
+  else
+    usage_error "not inside a git repository"
+  fi
+else
+  git_dir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  if [[ -z "${git_dir}" ]]; then
+    usage_error "failed to resolve git dir"
+  fi
+  git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 fi
 
-git_dir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
-if [[ -z "${git_dir}" ]]; then
-  usage_error "failed to resolve git dir"
-fi
-
-git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-
-if [[ -z "${desired_login}" ]]; then
+if [[ -z "${desired_login}" && "${auth_status_only}" != "true" ]]; then
   desired_login="$(git -C "${repo_root}" config --get akra.githubLogin 2>/dev/null || true)"
 fi
+
 
 parse_repo_full_name() {
   local origin_url
@@ -342,26 +353,42 @@ token_from_named_credential_files() {
   local line
   local token
 
-  for candidate in \
-    "${git_dir}/akra-github-credentials" \
-    "${git_dir}/github-credentials" \
-    "${git_dir}/refinedstone-credentials" \
-    "${git_common_dir}/akra-github-credentials" \
-    "${git_common_dir}/github-credentials" \
-    "${git_common_dir}/refinedstone-credentials"; do
-    [[ -f "${candidate}" ]] || continue
-    line="$(read_first_non_empty_line "${candidate}")"
-    [[ -n "${line}" ]] || continue
-    if token="$(parse_token_from_credential_url "${line}" 2>/dev/null)" &&
-      credential_url_matches_desired_login "${line}"; then
-      printf '%s\n' "${token}"
+for candidate in \
+  "${git_dir}/akra-github-credentials" \
+  "${git_dir}/github-credentials" \
+  "${git_dir}/refinedstone-credentials" \
+  "${git_common_dir}/akra-github-credentials" \
+  "${git_common_dir}/github-credentials" \
+  "${git_common_dir}/refinedstone-credentials"; do
+  [[ -n "${git_dir}" && -n "${git_common_dir}" ]] || break
+  [[ -f "${candidate}" ]] || continue
+  line="$(read_first_non_empty_line "${candidate}")"
+  [[ -n "${line}" ]] || continue
+  if token="$(parse_token_from_credential_url "${line}" 2>/dev/null)" &&
+    credential_url_matches_desired_login "${line}"; then
+    printf '%s\n' "${token}"
+    return 0
+  fi
+  if [[ "${line}" != https://* ]] && token_matches_desired_login "${line}"; then
+    printf '%s\n' "${line}"
+    return 0
+  fi
+done
+return 1
+}
+
+windows_current_user_credential_file() {
+  local user_name
+  local dir
+  user_name="${USER:-${USERNAME:-}}"
+  [[ -n "${user_name}" ]] || return 1
+  while IFS= read -r dir; do
+    [[ "${dir##*/}" != "" ]] || continue
+    if [[ "${dir##*/}" == "${user_name}" || "${dir##*/}" == "${user_name^}" || "${dir##*/,,}" == "${user_name,,}" ]]; then
+      printf '%s\n' "${dir}/.git-credentials"
       return 0
     fi
-    if [[ "${line}" != https://* ]] && token_matches_desired_login "${line}"; then
-      printf '%s\n' "${line}"
-      return 0
-    fi
-  done
+  done < <(find /mnt/c/Users -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
   return 1
 }
 
@@ -372,7 +399,7 @@ credential_files_to_scan() {
   if [[ -n "${USERPROFILE:-}" ]]; then
     printf '%s\n' "${USERPROFILE}/.git-credentials"
   fi
-  find /mnt/c/Users -maxdepth 2 -type f -name '.git-credentials' 2>/dev/null | sort || true
+  windows_current_user_credential_file || true
 }
 
 token_from_git_credential_files() {
