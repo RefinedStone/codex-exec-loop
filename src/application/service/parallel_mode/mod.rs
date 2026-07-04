@@ -616,19 +616,24 @@ impl ParallelModeService {
         workspace_dir: &str,
         epoch_id: u64,
     ) -> Result<Option<ParallelModeControlPlaneWake>, String> {
-        let snapshot = self
-            .planning_authority
-            .load_runtime_projections(workspace_dir)
-            .map_err(|error| error.to_string())?;
-        let Some(command) = Self::next_claimable_dispatch_command(&snapshot) else {
-            return Ok(None);
-        };
-        Ok(Some(ParallelModeControlPlaneWake::new(
-            workspace_dir,
-            command.trigger,
-            command.epoch_id.unwrap_or(epoch_id),
-            None,
-        )))
+        loop {
+            let snapshot = self
+                .planning_authority
+                .load_runtime_projections(workspace_dir)
+                .map_err(|error| error.to_string())?;
+            let Some(command) = Self::next_claimable_dispatch_command(&snapshot) else {
+                return Ok(None);
+            };
+            if Self::dispatch_command_targets_epoch(&command, epoch_id) {
+                return Ok(Some(ParallelModeControlPlaneWake::new(
+                    workspace_dir,
+                    command.trigger,
+                    command.epoch_id.unwrap_or(epoch_id),
+                    None,
+                )));
+            }
+            self.retire_stale_epoch_dispatch_command(workspace_dir, command, epoch_id)?;
+        }
     }
 
     fn next_claimable_dispatch_command(
@@ -653,6 +658,31 @@ impl ParallelModeService {
                     .then_with(|| left.command_id.cmp(&right.command_id))
             })
             .cloned()
+    }
+
+    fn dispatch_command_targets_epoch(
+        command: &ParallelModeDispatchCommandSnapshot,
+        epoch_id: u64,
+    ) -> bool {
+        command
+            .epoch_id
+            .is_none_or(|command_epoch_id| command_epoch_id == epoch_id)
+    }
+
+    fn retire_stale_epoch_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        mut command: ParallelModeDispatchCommandSnapshot,
+        epoch_id: u64,
+    ) -> Result<(), String> {
+        let command_epoch_id = command.epoch_id.unwrap_or_default();
+        command.mark_canceled(
+            format!(
+                "stale durable dispatch command belongs to epoch {command_epoch_id} while current epoch is {epoch_id}"
+            ),
+            current_timestamp(),
+        );
+        self.update_dispatch_command(workspace_dir, &command)
     }
 
     pub fn update_dispatch_command(

@@ -95,51 +95,79 @@ impl ParallelModeService {
                     });
                 }
             }
-            let outcome = match self.claim_next_dispatch_command(&workspace_directory) {
-                Ok(Some(mut command)) => {
-                    let command_epoch_id = command.epoch_id.unwrap_or(request.epoch_id);
-                    let outcome = dispatch_parallel_queue_pool(
-                        self,
-                        ParallelModeDispatchExecutionContext {
-                            workspace_directory: &workspace_directory,
-                            planning_projection: &planning_projection,
-                            worker_port: request.worker_port,
-                            turn_service: request.turn_service,
-                            planning: request.planning,
-                            event_sender: request.event_sender.clone(),
-                            trigger: command.trigger,
-                            epoch_id: command_epoch_id,
-                        },
-                    );
-                    persist_dispatch_command_outcome(
-                        self,
-                        &workspace_directory,
-                        &mut command,
-                        &outcome,
-                    );
-                    outcome
-                }
-                Ok(None) => {
-                    let mut outcome = ParallelModeDispatchOutcome::new(
-                        request.trigger,
-                        workspace_directory.clone(),
-                        request.epoch_id,
-                    );
-                    outcome.blocked_reason =
-                        Some("no pending durable dispatch command".to_string());
-                    outcome.status_copy_input = outcome.status_detail();
-                    outcome
-                }
-                Err(error) => {
-                    let mut outcome = ParallelModeDispatchOutcome::new(
-                        request.trigger,
-                        workspace_directory.clone(),
-                        request.epoch_id,
-                    );
-                    outcome.blocked_reason =
-                        Some(format!("dispatch command claim failed: {error}"));
-                    outcome.status_copy_input = outcome.status_detail();
-                    outcome
+            let outcome = loop {
+                match self.claim_next_dispatch_command(&workspace_directory) {
+                    Ok(Some(mut command)) => {
+                        if let Some(command_epoch_id) = command.epoch_id
+                            && command_epoch_id != request.epoch_id
+                        {
+                            command.mark_canceled(
+                                format!(
+                                    "stale durable dispatch command belongs to epoch {command_epoch_id} while current epoch is {}",
+                                    request.epoch_id
+                                ),
+                                Utc::now().to_rfc3339(),
+                            );
+                            if let Err(error) =
+                                self.update_dispatch_command(&workspace_directory, &command)
+                            {
+                                let mut outcome = ParallelModeDispatchOutcome::new(
+                                    request.trigger,
+                                    workspace_directory.clone(),
+                                    request.epoch_id,
+                                );
+                                outcome.blocked_reason = Some(format!(
+                                    "stale dispatch command retirement failed: {error}"
+                                ));
+                                outcome.status_copy_input = outcome.status_detail();
+                                break outcome;
+                            }
+                            continue;
+                        }
+                        let command_epoch_id = command.epoch_id.unwrap_or(request.epoch_id);
+                        let outcome = dispatch_parallel_queue_pool(
+                            self,
+                            ParallelModeDispatchExecutionContext {
+                                workspace_directory: &workspace_directory,
+                                planning_projection: &planning_projection,
+                                worker_port: request.worker_port,
+                                turn_service: request.turn_service,
+                                planning: request.planning,
+                                event_sender: request.event_sender.clone(),
+                                trigger: command.trigger,
+                                epoch_id: command_epoch_id,
+                            },
+                        );
+                        persist_dispatch_command_outcome(
+                            self,
+                            &workspace_directory,
+                            &mut command,
+                            &outcome,
+                        );
+                        break outcome;
+                    }
+                    Ok(None) => {
+                        let mut outcome = ParallelModeDispatchOutcome::new(
+                            request.trigger,
+                            workspace_directory.clone(),
+                            request.epoch_id,
+                        );
+                        outcome.blocked_reason =
+                            Some("no pending durable dispatch command".to_string());
+                        outcome.status_copy_input = outcome.status_detail();
+                        break outcome;
+                    }
+                    Err(error) => {
+                        let mut outcome = ParallelModeDispatchOutcome::new(
+                            request.trigger,
+                            workspace_directory.clone(),
+                            request.epoch_id,
+                        );
+                        outcome.blocked_reason =
+                            Some(format!("dispatch command claim failed: {error}"));
+                        outcome.status_copy_input = outcome.status_detail();
+                        break outcome;
+                    }
                 }
             };
             let supervisor_snapshot = self.build_supervisor_snapshot(
