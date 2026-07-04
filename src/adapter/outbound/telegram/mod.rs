@@ -55,6 +55,8 @@ impl CurlTelegramBotAdapter {
         let url = format!("{}/bot{}/{}", self.api_base_url, self.token, method_name);
         let json_body = serde_json::to_string(body).context("failed to serialize request body")?;
         let max_time_seconds = u32::from(timeout_seconds).saturating_add(15);
+        let wait_timeout = std::time::Duration::from_secs(u64::from(max_time_seconds))
+            .max(subprocess::configured_subprocess_timeout());
         let mut child = Command::new(&self.curl_path)
             .args(["--config", "-"])
             .stdin(Stdio::piped())
@@ -72,11 +74,13 @@ impl CurlTelegramBotAdapter {
             .with_context(|| format!("failed to write curl config for Telegram {method_name}"))?;
         drop(stdin);
         // stdin을 닫아야 curl이 `--config -` 입력 종료를 감지하고 실제 요청을 시작한다.
-        let output =
-            subprocess::wait_with_output(child, &format!("curl --config - Telegram {method_name}"))
-                .with_context(|| {
-                    format!("failed to wait for curl during Telegram {method_name}")
-                })?;
+        let output = subprocess::wait_with_output_timeout(
+            child,
+            &format!("curl --config - Telegram {method_name}"),
+            wait_timeout,
+        )
+        .with_context(|| format!("failed to wait for curl during Telegram {method_name}"))?;
+
         if !output.status.success() {
             bail!(
                 "telegram {method_name} request failed: {}",
@@ -362,7 +366,7 @@ mod tests {
             r#"#!/bin/sh
 set -eu
 cat >/dev/null
-sleep 2
+sleep 16
 "#,
         );
         let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
