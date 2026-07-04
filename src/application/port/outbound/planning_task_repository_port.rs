@@ -330,6 +330,65 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
         })
     }
 
+    fn commit_planning_authority_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningAuthoritySnapshotCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        let mut revision_store = noop_planning_revision_store()
+            .lock()
+            .expect("noop planning revision store should not be poisoned");
+        let mut direction_store = noop_direction_authority_store()
+            .lock()
+            .expect("noop direction authority store should not be poisoned");
+        let mut task_store = noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned");
+        let current_revision = revision_store.get(workspace_dir).copied().unwrap_or(0);
+        if let Some(observed_revision) = commit.observed_planning_revision
+            && observed_revision != current_revision
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: observed_revision,
+                current_planning_revision: current_revision,
+            });
+        }
+        let direction_unchanged = direction_store
+            .get(workspace_dir)
+            .is_some_and(|snapshot| snapshot.directions == *commit.directions);
+        let task_unchanged = task_store.get(workspace_dir).is_some_and(|snapshot| {
+            snapshot.task_authority == *commit.task_authority
+                && snapshot.queue_projection == *commit.queue_projection
+        });
+        if direction_unchanged && task_unchanged {
+            return Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: current_revision,
+                changed: false,
+            });
+        }
+        let planning_revision = current_revision + 1;
+        revision_store.insert(workspace_dir.to_string(), planning_revision);
+        direction_store.insert(
+            workspace_dir.to_string(),
+            PlanningDirectionAuthoritySnapshot {
+                planning_revision,
+                directions: commit.directions.clone(),
+            },
+        );
+        task_store.insert(
+            workspace_dir.to_string(),
+            PlanningTaskAuthoritySnapshot {
+                planning_revision,
+                task_authority: commit.task_authority.clone(),
+                queue_projection: commit.queue_projection.clone(),
+            },
+        );
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        })
+    }
+
     // direction snapshot을 workspace 단위로 제거한다.
     fn clear_direction_authority_snapshot(&self, workspace_dir: &str) -> Result<()> {
         noop_direction_authority_store()
