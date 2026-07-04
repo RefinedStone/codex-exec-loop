@@ -117,6 +117,17 @@ function Get-ValidationChecks {
                 "- interrupt and recovery remain responsive after delayed input checks"
             )
         }
+        "replay-policy-representative" {
+            return @(
+                "- launch and exit"
+                "- frontend selection"
+                "- input editing"
+                "- overlay flow"
+                "- streaming visibility"
+                "- resize and scrollback"
+                "- failure and recovery"
+            )
+        }
         default {
             throw "Unsupported -CheckProfile '$SelectedProfile'."
         }

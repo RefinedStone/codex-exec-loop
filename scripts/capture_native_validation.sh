@@ -160,6 +160,17 @@ EOF
 - interrupt and recovery remain responsive after delayed input checks
 EOF
       ;;
+    replay-policy-representative)
+      cat <<'EOF'
+- launch and exit
+- frontend selection
+- input editing
+- overlay flow
+- streaming visibility
+- resize and scrollback
+- failure and recovery
+EOF
+      ;;
     *)
       printf 'unsupported --check-profile: %s\n' "${check_profile}" >&2
       exit 1
