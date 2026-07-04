@@ -50,17 +50,16 @@ impl PlanningAdminFacadeService {
     // 아니라 admin이 직접 support file을 동기화하는 명령이므로 missing file을 오류로 본다.
     pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
         self.ensure_no_parallel_working("apply exported planning support files")?;
-        // 기존 operator documents를 먼저 읽고 대상 필드만 workspace 파일 내용으로 교체한다. 다른 planning support
-        // document가 생겨도 이 함수가 의도치 않게 나머지 필드를 초기화하지 않게 하기 위해서다.
-        let mut documents = self.load_operator_planning_documents()?;
-        documents.result_output_markdown = self
+        let exported_result_output = self
             .planning_workspace_port
-            // Workspace port를 통해 planning-relative file을 읽는다. 직접 fs::read_to_string을 쓰지 않아
-            // repo-scoped workspace 구현과 파일 시스템 구현의 차이를 port 아래에 남긴다.
-            .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
             // apply는 export된 파일이 있어야 의미가 있다. None을 빈 문서로 처리하면 실수로 accepted
             // result-output을 지울 수 있으므로 명시적 missing error로 중단한다.
+            .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
             .ok_or_else(|| anyhow::anyhow!("missing exported file: {RESULT_OUTPUT_FILE_PATH}"))?;
+        // 기존 operator documents를 읽고 대상 필드만 export된 파일 내용으로 교체한다. 다른 planning support
+        // document가 생겨도 이 함수가 의도치 않게 나머지 필드를 초기화하지 않게 하기 위해서다.
+        let mut documents = self.load_operator_planning_documents()?;
+        documents.result_output_markdown = exported_result_output;
         self.commit_operator_planning_documents(documents)?;
         // 현재 적용 대상은 result-output 하나다. export와 같은 path list shape를 유지해 admin caller가 두 작업의
         // 결과를 같은 UI contract로 표시할 수 있다.

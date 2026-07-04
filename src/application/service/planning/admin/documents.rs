@@ -48,16 +48,17 @@ impl PlanningAdminFacadeService {
     pub(super) fn load_operator_planning_documents(
         &self,
     ) -> Result<PlanningOperatorPlanningDocuments> {
-        // load는 direction/task repository snapshot을 authority로 삼고, result_output만 workspace file system에서
-        // 읽는다. observed revision은 operator가 읽은 DB snapshot의 버전이므로 commit 때 optimistic concurrency
-        // guard로 그대로 전달한다.
+        // load는 direction/task repository snapshot을 authority로 삼고, result_output은 authority-aware workspace port를
+        // 통해 읽는다. repo-backed workspace에서는 active authority store를 우선하고, plain workspace에서는 filesystem copy를
+        // fallback으로 사용한다. observed revision은 operator가 읽은 DB snapshot의 버전이므로 commit 때 optimistic
+        // concurrency guard로 그대로 전달한다.
         self.ensure_default_authority()?;
-        let workspace = self
+        let result_output_markdown = self
             .planning_workspace_port
-            .load_planning_workspace_files(self.workspace_dir.as_str())?;
-        let result_output_markdown = workspace.result_output_markdown.ok_or_else(|| {
-            anyhow!("default planning authority seed did not provide result output")
-        })?;
+            .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
+            .ok_or_else(|| {
+                anyhow!("default planning authority seed did not provide result output")
+            })?;
         let (direction_authority_snapshot, task_authority_snapshot) =
             load_consistent_planning_authority_snapshots(
                 self.planning_task_repository_port.as_ref(),
@@ -132,8 +133,11 @@ impl PlanningAdminFacadeService {
                     result_output_markdown: &documents.result_output_markdown,
                 },
             )?;
-        let authority_commit_changed = match authority_commit {
-            PlanningTaskAuthorityCommitResult::Committed { changed, .. } => changed,
+        let (authority_commit_revision, authority_commit_changed) = match authority_commit {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision,
+                changed,
+            } => (planning_revision, changed),
             PlanningTaskAuthorityCommitResult::Conflict {
                 observed_planning_revision,
                 current_planning_revision,
@@ -163,7 +167,7 @@ impl PlanningAdminFacadeService {
             self.rollback_operator_planning_documents(
                 &rollback_documents,
                 &rollback_queue_projection,
-                documents.observed_planning_revision,
+                Some(authority_commit_revision),
             )
             .map_err(|rollback_error| {
                 anyhow!(
