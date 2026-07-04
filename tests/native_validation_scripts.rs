@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,6 +29,15 @@ fn make_records_dir() -> PathBuf {
 
 fn write_record(dir: &Path, file_name: &str, body: &str) {
     fs::write(dir.join(file_name), body).expect("validation record should be written");
+}
+
+fn write_executable_file(path: &Path, body: &str) {
+    fs::write(path, body).expect("script fixture should be written");
+    let mut permissions = fs::metadata(path)
+        .expect("script fixture metadata should be readable")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("script fixture permissions should update");
 }
 
 fn repo_root() -> PathBuf {
@@ -277,6 +287,132 @@ fn public_release_and_github_scripts_report_missing_option_values() {
             "{script} should explain the missing option value\nstderr:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn gh_akra_auth_status_prefers_username_profile_when_user_differs() {
+    let windows_users_root = Path::new("/mnt/c/Users");
+    if !windows_users_root.is_dir() {
+        return;
+    }
+
+    let root = make_records_dir();
+    let repo = root.join("repo");
+    let bin_dir = root.join("bin");
+    let empty_home = root.join("empty-home");
+    fs::create_dir(&repo).expect("repo fixture dir should be created");
+    fs::create_dir(&bin_dir).expect("bin fixture dir should be created");
+    fs::create_dir(&empty_home).expect("home fixture dir should be created");
+
+    assert_success(
+        &Command::new("git")
+            .arg("init")
+            .arg(&repo)
+            .output()
+            .expect("git init should run"),
+        "git init",
+    );
+    assert_success(
+        &run_git(&repo, &["config", "credential.helper", ""]),
+        "configure empty credential helper",
+    );
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        ),
+        "configure origin",
+    );
+
+    write_executable_file(
+        &bin_dir.join("gh"),
+        r#"#!/bin/sh
+set -eu
+exit 1
+"#,
+    );
+    write_executable_file(
+        &bin_dir.join("curl"),
+        r#"#!/bin/sh
+set -eu
+config=$(cat)
+output_file=$(printf '%s\n' "$config" | sed -n 's/^output = "\(.*\)"$/\1/p')
+case "$config" in
+  *'Authorization: Bearer akra-token-123'*)
+    printf '{"login":"akra"}' > "$output_file"
+    ;;
+  *)
+    printf '{"login":"wrong"}' > "$output_file"
+    ;;
+esac
+printf '200'
+"#,
+    );
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    let wrong_user = format!("aaa-gh-akra-wrong-{nonce}");
+    let correct_user = format!("zzz-gh-akra-right-{nonce}");
+    let wrong_dir = windows_users_root.join(&wrong_user);
+    let correct_dir = windows_users_root.join(&correct_user);
+    if let Err(error) = fs::create_dir_all(&wrong_dir) {
+        if error.kind() == ErrorKind::PermissionDenied {
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        panic!("wrong Windows profile fixture should be created: {error}");
+    }
+    if let Err(error) = fs::create_dir_all(&correct_dir) {
+        let _ = fs::remove_dir_all(&wrong_dir);
+        let _ = fs::remove_dir_all(&root);
+        if error.kind() == ErrorKind::PermissionDenied {
+            return;
+        }
+        panic!("correct Windows profile fixture should be created: {error}");
+    }
+    fs::write(
+        wrong_dir.join(".git-credentials"),
+        "https://wrong:wrong-token-123@github.com\n",
+    )
+    .expect("wrong Windows credential fixture should be written");
+    fs::write(
+        correct_dir.join(".git-credentials"),
+        "https://akra:akra-token-123@github.com\n",
+    )
+    .expect("correct Windows credential fixture should be written");
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/gh-akra.sh"))
+        .arg("auth")
+        .arg("status")
+        .current_dir(&repo)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+        .env("HOME", &empty_home)
+        .env("USERPROFILE", "")
+        .env("AKRA_GITHUB_TOKEN", "")
+        .env("GH_TOKEN", "")
+        .env("GITHUB_TOKEN", "")
+        .env("USER", &wrong_user)
+        .env("USERNAME", &correct_user)
+        .output()
+        .expect("gh-akra auth status should run");
+
+    let _ = fs::remove_file(wrong_dir.join(".git-credentials"));
+    let _ = fs::remove_file(correct_dir.join(".git-credentials"));
+    let _ = fs::remove_dir_all(&wrong_dir);
+    let _ = fs::remove_dir_all(&correct_dir);
+    let _ = fs::remove_dir_all(&root);
+
+    assert_success(&output, "gh-akra auth status username precedence");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Logged in to github.com as akra"));
 }
 
 #[test]

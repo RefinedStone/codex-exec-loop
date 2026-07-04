@@ -370,10 +370,6 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
-    fn read_git_credential_file_token() -> Result<Option<String>> {
-        Self::read_git_credential_file_token_for_root(Path::new(WINDOWS_USERS_ROOT))
-    }
-
     fn read_git_credential_file_token_for_root(users_root: &Path) -> Result<Option<String>> {
         Self::read_git_credential_file_token_from_candidates(
             Self::git_credential_file_candidates_for_root(users_root)?,
@@ -442,9 +438,6 @@ impl GithubReviewPollerAdapter {
             .map(ToString::to_string)
             .ok_or_else(|| anyhow!("missing token line in {}", path.display()))
     }
-    fn find_windows_github_credential_line() -> Result<Option<String>> {
-        Self::find_windows_github_credential_line_in_root(Path::new(WINDOWS_USERS_ROOT))
-    }
 
     fn find_windows_github_credential_line_in_root(users_root: &Path) -> Result<Option<String>> {
         let Some(credential_path) =
@@ -473,11 +466,6 @@ impl GithubReviewPollerAdapter {
         }))
     }
 
-    fn resolve_windows_credential_path_for_current_user() -> Result<Option<PathBuf>> {
-        Self::resolve_windows_credential_path_for_current_user_in_root(Path::new(
-            WINDOWS_USERS_ROOT,
-        ))
-    }
     fn resolve_windows_credential_path_for_current_user_in_root(
         users_root: &Path,
     ) -> Result<Option<PathBuf>> {
@@ -496,7 +484,7 @@ impl GithubReviewPollerAdapter {
 
     fn current_user_names() -> Vec<String> {
         let mut names = Vec::new();
-        for key in ["USER", "USERNAME"] {
+        for key in ["USERNAME", "USER"] {
             if let Some(value) = std::env::var(key)
                 .ok()
                 .map(|value| value.trim().to_string())

@@ -726,8 +726,10 @@ fn git_credential_files_cover_home_fallback() {
     .expect("home git credential fixture should be written");
     let _env = EnvVarGuard::apply(&[("HOME", Some(home_root.to_string_lossy().as_ref()))]);
 
-    let token = GithubReviewPollerAdapter::read_git_credential_file_token()
-        .expect("home git credential lookup should not fail");
+    let token = GithubReviewPollerAdapter::read_git_credential_file_token_for_root(Path::new(
+        "/mnt/c/Users",
+    ))
+    .expect("home git credential lookup should not fail");
 
     assert_eq!(token.as_deref(), Some("home-token-123"));
     let _ = fs::remove_dir_all(&home_root);
@@ -740,14 +742,21 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
         .expect("environment fixture lock should not be poisoned");
     let users_root = unique_temp_dir("review-poller-windows-credential-candidates");
     let alice_home = users_root.join("Alice");
+    let linux_home = users_root.join("linux-akra");
     let akra_home = users_root.join("akra");
     fs::create_dir_all(&alice_home).expect("other Windows home should exist");
+    fs::create_dir_all(&linux_home).expect("wrong USER Windows home should exist");
     fs::create_dir_all(&akra_home).expect("current Windows home should exist");
     fs::write(
         alice_home.join(".git-credentials"),
         "https://alice:alice-token-123@github.com\n",
     )
     .expect("other-user credential fixture should be written");
+    fs::write(
+        linux_home.join(".git-credentials"),
+        "https://linux-akra:linux-token-123@github.com\n",
+    )
+    .expect("wrong-user credential fixture should be written");
     fs::write(
         akra_home.join(".git-credentials"),
         "https://akra:akra-token-123@github.com\n",
@@ -801,12 +810,19 @@ exit 2
     run_git(&repo_root, &["config", "credential.helper", ""]);
     let users_root = unique_temp_dir("review-poller-from-local-windows-users");
     fs::create_dir_all(users_root.join("Alice")).expect("other Windows home should exist");
+    fs::create_dir_all(users_root.join("linux-akra"))
+        .expect("wrong USER Windows home should exist");
     fs::create_dir_all(users_root.join("akra")).expect("current Windows home should exist");
     fs::write(
         users_root.join("Alice/.git-credentials"),
         "https://alice:alice-token-123@github.com\n",
     )
     .expect("other-user credential fixture should be written");
+    fs::write(
+        users_root.join("linux-akra/.git-credentials"),
+        "https://linux-akra:linux-token-123@github.com\n",
+    )
+    .expect("wrong-user credential fixture should be written");
     fs::write(
         users_root.join("akra/.git-credentials"),
         "https://akra:akra-token-123@github.com\n",
@@ -877,8 +893,10 @@ fn windows_credential_path_respects_empty_and_missing_user_names() {
         .expect("environment fixture lock should not be poisoned");
     let _env = EnvVarGuard::apply(&[("USER", Some("   "))]);
 
-    let credential_line = GithubReviewPollerAdapter::find_windows_github_credential_line()
-        .expect("empty USER should be handled as absent");
+    let credential_line = GithubReviewPollerAdapter::find_windows_github_credential_line_in_root(
+        Path::new("/mnt/c/Users"),
+    )
+    .expect("empty USER should be handled as absent");
 
     assert_eq!(credential_line, None);
     drop(_env);
@@ -888,8 +906,10 @@ fn windows_credential_path_respects_empty_and_missing_user_names() {
         Some("akra-user-that-should-not-exist-for-review-poller-test"),
     )]);
     let credential_path =
-        GithubReviewPollerAdapter::resolve_windows_credential_path_for_current_user()
-            .expect("missing Windows home should not fail");
+        GithubReviewPollerAdapter::resolve_windows_credential_path_for_current_user_in_root(
+            Path::new("/mnt/c/Users"),
+        )
+        .expect("missing Windows home should not fail");
     assert_eq!(credential_path, None);
 }
 
