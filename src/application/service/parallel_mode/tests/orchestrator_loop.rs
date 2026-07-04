@@ -763,6 +763,50 @@ fn pending_dispatch_wake_returns_recovery_wake_for_stale_epoch_only_command() {
 }
 
 #[test]
+fn pending_dispatch_wake_returns_recovery_wake_for_fresh_running_command() {
+    let repo = TempGitRepo::new("orchestrator-fresh-running-recovery-wake");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(224),
+        )
+        .expect("fresh running seed should enqueue");
+    let _running = authority
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-fresh")
+        .expect("fresh running command should claim")
+        .expect("fresh running command should exist");
+
+    let wake = service
+        .pending_dispatch_wake(&workspace_dir, 224)
+        .expect("fresh running command should be inspectable")
+        .expect("fresh running command should trigger a recovery wake");
+    assert_eq!(
+        wake.trigger,
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
+    );
+    assert_eq!(wake.epoch_id, 224);
+    assert_eq!(
+        wake.enqueue_trigger,
+        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
+    );
+}
+
+#[test]
 fn dispatch_tick_blocks_before_claim_when_readiness_fails() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1103,6 +1147,72 @@ fn dispatch_tick_reclaims_stale_running_dispatch_command_after_restart() {
             event_sender,
         });
 
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    for _ in 0..100 {
+        if worker_port.launch_count() >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(worker_port.launch_count(), 1);
+    let projections = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("runtime projections should load");
+    assert_eq!(projections.dispatch_commands.len(), 1);
+    assert_eq!(
+        projections.dispatch_commands[0].state,
+        ParallelModeDispatchCommandState::Completed
+    );
+}
+
+#[test]
+fn dispatch_tick_recovers_fresh_running_command_without_waiting_for_timeout() {
+    let repo = TempGitRepo::new("orchestrator-fresh-running-recovery");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+    let service = Arc::new(ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(224),
+        )
+        .expect("fresh running seed should enqueue");
+    let _running = authority
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-fresh")
+        .expect("fresh running command should claim")
+        .expect("fresh running command should exist");
+
+    let worker_port = Arc::new(CountingParallelAgentWorkerPort::default());
+    let (event_sender, _event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir.clone(),
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 224,
+            enqueue_trigger: Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+            planning: planning.clone(),
+            worker_port: worker_port.clone(),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(
+        result.outcome.trigger,
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
+    );
+    assert_eq!(result.outcome.epoch_id, 224);
     assert_eq!(result.outcome.launched_task_ids.len(), 1);
     for _ in 0..100 {
         if worker_port.launch_count() >= 1 {

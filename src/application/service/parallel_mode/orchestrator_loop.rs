@@ -178,6 +178,29 @@ impl ParallelModeService {
                         break outcome;
                     }
                     Ok(None) => {
+                        if let Some(enqueue_trigger) = request.enqueue_trigger {
+                            match self.recover_fresh_running_dispatch_command(
+                                &workspace_directory,
+                                &planning_projection,
+                                enqueue_trigger,
+                                request.epoch_id,
+                            ) {
+                                Ok(true) => continue,
+                                Ok(false) => {}
+                                Err(error) => {
+                                    let mut outcome = ParallelModeDispatchOutcome::new(
+                                        request.trigger,
+                                        workspace_directory.clone(),
+                                        request.epoch_id,
+                                    );
+                                    outcome.blocked_reason = Some(format!(
+                                        "fresh running dispatch recovery failed: {error}"
+                                    ));
+                                    outcome.status_copy_input = outcome.status_detail();
+                                    break outcome;
+                                }
+                            }
+                        }
                         let mut outcome = ParallelModeDispatchOutcome::new(
                             request.trigger,
                             workspace_directory.clone(),

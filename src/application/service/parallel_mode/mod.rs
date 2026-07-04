@@ -10,12 +10,13 @@ use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchTaskCandidate,
-    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
-    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolSlotState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEvent,
-    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
+    ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+    ParallelModeCapabilityState, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchTaskCandidate, ParallelModeOrchestratorState,
+    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
+    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState,
+    ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -628,6 +629,16 @@ impl ParallelModeService {
                 None,
             )));
         }
+        if let Some(command) =
+            Self::next_orphaned_current_epoch_running_dispatch_command(&snapshot, epoch_id)
+        {
+            return Ok(Some(ParallelModeControlPlaneWake::new(
+                workspace_dir,
+                command.trigger,
+                epoch_id,
+                Some(command.trigger),
+            )));
+        }
         let Some(command) = Self::next_stale_epoch_dispatch_command(&snapshot, epoch_id) else {
             return Ok(None);
         };
@@ -661,6 +672,29 @@ impl ParallelModeService {
         })
     }
 
+    fn next_orphaned_current_epoch_running_dispatch_command(
+        snapshot: &PlanningAuthorityRuntimeProjectionSnapshot,
+        epoch_id: u64,
+    ) -> Option<ParallelModeDispatchCommandSnapshot> {
+        if !snapshot.slot_leases.is_empty() || !snapshot.session_details.is_empty() {
+            return None;
+        }
+        snapshot
+            .dispatch_commands
+            .iter()
+            .filter(|command| {
+                command.state
+                    == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Running
+                    && !Self::dispatch_command_is_claimable(command)
+                    && command.epoch_id == Some(epoch_id)
+            })
+            .min_by(|left, right| {
+                left.updated_at
+                    .cmp(&right.updated_at)
+                    .then_with(|| left.command_id.cmp(&right.command_id))
+            })
+            .cloned()
+    }
     fn next_claimable_dispatch_command_by(
         snapshot: &PlanningAuthorityRuntimeProjectionSnapshot,
         mut predicate: impl FnMut(&ParallelModeDispatchCommandSnapshot) -> bool,
@@ -696,6 +730,48 @@ impl ParallelModeService {
         self.planning_authority
             .update_runtime_dispatch_command(workspace_dir, command)
             .map_err(|error| error.to_string())
+    }
+
+    pub fn recover_fresh_running_dispatch_command(
+        &self,
+        workspace_dir: &str,
+        planning_projection: &PlanningRuntimeProjection,
+        trigger: ParallelModeAutomationTrigger,
+        epoch_id: u64,
+    ) -> Result<bool, String> {
+        let queue_head_signature = planning_projection
+            .queue_head_task_signature()
+            .map(|signature| signature.to_string())
+            .or_else(|| {
+                planning_projection
+                    .queue_head()
+                    .map(|task| task.task_id.clone())
+            });
+        let replacement = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+            trigger,
+            queue_head_signature,
+            Some(epoch_id),
+            current_timestamp(),
+        );
+        let snapshot = self
+            .planning_authority
+            .load_runtime_projections(workspace_dir)
+            .map_err(|error| error.to_string())?;
+        if !snapshot.slot_leases.is_empty() || !snapshot.session_details.is_empty() {
+            return Ok(false);
+        }
+        let has_orphaned_running = snapshot.dispatch_commands.iter().any(|command| {
+            command.command_id == replacement.command_id
+                && command.state
+                    == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Running
+                && !Self::dispatch_command_is_claimable(command)
+                && command.epoch_id == Some(epoch_id)
+        });
+        if !has_orphaned_running {
+            return Ok(false);
+        }
+        self.update_dispatch_command(workspace_dir, &replacement)?;
+        Ok(true)
     }
 
     pub fn cancel_dispatch_commands(
