@@ -102,8 +102,8 @@ implementation planning out of this file.
 
 - Store-backed claims coordinate official refresh and distributor queue-head processing.
 - Stale official refresh recovery may abandon only the current head order per pass.
-- Retryable distributor push recovery is limited to source branch push failures.
-- Integration branch push blocks remain operator-owned.
+- Retryable distributor recovery includes source-branch push failures, PR ensure/inspection failures, integration-worktree precondition failures, `prerelease` push failures, and GitHub automation or pull-request workflow unavailability when the blocked record still matches the live lease/worktree.
+- Non-retryable integration conflicts, branch drift, missing worktree evidence, and cleanup failures remain operator-owned.
 - Failed-start dispatch blocks survive pool reset per task, keeping the latest `blocked_at`.
 - Stale startup leases require matching session-detail evidence before automatic cleanup.
 - Fresh same-epoch `Running` dispatch commands now recover immediately after restart/reentry when durable state shows no session detail yet, including the matching-lease/no-session handoff window.
