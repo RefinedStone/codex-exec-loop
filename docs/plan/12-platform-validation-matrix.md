@@ -151,7 +151,7 @@ Run the full `terminal-baseline` checklist plus these additional checks:
 
 Use this profile when prompt echo latency or input buffering changes, especially when the TUI runs
 inside a PTY bridge, multiplexer, or integrated terminal.
-The current `1/5` tmux pass is a historical counted row from the pre-six-step helper checklist; rerun it when fresh approval-grade evidence is needed.
+The current checked-in status is `0/5` required passes: the historical tmux record is supplemental-only, so fresh approval-grade prompt-delay evidence still requires a new counted tmux pass.
 
 Record these rows with:
 
@@ -212,7 +212,8 @@ Each completed row should capture:
 - frontend
 - `TERM` when available
 - capture_role (`counted-row` or `supplemental-unmatched`)
-- check profile
+- exact `check_profile`
+- emitted `checks` block
 - result and notes
 
 Committed validation rows live under [`../validation/`](../validation/).
