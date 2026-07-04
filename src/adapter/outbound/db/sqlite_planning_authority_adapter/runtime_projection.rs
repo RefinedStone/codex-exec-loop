@@ -475,7 +475,7 @@ impl SqlitePlanningAuthorityAdapter {
             .transaction()
             .context("failed to open runtime dispatch command claim transaction")?;
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
-        let row = transaction
+        let pending_row = transaction
             .query_row(
                 "SELECT command_id, content
                  FROM runtime_dispatch_commands
@@ -487,12 +487,52 @@ impl SqlitePlanningAuthorityAdapter {
             )
             .optional()
             .context("failed to read pending runtime dispatch command")?;
-        let Some((command_id, content)) = row else {
-            transaction
-                .commit()
-                .context("failed to commit empty dispatch command claim transaction")?;
-            return Ok(None);
-        };
+        let (command_id, content, expected_state, claim_event_kind, claim_event_summary) =
+            if let Some((command_id, content)) = pending_row {
+                (
+                    command_id,
+                    content,
+                    ParallelModeDispatchCommandState::Pending,
+                    "dispatch_command_claimed",
+                    "runtime dispatch command claimed",
+                )
+            } else {
+                let running_row = transaction
+                    .query_row(
+                        "SELECT command_id, content
+                         FROM runtime_dispatch_commands
+                         WHERE command_state = ?1
+                         ORDER BY updated_at ASC, command_id ASC
+                         LIMIT 1",
+                        params![ParallelModeDispatchCommandState::Running.label()],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .context("failed to read running runtime dispatch command")?;
+                let Some((command_id, content)) = running_row else {
+                    transaction
+                        .commit()
+                        .context("failed to commit empty dispatch command claim transaction")?;
+                    return Ok(None);
+                };
+                let command = serde_json::from_str::<ParallelModeDispatchCommandSnapshot>(&content)
+                    .with_context(|| {
+                        format!("failed to deserialize runtime dispatch command `{command_id}`")
+                    })?;
+                if !dispatch_command_is_stale(&command.updated_at) {
+                    transaction
+                        .commit()
+                        .context("failed to commit non-stale dispatch command claim transaction")?;
+                    return Ok(None);
+                }
+                (
+                    command_id,
+                    content,
+                    ParallelModeDispatchCommandState::Running,
+                    "dispatch_command_reclaimed",
+                    "stale runtime dispatch command reclaimed",
+                )
+            };
         let mut command = serde_json::from_str::<ParallelModeDispatchCommandSnapshot>(&content)
             .with_context(|| {
                 format!("failed to deserialize runtime dispatch command `{command_id}`")
@@ -514,7 +554,7 @@ impl SqlitePlanningAuthorityAdapter {
                     command.owner_token.as_deref(),
                     payload_json,
                     &command.command_id,
-                    ParallelModeDispatchCommandState::Pending.label()
+                    expected_state.label()
                 ],
             )
             .with_context(|| {
@@ -531,11 +571,11 @@ impl SqlitePlanningAuthorityAdapter {
         }
         append_runtime_event(
             &transaction,
-            "dispatch_command_claimed",
+            claim_event_kind,
             "dispatch_command",
             &command.command_id,
             &format!(
-                "runtime dispatch command claimed / trigger: {}",
+                "{claim_event_summary} / trigger: {}",
                 command.trigger.label()
             ),
             &serde_json::to_string(&command)
@@ -1741,5 +1781,16 @@ fn claim_is_stale(claimed_at: &str) -> bool {
                 >= CLAIM_STALE_AFTER_SECS
         })
         // timestamp가 깨졌다면 owner 생존을 신뢰할 수 없으므로 stale=true로 회수 가능하게 둔다.
+        .unwrap_or(true)
+}
+
+fn dispatch_command_is_stale(updated_at: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(updated_at)
+        .map(|timestamp| {
+            Utc::now()
+                .signed_duration_since(timestamp.with_timezone(&Utc))
+                .num_seconds()
+                >= CLAIM_STALE_AFTER_SECS
+        })
         .unwrap_or(true)
 }

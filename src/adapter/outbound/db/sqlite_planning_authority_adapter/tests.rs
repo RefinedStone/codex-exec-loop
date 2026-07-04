@@ -1076,6 +1076,40 @@ fn runtime_dispatch_command_reenqueue_revives_terminal_rows() {
 }
 
 #[test]
+fn runtime_dispatch_command_claim_reclaims_stale_running_rows() {
+    let workspace_dir = temp_workspace("dispatch-command-reclaim-running");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        Some("queue-head-running-stale".to_string()),
+        Some(73),
+        "2026-05-08T00:00:00+00:00",
+    );
+
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &command)
+            .expect("stale-running seed should enqueue")
+    );
+    let mut running = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-1")
+        .expect("running seed should claim")
+        .expect("running seed should exist");
+    running.updated_at = "2020-05-08T00:00:00+00:00".to_string();
+    adapter
+        .update_runtime_dispatch_command(&workspace_dir, &running)
+        .expect("stale running command should persist");
+
+    let reclaimed = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-2")
+        .expect("stale running command should be reclaimable")
+        .expect("stale running command should be returned");
+    assert_eq!(reclaimed.command_id, command.command_id);
+    assert_eq!(reclaimed.state, ParallelModeDispatchCommandState::Running);
+    assert_eq!(reclaimed.owner_token.as_deref(), Some("owner-2"));
+}
+
+#[test]
 fn runtime_dispatch_command_claim_handles_payload_row_id_mismatch_as_lost_claim() {
     let workspace_dir = temp_workspace("dispatch-command-lost-claim");
     let adapter = SqlitePlanningAuthorityAdapter::new();

@@ -18,7 +18,7 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 mod branch_names;
 mod completion;
@@ -589,11 +589,25 @@ impl ParallelModeService {
         Ok(snapshot
             .dispatch_commands
             .iter()
-            .filter(|command| {
-                command.state
-                    == crate::domain::parallel_mode::ParallelModeDispatchCommandState::Pending
-            })
+            .filter(|command| Self::dispatch_command_is_claimable(command))
             .count())
+    }
+
+    fn dispatch_command_is_claimable(command: &ParallelModeDispatchCommandSnapshot) -> bool {
+        match command.state {
+            crate::domain::parallel_mode::ParallelModeDispatchCommandState::Pending => true,
+            crate::domain::parallel_mode::ParallelModeDispatchCommandState::Running => {
+                DateTime::parse_from_rfc3339(command.updated_at.as_str())
+                    .map(|timestamp| {
+                        Utc::now()
+                            .signed_duration_since(timestamp.with_timezone(&Utc))
+                            .num_seconds()
+                            >= 300
+                    })
+                    .unwrap_or(true)
+            }
+            _ => false,
+        }
     }
 
     pub fn pending_dispatch_wake(
