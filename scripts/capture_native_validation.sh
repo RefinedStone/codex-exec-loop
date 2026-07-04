@@ -297,6 +297,7 @@ terminal: ${terminal}
 shell: ${shell_name}
 frontend: ${frontend}
 term: ${term_value}
+capture_role: counted-row
 check_profile: ${check_profile}
 checks:
 ${checks_block}

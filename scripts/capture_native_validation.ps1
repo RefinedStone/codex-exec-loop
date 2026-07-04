@@ -159,6 +159,7 @@ $report = @(
     "shell: $detectedShell"
     "frontend: $Frontend"
     "term: $Term"
+    "capture_role: counted-row"
     "check_profile: $CheckProfile"
     "checks:"
     ($checks -join [Environment]::NewLine)

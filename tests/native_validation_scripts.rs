@@ -828,6 +828,7 @@ terminal: tmux 3.4 detached PTY
 shell: bash
 frontend: inline
 term: tmux-256color
+capture_role: counted-row
 check_profile: prompt-input-delay-pty
 checks:
 - launch inline TUI in tmux PTY
@@ -845,6 +846,7 @@ terminal: Terminal.app
 shell: zsh
 frontend: inline
 term: xterm-256color
+capture_role: counted-row
 check_profile: terminal-baseline
 checks:
 - launch and exit
@@ -878,6 +880,7 @@ terminal: tmux 3.4 detached PTY
 shell: bash
 frontend: inline
 term: tmux-256color
+capture_role: counted-row
 check_profile: prompt-input-delay-pty
 checks:
 - launch inline TUI in tmux PTY
@@ -895,6 +898,7 @@ terminal: Terminal.app
 shell: zsh
 frontend: inline
 term: xterm-256color
+capture_role: counted-row
 check_profile: terminal-baseline
 checks:
 - launch and exit
@@ -961,6 +965,7 @@ terminal: Terminal.app
 shell: zsh
 frontend: inline
 term: xterm-256color
+capture_role: counted-row
 check_profile: terminal-baseline
 checks:
 - launch and exit
@@ -990,6 +995,7 @@ terminal: Terminal.app
 shell: zsh
 frontend: inline
 term: xterm-256color
+capture_role: counted-row
 check_profile: terminal-baseline
 checks:
 - launch and exit

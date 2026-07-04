@@ -23,7 +23,7 @@ terminal checklist.
   validation slices
 - preserve the emitted `check_profile` and checklist so rows stay comparable
 - use `bash scripts/summarize_native_validation.sh --fail-on-incomplete` when the matrix must act as a gate; the plain summary is informational and warns on incomplete required rows
-- `scripts/capture_native_validation.sh` and `scripts/capture_native_validation.ps1` emit the shared baseline fields (`date`, `commit`, `os`, `terminal`, `shell`, `frontend`, `term`, `check_profile`, `checks`, `result`, `notes`).
+- `scripts/capture_native_validation.sh` and `scripts/capture_native_validation.ps1` emit the shared baseline fields (`date`, `commit`, `os`, `terminal`, `shell`, `frontend`, `term`, `capture_role`, `check_profile`, `checks`, `result`, `notes`).
 - Primitive-sensitive supplemental captures may append manual metadata below that helper output when review needs environment class, render/insertion mode, override stamps, or per-scenario results that the helpers do not emit directly.
 - Supplemental primitive-sensitive captures may stay outside `scripts/summarize_native_validation.sh` entirely, or appear under `Unmatched Records`, depending on their `check_profile` and row metadata.
 
