@@ -414,12 +414,12 @@ impl ParallelModeControlPlaneRuntime {
     #[cfg(test)]
     pub fn force_mode_for_test(&mut self, workspace_directory: impl Into<String>, enabled: bool) {
         let workspace_directory = workspace_directory.into();
-        self.store.mode_enabled = enabled;
         if enabled {
             self.ensure_epoch(
                 workspace_directory,
                 &mut ParallelModeControlPlaneRuntimeOutcome::new(),
             );
+            self.store.mode_enabled = true;
             self.store.projection_ready = true;
         } else {
             self.store.workspace_directory = None;
@@ -1460,6 +1460,8 @@ impl ParallelModeControlPlaneRuntime {
             _ => {
                 let epoch_id = self.store.next_epoch_id;
                 self.store.next_epoch_id = self.store.next_epoch_id.saturating_add(1);
+                self.store.mode_enabled = false;
+                self.store.initial_pool_reset_completed = false;
                 self.clear_process_effect_state();
                 self.store.workspace_directory = Some(workspace_directory.clone());
                 self.store.current_epoch_id = Some(epoch_id);
@@ -1712,6 +1714,38 @@ mod tests {
         assert!(matches!(
             stale.events.as_slice(),
             [ParallelModeControlPlaneEvent::StaleCommandDropped { epoch_id: 1, .. }]
+        ));
+    }
+
+    #[test]
+    fn opening_new_workspace_resets_mode_and_initial_reset_state() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.force_mode_for_test("/repo", true);
+        runtime.force_initial_pool_reset_completed_for_test(true);
+
+        let opened = runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/other".to_string(),
+        });
+        assert!(matches!(
+            opened.events.as_slice(),
+            [ParallelModeControlPlaneEvent::EpochOpened {
+                workspace_directory,
+                epoch_id: 2,
+            }] if workspace_directory == "/other"
+        ));
+        assert!(!runtime.store().mode_enabled);
+        assert!(!runtime.store().initial_pool_reset_completed);
+        assert_eq!(runtime.store().current_epoch_id, Some(2));
+
+        let enabled = runtime.handle(enable("/other"));
+        let entry = only_effect(&enabled);
+        assert!(matches!(
+            &entry,
+            ParallelModeControlPlaneEffect::EnterParallelMode {
+                mode_was_enabled: false,
+                initial_pool_reset_required: true,
+                ..
+            }
         ));
     }
 
