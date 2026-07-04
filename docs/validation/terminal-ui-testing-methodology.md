@@ -12,9 +12,8 @@ This contract keeps `invariant × first-class environment × branch family` expl
 The current stack remains the default posture for native runtime proof.
 Manual terminal capture stays primitive-sensitive only.
 The first-class rendering contract does not replace the broader terminal-baseline rows in
-`docs/plan/12-platform-validation-matrix.md`; primitive-sensitive PRs still satisfy any
-additional required manual rows there, including the current macOS Terminal.app and iTerm2
-baseline rows, until that matrix is revised.
+`docs/plan/12-platform-validation-matrix.md` for shipped/default terminal behavior.
+Primitive-sensitive PRs still satisfy those counted rows unless the smaller-representative-set rule below applies because the change is limited to an explicit-only representative path such as `ViewportReplay`.
 
 
 ### First-class environment key

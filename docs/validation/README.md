@@ -43,6 +43,7 @@ Treat the plain summary output as a visibility report, not a release gate, until
 
 No required terminal-baseline row is currently recorded as passing.
 The replay-policy captures below are supplemental representative evidence and do not count toward the baseline row totals.
+For explicit-only representative changes such as replay-policy-only `ViewportReplay` work, these supplemental captures can satisfy review without adding new counted baseline rows when the first-class default path is unchanged and the methodology's smaller-representative-set rule applies.
 
 ### Supplemental replay-policy captures
 
