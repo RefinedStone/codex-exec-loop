@@ -456,6 +456,33 @@ fn cleanup_mixed_explicit_targets_fail_when_any_requested_target_is_missing() {
 }
 
 #[test]
+fn cleanup_apply_mixed_explicit_targets_stays_atomic_on_failure() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+
+    let output = run_cleanup(
+        &repo,
+        &[
+            "--apply",
+            "--base",
+            "main",
+            "--branch",
+            "feature",
+            "--branch",
+            "definitely-not-a-real-branch",
+            "--allow-unmerged-explicit",
+        ],
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("explicit targets not found: branch:definitely-not-a-real-branch"));
+    assert!(feature_worktree.is_dir());
+    assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
 fn prompt_input_delay_profile_counts_tmux_detached_pty_row() {
     let records_dir = make_records_dir();
     write_record(
