@@ -976,11 +976,13 @@ fn load_pull_request_activity_fetches_each_github_endpoint_through_curl_boundary
         &format!(
             r#"#!/bin/sh
 set -eu
+stdin_payload="$(cat)"
 last=""
 for arg in "$@"; do
   last="$arg"
 done
 printf '%s\n' "$@" >> "{log}"
+printf '%s\n' "$stdin_payload" >> "{log}"
 case "$last" in
   "https://api.test/repos/acme/widgets/pulls/42")
     cat "{root}/pull.json"

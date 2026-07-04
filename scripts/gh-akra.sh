@@ -27,6 +27,21 @@ read_option_file() {
   cat "${path}"
 }
 
+pr_create_uses_title_file() {
+  while (($# > 0)); do
+    case "$1" in
+      --title-file)
+        return 0
+        ;;
+      --title-file=*)
+        return 0
+        ;;
+    esac
+    shift
+  done
+  return 1
+}
+
 desired_login="${AKRA_GITHUB_LOGIN:-}"
 while (($# > 0)); do
   case "$1" in
@@ -87,7 +102,8 @@ parse_repo_full_name() {
   printf '%s\n' "${origin_url}"
 }
 
-repo_full_name="$(parse_repo_full_name)"
+repo_full_name=""
+
 
 json_escape() {
   local value
@@ -99,6 +115,42 @@ json_escape() {
   value="${value//$'\t'/\\t}"
   printf '%s' "${value}"
 }
+
+curl_config_escape() {
+  local value
+  value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  printf '%s' "${value}"
+}
+
+run_github_curl() {
+  local method
+  local endpoint
+  local payload
+  local response_file
+  local config
+
+  method="$1"
+  endpoint="$2"
+  payload="${3-}"
+  response_file="$4"
+
+  config=$(
+    printf 'silent\nshow-error\nlocation\noutput = "%s"\nwrite-out = "%%{http_code}"\nconnect-timeout = 10\nmax-time = 30\nrequest = "%s"\nheader = "Accept: application/vnd.github+json"\nheader = "Authorization: Bearer %s"\nheader = "User-Agent: gh-akra.sh"\nheader = "X-GitHub-Api-Version: 2022-11-28"\nurl = "https://api.github.com%s"\n' \
+      "$(curl_config_escape "${response_file}")" \
+      "$(curl_config_escape "${method}")" \
+      "$(curl_config_escape "${token}")" \
+      "$(curl_config_escape "${endpoint}")"
+    if [[ -n "${payload}" ]]; then
+      printf 'data = "%s"\n' "$(curl_config_escape "${payload}")"
+    fi
+  )
+  printf '%s' "${config}" | curl --config -
+}
+
 
 json_string_field() {
   local body
@@ -387,6 +439,15 @@ resolve_gh_exec_token() {
     printf '%s\n' "${GITHUB_TOKEN}"
     return 0
   fi
+
+  if command -v gh >/dev/null 2>&1; then
+    local gh_auth_token
+    gh_auth_token="$(GH_HOST=github.com gh auth token 2>/dev/null || true)"
+    if [[ -n "${gh_auth_token}" ]]; then
+      printf '%s\n' "${gh_auth_token}"
+      return 0
+    fi
+  fi
   true
 }
 
@@ -421,32 +482,7 @@ api_request() {
   payload="${3-}"
   response_file="$(mktemp)"
 
-  if [[ -n "${payload}" ]]; then
-    status_code="$(
-      curl -sS -L -o "${response_file}" -w '%{http_code}' \
-        --connect-timeout 10 \
-        --max-time 30 \
-        -X "${method}" \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer ${token}" \
-        -H "User-Agent: gh-akra.sh" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        -d "${payload}" \
-        "https://api.github.com${endpoint}"
-    )"
-  else
-    status_code="$(
-      curl -sS -L -o "${response_file}" -w '%{http_code}' \
-        --connect-timeout 10 \
-        --max-time 30 \
-        -X "${method}" \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer ${token}" \
-        -H "User-Agent: gh-akra.sh" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com${endpoint}"
-    )"
-  fi
+  status_code="$(run_github_curl "${method}" "${endpoint}" "${payload}" "${response_file}")"
 
   if [[ "${status_code}" != 2* ]]; then
     cat "${response_file}" >&2
@@ -606,6 +642,10 @@ create_pr_with_api() {
         title="$2"
         shift 2
         ;;
+      --title-file)
+        title="$(read_option_file "$1" "${2-}")"
+        shift 2
+        ;;
       --body)
         require_value "$1" "${2-}"
         body="$2"
@@ -626,7 +666,7 @@ create_pr_with_api() {
   done
 
   if [[ -z "${base_branch}" || -z "${head_branch}" || -z "${title}" ]]; then
-    usage_error "pr create requires --base, --head, and --title"
+    usage_error "pr create requires --base, --head, and one of --title or --title-file"
   fi
 
   local payload
@@ -873,12 +913,36 @@ reply_review_comment_with_api() {
   api_request POST "/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
+if [[ "${1-}:${2-}" == "auth:status" ]]; then
+  token="$(resolve_token)"
+  if [[ -z "${token}" ]]; then
+    usage_error "gh auth status requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+  fi
+  shift 2
+  auth_status_with_api "$@"
+  exit 0
+fi
+
+repo_full_name="$(parse_repo_full_name)"
+
 if command -v gh >/dev/null 2>&1; then
   gh_exec_token="$(resolve_gh_exec_token)"
   verify_gh_login_if_requested
   if [[ "${1-}" == "review-reply" ]]; then
     shift
     reply_review_comment_with_gh "$@"
+    exit 0
+  fi
+  if [[ "${1-}" == "pr" && "${2-}" == "create" ]] && pr_create_uses_title_file "$@"; then
+    token="${gh_exec_token}"
+    if [[ -z "${token}" ]]; then
+      token="$(resolve_token)"
+    fi
+    if [[ -z "${token}" ]]; then
+      usage_error "pr create with --title-file requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+    fi
+    shift 2
+    create_pr_with_api "$@"
     exit 0
   fi
   if [[ -n "${gh_exec_token}" ]]; then

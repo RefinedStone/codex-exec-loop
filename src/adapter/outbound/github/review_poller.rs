@@ -580,6 +580,8 @@ impl GithubReviewPollerAdapter {
         authorization: &str,
         user_agent: &str,
     ) -> io::Result<Output> {
+        let config = build_curl_stdin_config(api_version, authorization, user_agent);
+        let command_label = format!("{} {url}", self.curl_path);
         for attempt in 1..=CURL_SPAWN_ATTEMPTS {
             let mut command = Command::new(&self.curl_path);
             command
@@ -589,28 +591,32 @@ impl GithubReviewPollerAdapter {
                     CURL_CONNECT_TIMEOUT_SECONDS,
                     "--max-time",
                     CURL_MAX_TIME_SECONDS,
+                    "--config",
+                    "-",
                 ])
-                .args(["-H", "Accept: application/vnd.github+json"])
-                .args(["-H", api_version])
-                .args(["-H", authorization])
-                .args(["-H", user_agent])
                 .arg(url)
-                .stdin(Stdio::null());
-            let output =
-                subprocess::command_output(&mut command, &format!("{} {url}", self.curl_path));
-            match output {
-                Ok(output) => return Ok(output),
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = match command.spawn() {
+                Ok(child) => child,
                 Err(error)
                     if attempt < CURL_SPAWN_ATTEMPTS && is_transient_curl_spawn_error(&error) =>
                 {
                     thread::sleep(CURL_SPAWN_RETRY_DELAY);
+                    continue;
                 }
                 Err(error) => return Err(error),
+            };
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(config.as_bytes())?;
             }
+            return subprocess::wait_with_output(child, &command_label);
         }
 
         unreachable!("curl spawn retry loop should return from every attempt")
     }
+
     fn parse_json<T>(body: &str, endpoint: &str) -> Result<T>
     where
         T: DeserializeOwned,
@@ -713,6 +719,41 @@ impl GithubReviewPollerAdapter {
             path: None,
         }
     }
+}
+
+fn build_curl_stdin_config(api_version: &str, authorization: &str, user_agent: &str) -> String {
+    let mut config = String::new();
+    config.push_str("header = ");
+    config.push_str(&curl_config_string_literal(
+        "Accept: application/vnd.github+json",
+    ));
+    config.push('\n');
+    config.push_str("header = ");
+    config.push_str(&curl_config_string_literal(api_version));
+    config.push('\n');
+    config.push_str("header = ");
+    config.push_str(&curl_config_string_literal(authorization));
+    config.push('\n');
+    config.push_str("header = ");
+    config.push_str(&curl_config_string_literal(user_agent));
+    config.push('\n');
+    config
+}
+
+fn curl_config_string_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 
 fn is_transient_curl_spawn_error(error: &io::Error) -> bool {
@@ -925,6 +966,56 @@ sleep 2
             .join(" | ");
 
         assert!(error_chain.contains("timed out after"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fetch_json_sends_authorization_via_curl_stdin_config() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("review-poller-curl-stdin-config");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        let argv_path = root.join("curl-argv.txt");
+        let stdin_path = root.join("curl-stdin.txt");
+        let script = write_executable_script(
+            &root,
+            "fake-curl",
+            &format!(
+                r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" > "{}"
+cat > "{}"
+printf '{{"ok":true}}'
+"#,
+                argv_path.display(),
+                stdin_path.display(),
+            ),
+        );
+        let adapter = GithubReviewPollerAdapter {
+            curl_path: script.display().to_string(),
+            api_base_url: "https://api.test".to_string(),
+            user_agent: "akra-test".to_string(),
+            token: "secret-token".to_string(),
+        };
+
+        let body = adapter
+            .fetch_json("/repos/acme/widgets/pulls/42")
+            .expect("fake curl should return JSON body");
+        let argv = fs::read_to_string(&argv_path).expect("curl argv capture should be readable");
+        let stdin = fs::read_to_string(&stdin_path).expect("curl stdin capture should be readable");
+
+        assert_eq!(body, "{\"ok\":true}");
+        assert_eq!(
+            argv,
+            "-sSfL\n--connect-timeout\n10\n--max-time\n30\n--config\n-\nhttps://api.test/repos/acme/widgets/pulls/42\n"
+        );
+        assert!(
+            stdin.contains("header = \"Authorization: Bearer secret-token\""),
+            "curl stdin config should carry authorization header: {stdin}"
+        );
+        assert!(!argv.contains("secret-token"));
+        assert!(!stdin.contains("url = \"https://api.test/repos/acme/widgets/pulls/42\""));
         let _ = fs::remove_dir_all(&root);
     }
 
