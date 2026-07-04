@@ -430,6 +430,66 @@ printf '200'
 }
 
 #[test]
+fn gh_akra_auth_status_works_outside_repo_with_local_credentials() {
+    let root = make_records_dir();
+    let bin_dir = root.join("bin");
+    let home_root = root.join("home");
+    fs::create_dir(&bin_dir).expect("bin fixture dir should be created");
+    fs::create_dir(&home_root).expect("home fixture dir should be created");
+    fs::write(
+        home_root.join(".git-credentials"),
+        "https://akra:outside-home-token-123@github.com\n",
+    )
+    .expect("home credential fixture should be written");
+
+    write_executable_file(
+        &bin_dir.join("gh"),
+        r#"#!/bin/sh
+set -eu
+exit 1
+"#,
+    );
+    write_executable_file(
+        &bin_dir.join("curl"),
+        r#"#!/bin/sh
+set -eu
+config=$(cat)
+output_file=$(printf '%s\n' "$config" | sed -n 's/^output = "\(.*\)"$/\1/p')
+case "$config" in
+  *'Authorization: Bearer outside-home-token-123'*)
+    printf '{"login":"akra"}' > "$output_file"
+    ;;
+  *)
+    printf '{"login":"wrong"}' > "$output_file"
+    ;;
+esac
+printf '200'
+"#,
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/gh-akra.sh"))
+        .arg("auth")
+        .arg("status")
+        .current_dir(&root)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+        .env("HOME", &home_root)
+        .env("USERPROFILE", "")
+        .env("AKRA_GITHUB_TOKEN", "")
+        .env("GH_TOKEN", "")
+        .env("GITHUB_TOKEN", "")
+        .output()
+        .expect("gh-akra auth status should run outside a repo");
+
+    let _ = fs::remove_file(home_root.join(".git-credentials"));
+    let _ = fs::remove_dir_all(&root);
+
+    assert_success(&output, "gh-akra auth status outside repo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Logged in to github.com as akra"));
+}
+
+#[test]
 fn cleanup_explicit_unmerged_branch_is_skipped_by_default() {
     let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
 
