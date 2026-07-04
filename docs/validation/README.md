@@ -54,17 +54,18 @@ They do not waive counted terminal-baseline requirements on their own.
 
 | Metric | Current value |
 | --- | --- |
-| Required pass | `1/5` |
-| Required missing | `0` |
+| Required pass | `0/5` |
+| Required missing | `1` |
 | Required non-pass | `4` |
 | Optional pass | `0/4` |
-The single tmux `pass` row is the historical counted record currently on file for this profile; rerun the capture under the current helper checklist when fresh approval-grade evidence is required.
+The historical tmux prompt-delay record is preserved as supplemental-only evidence and no longer counts as current approval-grade coverage.
 
-Current required blockers still recorded in-tree:
-- `Linux / direct terminal / bash / inline`
-- `Linux / Zellij / bash / inline`
-- `Windows / Windows Terminal / PowerShell / inline`
-- `Windows / Windows Terminal / WSL bash / inline`
+Current required gaps still recorded in-tree:
+- `Linux / direct terminal / bash / inline` (`blocker`)
+- `Linux / tmux detached PTY / bash / inline` (`missing`)
+- `Linux / Zellij / bash / inline` (`blocker`)
+- `Windows / Windows Terminal / PowerShell / inline` (`blocker`)
+- `Windows / Windows Terminal / WSL bash / inline` (`blocker`)
 
 Use `bash scripts/summarize_native_validation.sh --format markdown` (and `--check-profile prompt-input-delay-pty --format markdown`) to refresh these numbers after new captures land.
 

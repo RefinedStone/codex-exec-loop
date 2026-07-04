@@ -5,7 +5,7 @@ terminal: tmux 3.4 detached PTY
 shell: bash
 frontend: inline
 term: tmux-256color
-capture_role: counted-row
+capture_role: supplemental-unmatched
 check_profile: prompt-input-delay-pty
 checks:
 - launch inline TUI in tmux PTY
