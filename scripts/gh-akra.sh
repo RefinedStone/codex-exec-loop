@@ -83,7 +83,7 @@ else
   git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 fi
 
-if [[ -z "${desired_login}" && "${auth_status_only}" != "true" ]]; then
+if [[ -z "${desired_login}" && -n "${git_dir:-}" ]]; then
   desired_login="$(git -C "${repo_root}" config --get akra.githubLogin 2>/dev/null || true)"
 fi
 
