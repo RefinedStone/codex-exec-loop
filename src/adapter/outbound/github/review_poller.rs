@@ -199,8 +199,14 @@ impl GithubReviewPollerAdapter {
                 .trim_start_matches("git@github.com:")
                 .trim_end_matches(".git")
                 .to_string(),
-            value if value.starts_with("https://github.com/") => value
-                .trim_start_matches("https://github.com/")
+            value if value.starts_with("ssh://git@github.com/") => value
+                .trim_start_matches("ssh://git@github.com/")
+                .trim_end_matches(".git")
+                .to_string(),
+            value if value.starts_with("https://") && value.contains("github.com/") => value
+                .trim_start_matches("https://")
+                .trim_start_matches(|character| character != 'g')
+                .trim_start_matches("github.com/")
                 .trim_end_matches(".git")
                 .to_string(),
             _ => bail!("unsupported GitHub origin URL {origin_url}"),

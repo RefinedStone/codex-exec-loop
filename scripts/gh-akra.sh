@@ -259,21 +259,20 @@ parse_git_credential_username() {
 
 github_login_for_token() {
   local candidate_token
+  local previous_token
   local response_body
   candidate_token="$1"
+  previous_token="${token-}"
+  token="${candidate_token}"
 
-  response_body="$(
-    curl -sS -L \
-      --connect-timeout 10 \
-      --max-time 30 \
-      -H "Accept: application/vnd.github+json" \
-      -H "Authorization: Bearer ${candidate_token}" \
-      -H "User-Agent: gh-akra.sh" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "https://api.github.com/user" 2>/dev/null
-  )" || return 1
+  if ! response_body="$(api_request GET "/user" 2>/dev/null)"; then
+    token="${previous_token}"
+    return 1
+  fi
+  token="${previous_token}"
   json_string_field "${response_body}" "login"
 }
+
 
 token_matches_desired_login() {
   local candidate_token
@@ -452,13 +451,13 @@ resolve_gh_exec_token() {
 }
 
 gh_api_login() {
-  if [[ -n "${gh_exec_token:-}" ]]; then
-    GH_TOKEN="${gh_exec_token}" GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
-  elif [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
-    GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
-  else
-    GH_HOST=github.com gh api user --jq .login 2>/dev/null || true
+  local candidate_token
+  candidate_token="$(resolve_gh_exec_token)"
+  if [[ -z "${candidate_token}" ]]; then
+    candidate_token="$(resolve_token)"
   fi
+  [[ -n "${candidate_token}" ]] || return 0
+  github_login_for_token "${candidate_token}"
 }
 
 verify_gh_login_if_requested() {
@@ -466,7 +465,7 @@ verify_gh_login_if_requested() {
   [[ -n "${desired_login}" ]] || return 0
   actual_login="$(gh_api_login)"
   if [[ "${actual_login}" != "${desired_login}" ]]; then
-    usage_error "expected GitHub login ${desired_login}, but gh returned ${actual_login:-unknown}"
+    usage_error "expected GitHub login ${desired_login}, but token returned ${actual_login:-unknown}"
   fi
 }
 
@@ -617,6 +616,8 @@ create_pr_with_api() {
   local title
   local body
   local draft
+  local title_from_file
+  local body_from_file
   local error_log
 
   base_branch=""
@@ -624,6 +625,8 @@ create_pr_with_api() {
   title=""
   body=""
   draft="false"
+  title_from_file="false"
+  body_from_file="false"
 
   while (($# > 0)); do
     case "$1" in
@@ -644,6 +647,7 @@ create_pr_with_api() {
         ;;
       --title-file)
         title="$(read_option_file "$1" "${2-}")"
+        title_from_file="true"
         shift 2
         ;;
       --body)
@@ -653,6 +657,7 @@ create_pr_with_api() {
         ;;
       --body-file)
         body="$(read_option_file "$1" "${2-}")"
+        body_from_file="true"
         shift 2
         ;;
       --draft)
@@ -667,6 +672,9 @@ create_pr_with_api() {
 
   if [[ -z "${base_branch}" || -z "${head_branch}" || -z "${title}" ]]; then
     usage_error "pr create requires --base, --head, and one of --title or --title-file"
+  fi
+  if [[ "${title_from_file}" != "true" || "${body_from_file}" != "true" ]]; then
+    usage_error "pr create requires --title-file and --body-file for privacy-safe invocation"
   fi
 
   local payload
@@ -853,6 +861,8 @@ parse_review_reply_args() {
   pr_number=""
   comment_id=""
   body=""
+  local body_from_file
+  body_from_file="false"
 
   while (($# > 0)); do
     case "$1" in
@@ -873,6 +883,7 @@ parse_review_reply_args() {
         ;;
       --body-file)
         body="$(read_option_file "$1" "${2-}")"
+        body_from_file="true"
         shift 2
         ;;
       *)
@@ -884,6 +895,9 @@ parse_review_reply_args() {
   if [[ -z "${pr_number}" || -z "${comment_id}" || -z "${body}" ]]; then
     usage_error "review-reply requires --pr, --comment-id, and --body"
   fi
+  if [[ "${body_from_file}" != "true" ]]; then
+    usage_error "review-reply requires --body-file for privacy-safe invocation"
+  fi
 }
 
 reply_review_comment_with_gh() {
@@ -891,17 +905,17 @@ reply_review_comment_with_gh() {
   if [[ -n "${gh_exec_token:-}" ]]; then
     GH_TOKEN="${gh_exec_token}" GH_HOST=github.com gh api \
       -X POST \
-      "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
+      "repos/${repo_full_name}/pulls/comments/${comment_id}/replies" \
       -f "body=${body}" >/dev/null
   elif [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
     GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api \
       -X POST \
-      "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
+      "repos/${repo_full_name}/pulls/comments/${comment_id}/replies" \
       -f "body=${body}" >/dev/null
   else
     GH_HOST=github.com gh api \
       -X POST \
-      "repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" \
+      "repos/${repo_full_name}/pulls/comments/${comment_id}/replies" \
       -f "body=${body}" >/dev/null
   fi
 }
@@ -910,11 +924,15 @@ reply_review_comment_with_api() {
   local payload
   parse_review_reply_args "$@"
   payload=$(printf '{"body":"%s"}' "$(json_escape "${body}")")
-  api_request POST "/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" "${payload}" >/dev/null
+  api_request POST "/repos/${repo_full_name}/pulls/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
 if [[ "${1-}:${2-}" == "auth:status" ]]; then
-  token="$(resolve_token)"
+  repo_full_name="$(parse_repo_full_name)"
+  token="$(resolve_gh_exec_token)"
+  if [[ -z "${token}" ]]; then
+    token="$(resolve_token)"
+  fi
   if [[ -z "${token}" ]]; then
     usage_error "gh auth status requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
   fi
@@ -929,24 +947,35 @@ if command -v gh >/dev/null 2>&1; then
   gh_exec_token="$(resolve_gh_exec_token)"
   verify_gh_login_if_requested
   if [[ "${1-}" == "review-reply" ]]; then
-    shift
-    reply_review_comment_with_gh "$@"
-    exit 0
-  fi
-  if [[ "${1-}" == "pr" && "${2-}" == "create" ]] && pr_create_uses_title_file "$@"; then
     token="${gh_exec_token}"
     if [[ -z "${token}" ]]; then
       token="$(resolve_token)"
     fi
     if [[ -z "${token}" ]]; then
-      usage_error "pr create with --title-file requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+      usage_error "review-reply requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+    fi
+    shift
+    reply_review_comment_with_api "$@"
+    exit 0
+  fi
+  if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
+    token="${gh_exec_token}"
+    if [[ -z "${token}" ]]; then
+      token="$(resolve_token)"
+    fi
+    if [[ -z "${token}" ]]; then
+      usage_error "pr create requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
     fi
     shift 2
     create_pr_with_api "$@"
     exit 0
   fi
-  if [[ -n "${gh_exec_token}" ]]; then
-    GH_TOKEN="${gh_exec_token}" GH_HOST=github.com exec gh "$@"
+  token="${gh_exec_token}"
+  if [[ -z "${token}" ]]; then
+    token="$(resolve_token)"
+  fi
+  if [[ -n "${token}" ]]; then
+    GH_TOKEN="${token}" GH_HOST=github.com exec gh "$@"
   fi
   GH_HOST=github.com exec gh "$@"
 fi

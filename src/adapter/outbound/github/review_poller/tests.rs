@@ -187,6 +187,26 @@ fn parses_repository_full_name_from_github_https_origin() {
 }
 
 #[test]
+fn parses_repository_full_name_from_github_credentialed_https_origin() {
+    let repository = GithubReviewPollerAdapter::parse_repository_full_name(
+        "https://token@github.com/acme/widgets.git",
+    )
+    .expect("credentialed HTTPS repository should parse");
+
+    assert_eq!(repository, "acme/widgets");
+}
+
+#[test]
+fn parses_repository_full_name_from_github_ssh_protocol_origin() {
+    let repository = GithubReviewPollerAdapter::parse_repository_full_name(
+        "ssh://git@github.com/acme/widgets.git",
+    )
+    .expect("ssh protocol repository should parse");
+
+    assert_eq!(repository, "acme/widgets");
+}
+
+#[test]
 fn encodes_branch_head_filter_for_pull_request_lookup() {
     // GitHub PR search의 `head` query는 `owner:branch` 형태인데 agent branch에는 slash가 들어간다.
     // 이 값을 percent-encode하지 않으면 branch lookup이 다른 query로 해석된다. path segment가 아니라 query value만
@@ -489,6 +509,8 @@ fn find_current_branch_resolves_repository_branch_and_maps_open_pull_request() {
         &format!(
             r#"#!/bin/sh
 set -eu
+cat >/dev/null
+
 last=""
 for arg in "$@"; do
   last="$arg"
@@ -769,6 +791,8 @@ fn fetch_json_reports_curl_stderr_for_failed_http_request() {
         "fake-curl",
         r#"#!/bin/sh
 set -eu
+cat >/dev/null
+
 echo "api denied" >&2
 exit 22
 "#,
@@ -816,6 +840,8 @@ fn find_open_pull_request_for_branch_encodes_filters_and_maps_target() {
         &format!(
             r#"#!/bin/sh
 set -eu
+cat >/dev/null
+
 last=""
 for arg in "$@"; do
   last="$arg"
@@ -881,6 +907,7 @@ fn fetch_paginated_array_reads_followup_pages_until_short_page() {
         &format!(
             r#"#!/bin/sh
 set -eu
+cat >/dev/null
 last=""
 for arg in "$@"; do
   last="$arg"
