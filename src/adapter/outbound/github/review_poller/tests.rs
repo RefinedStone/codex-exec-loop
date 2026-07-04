@@ -713,6 +713,27 @@ fn named_credentials_cover_plain_token_missing_files_and_common_dir_fallback() {
 }
 
 #[test]
+fn git_credential_files_cover_home_fallback() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let home_root = unique_temp_dir("review-poller-home-git-credentials");
+    fs::create_dir_all(&home_root).expect("home credential fixture root should exist");
+    fs::write(
+        home_root.join(".git-credentials"),
+        "https://ci:home-token-123@github.com\n",
+    )
+    .expect("home git credential fixture should be written");
+    let _env = EnvVarGuard::apply(&[("HOME", Some(home_root.to_string_lossy().as_ref()))]);
+
+    let token = GithubReviewPollerAdapter::read_git_credential_file_token()
+        .expect("home git credential lookup should not fail");
+
+    assert_eq!(token.as_deref(), Some("home-token-123"));
+    let _ = fs::remove_dir_all(&home_root);
+}
+
+#[test]
 fn windows_home_resolution_covers_absent_permission_and_error_edges() {
     let empty_root = unique_temp_dir("review-poller-windows-users-empty");
     fs::create_dir_all(&empty_root).expect("empty users root should be created");

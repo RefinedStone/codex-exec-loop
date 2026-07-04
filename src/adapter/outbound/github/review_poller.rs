@@ -232,6 +232,9 @@ impl GithubReviewPollerAdapter {
         if let Some(token) = Self::read_named_github_credential_token(repo_root)? {
             return Ok(token);
         }
+        if let Some(token) = Self::read_git_credential_file_token()? {
+            return Ok(token);
+        }
         if let Some(credential_line) = Self::find_windows_github_credential_line()? {
             return Self::parse_github_credential_token(&credential_line);
         }
@@ -356,6 +359,57 @@ impl GithubReviewPollerAdapter {
             }
         }
         Ok(None)
+    }
+
+    fn read_git_credential_file_token() -> Result<Option<String>> {
+        for candidate in Self::git_credential_file_candidates() {
+            let path = Path::new(&candidate);
+            if !path.is_file() {
+                continue;
+            }
+            let contents = fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            for line in contents.lines().map(str::trim) {
+                if !line.starts_with("https://") || !line.contains("@github.com") {
+                    continue;
+                }
+                if let Ok(token) = Self::parse_github_credential_token(line) {
+                    return Ok(Some(token));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn git_credential_file_candidates() -> Vec<String> {
+        let mut candidates = Vec::new();
+        if let Some(home) = std::env::var_os("HOME") {
+            candidates.push(
+                PathBuf::from(home)
+                    .join(".git-credentials")
+                    .display()
+                    .to_string(),
+            );
+        }
+        if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+            candidates.push(
+                PathBuf::from(userprofile)
+                    .join(".git-credentials")
+                    .display()
+                    .to_string(),
+            );
+        }
+        if let Ok(entries) = fs::read_dir(WINDOWS_USERS_ROOT) {
+            let mut windows_candidates = entries
+                .flatten()
+                .map(|entry| entry.path().join(".git-credentials"))
+                .filter(|path| path.is_file())
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            windows_candidates.sort();
+            candidates.extend(windows_candidates);
+        }
+        candidates
     }
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
         /*

@@ -47,7 +47,7 @@ impl GithubAutomationAdapter {
     최종 guard 역할을 한다.
     */
     fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnapshot {
-        let Some(push_url) = run_git_stdout(
+        let Some(_push_url) = run_git_stdout(
             repo_root,
             &["remote", "get-url", "--push", DEFAULT_PUSH_REMOTE_NAME],
         )
@@ -88,7 +88,9 @@ impl GithubAutomationAdapter {
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::PushRemote,
                 ParallelModeCapabilityState::Degraded,
-                format!("git push --dry-run failed for `{current_branch}` to `{push_url}`"),
+                format!(
+                    "git push --dry-run failed for `{current_branch}` via remote `{DEFAULT_PUSH_REMOTE_NAME}`"
+                ),
                 Some("repair git push credentials or remote branch permissions".to_string()),
             );
         }
@@ -96,7 +98,7 @@ impl GithubAutomationAdapter {
         ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
             ParallelModeCapabilityState::Ready,
-            format!("push remote is configured at {push_url}"),
+            format!("push remote `{DEFAULT_PUSH_REMOTE_NAME}` is configured"),
             None,
         )
     }
@@ -821,7 +823,11 @@ mod tests {
 
         assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
         assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
-        assert!(capability.detail.contains("push remote is configured at"));
+        assert!(
+            capability
+                .detail
+                .contains("push remote `origin` is configured")
+        );
         assert!(capability.next_action.is_none());
     }
 
