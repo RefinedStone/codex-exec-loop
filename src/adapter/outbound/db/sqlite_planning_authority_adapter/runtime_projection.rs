@@ -435,7 +435,8 @@ impl SqlitePlanningAuthorityAdapter {
                                 command.command_id
                             )
                         })?;
-                if !existing_command.is_terminal() && existing_command.epoch_id != command.epoch_id
+                if existing_command.state == ParallelModeDispatchCommandState::Pending
+                    && existing_command.epoch_id != command.epoch_id
                 {
                     changed_rows = transaction
                         .execute(
@@ -445,21 +446,23 @@ impl SqlitePlanningAuthorityAdapter {
                                  command_state = ?3,
                                  queue_head_signature = ?4,
                                  epoch_id = ?5,
-                                 updated_at = ?6,
+                                 created_at = ?6,
+                                 updated_at = ?7,
                                  owner_token = NULL,
-                                 content = ?7
-                             WHERE command_id = ?8
-                               AND command_state = ?9",
+                                 content = ?8
+                             WHERE command_id = ?9
+                               AND command_state = ?10",
                             params![
                                 command.kind.label(),
                                 command.trigger.label(),
                                 command.state.label(),
                                 command.queue_head_signature.as_deref(),
                                 command.epoch_id.map(|value| value as i64),
+                                &command.created_at,
                                 &command.updated_at,
                                 &payload_json,
                                 &command.command_id,
-                                existing_command.state.label(),
+                                ParallelModeDispatchCommandState::Pending.label(),
                             ],
                         )
                         .with_context(|| {
