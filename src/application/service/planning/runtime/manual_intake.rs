@@ -218,6 +218,9 @@ mod tests {
     };
     use crate::diagnostics::event_log;
     use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+    use crate::domain::planning::{
+        PriorityQueueService, TaskActor, TaskDefinition, TaskMutationProvenance, TaskStatus,
+    };
     use anyhow::anyhow;
     use serde_json::json;
     use tracing_subscriber::EnvFilter;
@@ -254,6 +257,86 @@ mod tests {
             assert_eq!(task.task_title, expected_title);
             assert_eq!(handoff.transcript_text, prompt);
         }
+    }
+
+    #[test]
+    fn manual_prompt_intake_handoff_follows_existing_ready_queue_head() {
+        let workspace_dir = create_temp_git_repo("manual-intake-existing-ready-head");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning = PlanningServices::from_ports(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            authority.clone(),
+            authority.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        bootstrap_planning_workspace(&planning, &workspace_dir);
+
+        let direction_snapshot = authority
+            .load_direction_authority_snapshot(&workspace_dir)
+            .expect("direction authority should load")
+            .expect("direction authority should exist");
+        let task_snapshot = authority
+            .load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
+        let mut task_authority = task_snapshot.task_authority.clone();
+        task_authority.tasks.push(TaskDefinition {
+            id: "task-existing".to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_relation_note: "preexisting queue work".to_string(),
+            title: "Existing ready task".to_string(),
+            description: "Finish the existing ready task first.".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 100,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::System,
+            last_updated_by: TaskActor::System,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::default(),
+            updated_at: "2026-05-12T00:00:00Z".to_string(),
+        });
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&direction_snapshot.directions, &task_authority)
+            .expect("queue projection should build with existing ready task");
+        let commit_result = authority
+            .commit_task_authority_snapshot(
+                &workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: Some(task_snapshot.planning_revision),
+                    task_authority: &task_authority,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("existing ready task should commit");
+        assert!(matches!(
+            commit_result,
+            PlanningTaskAuthorityCommitResult::Committed { .. }
+        ));
+
+        let prompt = "Please remember the release notes follow-up";
+        let outcome = planning
+            .runtime
+            .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                workspace_directory: workspace_dir.clone(),
+                raw_prompt: prompt.to_string(),
+                legacy_source_turn_id: None,
+                parent_thread_id: None,
+                parent_turn_id: None,
+            });
+
+        let ManualPromptIntakeOutcome::TaskCommitted { handoff, .. } = outcome else {
+            panic!("manual prompt should still commit as a task: {outcome:?}");
+        };
+        let task = handoff
+            .task
+            .expect("manual intake handoff should carry the queue head task");
+        assert_eq!(task.task_id, "task-existing");
+        assert_eq!(task.task_title, "Existing ready task");
+        assert_eq!(handoff.transcript_text, prompt);
+        assert!(handoff.prompt.contains("Existing ready task"));
     }
 
     #[test]
