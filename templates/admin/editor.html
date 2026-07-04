@@ -7,6 +7,10 @@
     <form method="post" action="{{ action_paths.save }}" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="kind" value="{{ session.kind }}">
+      {% if let Some(surface) = editor_surface_token %}
+      <input type="hidden" name="surface" value="{{ surface }}">
+      {% endif %}
+
       {% if let Some(direction_id) = session.direction_id %}
       <input type="hidden" name="direction_id" value="{{ direction_id }}">
       {% endif %}
@@ -40,7 +44,7 @@
         >
           Promote
         </button>
-        <a class="button secondary" href="{{ session.return_path }}">Back</a>
+        <a class="button secondary" href="{{ return_path }}">Back</a>
       </div>
     </form>
   </article>
