@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(response.operation, "list_tasks");
         assert!(!response.task_authority_changed);
         assert_eq!(response.applied_command_count, 0);
-        assert_eq!(response.committed_planning_revision, Some(1));
+        assert_eq!(response.committed_planning_revision, Some(2));
         assert_eq!(
             response
                 .queue_head
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(response.operation, "create_task");
         assert!(response.task_authority_changed);
         assert_eq!(response.applied_command_count, 1);
-        assert_eq!(response.committed_planning_revision, Some(2));
+        assert_eq!(response.committed_planning_revision, Some(3));
         assert_eq!(response.tasks, Vec::new());
         assert_eq!(
             response
@@ -888,7 +888,7 @@ mod tests {
         assert!(response.task_authority_changed);
         assert_eq!(response.applied_command_count, 1);
         assert_eq!(response.committed_task_ids, vec!["target"]);
-        assert_eq!(response.committed_planning_revision, Some(2));
+        assert_eq!(response.committed_planning_revision, Some(3));
         assert_eq!(
             response
                 .queue_head

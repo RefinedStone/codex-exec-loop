@@ -221,14 +221,17 @@ pub fn load_consistent_planning_authority_snapshots(
     for _ in 0..CONSISTENT_AUTHORITY_SNAPSHOT_LOAD_ATTEMPTS {
         let direction_snapshot = repository.load_direction_authority_snapshot(workspace_dir)?;
         let task_snapshot = repository.load_task_authority_snapshot(workspace_dir)?;
-        let direction_revision = direction_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.planning_revision);
-        let task_revision = task_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.planning_revision);
-        if direction_revision == task_revision {
-            return Ok((direction_snapshot, task_snapshot));
+        match (direction_snapshot.as_ref(), task_snapshot.as_ref()) {
+            (Some(direction_snapshot), Some(task_snapshot))
+                if direction_snapshot.planning_revision == task_snapshot.planning_revision =>
+            {
+                return Ok((
+                    Some(direction_snapshot.clone()),
+                    Some(task_snapshot.clone()),
+                ));
+            }
+            (None, _) | (_, None) => return Ok((direction_snapshot, task_snapshot)),
+            _ => {}
         }
         last_direction_snapshot = direction_snapshot;
         last_task_snapshot = task_snapshot;
@@ -278,14 +281,17 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
         commit: PlanningDirectionAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         // 현재 revision 확인과 새 snapshot 삽입을 같은 lock 범위에서 수행해 테스트 환경의 lost update를 막는다.
-        let mut store = noop_direction_authority_store()
+        let mut revision_store = noop_planning_revision_store()
+            .lock()
+            .expect("noop planning revision store should not be poisoned");
+        let mut direction_store = noop_direction_authority_store()
             .lock()
             .expect("noop direction authority store should not be poisoned");
-        // 저장된 snapshot이 없으면 revision 0으로 간주해 첫 commit이 revision 1이 되게 한다.
-        let current_revision = store
-            .get(workspace_dir)
-            .map(|snapshot| snapshot.planning_revision)
-            .unwrap_or(0);
+        let mut task_store = noop_task_authority_store()
+            .lock()
+            .expect("noop task authority store should not be poisoned");
+        // direction/task snapshot은 같은 planning revision을 공유하므로 공용 revision을 기준으로 충돌을 검사한다.
+        let current_revision = revision_store.get(workspace_dir).copied().unwrap_or(0);
         // 호출자가 읽은 revision과 현재 revision이 다르면 저장하지 않고 충돌 정보를 돌려준다.
         if let Some(observed_revision) = commit.observed_planning_revision
             && observed_revision != current_revision
@@ -296,7 +302,7 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
             });
         }
         // 현재 snapshot이 이미 요청과 같으면 no-op으로 보고 revision을 올리지 않는다.
-        if let Some(existing_snapshot) = store.get(workspace_dir)
+        if let Some(existing_snapshot) = direction_store.get(workspace_dir)
             && existing_snapshot.directions == *commit.directions
         {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
@@ -306,7 +312,8 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
         }
         // 성공 commit은 revision을 하나 올려 후속 읽기/쓰기의 기준점을 바꾼다.
         let planning_revision = current_revision + 1;
-        store.insert(
+        revision_store.insert(workspace_dir.to_string(), planning_revision);
+        direction_store.insert(
             workspace_dir.to_string(),
             PlanningDirectionAuthoritySnapshot {
                 planning_revision,
@@ -314,6 +321,9 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 directions: commit.directions.clone(),
             },
         );
+        if let Some(task_snapshot) = task_store.get_mut(workspace_dir) {
+            task_snapshot.planning_revision = planning_revision;
+        }
         Ok(PlanningTaskAuthorityCommitResult::Committed {
             planning_revision,
             changed: true,
@@ -352,14 +362,17 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         // 현재 revision 검사와 새 snapshot 삽입을 같은 Mutex guard 안에서 처리한다.
-        let mut store = noop_task_authority_store()
+        let mut revision_store = noop_planning_revision_store()
+            .lock()
+            .expect("noop planning revision store should not be poisoned");
+        let mut direction_store = noop_direction_authority_store()
+            .lock()
+            .expect("noop direction authority store should not be poisoned");
+        let mut task_store = noop_task_authority_store()
             .lock()
             .expect("noop task authority store should not be poisoned");
-        // direction store와 같은 규칙으로 빈 저장소의 현재 revision을 0으로 둔다.
-        let current_revision = store
-            .get(workspace_dir)
-            .map(|snapshot| snapshot.planning_revision)
-            .unwrap_or(0);
+        // direction/task snapshot은 같은 planning revision을 공유하므로 공용 revision을 기준으로 충돌을 검사한다.
+        let current_revision = revision_store.get(workspace_dir).copied().unwrap_or(0);
         // observed revision이 현재와 다르면 task 문서와 queue projection 모두 저장하지 않는다.
         if let Some(observed_revision) = commit.observed_planning_revision
             && observed_revision != current_revision
@@ -369,7 +382,7 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 current_planning_revision: current_revision,
             });
         }
-        if let Some(existing_snapshot) = store.get(workspace_dir)
+        if let Some(existing_snapshot) = task_store.get(workspace_dir)
             && existing_snapshot.task_authority == *commit.task_authority
             && existing_snapshot.queue_projection == *commit.queue_projection
         {
@@ -380,7 +393,8 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
         }
         // 성공하면 두 문서가 같은 새 revision을 공유한다.
         let planning_revision = current_revision + 1;
-        store.insert(
+        revision_store.insert(workspace_dir.to_string(), planning_revision);
+        task_store.insert(
             workspace_dir.to_string(),
             PlanningTaskAuthoritySnapshot {
                 planning_revision,
@@ -390,6 +404,9 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 queue_projection: commit.queue_projection.clone(),
             },
         );
+        if let Some(direction_snapshot) = direction_store.get_mut(workspace_dir) {
+            direction_snapshot.planning_revision = planning_revision;
+        }
         Ok(PlanningTaskAuthorityCommitResult::Committed {
             planning_revision,
             changed: true,
@@ -428,5 +445,11 @@ fn noop_direction_authority_store()
 -> &'static Mutex<BTreeMap<String, PlanningDirectionAuthoritySnapshot>> {
     static STORE: OnceLock<Mutex<BTreeMap<String, PlanningDirectionAuthoritySnapshot>>> =
         OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[cfg(test)]
+fn noop_planning_revision_store() -> &'static Mutex<BTreeMap<String, i64>> {
+    static STORE: OnceLock<Mutex<BTreeMap<String, i64>>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }

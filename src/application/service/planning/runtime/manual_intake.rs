@@ -229,14 +229,22 @@ mod tests {
 
     #[test]
     fn manual_prompt_intake_commits_greetings_and_questions_as_tasks() {
-        let workspace_dir = create_temp_git_repo("manual-intake-no-heuristic");
         let planning = planning_services();
-        bootstrap_planning_workspace(&planning, &workspace_dir);
 
-        for (prompt, expected_title) in [
-            ("안녕하세요 ?", "안녕하세요"),
-            ("How does the queue work?", "How does the queue work"),
+        for (workspace_label, prompt, expected_title) in [
+            (
+                "manual-intake-no-heuristic-greeting",
+                "안녕하세요 ?",
+                "안녕하세요",
+            ),
+            (
+                "manual-intake-no-heuristic-question",
+                "How does the queue work?",
+                "How does the queue work",
+            ),
         ] {
+            let workspace_dir = create_temp_git_repo(workspace_label);
+            bootstrap_planning_workspace(&planning, &workspace_dir);
             let outcome =
                 planning
                     .runtime
