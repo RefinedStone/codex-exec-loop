@@ -47,6 +47,17 @@ bash scripts/capture_native_validation.sh \
   --output-dir docs/validation
 ```
 
+Record the alternate-screen validation row reserved by the terminal-baseline gate:
+
+```bash
+bash scripts/capture_native_validation.sh \
+  --frontend alternate \
+  --check-profile terminal-baseline \
+  --terminal "iTerm2 3.5" \
+  --result pass \
+  --output-dir docs/validation
+```
+
 Summarize recorded coverage (informational; warns when required rows are incomplete):
 
 ```bash
@@ -59,7 +70,7 @@ Gate recorded coverage explicitly:
 bash scripts/summarize_native_validation.sh --fail-on-incomplete
 ```
 
-The summary helper counts only exact matrix-row captures. Supplemental primitive-sensitive artifacts may appear under `Unmatched Records` by design when they document representative branch-family evidence rather than a counted matrix row.
+The summary helper counts only exact matrix-row captures. Supplemental primitive-sensitive artifacts may stay outside the summary entirely, or appear under `Unmatched Records`, depending on their `check_profile` and row metadata.
 
 ## Minimum Matrix
 

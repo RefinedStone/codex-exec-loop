@@ -13,12 +13,12 @@ terminal_version: not recorded
 shell: WSL bash
 shell_version: not recorded
 frontend: inline
-environment_class: fallback
+environment_class: first-class
 multiplexer_state: none
 term: dumb
 inline_history_render_mode: ViewportReplay
 history_insertion_mode: NewlineFallback
-override_env_vars: none recorded; inferred default from Windows Terminal / WSL bash first-class path
+override_env_vars: none recorded; inferred NewlineFallback because WT_SESSION was present on the Windows Terminal / WSL bash first-class path
 scenario_set: replay-policy representative minimum
 scenario_results:
 - committed history insertion above live viewport = pass (focused replay regression suite)
