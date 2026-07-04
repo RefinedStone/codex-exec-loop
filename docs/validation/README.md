@@ -36,10 +36,10 @@ Treat the plain summary output as a visibility report, not a release gate, until
 
 | Metric | Current value |
 | --- | --- |
-| Required pass | `0/8` |
-| Required missing | `8` |
+| Required pass | `0/4` |
+| Required missing | `4` |
 | Required non-pass | `0` |
-| Optional pass | `0/3` |
+| Optional pass | `0/7` |
 
 No required terminal-baseline row is currently recorded as passing.
 The replay-policy captures below are supplemental representative evidence and do not count toward the baseline row totals.

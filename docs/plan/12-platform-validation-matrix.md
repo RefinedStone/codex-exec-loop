@@ -77,13 +77,13 @@ The summary helper counts only exact matrix-row captures. Supplemental primitive
 | OS | Terminal | Shell | Frontend | Priority |
 | --- | --- | --- | --- | --- |
 | macOS | Terminal.app | zsh | inline | required |
-| macOS | Terminal.app | zsh | alternate | required |
 | macOS | iTerm2 | zsh | inline | required |
-| macOS | iTerm2 | zsh | alternate | required |
 | Windows | Windows Terminal | PowerShell | inline | required |
-| Windows | Windows Terminal | PowerShell | alternate | required |
 | Windows | Windows Terminal | WSL bash | inline | required |
-| Windows | Windows Terminal | WSL bash | alternate | required |
+| macOS | Terminal.app | zsh | alternate | optional |
+| macOS | iTerm2 | zsh | alternate | optional |
+| Windows | Windows Terminal | PowerShell | alternate | optional |
+| Windows | Windows Terminal | WSL bash | alternate | optional |
 | Windows | Git Bash or equivalent | bash | inline | optional |
 | Windows | JetBrains IDE terminal | WSL bash | inline | optional |
 | Windows | JetBrains IDE terminal | WSL bash | alternate | optional |
