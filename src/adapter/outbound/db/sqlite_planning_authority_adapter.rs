@@ -22,8 +22,9 @@ use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
 };
 use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityDocumentCommit,
-    PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
-    PlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+    PlanningAuthorityDocumentSnapshot, PlanningAuthorityOfficialRefreshClaimStatus,
+    PlanningAuthorityOfficialRefreshRecoveryStatus, PlanningAuthorityPort,
+    PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
@@ -190,6 +191,52 @@ impl SqlitePlanningAuthorityAdapter {
         load_direction_authority_snapshot_from_connection(&connection)
     }
 
+    /*
+    direction/task authority와 accepted result output을 같은 authority read snapshot으로 읽는다.
+
+    admin operator surface는 direction/task/result-output을 같은 시점의 accepted state로 봐야 한다. 이 helper는
+    하나의 SQLite transaction 안에서 세 표면을 읽고, direction/task revision이 어긋나면 mixed snapshot으로 보지 않고
+    reload 오류를 돌린다.
+    */
+    pub(crate) fn load_planning_authority_documents(
+        workspace_dir: &str,
+    ) -> Result<Option<PlanningAuthorityDocumentSnapshot>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open planning authority document load transaction")?;
+        let direction_snapshot = load_direction_authority_snapshot_from_connection(&transaction)?;
+        let task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        let workspace_record = load_active_workspace_record(&transaction)?;
+        match (direction_snapshot, task_snapshot) {
+            (Some(direction_snapshot), Some(task_snapshot)) => {
+                if direction_snapshot.planning_revision != task_snapshot.planning_revision {
+                    return Err(anyhow!(
+                        "planning authority changed while loading direction/task snapshots (direction revision {:?}, task revision {:?}); reload and retry",
+                        Some(direction_snapshot.planning_revision),
+                        Some(task_snapshot.planning_revision)
+                    ));
+                }
+                let Some(result_output_markdown) = workspace_record.result_output_markdown else {
+                    return Ok(None);
+                };
+                Ok(Some(PlanningAuthorityDocumentSnapshot {
+                    planning_revision: task_snapshot.planning_revision,
+                    directions: direction_snapshot.directions,
+                    task_authority: task_snapshot.task_authority,
+                    result_output_markdown,
+                }))
+            }
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(anyhow!(
+                "accepted planning authority is missing task authority"
+            )),
+            (None, Some(_)) => Err(anyhow!(
+                "accepted planning authority is missing direction authority"
+            )),
+        }
+    }
     /*
     direction/task authority와 operator-facing result output을 한 transaction으로 함께 commit한다.
 
@@ -696,6 +743,13 @@ impl PlanningAuthorityPort for SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityShadowStoreInspection> {
         self.inspect_shadow_store_impl(workspace_dir)
+    }
+
+    fn load_planning_authority_documents(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<PlanningAuthorityDocumentSnapshot>> {
+        Self::load_planning_authority_documents(workspace_dir)
     }
 
     fn commit_planning_authority_documents(

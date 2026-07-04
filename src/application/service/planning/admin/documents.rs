@@ -48,11 +48,21 @@ impl PlanningAdminFacadeService {
     pub(super) fn load_operator_planning_documents(
         &self,
     ) -> Result<PlanningOperatorPlanningDocuments> {
-        // load는 direction/task repository snapshot을 authority로 삼고, result_output은 authority-aware workspace port를
-        // 통해 읽는다. repo-backed workspace에서는 active authority store를 우선하고, plain workspace에서는 filesystem copy를
-        // fallback으로 사용한다. observed revision은 operator가 읽은 DB snapshot의 버전이므로 commit 때 optimistic
-        // concurrency guard로 그대로 전달한다.
+        // load는 가능한 한 authority store가 제공하는 한 번의 일관된 snapshot을 우선 사용한다.
+        // repo-backed workspace에서는 direction/task/result-output을 같은 authority read로 묶고,
+        // fallback 경로에서는 authority-aware workspace port와 consistent snapshot loader를 조합해 기존 contract를 유지한다.
         self.ensure_default_authority()?;
+        if let Some(snapshot) = self
+            .planning_authority_port
+            .load_planning_authority_documents(self.workspace_dir.as_str())?
+        {
+            return Ok(PlanningOperatorPlanningDocuments {
+                directions: snapshot.directions,
+                task_authority: snapshot.task_authority,
+                result_output_markdown: snapshot.result_output_markdown,
+                observed_planning_revision: Some(snapshot.planning_revision),
+            });
+        }
         let result_output_markdown = self
             .planning_workspace_port
             .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
@@ -462,6 +472,8 @@ mod tests {
         TaskDefinition, TaskMutationProvenance, TaskStatus,
     };
     use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -703,6 +715,37 @@ mod tests {
     }
 
     #[test]
+    fn git_backed_operator_document_reload_prefers_authority_backed_result_output() {
+        let fixture = TestAdminFixture::new_git("admin-documents-git-backed-reload");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded git-backed operator documents should load");
+        documents.result_output_markdown = "# Result Output\n\nAccepted admin copy.".to_string();
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("git-backed operator documents should commit");
+
+        let stale_path =
+            PathBuf::from(fixture.facade.workspace_dir()).join(RESULT_OUTPUT_FILE_PATH);
+        if let Some(parent) = stale_path.parent() {
+            fs::create_dir_all(parent).expect("stale workspace parent should create");
+        }
+        fs::write(&stale_path, "# Result Output\n\nStale filesystem copy.")
+            .expect("stale workspace result output should write");
+
+        let reloaded = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("git-backed operator documents should reload from authority store");
+        assert_eq!(
+            reloaded.result_output_markdown,
+            "# Result Output\n\nAccepted admin copy."
+        );
+    }
+
+    #[test]
     fn operator_document_commit_surfaces_authority_commit_failure_without_mutation() {
         let workspace_port: Arc<dyn PlanningWorkspacePort> =
             Arc::new(FilesystemPlanningWorkspaceAdapter::new());
@@ -889,12 +932,30 @@ mod tests {
             Self::new_with_workspace_port(prefix, workspace_port)
         }
 
+        fn new_git(prefix: &str) -> Self {
+            let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+                FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+            );
+            Self::from_workspace(
+                TempPlanningWorkspace::new_git(prefix),
+                workspace_port,
+                sqlite.clone(),
+                sqlite,
+            )
+        }
+
         fn new_with_workspace_port(
             prefix: &str,
             workspace_port: Arc<dyn PlanningWorkspacePort>,
         ) -> Self {
             let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
-            Self::new_with_ports(prefix, workspace_port, sqlite.clone(), sqlite)
+            Self::from_workspace(
+                TempPlanningWorkspace::new(prefix),
+                workspace_port,
+                sqlite.clone(),
+                sqlite,
+            )
         }
 
         fn new_with_ports(
@@ -903,7 +964,20 @@ mod tests {
             authority_port: Arc<dyn PlanningAuthorityPort>,
             task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
         ) -> Self {
-            let workspace = TempPlanningWorkspace::new(prefix);
+            Self::from_workspace(
+                TempPlanningWorkspace::new(prefix),
+                workspace_port,
+                authority_port,
+                task_repository_port,
+            )
+        }
+
+        fn from_workspace(
+            workspace: TempPlanningWorkspace,
+            workspace_port: Arc<dyn PlanningWorkspacePort>,
+            authority_port: Arc<dyn PlanningAuthorityPort>,
+            task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        ) -> Self {
             let planning = PlanningServices::from_ports(
                 workspace_port.clone(),
                 authority_port.clone(),
@@ -939,6 +1013,16 @@ mod tests {
             Self {
                 path: path.display().to_string(),
             }
+        }
+
+        fn new_git(prefix: &str) -> Self {
+            let workspace = Self::new(prefix);
+            let status = Command::new("git")
+                .args(["init", workspace.path.as_str()])
+                .status()
+                .expect("git init should run");
+            assert!(status.success(), "git init should succeed");
+            workspace
         }
     }
 

@@ -246,6 +246,19 @@ pub struct PlanningAuthorityDocumentCommit<'a> {
     pub result_output_markdown: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/*
+ * accepted planning authority를 한 번의 일관된 읽기로 돌려주는 admin read model이다.
+ * direction/task authority와 active result output이 같은 planning revision으로 관찰되었음을 나타내며,
+ * admin/operator surface가 mixed snapshot을 만들지 않도록 하는 read-side 계약이다.
+ */
+pub struct PlanningAuthorityDocumentSnapshot {
+    pub planning_revision: i64,
+    pub directions: DirectionCatalogDocument,
+    pub task_authority: TaskAuthorityDocument,
+    pub result_output_markdown: String,
+}
+
 /*
  * `PlanningAuthorityPort`는 planning authority 저장소의 운영 제어면입니다.
  * task/direction 문서 자체는 `PlanningTaskRepositoryPort`가 다루고, 이 포트는 그 문서들이 놓인
@@ -279,6 +292,17 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         Err(anyhow!(
             "planning authority document commits are unsupported by this authority adapter"
         ))
+    }
+
+    /*
+     * direction/task authority와 accepted result output을 같은 authority read snapshot으로 읽습니다.
+     * 지원하지 않는 adapter는 None을 반환해 caller가 기존 fallback 조립 경로를 사용할 수 있게 합니다.
+     */
+    fn load_planning_authority_documents(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Option<PlanningAuthorityDocumentSnapshot>> {
+        Ok(None)
     }
 
     /*
