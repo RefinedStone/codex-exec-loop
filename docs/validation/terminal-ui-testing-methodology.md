@@ -205,9 +205,29 @@ or emitted escape-sequence behavior.
 
 ### Required artifact fields
 
-Each manual capture artifact must record:
+For primitive-sensitive review, the artifact set must distinguish between:
+- a **matrix-row capture** counted by `scripts/summarize_native_validation.sh`
+- a **supplemental representative capture** that documents branch-family or environment-specific primitive behavior
 
+Current capture helpers emit the shared baseline fields only:
+- date
+- commit SHA
+- OS / distro
+- terminal program
+- shell
+- frontend
+- `TERM` when available
+- check profile
+- generic checklist labels
+- result
+- notes
+
+When primitive-sensitive review needs more detail than the helpers emit, append manual metadata below the helper output instead of omitting it.
+If a field cannot be recovered after capture, record `not recorded` explicitly.
+
+Each supplemental primitive-sensitive artifact should record:
 - artifact id / file name
+- whether it is `counted-row` or `supplemental-unmatched`
 - commit SHA
 - PR or work item id
 - capture date/time
@@ -222,7 +242,7 @@ Each manual capture artifact must record:
 - configured `HistoryInsertionMode`
 - whether override env vars were used
 - check profile / scenario set name
-- pass/fail per scenario
+- pass/fail per scenario, or a named automated-proof reference when the artifact is a representative manual addendum
 - notes on deviations
 
 ### Environment stamp contents
@@ -257,8 +277,10 @@ For a primitive-sensitive change, the artifact must show at least:
 ### Reviewer gate
 
 - A primitive-sensitive PR cannot be approved without manual capture artifacts attached.
-- Reviewer must confirm artifact fields, environment stamp, required scenarios, explicit
-  downgrade handling, and updated matrix rows.
+- Reviewer must confirm artifact type (`counted-row` vs `supplemental-unmatched`), environment stamp,
+  required scenarios, explicit downgrade handling, and updated matrix rows.
+- `scripts/capture_native_validation.sh` / `.ps1` do not satisfy the supplemental metadata contract by
+  themselves; representative artifacts may need manual augmentation after capture.
 
 ### When all four first-class environments are required
 

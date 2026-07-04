@@ -58,6 +58,8 @@ Gate recorded coverage explicitly:
 bash scripts/summarize_native_validation.sh --fail-on-incomplete
 ```
 
+The summary helper counts only exact matrix-row captures. Supplemental primitive-sensitive artifacts may appear under `Unmatched Records` by design when they document representative branch-family evidence rather than a counted matrix row.
+
 ## Minimum Matrix
 
 | OS | Terminal | Shell | Frontend | Priority |

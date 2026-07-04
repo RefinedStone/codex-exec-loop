@@ -23,6 +23,9 @@ terminal checklist.
   validation slices
 - preserve the emitted `check_profile` and checklist so rows stay comparable
 - use `bash scripts/summarize_native_validation.sh --fail-on-incomplete` when the matrix must act as a gate; the plain summary is informational and warns on incomplete required rows
+- `scripts/capture_native_validation.sh` and `scripts/capture_native_validation.ps1` emit the shared baseline fields (`date`, `commit`, `os`, `terminal`, `shell`, `frontend`, `term`, `check_profile`, `checks`, `result`, `notes`).
+- Primitive-sensitive supplemental captures may append manual metadata below that helper output when review needs environment class, render/insertion mode, override stamps, or per-scenario results that the helpers do not emit directly.
+- Supplemental primitive-sensitive captures may stay unmatched in `scripts/summarize_native_validation.sh`; only exact matrix-row captures count toward required-row pass totals.
 
 ## Current Status
 
@@ -40,6 +43,9 @@ Treat the plain summary output as a visibility report, not a release gate, until
 
 Recorded required pass today:
 - `Windows / Windows Terminal / WSL bash / inline` → `docs/validation/2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt`
+
+Supplemental representative capture currently stored but not counted in the baseline matrix summary:
+- `docs/validation/2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt` — contrasting `HostScrollback` path evidence for the replay-only primitive change.
 
 ### `prompt-input-delay-pty` snapshot
 
@@ -60,9 +66,19 @@ Use `bash scripts/summarize_native_validation.sh --format markdown` (and `--chec
 
 ## Filename Shape
 
+Standard matrix-row capture:
+
 ```text
 YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>.txt
 ```
+
+Supplemental primitive-sensitive capture:
+
+```text
+YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>-<scenario>.txt
+```
+
+Use the supplemental suffix only when the artifact is a representative/manual addendum rather than a matrix-row record counted by `scripts/summarize_native_validation.sh`.
 
 ## Helper Usage
 

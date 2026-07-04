@@ -1,5 +1,6 @@
 artifact_id: 2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt
 file_name: 2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt
+capture_role: supplemental-unmatched
 work_item_id: not separately recorded; replay-policy follow-up commit d72277de
 capture_datetime: not separately recorded in the artifact body
 operator_reviewer_initials: not recorded
@@ -18,6 +19,13 @@ term: tmux-256color
 inline_history_render_mode: HostScrollback
 history_insertion_mode: unchanged first-class default (not separately recorded)
 override_env_vars: none recorded; notes indicate unchanged first-class defaults
+scenario_set: hostscrollback representative contrast
+scenario_results:
+- committed history insertion above live viewport = pass (unchanged B1 path; representative capture only)
+- no duplicate replay after redraw = pass (unchanged B1 path; representative capture only)
+- shrink then restore with no stale rows / duplicated tail = pass (unchanged B1 path; representative capture only)
+- clear/reset path with clean header and viewport recovery = pass (unchanged B1 path; representative capture only)
+- thread or session switch with no transcript/history leakage = pass (unchanged B1 path; representative capture only)
 check_profile: terminal-baseline
 checks:
 - launch and exit = pass

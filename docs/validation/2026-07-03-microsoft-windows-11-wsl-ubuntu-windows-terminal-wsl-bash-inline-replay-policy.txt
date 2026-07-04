@@ -1,5 +1,6 @@
 artifact_id: 2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt
 file_name: 2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt
+capture_role: counted-row
 work_item_id: not separately recorded; replay-policy follow-up commit d72277de
 capture_datetime: not separately recorded in the artifact body
 operator_reviewer_initials: not recorded
@@ -12,12 +13,19 @@ terminal_version: not recorded
 shell: WSL bash
 shell_version: not recorded
 frontend: inline
-environment_class: fallback
+environment_class: first-class
 multiplexer_state: none
 term: dumb
 inline_history_render_mode: ViewportReplay
 history_insertion_mode: unchanged first-class default (not separately recorded)
 override_env_vars: none recorded; notes indicate unchanged first-class defaults
+scenario_set: replay-policy representative minimum
+scenario_results:
+- committed history insertion above live viewport = pass (focused replay regression suite)
+- no duplicate replay after redraw = pass (focused replay regression suite)
+- shrink then restore with no stale rows / duplicated tail = pass (focused replay regression suite)
+- clear/reset path with clean header and viewport recovery = pass (focused replay regression suite)
+- thread or session switch with no transcript/history leakage = pass (focused replay regression suite)
 check_profile: terminal-baseline
 checks:
 - launch and exit = pass
