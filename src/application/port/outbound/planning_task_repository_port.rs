@@ -64,6 +64,23 @@ pub struct PlanningDirectionAuthorityCommit<'a> {
     pub directions: &'a DirectionCatalogDocument,
 }
 
+#[derive(Debug, Clone, Copy)]
+/*
+ * direction/task authority를 같은 planning revision으로 함께 저장해야 하는 callsite를 위한 묶음 commit 명령이다.
+ * admin 문서 commit처럼 여러 문서를 한 편집 세션에서 동시에 반영할 때, concrete adapter는 이 값을 한 transaction으로
+ * 처리해 반쪽 authority를 남기지 않을 수 있다.
+ */
+pub struct PlanningAuthoritySnapshotCommit<'a> {
+    // 호출자가 마지막으로 본 planning revision이다.
+    pub observed_planning_revision: Option<i64>,
+    // 저장할 direction catalog 문서 참조이다.
+    pub directions: &'a DirectionCatalogDocument,
+    // 저장할 task authority 문서 참조이다.
+    pub task_authority: &'a TaskAuthorityDocument,
+    // task authority와 같은 revision으로 저장할 우선순위 큐 투영이다.
+    pub queue_projection: &'a PriorityQueueProjection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
  * commit 결과는 단순 성공/실패가 아니라 충돌 정보를 값으로 돌려준다.
@@ -72,8 +89,10 @@ pub struct PlanningDirectionAuthorityCommit<'a> {
  */
 pub enum PlanningTaskAuthorityCommitResult {
     Committed {
-        // 성공적으로 저장된 새 revision이다. 호출자는 이후 commit의 observed 값으로 사용할 수 있다.
+        // 성공적으로 저장된 최신 revision이다. 호출자는 이후 commit의 observed 값으로 사용할 수 있다.
         planning_revision: i64,
+        // 실제 저장소 상태가 바뀌었는지 나타낸다. false면 현재 snapshot이 이미 요청과 같아 no-op이었다는 뜻이다.
+        changed: bool,
     },
     Conflict {
         // 호출자가 기준으로 삼았던 오래된 revision이다.
@@ -124,6 +143,64 @@ pub trait PlanningTaskRepositoryPort: Send + Sync {
         // 저장할 task authority, queue projection, observed revision을 담은 명령이다.
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult>;
+
+    /*
+     * direction/task authority를 한 편집 세션 단위로 함께 저장한다.
+     * 기본 구현은 두 commit을 순차 호출하는 fallback이며, shared transaction을 지원하는 concrete adapter는
+     * 이 메서드를 override해 반쪽 authority commit을 막아야 한다.
+     */
+    fn commit_planning_authority_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningAuthoritySnapshotCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        let direction_result = self.commit_direction_authority_snapshot(
+            workspace_dir,
+            PlanningDirectionAuthorityCommit {
+                observed_planning_revision: commit.observed_planning_revision,
+                directions: commit.directions,
+            },
+        )?;
+        let (planning_revision, direction_changed) = match direction_result {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision,
+                changed,
+            } => (planning_revision, changed),
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => {
+                return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                    observed_planning_revision,
+                    current_planning_revision,
+                });
+            }
+        };
+        let task_result = self.commit_task_authority_snapshot(
+            workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: Some(planning_revision),
+                task_authority: commit.task_authority,
+                queue_projection: commit.queue_projection,
+            },
+        )?;
+        Ok(match task_result {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision,
+                changed,
+            } => PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision,
+                changed: direction_changed || changed,
+            },
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            },
+        })
+    }
 
     // workspace의 task authority snapshot을 제거한다. direction snapshot과 별도로 초기화할 수 있다.
     fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> Result<()>;
@@ -218,7 +295,16 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 current_planning_revision: current_revision,
             });
         }
-        // 성공 commit은 항상 revision을 하나 올려 후속 읽기/쓰기의 기준점을 바꾼다.
+        // 현재 snapshot이 이미 요청과 같으면 no-op으로 보고 revision을 올리지 않는다.
+        if let Some(existing_snapshot) = store.get(workspace_dir)
+            && existing_snapshot.directions == *commit.directions
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: current_revision,
+                changed: false,
+            });
+        }
+        // 성공 commit은 revision을 하나 올려 후속 읽기/쓰기의 기준점을 바꾼다.
         let planning_revision = current_revision + 1;
         store.insert(
             workspace_dir.to_string(),
@@ -228,7 +314,10 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 directions: commit.directions.clone(),
             },
         );
-        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        })
     }
 
     // direction snapshot을 workspace 단위로 제거한다.
@@ -280,6 +369,15 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 current_planning_revision: current_revision,
             });
         }
+        if let Some(existing_snapshot) = store.get(workspace_dir)
+            && existing_snapshot.task_authority == *commit.task_authority
+            && existing_snapshot.queue_projection == *commit.queue_projection
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: current_revision,
+                changed: false,
+            });
+        }
         // 성공하면 두 문서가 같은 새 revision을 공유한다.
         let planning_revision = current_revision + 1;
         store.insert(
@@ -292,7 +390,10 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 queue_projection: commit.queue_projection.clone(),
             },
         );
-        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        })
     }
 
     // task authority snapshot을 workspace 단위로 제거한다.

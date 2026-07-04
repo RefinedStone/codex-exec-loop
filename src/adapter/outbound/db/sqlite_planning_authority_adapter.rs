@@ -26,9 +26,9 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningDirectionAuthorityCommit, PlanningDirectionAuthoritySnapshot,
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot,
-    PlanningTaskRepositoryPort,
+    PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
+    PlanningDirectionAuthoritySnapshot, PlanningTaskAuthorityCommit,
+    PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::domain::parallel_mode::{
@@ -191,6 +191,72 @@ impl SqlitePlanningAuthorityAdapter {
     }
 
     /*
+    direction/task authority를 한 transaction으로 함께 commit한다.
+
+    admin 문서 commit처럼 direction/task/result-output을 한 편집 세션에서 같이 저장할 때는,
+    direction commit과 task commit이 서로 다른 revision으로 갈라지면 안 된다. 이 helper는 두 문서가 이미
+    target과 같은지 먼저 비교하고, 실제 변경이 필요할 때만 같은 SQLite transaction에서 direction rows,
+    task rows, queue projection, planning revision을 함께 갱신한다.
+    */
+    pub(crate) fn commit_planning_authority_snapshot(
+        workspace_dir: &str,
+        commit: PlanningAuthoritySnapshotCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+
+        let transaction = connection
+            .transaction()
+            .context("failed to open planning authority combined commit transaction")?;
+        let current_revision = read_metadata_i64(&transaction, "planning_revision")?.unwrap_or(0);
+        if let Some(observed_revision) = commit.observed_planning_revision
+            && observed_revision != current_revision
+        {
+            return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision: observed_revision,
+                current_planning_revision: current_revision,
+            });
+        }
+        let direction_unchanged = load_direction_authority_snapshot_from_connection(&transaction)?
+            .as_ref()
+            .map(|snapshot| &snapshot.directions)
+            == Some(commit.directions);
+        let task_unchanged = load_task_authority_snapshot_from_connection(&transaction)?
+            .as_ref()
+            .is_some_and(|snapshot| {
+                snapshot.task_authority == *commit.task_authority
+                    && snapshot.queue_projection == *commit.queue_projection
+            });
+        if direction_unchanged && task_unchanged {
+            return Ok(PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision: current_revision,
+                changed: false,
+            });
+        }
+
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_direction_authority_commit_at",
+        )?;
+        upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
+        replace_direction_authority_tables(&transaction, commit.directions)?;
+        replace_task_authority_tables(
+            &transaction,
+            commit.task_authority,
+            commit.queue_projection,
+        )?;
+        let planning_revision = bump_planning_revision(&transaction)?;
+        transaction
+            .commit()
+            .context("failed to commit planning authority combined transaction")?;
+
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        })
+    }
+    /*
     direction authority catalog를 commit하고 planning revision을 갱신한다.
 
     commit에는 caller가 마지막으로 관찰한 planning revision이 들어올 수 있다. 이 값이 현재 DB revision과
@@ -226,6 +292,7 @@ impl SqlitePlanningAuthorityAdapter {
         {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: current_revision,
+                changed: false,
             });
         }
 
@@ -241,7 +308,10 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit direction authority transaction")?;
 
-        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        })
     }
 
     /*
@@ -306,6 +376,7 @@ impl SqlitePlanningAuthorityAdapter {
         {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: current_revision,
+                changed: false,
             });
         }
 
@@ -320,7 +391,10 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit task authority transaction")?;
 
-        Ok(PlanningTaskAuthorityCommitResult::Committed { planning_revision })
+        Ok(PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        })
     }
 
     /*
@@ -776,6 +850,14 @@ impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
         commit: PlanningDirectionAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         Self::commit_direction_authority_snapshot(workspace_dir, commit)
+    }
+
+    fn commit_planning_authority_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningAuthoritySnapshotCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Self::commit_planning_authority_snapshot(workspace_dir, commit)
     }
 
     // direction authority 제거 port를 DB clear와 task reconcile helper에 연결한다.

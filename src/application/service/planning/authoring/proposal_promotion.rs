@@ -684,6 +684,7 @@ mod tests {
         ) -> Result<PlanningTaskAuthorityCommitResult> {
             Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: 1,
+                changed: true,
             })
         }
 

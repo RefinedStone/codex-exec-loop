@@ -213,7 +213,9 @@ impl PlanningTaskMutationService {
                 &candidate_task_authority,
                 &queue_projection,
             )? {
-                PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
+                PlanningTaskAuthorityCommitResult::Committed {
+                    planning_revision, ..
+                } => {
                     return Ok(PlanningTaskMutationCommitResult {
                         committed_planning_revision: planning_revision,
                         queue_head: queue_projection.next_task,
@@ -293,7 +295,9 @@ impl PlanningTaskMutationService {
                 &candidate_task_authority,
                 &queue_projection,
             )? {
-                PlanningTaskAuthorityCommitResult::Committed { planning_revision } => {
+                PlanningTaskAuthorityCommitResult::Committed {
+                    planning_revision, ..
+                } => {
                     return Ok(PlanningTaskMutationCommitResult {
                         committed_planning_revision: planning_revision,
                         queue_head: queue_projection.next_task,
