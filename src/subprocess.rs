@@ -81,7 +81,7 @@ fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::{
         DEFAULT_SUBPROCESS_TIMEOUT_SECS, command_output, command_output_with_timeout,
-        format_duration, parse_subprocess_timeout_secs, wait_with_output,
+        format_duration, parse_subprocess_timeout_secs, wait_with_output, wait_with_output_timeout,
     };
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -163,5 +163,21 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(2)), "2s");
         assert_eq!(format_duration(Duration::from_millis(250)), "250ms");
         assert_eq!(format_duration(Duration::from_millis(1_250)), "1250ms");
+    }
+
+    #[test]
+    fn wait_with_output_timeout_kills_slow_existing_child() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 2"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("child should start");
+
+        let error = wait_with_output_timeout(child, "sh -c sleep 2", Duration::from_millis(50))
+            .expect_err("slow child should time out");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("timed out after 50ms"));
     }
 }

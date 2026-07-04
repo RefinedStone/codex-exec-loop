@@ -6,6 +6,7 @@ parallel-mode orchestration은 branch push, PR 생성/조회, capability inspect
 GitHub CLI가 있으면 로컬 인증을 그대로 활용하고, 없으면 wrapper script가 git credential 기반 REST
 fallback을 제공한다.
 */
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
@@ -318,21 +319,32 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         */
         let script_path = github_script_path();
         let script_path = script_path.to_string_lossy().into_owned();
-        let create_output = run_command(
+        let body_file = TemporaryTextFile::new("github-pr-body", body)?;
+        let body_file_path = body_file.path().to_string_lossy().into_owned();
+        let create_args = vec![
+            script_path.clone(),
+            "pr".to_string(),
+            "create".to_string(),
+            "--base".to_string(),
+            base_branch.to_string(),
+            "--head".to_string(),
+            head_branch.to_string(),
+            "--title".to_string(),
+            title.to_string(),
+            "--body-file".to_string(),
+            body_file_path,
+        ];
+        let create_arg_refs = create_args.iter().map(String::as_str).collect::<Vec<_>>();
+        let create_output = run_command_with_label(
             "bash",
-            &[
+            &create_arg_refs,
+            &pull_request_create_command_label(
                 script_path.as_str(),
-                "pr",
-                "create",
-                "--base",
                 base_branch,
-                "--head",
                 head_branch,
-                "--title",
                 title,
-                "--body",
                 body,
-            ],
+            ),
             repo_root,
         )?;
 
@@ -425,6 +437,58 @@ fn installed_github_script_path() -> Option<PathBuf> {
     })
 }
 
+struct TemporaryTextFile {
+    path: PathBuf,
+}
+
+impl TemporaryTextFile {
+    fn new(prefix: &str, contents: &str) -> Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "codex-exec-loop-{prefix}-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::write(&path, contents).with_context(|| {
+            format!(
+                "failed to write temporary GitHub automation file `{}`",
+                path.display()
+            )
+        })?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryTextFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn pull_request_create_command_label(
+    script_path: &str,
+    base_branch: &str,
+    head_branch: &str,
+    title: &str,
+    body: &str,
+) -> String {
+    format!(
+        "bash {script_path} pr create --base {base_branch} --head {head_branch} --title {} --body-file {}",
+        redacted_argument_label(title),
+        redacted_argument_label(body)
+    )
+}
+
+fn redacted_argument_label(value: &str) -> String {
+    format!("[redacted:{} chars]", value.chars().count())
+}
+
 /*
 GitHub PR JSON 중 이 adapter가 필요한 subset만 모델링한 private DTO다.
 
@@ -498,13 +562,20 @@ command를 실행하고 성공한 경우에만 trimmed stdout을 반환한다.
 orchestration layer에는 bare exit status보다 "어떤 repo에서 어떤 wrapper/git command가 어떤 메시지로 실패했는가"가 필요하다.
 */
 fn run_command(program: &str, args: &[&str], repo_root: &str) -> Result<String> {
-    let output = run_process(program, args, repo_root)?;
+    let command_label = format!("{program} {}", args.join(" "));
+    run_command_with_label(program, args, command_label.as_str(), repo_root)
+}
+
+fn run_command_with_label(
+    program: &str,
+    args: &[&str],
+    command_label: &str,
+    repo_root: &str,
+) -> Result<String> {
+    let output = run_process_with_label(program, args, command_label, repo_root)?;
     if !output.status.success() {
         bail!(
-            "{} {} failed in {}: {}",
-            program,
-            args.join(" "),
-            repo_root,
+            "{command_label} failed in {repo_root}: {}",
             command_error_detail(&output)
         );
     }
@@ -513,6 +584,16 @@ fn run_command(program: &str, args: &[&str], repo_root: &str) -> Result<String> 
 }
 
 fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> {
+    let command_label = format!("{program} {}", args.join(" "));
+    run_process_with_label(program, args, command_label.as_str(), repo_root)
+}
+
+fn run_process_with_label(
+    program: &str,
+    args: &[&str],
+    command_label: &str,
+    repo_root: &str,
+) -> Result<Output> {
     /*
     background parallel-mode delivery에서는 non-interactive execution이 필수다.
     terminal prompt를 막아 credential/network gap이 supervisor lane을 멈춰 세우는 interactive wait가 아니라
@@ -524,14 +605,8 @@ fn run_process(program: &str, args: &[&str], repo_root: &str) -> Result<Output> 
         .args(args)
         .stdin(Stdio::null())
         .env("GIT_TERMINAL_PROMPT", "0");
-    subprocess::command_output(&mut command, &format!("{program} {}", args.join(" "))).with_context(
-        || {
-            format!(
-                "failed to run `{program} {}` in {repo_root}",
-                args.join(" ")
-            )
-        },
-    )
+    subprocess::command_output(&mut command, command_label)
+        .with_context(|| format!("failed to run `{command_label}` in {repo_root}"))
 }
 
 fn command_error_detail(output: &Output) -> String {
@@ -591,6 +666,7 @@ mod tests {
     use crate::domain::parallel_mode::{
         ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     };
+    use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
 
     #[test]
     fn pull_request_json_maps_only_the_application_port_contract() {
@@ -840,11 +916,22 @@ mod tests {
         assert_eq!(existing.number, 41);
         assert_eq!(existing.head_branch, "feature/existing");
 
+        let created_body = "created PR body stays out of argv";
         let created = adapter
-            .ensure_pull_request(path_str(&repo), "prerelease", "feature/new", "New", "body")
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/new",
+                "New",
+                created_body,
+            )
             .expect("create URL fallback should inspect created PR");
         assert_eq!(created.number, 42);
         assert_eq!(created.base_branch, "prerelease");
+        let create_args = read_fake_gh_args(&repo);
+        assert!(create_args.iter().any(|arg| arg == "--body-file"));
+        assert!(!create_args.iter().any(|arg| arg == "--body"));
+        assert!(!create_args.iter().any(|arg| arg == created_body));
 
         let created_from_second_lookup = adapter
             .ensure_pull_request(
@@ -899,16 +986,29 @@ mod tests {
             .expect_err("PR list command failure should stop ensure before create");
         assert!(list_failure.to_string().contains("list denied"));
 
+        let sensitive_title = "Create Fail Private Title";
+        let sensitive_body = "private create body must stay out of surfaced errors";
         let create_failure = adapter
             .ensure_pull_request(
                 path_str(&repo),
                 "prerelease",
                 "feature/create-fail",
-                "Create Fail",
-                "body",
+                sensitive_title,
+                sensitive_body,
             )
             .expect_err("PR create command failure should be reported");
-        assert!(create_failure.to_string().contains("create denied"));
+        let create_failure_text = create_failure.to_string();
+        assert!(create_failure_text.contains("create denied"));
+        assert!(create_failure_text.contains(&format!(
+            "--title [redacted:{} chars]",
+            sensitive_title.chars().count()
+        )));
+        assert!(create_failure_text.contains(&format!(
+            "--body-file [redacted:{} chars]",
+            sensitive_body.chars().count()
+        )));
+        assert!(!create_failure_text.contains(sensitive_title));
+        assert!(!create_failure_text.contains(sensitive_body));
 
         let invalid_view = adapter
             .inspect_pull_request(path_str(&repo), 99)
@@ -932,6 +1032,49 @@ mod tests {
             .close_pull_request(path_str(&repo), 13)
             .expect_err("PR close command failure should be reported");
         assert!(close_failure.to_string().contains("close denied"));
+
+        let _ = fs::remove_file(script_path);
+    }
+
+    #[test]
+    fn pull_request_create_timeout_redacts_sensitive_fields() {
+        let _guard = github_script_lock()
+            .lock()
+            .expect("github script fixture lock should not be poisoned");
+        let script_path = install_fake_github_script();
+        let repo = unique_temp_dir("github-automation-pr-timeout");
+        let adapter = GithubAutomationAdapter::new();
+        let _timeout_guard = EnvVarGuard::set(SUBPROCESS_TIMEOUT_ENV, "1");
+        let sensitive_title = "Create Timeout Private Title";
+        let sensitive_body = "private timeout body must stay out of surfaced errors";
+
+        let error = adapter
+            .ensure_pull_request(
+                path_str(&repo),
+                "prerelease",
+                "feature/create-timeout",
+                sensitive_title,
+                sensitive_body,
+            )
+            .expect_err("slow PR create should time out");
+        let error_text = error.to_string();
+        let error_chain = error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(error_chain.contains("timed out after"));
+        assert!(error_text.contains(&format!(
+            "--title [redacted:{} chars]",
+            sensitive_title.chars().count()
+        )));
+        assert!(error_text.contains(&format!(
+            "--body-file [redacted:{} chars]",
+            sensitive_body.chars().count()
+        )));
+        assert!(!error_text.contains(sensitive_title));
+        assert!(!error_text.contains(sensitive_body));
 
         let _ = fs::remove_file(script_path);
     }
@@ -1042,6 +1185,9 @@ mod tests {
             r#"#!/usr/bin/env bash
 set -euo pipefail
 args="$*"
+if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
+  printf '%s\n' "$@" > .fake-gh-last-args
+fi
 case "$args" in
   "auth status")
     exit 0
@@ -1077,6 +1223,10 @@ case "$args" in
     printf '%s\n' 'create denied' >&2
     exit 23
     ;;
+  pr\ create*feature/create-timeout*)
+    sleep 2
+    printf '%s\n' 'https://github.example/pull/77'
+    ;;
   pr\ create*feature/no-url*)
     printf '%s\n' 'created without url'
     ;;
@@ -1110,6 +1260,14 @@ esac
 
     fn remove_fake_github_script() {
         let _ = fs::remove_file(fake_github_script_path());
+    }
+
+    fn read_fake_gh_args(repo: &Path) -> Vec<String> {
+        fs::read_to_string(repo.join(".fake-gh-last-args"))
+            .expect("fake github script should record create arguments")
+            .lines()
+            .map(str::to_string)
+            .collect()
     }
 
     fn fake_github_script_path() -> PathBuf {
@@ -1173,6 +1331,32 @@ exit 66
                 match &self.previous {
                     Some(path) => std::env::set_var("PATH", path),
                     None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
                 }
             }
         }
