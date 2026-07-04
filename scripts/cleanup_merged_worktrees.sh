@@ -371,8 +371,10 @@ process_entry() {
   if ! worktree_is_clean "${path}"; then
     if [[ "${explicitly_targeted}" == "true" && "${force_dirty}" == "true" ]]; then
       if [[ "${apply_mode}" == "true" ]]; then
-        apply_cleanup "${path}" "${branch_name}" "${explicitly_targeted}" "false"
-        removed_count=$((removed_count + 1))
+        pending_paths+=("${path}")
+        pending_branches+=("${branch_name}")
+        pending_explicit_flags+=("${explicitly_targeted}")
+        pending_missing_path_flags+=("false")
       else
         report_cleanup "dry-run" "explicit dirty target eligible with --force-dirty" "${path}" "${branch_name}"
         dry_run_count=$((dry_run_count + 1))
