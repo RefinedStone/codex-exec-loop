@@ -724,8 +724,6 @@ impl PlanningRuntimeUseCases {
         let runtime_projection =
             if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
                 PlanningRuntimeProjection::invalid(block_reason)
-            } else if request.changed_planning_file_paths.is_empty() {
-                request.current_runtime_projection.clone()
             } else {
                 self.load_runtime_projection_or_invalid(request.workspace_directory)
             };
@@ -1427,7 +1425,10 @@ mod tests {
     use super::*;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
-    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
@@ -1437,7 +1438,10 @@ mod tests {
     use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::application::service::planning::task_tool::PlanningTaskToolListRequest;
     use crate::domain::planning::{
-        PlanningOfficialCompletionRefreshPayload, PriorityQueueTask, TaskStatus,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PlanningOfficialCompletionRefreshPayload, PriorityQueueService, PriorityQueueTask,
+        QueueIdleConfig, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
+        TaskStatus,
     };
 
     #[derive(Default)]
@@ -1962,17 +1966,28 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_post_turn_restores_protected_files_and_preserves_current_projection_without_changes()
-     {
+    fn reconcile_post_turn_reloads_projection_without_file_changes_and_restores_protected_files() {
         let workspace_port = Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
             "# Result Output\n- Worker-edited copy.",
         ));
-        let planning = planning_services(workspace_port.clone());
+        let repository: Arc<dyn PlanningTaskRepositoryPort> =
+            Arc::new(NoopPlanningTaskRepositoryPort);
+        let planning =
+            planning_services_with_repository(workspace_port.clone(), repository.clone());
         let current = PlanningRuntimeProjection::ready(
             "prompt".to_string(),
             "queue summary".to_string(),
             Some(sample_queue_head()),
         );
+        let refreshed_queue_head = PriorityQueueTask {
+            task_id: "task-2".to_string(),
+            task_title: "Refreshed queue head".to_string(),
+            direction_title: "Direction".to_string(),
+            updated_at: "2026-04-24T00:00:00Z".to_string(),
+            ..sample_queue_head()
+        };
+        seed_runtime_authority(repository.as_ref(), "/tmp/workspace", &refreshed_queue_head);
+
         let unchanged =
             planning
                 .runtime
@@ -1983,7 +1998,12 @@ mod tests {
                     execution_snapshot_capture: None,
                     current_runtime_projection: &current,
                 });
-        assert_eq!(unchanged.runtime_projection, current);
+        let queue_head = unchanged
+            .runtime_projection
+            .queue_head()
+            .expect("authoritative queue head should reload even without file edits");
+        assert_eq!(queue_head.task_id, "task-2");
+        assert_eq!(queue_head.task_title, "Refreshed queue head");
         assert!(unchanged.reconciliation_result.notices.is_empty());
 
         let capture = PlanningTurnExecutionSnapshotCapture::ready(
@@ -2567,12 +2587,82 @@ mod tests {
     }
 
     fn planning_services(workspace_port: Arc<dyn PlanningWorkspacePort>) -> PlanningServices {
+        planning_services_with_repository(workspace_port, Arc::new(NoopPlanningTaskRepositoryPort))
+    }
+
+    fn planning_services_with_repository(
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    ) -> PlanningServices {
         PlanningServices::from_ports(
             workspace_port,
             Arc::new(NoopPlanningAuthorityPort::default()),
-            Arc::new(NoopPlanningTaskRepositoryPort),
+            planning_task_repository_port,
             Arc::new(NoopPlanningWorkerPort),
         )
+    }
+
+    fn seed_runtime_authority(
+        repository: &dyn PlanningTaskRepositoryPort,
+        workspace_dir: &str,
+        queue_head: &PriorityQueueTask,
+    ) {
+        let directions = DirectionCatalogDocument {
+            version: 1,
+            queue_idle: QueueIdleConfig::default(),
+            directions: vec![DirectionDefinition {
+                id: queue_head.direction_id.clone(),
+                title: queue_head.direction_title.clone(),
+                summary: "Direction summary".to_string(),
+                success_criteria: vec!["complete the direction".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            }],
+        };
+        let task_authority = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![TaskDefinition {
+                id: queue_head.task_id.clone(),
+                direction_id: queue_head.direction_id.clone(),
+                direction_relation_note: "covers direction".to_string(),
+                title: queue_head.task_title.clone(),
+                description: "Queue head task".to_string(),
+                status: queue_head.status,
+                base_priority: queue_head.combined_priority,
+                dynamic_priority_delta: 0,
+                priority_reason: String::new(),
+                depends_on: Vec::new(),
+                blocked_by: Vec::new(),
+                created_by: TaskActor::System,
+                last_updated_by: TaskActor::System,
+                source_turn_id: None,
+                provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+                updated_at: queue_head.updated_at.clone(),
+            }],
+        };
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&directions, &task_authority)
+            .expect("seed runtime authority should build a queue projection");
+        repository
+            .commit_direction_authority_snapshot(
+                workspace_dir,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: None,
+                    directions: &directions,
+                },
+            )
+            .expect("direction authority should commit");
+        repository
+            .commit_task_authority_snapshot(
+                workspace_dir,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority: &task_authority,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("task authority should commit");
     }
 
     fn decide_auto_follow_skip(
