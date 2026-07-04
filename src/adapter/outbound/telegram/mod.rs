@@ -55,8 +55,9 @@ impl CurlTelegramBotAdapter {
         let url = format!("{}/bot{}/{}", self.api_base_url, self.token, method_name);
         let json_body = serde_json::to_string(body).context("failed to serialize request body")?;
         let max_time_seconds = u32::from(timeout_seconds).saturating_add(15);
-        let wait_timeout = std::time::Duration::from_secs(u64::from(max_time_seconds))
-            .max(subprocess::configured_subprocess_timeout());
+        let wait_timeout =
+            std::time::Duration::from_secs(u64::from(max_time_seconds).saturating_add(1));
+
         let mut child = Command::new(&self.curl_path)
             .args(["--config", "-"])
             .stdin(Stdio::piped())
@@ -366,7 +367,7 @@ mod tests {
             r#"#!/bin/sh
 set -eu
 cat >/dev/null
-sleep 16
+sleep 17
 "#,
         );
         let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
