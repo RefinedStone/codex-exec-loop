@@ -106,6 +106,7 @@ implementation planning out of this file.
 - Integration branch push blocks remain operator-owned.
 - Failed-start dispatch blocks survive pool reset per task, keeping the latest `blocked_at`.
 - Stale startup leases require matching session-detail evidence before automatic cleanup.
+- Fresh same-epoch `Running` dispatch commands now recover immediately after restart/reentry when durable state shows no session detail yet, including the matching-lease/no-session handoff window.
 
 ## Current Limits
 

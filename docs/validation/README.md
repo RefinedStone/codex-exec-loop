@@ -24,6 +24,40 @@ terminal checklist.
 - preserve the emitted `check_profile` and checklist so rows stay comparable
 - use `bash scripts/summarize_native_validation.sh --fail-on-incomplete` when the matrix must act as a gate; the plain summary is informational and warns on incomplete required rows
 
+## Current Status
+
+Current checked-in validation coverage is not matrix-complete yet.
+Treat the plain summary output as a visibility report, not a release gate, until the missing required rows are recorded.
+
+### `terminal-baseline` snapshot
+
+| Metric | Current value |
+| --- | --- |
+| Required pass | `1/8` |
+| Required missing | `7` |
+| Required non-pass | `0` |
+| Optional pass | `0/3` |
+
+Recorded required pass today:
+- `Windows / Windows Terminal / WSL bash / inline` → `docs/validation/2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt`
+
+### `prompt-input-delay-pty` snapshot
+
+| Metric | Current value |
+| --- | --- |
+| Required pass | `1/5` |
+| Required missing | `0` |
+| Required non-pass | `4` |
+| Optional pass | `0/4` |
+
+Current required blockers still recorded in-tree:
+- `Linux / direct terminal / bash / inline`
+- `Linux / Zellij / bash / inline`
+- `Windows / Windows Terminal / PowerShell / inline`
+- `Windows / Windows Terminal / WSL bash / inline`
+
+Use `bash scripts/summarize_native_validation.sh --format markdown` (and `--check-profile prompt-input-delay-pty --format markdown`) to refresh these numbers after new captures land.
+
 ## Filename Shape
 
 ```text
