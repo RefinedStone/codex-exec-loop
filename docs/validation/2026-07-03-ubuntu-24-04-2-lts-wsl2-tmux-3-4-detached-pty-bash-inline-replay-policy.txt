@@ -1,18 +1,31 @@
-date: 2026-07-04
+artifact_id: 2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt
+file_name: 2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt
+work_item_id: not separately recorded; replay-policy follow-up commit d72277de
+capture_datetime: not separately recorded in the artifact body
+operator_reviewer_initials: not recorded
 commit: d72277de
+date: 2026-07-04
 os: Microsoft Windows 11 Pro 10.0.26200 / WSL Ubuntu
+kernel_platform: not recorded
 terminal: tmux 3.4 detached PTY
+terminal_version: 3.4
 shell: bash
+shell_version: not recorded
 frontend: inline
+environment_class: fallback
+multiplexer_state: tmux detached PTY
 term: tmux-256color
+inline_history_render_mode: HostScrollback
+history_insertion_mode: unchanged first-class default (not separately recorded)
+override_env_vars: none recorded; notes indicate unchanged first-class defaults
 check_profile: terminal-baseline
 checks:
-- launch and exit
-- frontend selection
-- input editing
-- overlay flow
-- streaming visibility
-- resize and scrollback
-- failure and recovery
+- launch and exit = pass
+- frontend selection = pass
+- input editing = pass
+- overlay flow = pass
+- streaming visibility = pass
+- resize and scrollback = pass
+- failure and recovery = pass
 result: pass
 notes: Contrasting representative path for the unchanged B1 HostScrollback branch family after the replay-only fix; recorded alongside the Windows Terminal replay row because the manual-capture contract allows a smaller representative set when only one branch family changes and automated proof for the other first-class paths stays unchanged.
