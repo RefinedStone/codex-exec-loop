@@ -189,7 +189,7 @@ fn parses_repository_full_name_from_github_https_origin() {
 #[test]
 fn parses_repository_full_name_from_github_credentialed_https_origin() {
     let repository = GithubReviewPollerAdapter::parse_repository_full_name(
-        "https://token@github.com/acme/widgets.git",
+        "https://greg:ghp_secret_token@github.com/acme/widgets.git",
     )
     .expect("credentialed HTTPS repository should parse");
 

@@ -203,12 +203,15 @@ impl GithubReviewPollerAdapter {
                 .trim_start_matches("ssh://git@github.com/")
                 .trim_end_matches(".git")
                 .to_string(),
-            value if value.starts_with("https://") && value.contains("github.com/") => value
-                .trim_start_matches("https://")
-                .trim_start_matches(|character| character != 'g')
-                .trim_start_matches("github.com/")
-                .trim_end_matches(".git")
-                .to_string(),
+            value if value.starts_with("https://") && value.contains("github.com/") => {
+                let trimmed = value.trim_start_matches("https://");
+                let repository = if let Some((_, repository)) = trimmed.split_once("@github.com/") {
+                    repository
+                } else {
+                    trimmed.trim_start_matches("github.com/")
+                };
+                repository.trim_end_matches(".git").to_string()
+            }
             _ => bail!("unsupported GitHub origin URL {origin_url}"),
         };
         if repository.split('/').count() != 2 {
@@ -289,7 +292,7 @@ impl GithubReviewPollerAdapter {
     }
 
     fn run_git_credential_fill(repo_root: &Path, query: &str) -> Result<Option<String>> {
-        let mut child = match Command::new("git")
+        let mut child = Command::new("git")
             .arg("-C")
             .arg(repo_root)
             .arg("credential")
@@ -299,10 +302,7 @@ impl GithubReviewPollerAdapter {
             .stderr(Stdio::null())
             .env("GIT_TERMINAL_PROMPT", "0")
             .spawn()
-        {
-            Ok(child) => child,
-            Err(_) => return Ok(None),
-        };
+            .context("failed to spawn git credential fill")?;
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(query.as_bytes())
