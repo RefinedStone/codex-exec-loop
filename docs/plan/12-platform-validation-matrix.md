@@ -47,17 +47,7 @@ bash scripts/capture_native_validation.sh \
   --output-dir docs/validation
 ```
 
-Record the alternate-screen validation row reserved by the terminal-baseline gate:
-
-```bash
-bash scripts/capture_native_validation.sh \
-  --frontend alternate \
-  --check-profile terminal-baseline \
-  --terminal "iTerm2 3.5" \
-  --result pass \
-  --output-dir docs/validation
-```
-
+Supplemental primitive-sensitive captures may still use `--frontend alternate` when the review needs alternate-screen or restore evidence, but those rows are no longer part of the counted terminal-baseline gate.
 Summarize recorded coverage (informational; warns when required rows are incomplete):
 
 ```bash
@@ -221,6 +211,7 @@ Each completed row should capture:
 - shell
 - frontend
 - `TERM` when available
+- capture_role (`counted-row` or `supplemental-unmatched`)
 - check profile
 - result and notes
 
