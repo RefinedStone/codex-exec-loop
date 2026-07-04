@@ -16,7 +16,7 @@ downgrade the required macOS Terminal.app and iTerm2 terminal-baseline rows list
 ## Frontend
 
 - shipped product frontend: inline main-buffer only
-- terminal-baseline validation still reserves `alternate` rows for restore / alternate-screen evidence until the summary gate is narrowed
+- the current counted terminal-baseline gate tracks only inline rows; alternate-screen evidence lives in supplemental captures instead of counted matrix rows
 
 ## Common Commands
 
@@ -82,13 +82,8 @@ Supplemental replay-policy captures document representative branch-family behavi
 | macOS | iTerm2 | zsh | inline | required |
 | Windows | Windows Terminal | PowerShell | inline | required |
 | Windows | Windows Terminal | WSL bash | inline | required |
-| macOS | Terminal.app | zsh | alternate | optional |
-| macOS | iTerm2 | zsh | alternate | optional |
-| Windows | Windows Terminal | PowerShell | alternate | optional |
-| Windows | Windows Terminal | WSL bash | alternate | optional |
 | Windows | Git Bash or equivalent | bash | inline | optional |
 | Windows | JetBrains IDE terminal | WSL bash | inline | optional |
-| Windows | JetBrains IDE terminal | WSL bash | alternate | optional |
 
 ## Check Profiles
 
@@ -166,6 +161,7 @@ Run the full `terminal-baseline` checklist plus these additional checks:
 
 Use this profile when prompt echo latency or input buffering changes, especially when the TUI runs
 inside a PTY bridge, multiplexer, or integrated terminal.
+The current `1/5` tmux pass is a historical counted row from the pre-six-step helper checklist; rerun it when fresh approval-grade evidence is needed.
 
 Record these rows with:
 

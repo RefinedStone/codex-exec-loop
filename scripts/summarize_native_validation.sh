@@ -201,16 +201,11 @@ load_row_specs() {
     terminal-baseline|phase1-operator-surface)
       row_specs=(
         "required|macos|terminal-app|zsh|inline|macOS / Terminal.app / zsh / inline"
-        "optional|macos|terminal-app|zsh|alternate|macOS / Terminal.app / zsh / alternate"
         "required|macos|iterm2|zsh|inline|macOS / iTerm2 / zsh / inline"
-        "optional|macos|iterm2|zsh|alternate|macOS / iTerm2 / zsh / alternate"
         "required|windows|windows-terminal|powershell|inline|Windows / Windows Terminal / PowerShell / inline"
-        "optional|windows|windows-terminal|powershell|alternate|Windows / Windows Terminal / PowerShell / alternate"
         "required|windows|windows-terminal|wsl-bash|inline|Windows / Windows Terminal / WSL bash / inline"
-        "optional|windows|windows-terminal|wsl-bash|alternate|Windows / Windows Terminal / WSL bash / alternate"
         "optional|windows|git-bash|bash|inline|Windows / Git Bash / bash / inline"
         "optional|windows|jetbrains-terminal|wsl-bash|inline|Windows / JetBrains IDE terminal / WSL bash / inline"
-        "optional|windows|jetbrains-terminal|wsl-bash|alternate|Windows / JetBrains IDE terminal / WSL bash / alternate"
       )
       ;;
     prompt-input-delay-pty)

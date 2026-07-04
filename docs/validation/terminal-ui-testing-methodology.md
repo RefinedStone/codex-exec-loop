@@ -216,6 +216,7 @@ Current capture helpers emit the shared baseline fields only:
 - shell
 - frontend
 - `TERM` when available
+- capture_role (`counted-row` or `supplemental-unmatched`)
 - check profile
 - generic checklist labels
 - result

@@ -39,7 +39,7 @@ Treat the plain summary output as a visibility report, not a release gate, until
 | Required pass | `0/4` |
 | Required missing | `4` |
 | Required non-pass | `0` |
-| Optional pass | `0/7` |
+| Optional pass | `0/2` |
 
 No required terminal-baseline row is currently recorded as passing.
 The replay-policy captures below are supplemental representative evidence and do not count toward the baseline row totals.
