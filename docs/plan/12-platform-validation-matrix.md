@@ -15,7 +15,8 @@ downgrade the required macOS Terminal.app and iTerm2 terminal-baseline rows list
 
 ## Frontend
 
-- inline main-buffer only
+- shipped product frontend: inline main-buffer only
+- terminal-baseline validation still reserves `alternate` rows for restore / alternate-screen evidence until the summary gate is narrowed
 
 ## Common Commands
 

@@ -17,8 +17,8 @@ environment_class: first-class
 multiplexer_state: none
 term: dumb
 inline_history_render_mode: ViewportReplay
-history_insertion_mode: unchanged first-class default (not separately recorded)
-override_env_vars: none recorded; notes indicate unchanged first-class defaults
+history_insertion_mode: NewlineFallback
+override_env_vars: none recorded; inferred default from Windows Terminal / WSL bash first-class path
 scenario_set: replay-policy representative minimum
 scenario_results:
 - committed history insertion above live viewport = pass (focused replay regression suite)

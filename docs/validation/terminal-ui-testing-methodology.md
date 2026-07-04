@@ -224,6 +224,7 @@ Current capture helpers emit the shared baseline fields only:
 
 When primitive-sensitive review needs more detail than the helpers emit, append manual metadata below the helper output instead of omitting it.
 If a field cannot be recovered after capture, record `not recorded` explicitly.
+For `HistoryInsertionMode`, reviewers should prefer a concrete value; use `not recorded` only when the artifact is purely supplemental and the named automated proof covers the insertion branch.
 
 Each supplemental primitive-sensitive artifact should record:
 - artifact id / file name

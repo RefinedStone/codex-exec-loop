@@ -13,12 +13,12 @@ terminal_version: 3.4
 shell: bash
 shell_version: not recorded
 frontend: inline
-environment_class: fallback
+environment_class: first-class
 multiplexer_state: tmux detached PTY
 term: tmux-256color
 inline_history_render_mode: HostScrollback
-history_insertion_mode: unchanged first-class default (not separately recorded)
-override_env_vars: none recorded; notes indicate unchanged first-class defaults
+history_insertion_mode: StandardScrollRegion
+override_env_vars: none recorded; inferred default for tmux detached PTY first-class path
 scenario_set: hostscrollback representative contrast
 scenario_results:
 - committed history insertion above live viewport = pass (unchanged B1 path; representative capture only)

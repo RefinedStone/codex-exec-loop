@@ -72,13 +72,14 @@ Standard matrix-row capture:
 YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>.txt
 ```
 
-Supplemental primitive-sensitive capture:
+Primitive-sensitive capture with scenario suffix:
 
 ```text
 YYYY-MM-DD-<os>-<terminal>-<shell>-<frontend>-<scenario>.txt
 ```
 
-Use the supplemental suffix only when the artifact is a representative/manual addendum rather than a matrix-row record counted by `scripts/summarize_native_validation.sh`.
+Use `capture_role: counted-row` when the artifact body still names an exact matrix row and should count in `scripts/summarize_native_validation.sh`.
+Use `capture_role: supplemental-unmatched` when the artifact is representative-only and may remain unmatched in the summary.
 
 ## Helper Usage
 
