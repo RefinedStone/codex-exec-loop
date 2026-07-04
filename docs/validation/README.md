@@ -36,16 +36,18 @@ Treat the plain summary output as a visibility report, not a release gate, until
 
 | Metric | Current value |
 | --- | --- |
-| Required pass | `1/8` |
-| Required missing | `7` |
+| Required pass | `0/8` |
+| Required missing | `8` |
 | Required non-pass | `0` |
 | Optional pass | `0/3` |
 
-Recorded required pass today:
-- `Windows / Windows Terminal / WSL bash / inline` → `docs/validation/2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt`
+No required terminal-baseline row is currently recorded as passing.
+The replay-policy captures below are supplemental representative evidence and do not count toward the baseline row totals.
 
-Supplemental representative capture currently stored but not counted in the baseline matrix summary:
-- `docs/validation/2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt` — contrasting `HostScrollback` path evidence for the replay-only primitive change.
+### Supplemental replay-policy captures
+
+- `docs/validation/2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt` — explicit `ViewportReplay` representative evidence for the replay-only primitive change
+- `docs/validation/2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt` — contrasting `HostScrollback` representative evidence for the unchanged branch family
 
 ### `prompt-input-delay-pty` snapshot
 

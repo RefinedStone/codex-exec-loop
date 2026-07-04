@@ -5,8 +5,8 @@ work_item_id: not separately recorded; replay-policy follow-up commit d72277de
 capture_datetime: not separately recorded in the artifact body
 operator_reviewer_initials: not recorded
 commit: d72277de
-date: 2026-07-04
-os: Microsoft Windows 11 Pro 10.0.26200 / WSL Ubuntu
+date: 2026-07-03
+os: Ubuntu 24.04.2 LTS / WSL2
 kernel_platform: not recorded
 terminal: tmux 3.4 detached PTY
 terminal_version: 3.4
@@ -26,7 +26,7 @@ scenario_results:
 - shrink then restore with no stale rows / duplicated tail = pass (unchanged B1 path; representative capture only)
 - clear/reset path with clean header and viewport recovery = pass (unchanged B1 path; representative capture only)
 - thread or session switch with no transcript/history leakage = pass (unchanged B1 path; representative capture only)
-check_profile: terminal-baseline
+check_profile: replay-policy-representative
 checks:
 - launch and exit = pass
 - frontend selection = pass
