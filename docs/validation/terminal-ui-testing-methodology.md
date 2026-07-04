@@ -319,6 +319,11 @@ Representative minimum in that case:
 - `src/adapter/inbound/tui/app/snapshots/`
 - `tests/native_validation_scripts.rs`
 
+Representative replay-policy workflow:
+- generate the baseline capture skeleton with `scripts/capture_native_validation.sh` or `.ps1` using `--check-profile replay-policy-representative --capture-role supplemental-unmatched`
+- if the proof requires an explicit render-mode override, record the exact env key/value that activated it
+- append the supplemental metadata fields and per-scenario results required above
+
 ## Validation Commands
 
 ```bash

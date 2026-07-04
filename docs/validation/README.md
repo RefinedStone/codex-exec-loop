@@ -46,7 +46,7 @@ The replay-policy captures below are supplemental representative evidence and do
 
 ### Supplemental replay-policy captures
 
-- `docs/validation/2026-07-03-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt` — explicit `ViewportReplay` representative evidence for the replay-only primitive change
+- `docs/validation/2026-07-05-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt` — explicit `ViewportReplay` representative evidence for the replay-only primitive change
 - `docs/validation/2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt` — contrasting `HostScrollback` representative evidence for the unchanged branch family
 
 ### `prompt-input-delay-pty` snapshot
@@ -115,6 +115,21 @@ bash scripts/capture_native_validation.sh \
   --result pass \
   --output-dir docs/validation
 ```
+
+Replay-policy representative capture:
+
+```bash
+CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=viewport-replay \
+  bash scripts/capture_native_validation.sh \
+  --frontend inline \
+  --check-profile replay-policy-representative \
+  --capture-role supplemental-unmatched \
+  --terminal "Windows Terminal" \
+  --result pass \
+  --output docs/validation/<date>-<os>-<terminal>-<shell>-<frontend>-replay-policy.txt
+```
+
+Then append the supplemental metadata required by `terminal-ui-testing-methodology.md`, including the effective render/insertion modes, exact env cause (`CODEX_EXEC_LOOP_INLINE_HISTORY_MODE`, `WT_SESSION` when relevant), and per-scenario results.
 
 Windows PowerShell:
 
