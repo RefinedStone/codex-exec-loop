@@ -411,6 +411,67 @@ impl SqlitePlanningAuthorityAdapter {
                 )
             })?;
         if changed_rows == 0 {
+            let existing_payload = transaction
+                .query_row(
+                    "SELECT content
+                     FROM runtime_dispatch_commands
+                     WHERE command_id = ?1",
+                    params![&command.command_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .with_context(|| {
+                    format!(
+                        "failed to load existing runtime dispatch command `{}` for duplicate enqueue",
+                        command.command_id
+                    )
+                })?;
+            if let Some(existing_payload) = existing_payload {
+                let existing_command =
+                    serde_json::from_str::<ParallelModeDispatchCommandSnapshot>(&existing_payload)
+                        .with_context(|| {
+                            format!(
+                                "failed to deserialize existing runtime dispatch command `{}` for duplicate enqueue",
+                                command.command_id
+                            )
+                        })?;
+                if !existing_command.is_terminal() && existing_command.epoch_id != command.epoch_id
+                {
+                    changed_rows = transaction
+                        .execute(
+                            "UPDATE runtime_dispatch_commands
+                             SET command_kind = ?1,
+                                 trigger = ?2,
+                                 command_state = ?3,
+                                 queue_head_signature = ?4,
+                                 epoch_id = ?5,
+                                 updated_at = ?6,
+                                 owner_token = NULL,
+                                 content = ?7
+                             WHERE command_id = ?8
+                               AND command_state = ?9",
+                            params![
+                                command.kind.label(),
+                                command.trigger.label(),
+                                command.state.label(),
+                                command.queue_head_signature.as_deref(),
+                                command.epoch_id.map(|value| value as i64),
+                                &command.updated_at,
+                                &payload_json,
+                                &command.command_id,
+                                existing_command.state.label(),
+                            ],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "failed to replace stale-epoch runtime dispatch command `{}`",
+                                command.command_id
+                            )
+                        })?;
+                }
+            }
+        }
+        if changed_rows == 0 {
             changed_rows = transaction
                 .execute(
                     "UPDATE runtime_dispatch_commands

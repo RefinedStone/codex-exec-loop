@@ -1076,6 +1076,46 @@ fn runtime_dispatch_command_reenqueue_revives_terminal_rows() {
 }
 
 #[test]
+fn runtime_dispatch_command_reenqueue_replaces_nonterminal_stale_epoch_row() {
+    let workspace_dir = temp_workspace("dispatch-command-replace-stale-epoch");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let stale_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        Some("queue-head-shared".to_string()),
+        Some(71),
+        "2026-05-08T00:00:00+00:00",
+    );
+    let current_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        Some("queue-head-shared".to_string()),
+        Some(72),
+        "2026-05-08T00:01:00+00:00",
+    );
+
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &stale_command)
+            .expect("stale epoch seed should enqueue")
+    );
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&workspace_dir, &current_command)
+            .expect("current epoch enqueue should replace stale row")
+    );
+
+    let claimed = adapter
+        .try_claim_next_runtime_dispatch_command(&workspace_dir, "owner-2")
+        .expect("replaced command should claim")
+        .expect("replaced command should exist");
+    assert_eq!(claimed.command_id, current_command.command_id);
+    assert_eq!(
+        claimed.trigger,
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
+    );
+    assert_eq!(claimed.epoch_id, Some(72));
+}
+
+#[test]
 fn runtime_dispatch_command_claim_reclaims_stale_running_rows() {
     let workspace_dir = temp_workspace("dispatch-command-reclaim-running");
     let adapter = SqlitePlanningAuthorityAdapter::new();
