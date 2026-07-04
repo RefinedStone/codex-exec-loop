@@ -299,10 +299,12 @@ fn gh_akra_auth_status_prefers_username_profile_when_user_differs() {
     let root = make_records_dir();
     let repo = root.join("repo");
     let bin_dir = root.join("bin");
-    let empty_home = root.join("empty-home");
+    let home_root = root.join("home");
+    let userprofile_root = root.join("userprofile");
     fs::create_dir(&repo).expect("repo fixture dir should be created");
     fs::create_dir(&bin_dir).expect("bin fixture dir should be created");
-    fs::create_dir(&empty_home).expect("home fixture dir should be created");
+    fs::create_dir(&home_root).expect("home fixture dir should be created");
+    fs::create_dir(&userprofile_root).expect("userprofile fixture dir should be created");
 
     assert_success(
         &Command::new("git")
@@ -378,6 +380,16 @@ printf '200'
         panic!("correct Windows profile fixture should be created: {error}");
     }
     fs::write(
+        home_root.join(".git-credentials"),
+        "https://home:home-token-123@github.com\n",
+    )
+    .expect("home credential fixture should be written");
+    fs::write(
+        userprofile_root.join(".git-credentials"),
+        "https://userprofile:userprofile-token-123@github.com\n",
+    )
+    .expect("userprofile credential fixture should be written");
+    fs::write(
         wrong_dir.join(".git-credentials"),
         "https://wrong:wrong-token-123@github.com\n",
     )
@@ -394,8 +406,8 @@ printf '200'
         .arg("status")
         .current_dir(&repo)
         .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
-        .env("HOME", &empty_home)
-        .env("USERPROFILE", "")
+        .env("HOME", &home_root)
+        .env("USERPROFILE", &userprofile_root)
         .env("AKRA_GITHUB_TOKEN", "")
         .env("GH_TOKEN", "")
         .env("GITHUB_TOKEN", "")
@@ -404,6 +416,8 @@ printf '200'
         .output()
         .expect("gh-akra auth status should run");
 
+    let _ = fs::remove_file(home_root.join(".git-credentials"));
+    let _ = fs::remove_file(userprofile_root.join(".git-credentials"));
     let _ = fs::remove_file(wrong_dir.join(".git-credentials"));
     let _ = fs::remove_file(correct_dir.join(".git-credentials"));
     let _ = fs::remove_dir_all(&wrong_dir);

@@ -399,6 +399,11 @@ impl GithubReviewPollerAdapter {
 
     fn git_credential_file_candidates_for_root(users_root: &Path) -> Result<Vec<PathBuf>> {
         let mut candidates = Vec::new();
+        if let Some(path) =
+            Self::resolve_windows_credential_path_for_current_user_in_root(users_root)?
+        {
+            Self::push_unique_path(&mut candidates, path);
+        }
         if let Some(home) = std::env::var_os("HOME") {
             Self::push_unique_path(
                 &mut candidates,
@@ -410,11 +415,6 @@ impl GithubReviewPollerAdapter {
                 &mut candidates,
                 PathBuf::from(userprofile).join(".git-credentials"),
             );
-        }
-        if let Some(path) =
-            Self::resolve_windows_credential_path_for_current_user_in_root(users_root)?
-        {
-            Self::push_unique_path(&mut candidates, path);
         }
         Ok(candidates)
     }

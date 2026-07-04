@@ -416,13 +416,13 @@ windows_current_user_credential_file() {
 }
 
 credential_files_to_scan() {
+  windows_current_user_credential_file || true
   if [[ -n "${HOME:-}" ]]; then
     printf '%s\n' "${HOME}/.git-credentials"
   fi
   if [[ -n "${USERPROFILE:-}" ]]; then
     printf '%s\n' "${USERPROFILE}/.git-credentials"
   fi
-  windows_current_user_credential_file || true
 }
 
 token_from_git_credential_files() {

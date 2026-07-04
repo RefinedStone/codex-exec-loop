@@ -741,12 +741,26 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
         .lock()
         .expect("environment fixture lock should not be poisoned");
     let users_root = unique_temp_dir("review-poller-windows-credential-candidates");
+    let home_root = unique_temp_dir("review-poller-home-credential-priority");
+    let userprofile_root = unique_temp_dir("review-poller-userprofile-credential-priority");
     let alice_home = users_root.join("Alice");
     let linux_home = users_root.join("linux-akra");
     let akra_home = users_root.join("akra");
     fs::create_dir_all(&alice_home).expect("other Windows home should exist");
     fs::create_dir_all(&linux_home).expect("wrong USER Windows home should exist");
     fs::create_dir_all(&akra_home).expect("current Windows home should exist");
+    fs::create_dir_all(&home_root).expect("home credential root should exist");
+    fs::create_dir_all(&userprofile_root).expect("userprofile credential root should exist");
+    fs::write(
+        home_root.join(".git-credentials"),
+        "https://home:home-token-123@github.com\n",
+    )
+    .expect("home credential fixture should be written");
+    fs::write(
+        userprofile_root.join(".git-credentials"),
+        "https://userprofile:userprofile-token-123@github.com\n",
+    )
+    .expect("userprofile credential fixture should be written");
     fs::write(
         alice_home.join(".git-credentials"),
         "https://alice:alice-token-123@github.com\n",
@@ -763,8 +777,11 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
     )
     .expect("current-user credential fixture should be written");
     let _env = EnvVarGuard::apply(&[
-        ("HOME", None),
-        ("USERPROFILE", None),
+        ("HOME", Some(home_root.to_string_lossy().as_ref())),
+        (
+            "USERPROFILE",
+            Some(userprofile_root.to_string_lossy().as_ref()),
+        ),
         ("USER", Some("linux-akra")),
         ("USERNAME", Some("akra")),
     ]);
@@ -772,13 +789,22 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
     let candidates =
         GithubReviewPollerAdapter::git_credential_file_candidates_for_root(&users_root)
             .expect("candidate lookup should not fail");
-    assert_eq!(candidates, vec![akra_home.join(".git-credentials")]);
+    assert_eq!(
+        candidates,
+        vec![
+            akra_home.join(".git-credentials"),
+            home_root.join(".git-credentials"),
+            userprofile_root.join(".git-credentials"),
+        ]
+    );
 
     let token =
         GithubReviewPollerAdapter::read_git_credential_file_token_from_candidates(candidates)
             .expect("current-user credential lookup should not fail");
     assert_eq!(token.as_deref(), Some("akra-token-123"));
     let _ = fs::remove_dir_all(&users_root);
+    let _ = fs::remove_dir_all(&home_root);
+    let _ = fs::remove_dir_all(&userprofile_root);
 }
 
 #[test]
@@ -786,12 +812,29 @@ fn local_credential_constructor_falls_back_to_windows_current_user_when_names_di
     let _guard = env_lock()
         .lock()
         .expect("environment fixture lock should not be poisoned");
+    let home_root = unique_temp_dir("review-poller-from-local-home-credential");
+    let userprofile_root = unique_temp_dir("review-poller-from-local-userprofile-credential");
+    fs::create_dir_all(&home_root).expect("home credential root should exist");
+    fs::create_dir_all(&userprofile_root).expect("userprofile credential root should exist");
+    fs::write(
+        home_root.join(".git-credentials"),
+        "https://home:home-token-123@github.com\n",
+    )
+    .expect("home credential fixture should be written");
+    fs::write(
+        userprofile_root.join(".git-credentials"),
+        "https://userprofile:userprofile-token-123@github.com\n",
+    )
+    .expect("userprofile credential fixture should be written");
     let _env = EnvVarGuard::apply(&[
         ("AKRA_GITHUB_TOKEN", None),
         ("GH_TOKEN", None),
         ("GITHUB_TOKEN", None),
-        ("HOME", None),
-        ("USERPROFILE", None),
+        ("HOME", Some(home_root.to_string_lossy().as_ref())),
+        (
+            "USERPROFILE",
+            Some(userprofile_root.to_string_lossy().as_ref()),
+        ),
         ("USER", Some("linux-akra")),
         ("USERNAME", Some("akra")),
     ]);
@@ -837,8 +880,9 @@ exit 2
     let _ = fs::remove_dir_all(&fake_gh_root);
     let _ = fs::remove_dir_all(&repo_root);
     let _ = fs::remove_dir_all(&users_root);
+    let _ = fs::remove_dir_all(&home_root);
+    let _ = fs::remove_dir_all(&userprofile_root);
 }
-
 #[test]
 fn windows_home_resolution_covers_absent_permission_and_error_edges() {
     let empty_root = unique_temp_dir("review-poller-windows-users-empty");
