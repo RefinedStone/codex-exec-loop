@@ -380,14 +380,29 @@ return 1
 windows_current_user_credential_file() {
   local user_name
   local dir
-  user_name="${USER:-${USERNAME:-}}"
-  [[ -n "${user_name}" ]] || return 1
+  local duplicate_name
+  local -a user_names
+  user_names=()
+  [[ -n "${USER:-}" ]] && user_names+=("${USER}")
+  if [[ -n "${USERNAME:-}" ]]; then
+    duplicate_name='false'
+    for user_name in "${user_names[@]}"; do
+      if [[ "${user_name,,}" == "${USERNAME,,}" ]]; then
+        duplicate_name='true'
+        break
+      fi
+    done
+    [[ "${duplicate_name}" == 'false' ]] && user_names+=("${USERNAME}")
+  fi
+  ((${#user_names[@]} > 0)) || return 1
   while IFS= read -r dir; do
     [[ "${dir##*/}" != "" ]] || continue
-    if [[ "${dir##*/}" == "${user_name}" || "${dir##*/}" == "${user_name^}" || "${dir##*/,,}" == "${user_name,,}" ]]; then
-      printf '%s\n' "${dir}/.git-credentials"
-      return 0
-    fi
+    for user_name in "${user_names[@]}"; do
+      if [[ "${dir##*/}" == "${user_name}" || "${dir##*/}" == "${user_name^}" || "${dir##*/,,}" == "${user_name,,}" ]]; then
+        printf '%s\n' "${dir}/.git-credentials"
+        return 0
+      fi
+    done
   done < <(find /mnt/c/Users -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
   return 1
 }

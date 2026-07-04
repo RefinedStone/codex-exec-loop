@@ -756,8 +756,8 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
     let _env = EnvVarGuard::apply(&[
         ("HOME", None),
         ("USERPROFILE", None),
-        ("USER", Some("akra")),
-        ("USERNAME", None),
+        ("USER", Some("linux-akra")),
+        ("USERNAME", Some("akra")),
     ]);
 
     let candidates =
@@ -769,6 +769,57 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
         GithubReviewPollerAdapter::read_git_credential_file_token_from_candidates(candidates)
             .expect("current-user credential lookup should not fail");
     assert_eq!(token.as_deref(), Some("akra-token-123"));
+    let _ = fs::remove_dir_all(&users_root);
+}
+
+#[test]
+fn local_credential_constructor_falls_back_to_windows_current_user_when_names_differ() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let _env = EnvVarGuard::apply(&[
+        ("AKRA_GITHUB_TOKEN", None),
+        ("GH_TOKEN", None),
+        ("GITHUB_TOKEN", None),
+        ("HOME", None),
+        ("USERPROFILE", None),
+        ("USER", Some("linux-akra")),
+        ("USERNAME", Some("akra")),
+    ]);
+    let fake_gh_root = unique_temp_dir("review-poller-from-local-windows-failed-gh");
+    fs::create_dir_all(&fake_gh_root).expect("fake gh root should be created");
+    write_executable_script(
+        &fake_gh_root,
+        "gh",
+        r#"#!/bin/sh
+set -eu
+exit 2
+"#,
+    );
+    let _path = PathEnvGuard::prepend(&fake_gh_root);
+    let repo_root = init_git_repo("review-poller-from-local-windows-credential");
+    run_git(&repo_root, &["config", "credential.helper", ""]);
+    let users_root = unique_temp_dir("review-poller-from-local-windows-users");
+    fs::create_dir_all(users_root.join("Alice")).expect("other Windows home should exist");
+    fs::create_dir_all(users_root.join("akra")).expect("current Windows home should exist");
+    fs::write(
+        users_root.join("Alice/.git-credentials"),
+        "https://alice:alice-token-123@github.com\n",
+    )
+    .expect("other-user credential fixture should be written");
+    fs::write(
+        users_root.join("akra/.git-credentials"),
+        "https://akra:akra-token-123@github.com\n",
+    )
+    .expect("current-user credential fixture should be written");
+
+    let token =
+        GithubReviewPollerAdapter::read_local_github_token_for_root(&repo_root, &users_root)
+            .expect("windows current-user credential should satisfy local fallback order");
+
+    assert_eq!(token, "akra-token-123");
+    let _ = fs::remove_dir_all(&fake_gh_root);
+    let _ = fs::remove_dir_all(&repo_root);
     let _ = fs::remove_dir_all(&users_root);
 }
 

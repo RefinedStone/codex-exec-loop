@@ -220,6 +220,13 @@ impl GithubReviewPollerAdapter {
         Ok(repository)
     }
     fn read_local_github_token(repo_root: &Path) -> Result<String> {
+        Self::read_local_github_token_for_root(repo_root, Path::new(WINDOWS_USERS_ROOT))
+    }
+
+    fn read_local_github_token_for_root(
+        repo_root: &Path,
+        windows_users_root: &Path,
+    ) -> Result<String> {
         if let Some(token) = Self::read_token_from_environment() {
             return Ok(token);
         }
@@ -232,10 +239,12 @@ impl GithubReviewPollerAdapter {
         if let Some(token) = Self::read_named_github_credential_token(repo_root)? {
             return Ok(token);
         }
-        if let Some(token) = Self::read_git_credential_file_token()? {
+        if let Some(token) = Self::read_git_credential_file_token_for_root(windows_users_root)? {
             return Ok(token);
         }
-        if let Some(credential_line) = Self::find_windows_github_credential_line()? {
+        if let Some(credential_line) =
+            Self::find_windows_github_credential_line_in_root(windows_users_root)?
+        {
             return Self::parse_github_credential_token(&credential_line);
         }
         bail!(
@@ -362,8 +371,12 @@ impl GithubReviewPollerAdapter {
     }
 
     fn read_git_credential_file_token() -> Result<Option<String>> {
+        Self::read_git_credential_file_token_for_root(Path::new(WINDOWS_USERS_ROOT))
+    }
+
+    fn read_git_credential_file_token_for_root(users_root: &Path) -> Result<Option<String>> {
         Self::read_git_credential_file_token_from_candidates(
-            Self::git_credential_file_candidates_for_root(Path::new(WINDOWS_USERS_ROOT))?,
+            Self::git_credential_file_candidates_for_root(users_root)?,
         )
     }
 
@@ -430,7 +443,12 @@ impl GithubReviewPollerAdapter {
             .ok_or_else(|| anyhow!("missing token line in {}", path.display()))
     }
     fn find_windows_github_credential_line() -> Result<Option<String>> {
-        let Some(credential_path) = Self::resolve_windows_credential_path_for_current_user()?
+        Self::find_windows_github_credential_line_in_root(Path::new(WINDOWS_USERS_ROOT))
+    }
+
+    fn find_windows_github_credential_line_in_root(users_root: &Path) -> Result<Option<String>> {
+        let Some(credential_path) =
+            Self::resolve_windows_credential_path_for_current_user_in_root(users_root)?
         else {
             return Ok(None);
         };
@@ -454,6 +472,7 @@ impl GithubReviewPollerAdapter {
             (line.starts_with("https://") && line.contains("@github.com")).then(|| line.to_string())
         }))
     }
+
     fn resolve_windows_credential_path_for_current_user() -> Result<Option<PathBuf>> {
         Self::resolve_windows_credential_path_for_current_user_in_root(Path::new(
             WINDOWS_USERS_ROOT,
@@ -465,23 +484,33 @@ impl GithubReviewPollerAdapter {
         if !users_root.exists() {
             return Ok(None);
         }
-        let Some(current_user) = Self::current_user_name() else {
-            return Ok(None);
-        };
-        let Some(user_home) =
-            Self::resolve_current_user_windows_home(users_root, current_user.as_str())?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(user_home.join(".git-credentials")))
+        for current_user in Self::current_user_names() {
+            if let Some(user_home) =
+                Self::resolve_current_user_windows_home(users_root, current_user.as_str())?
+            {
+                return Ok(Some(user_home.join(".git-credentials")));
+            }
+        }
+        Ok(None)
     }
-    fn current_user_name() -> Option<String> {
-        ["USER", "USERNAME"].into_iter().find_map(|key| {
-            std::env::var(key)
+
+    fn current_user_names() -> Vec<String> {
+        let mut names = Vec::new();
+        for key in ["USER", "USERNAME"] {
+            if let Some(value) = std::env::var(key)
                 .ok()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
-        })
+            {
+                if !names
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
+                {
+                    names.push(value);
+                }
+            }
+        }
+        names
     }
     fn resolve_current_user_windows_home(
         users_root: &Path,
