@@ -47,7 +47,7 @@ They do not waive counted terminal-baseline requirements on their own.
 
 ### Supplemental replay-policy captures
 
-- `docs/validation/2026-07-05-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt` — explicit `ViewportReplay` representative evidence for the replay-only primitive change
+- `docs/validation/2026-07-04-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt` — explicit `ViewportReplay` representative evidence for the replay-only primitive change
 - `docs/validation/2026-07-03-ubuntu-24-04-2-lts-wsl2-tmux-3-4-detached-pty-bash-inline-replay-policy.txt` — contrasting `HostScrollback` representative evidence for the unchanged branch family
 
 ### `prompt-input-delay-pty` snapshot

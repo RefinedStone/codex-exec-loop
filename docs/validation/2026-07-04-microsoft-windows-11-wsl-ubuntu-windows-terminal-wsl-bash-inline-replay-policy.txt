@@ -1,11 +1,11 @@
-artifact_id: 2026-07-05-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt
-file_name: 2026-07-05-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt
+artifact_id: 2026-07-04-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt
+file_name: 2026-07-04-microsoft-windows-11-wsl-ubuntu-windows-terminal-wsl-bash-inline-replay-policy.txt
 capture_role: supplemental-unmatched
 work_item_id: replay-policy representative capture for the ViewportReplay branch
 capture_datetime: not separately recorded outside the helper output
 operator_reviewer_initials: not recorded
 
-date: 2026-07-05
+date: 2026-07-04
 commit: 2fc6ae0711836818d71879bda1b4168840fa5119
 os: Microsoft Windows 11 Pro 10.0.26200 / WSL Ubuntu
 terminal: Windows Terminal
