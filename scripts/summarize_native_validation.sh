@@ -312,6 +312,7 @@ if [[ -d "${records_dir}" ]]; then
     frontend_value="$(read_field "${record_file}" "frontend")"
     profile_value="$(read_field "${record_file}" "check_profile")"
     result_value="$(read_field "${record_file}" "result")"
+    capture_role_value="$(read_field "${record_file}" "capture_role")"
     record_profile="$(canonical_check_profile "${profile_value:-terminal-baseline}")"
 
     if [[ "${record_profile}" != "${check_profile}" ]]; then
@@ -323,6 +324,11 @@ if [[ -d "${records_dir}" ]]; then
       "$(canonical_terminal "${terminal_value}")" \
       "$(canonical_shell "${shell_value}")" \
       "$(canonical_frontend "${frontend_value}")")"
+
+    if [[ "${capture_role_value}" == "supplemental-unmatched" ]]; then
+      unmatched_entries+=("${record_file}|${os_value}|${terminal_value}|${shell_value}|${frontend_value}|${result_value}")
+      continue
+    fi
 
     if row_key_exists "${key}"; then
       set_latest_for_row "${key}" "$(slugify "${result_value}")" "${record_file}"
