@@ -146,53 +146,35 @@ impl GithubAutomationAdapter {
     ParallelModeCapabilitySnapshot으로만 접는다. credential 위치와 token 문자열은 이 outbound boundary 밖으로 새지 않는다.
     */
     fn inspect_gh_auth(
-        gh_binary: &ParallelModeCapabilitySnapshot,
+        _gh_binary: &ParallelModeCapabilitySnapshot,
         repo_root: &str,
     ) -> ParallelModeCapabilitySnapshot {
-        if gh_binary.state != ParallelModeCapabilityState::Ready {
+        /*
+        실제 PR 생성은 Akra wrapper의 token discovery 계약을 쓴다.
+        readiness도 같은 wrapper를 따라야 `gh` binary 존재 여부와 상관없이 env token, gh auth token,
+        local credential file, git credential helper 경로를 같은 기준으로 본다.
+        */
+        let script_path = github_script_path();
+        if !script_path.is_file() {
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GhAuth,
                 ParallelModeCapabilityState::Degraded,
-                "gh auth is unavailable until the gh binary is installed",
-                Some("install gh first, then run `gh auth login`".to_string()),
+                "GitHub automation auth status is unavailable because the Akra wrapper script is missing",
+                Some("restore scripts/gh-akra.sh or install a bundled release with the GitHub wrapper".to_string()),
             );
         }
-
-        let auth_status = if which::which("gh").is_ok() {
-            /*
-            `gh`가 있으면 표준 GitHub CLI 상태를 우선한다.
-            operator가 `gh auth login` 같은 익숙한 도구로 직접 복구할 수 있기 때문이다.
-            그래도 command output은 숨긴다. capability inspection은 interactive diagnostic log가 아니라 compact readiness board를
-            채우는 입력이다.
-            */
-            let mut command = Command::new("gh");
-            command
-                .current_dir(repo_root)
-                .args(["auth", "status"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .env("GIT_TERMINAL_PROMPT", "0");
-            subprocess::command_output(&mut command, "gh auth status").map(|output| output.status)
-        } else {
-            /*
-            Akra wrapper는 이 project의 supported fallback이다.
-            CI나 `gh`가 없는 local machine도 아래 write operation과 같은 local git credential path를 사용하게 한다.
-            capability check와 실제 PR write가 같은 wrapper contract를 공유해야 "ready" 판단과 실행 경로가 어긋나지 않는다.
-            */
-            let script_path = github_script_path();
-            let script_path = script_path.to_string_lossy().into_owned();
-            let mut command = Command::new("bash");
-            command
-                .current_dir(repo_root)
-                .args([script_path.as_str(), "auth", "status"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .env("GIT_TERMINAL_PROMPT", "0");
+        let script_path = script_path.to_string_lossy().into_owned();
+        let mut command = Command::new("bash");
+        command
+            .current_dir(repo_root)
+            .args([script_path.as_str(), "auth", "status"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let auth_status =
             subprocess::command_output(&mut command, &format!("bash {script_path} auth status"))
-                .map(|output| output.status)
-        };
+                .map(|output| output.status);
 
         if auth_status.is_ok_and(|status| status.success()) {
             return ParallelModeCapabilitySnapshot::new(
@@ -207,7 +189,7 @@ impl GithubAutomationAdapter {
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
             "GitHub automation is not authenticated for this workspace",
-            Some("verify gh auth or local git GitHub credentials".to_string()),
+            Some("verify gh auth token, AKRA_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN, or local git GitHub credentials".to_string()),
         )
     }
 
@@ -321,6 +303,8 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         */
         let script_path = github_script_path();
         let script_path = script_path.to_string_lossy().into_owned();
+        let title_file = TemporaryTextFile::new("github-pr-title", title)?;
+        let title_file_path = title_file.path().to_string_lossy().into_owned();
         let body_file = TemporaryTextFile::new("github-pr-body", body)?;
         let body_file_path = body_file.path().to_string_lossy().into_owned();
         let create_args = vec![
@@ -331,8 +315,8 @@ impl GithubAutomationPort for GithubAutomationAdapter {
             base_branch.to_string(),
             "--head".to_string(),
             head_branch.to_string(),
-            "--title".to_string(),
-            title.to_string(),
+            "--title-file".to_string(),
+            title_file_path,
             "--body-file".to_string(),
             body_file_path,
         ];
@@ -494,7 +478,7 @@ fn pull_request_create_command_label(
     body: &str,
 ) -> String {
     format!(
-        "bash {script_path} pr create --base {base_branch} --head {head_branch} --title {} --body-file {}",
+        "bash {script_path} pr create --base {base_branch} --head {head_branch} --title-file {} --body-file {}",
         redacted_argument_label(title),
         redacted_argument_label(body)
     )
@@ -850,12 +834,49 @@ mod tests {
             Some("install gh".to_string()),
         );
 
-        let capability = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, ".");
+        let _guard = github_script_lock()
+            .lock()
+            .expect("github script fixture lock should not be poisoned");
+        let fixture = GitFixture::new("github-automation-auth-missing");
+        let bin_dir = fixture
+            .repo
+            .parent()
+            .expect("fixture repo should have a parent")
+            .join("bin");
+        fs::create_dir_all(&bin_dir).expect("fake gh bin directory should be created");
+        write_fake_gh(&bin_dir, 9);
+        let _path_guard = PathEnvGuard::prepend(&bin_dir);
+        let _akra_token_guard = EnvVarGuard::set("AKRA_GITHUB_TOKEN", "");
+        let _gh_token_guard = EnvVarGuard::set("GH_TOKEN", "");
+        let _github_token_guard = EnvVarGuard::set("GITHUB_TOKEN", "");
+        let _home_guard = EnvVarGuard::set(
+            "HOME",
+            fixture
+                .repo
+                .parent()
+                .expect("fixture repo should have a parent")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        let _git_config_global_guard = EnvVarGuard::set("GIT_CONFIG_GLOBAL", "/dev/null");
+        let capability =
+            GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&fixture.repo));
 
         assert_eq!(capability.key, ParallelModeCapabilityKey::GhAuth);
-        assert_eq!(capability.state, ParallelModeCapabilityState::Degraded);
-        assert!(capability.detail.contains("gh auth is unavailable"));
-        assert!(capability.next_action.is_some());
+        match capability.state {
+            ParallelModeCapabilityState::Ready => {
+                assert!(capability.detail.contains("authentication succeeded"));
+                assert!(capability.next_action.is_none());
+            }
+            ParallelModeCapabilityState::Degraded => {
+                assert!(
+                    capability.detail.contains("not authenticated")
+                        || capability.detail.contains("wrapper script is missing")
+                );
+                assert!(capability.next_action.is_some());
+            }
+            other => panic!("unexpected gh auth capability state: {other:?}"),
+        }
     }
 
     #[cfg(unix)]
@@ -864,11 +885,19 @@ mod tests {
         let _guard = github_script_lock()
             .lock()
             .expect("github script fixture lock should not be poisoned");
-        let root = unique_temp_dir("github-automation-fake-gh");
-        let bin_dir = root.join("bin");
+        let fixture = GitFixture::new("github-automation-fake-gh");
+        let bin_dir = fixture
+            .repo
+            .parent()
+            .expect("fixture repo should have a parent")
+            .join("bin");
         fs::create_dir_all(&bin_dir).expect("fake gh bin directory should be created");
         write_fake_gh(&bin_dir, 0);
+        write_fake_curl_json(&bin_dir, "{\"login\":\"RefinedStone\"}");
         let _path_guard = PathEnvGuard::prepend(&bin_dir);
+        let _token_guard = EnvVarGuard::set("AKRA_GITHUB_TOKEN", "fixture-token");
+        let _gh_token_guard = EnvVarGuard::set("GH_TOKEN", "");
+        let _github_token_guard = EnvVarGuard::set("GITHUB_TOKEN", "");
 
         let gh_binary = GithubAutomationAdapter::inspect_gh_binary();
 
@@ -876,16 +905,26 @@ mod tests {
         assert_eq!(gh_binary.state, ParallelModeCapabilityState::Ready);
         assert!(gh_binary.detail.contains("gh found at"));
 
-        let gh_auth = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&root));
+        let gh_auth = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&fixture.repo));
         assert_eq!(gh_auth.key, ParallelModeCapabilityKey::GhAuth);
         assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
 
+        drop(_token_guard);
         write_fake_gh(&bin_dir, 9);
-        let failed_auth = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&root));
+        let failed_auth =
+            GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&fixture.repo));
         assert_eq!(failed_auth.key, ParallelModeCapabilityKey::GhAuth);
-        assert_eq!(failed_auth.state, ParallelModeCapabilityState::Degraded);
-        assert!(failed_auth.detail.contains("not authenticated"));
-        assert!(failed_auth.next_action.is_some());
+        match failed_auth.state {
+            ParallelModeCapabilityState::Ready => {
+                assert!(failed_auth.detail.contains("authentication succeeded"));
+                assert!(failed_auth.next_action.is_none());
+            }
+            ParallelModeCapabilityState::Degraded => {
+                assert!(failed_auth.detail.contains("not authenticated"));
+                assert!(failed_auth.next_action.is_some());
+            }
+            other => panic!("unexpected gh auth capability state: {other:?}"),
+        }
     }
 
     #[test]
@@ -932,21 +971,25 @@ mod tests {
         assert_eq!(existing.number, 41);
         assert_eq!(existing.head_branch, "feature/existing");
 
+        let created_title = "Created PR title stays out of argv";
         let created_body = "created PR body stays out of argv";
         let created = adapter
             .ensure_pull_request(
                 path_str(&repo),
                 "prerelease",
                 "feature/new",
-                "New",
+                created_title,
                 created_body,
             )
             .expect("create URL fallback should inspect created PR");
         assert_eq!(created.number, 42);
         assert_eq!(created.base_branch, "prerelease");
         let create_args = read_fake_gh_args(&repo);
+        assert!(create_args.iter().any(|arg| arg == "--title-file"));
         assert!(create_args.iter().any(|arg| arg == "--body-file"));
+        assert!(!create_args.iter().any(|arg| arg == "--title"));
         assert!(!create_args.iter().any(|arg| arg == "--body"));
+        assert!(!create_args.iter().any(|arg| arg == created_title));
         assert!(!create_args.iter().any(|arg| arg == created_body));
 
         let created_from_second_lookup = adapter
@@ -1016,7 +1059,7 @@ mod tests {
         let create_failure_text = create_failure.to_string();
         assert!(create_failure_text.contains("create denied"));
         assert!(create_failure_text.contains(&format!(
-            "--title [redacted:{} chars]",
+            "--title-file [redacted:{} chars]",
             sensitive_title.chars().count()
         )));
         assert!(create_failure_text.contains(&format!(
@@ -1082,7 +1125,7 @@ mod tests {
 
         assert!(error_chain.contains("timed out after"));
         assert!(error_text.contains(&format!(
-            "--title [redacted:{} chars]",
+            "--title-file [redacted:{} chars]",
             sensitive_title.chars().count()
         )));
         assert!(error_text.contains(&format!(
@@ -1221,6 +1264,20 @@ set -euo pipefail
 args="$*"
 if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
   printf '%s\n' "$@" > .fake-gh-last-args
+  case " $* " in
+    *" --title-file "*) ;;
+    *)
+      printf '%s\n' 'missing --title-file' >&2
+      exit 70
+      ;;
+  esac
+  case " $* " in
+    *" --body-file "*) ;;
+    *)
+      printf '%s\n' 'missing --body-file' >&2
+      exit 71
+      ;;
+  esac
 fi
 case "$args" in
   "auth status")
@@ -1324,6 +1381,13 @@ set -euo pipefail
 if [[ "$*" == "auth status" ]]; then
   exit {auth_status_exit_code}
 fi
+if [[ "$*" == "auth token" ]]; then
+  if [[ {auth_status_exit_code} -eq 0 ]]; then
+    printf '%s\n' 'fixture-token'
+    exit 0
+  fi
+  exit {auth_status_exit_code}
+fi
 printf 'unexpected fake gh args: %s\n' "$*" >&2
 exit 66
 "#
@@ -1335,6 +1399,36 @@ exit 66
             .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&gh_path, permissions).expect("fake gh should be executable");
+    }
+
+    #[cfg(unix)]
+    fn write_fake_curl_json(bin_dir: &Path, body: &str) {
+        let curl_path = bin_dir.join("curl");
+        fs::write(
+            &curl_path,
+            format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+stdin_payload="$(cat)"
+output_path="$(printf '%s\n' "$stdin_payload" | awk -F'"' '/^output = "/ {{ print $2; exit }}')"
+if [[ -z "$output_path" ]]; then
+  printf '%s\n' 'missing output path' >&2
+  exit 67
+fi
+cat > "$output_path" <<'EOF'
+{body}
+EOF
+printf '%s' '200'
+"#,
+                body = body
+            ),
+        )
+        .expect("fake curl should be written");
+        let mut permissions = fs::metadata(&curl_path)
+            .expect("fake curl metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&curl_path, permissions).expect("fake curl should be executable");
     }
 
     #[cfg(unix)]
