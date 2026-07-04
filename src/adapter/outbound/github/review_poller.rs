@@ -11,6 +11,7 @@ use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
 };
+use crate::subprocess;
 use anyhow::{Context, Result, anyhow, bail};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
@@ -164,12 +165,16 @@ impl GithubReviewPollerAdapter {
         이 helper 위쪽 caller는 repository/branch/credential 같은 domain-specific parse error를 붙이고,
         command 자체가 실패하면 stderr를 포함해 origin 설정이나 worktree 상태 문제를 진단할 수 있게 한다.
         */
-        let output = Command::new("git")
+        let command_label = format!("git {}", args.join(" "));
+        let mut command = Command::new("git");
+        command
             .arg("-C")
             .arg(repo_root)
             .args(args)
-            .output()
-            .with_context(|| {
+            .stdin(Stdio::null())
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let output =
+            subprocess::command_output(&mut command, &command_label).with_context(|| {
                 format!(
                     "failed to run git {} from {}",
                     args.join(" "),
@@ -238,12 +243,14 @@ impl GithubReviewPollerAdapter {
     }
 
     fn read_gh_auth_token(repo_root: &Path) -> Result<Option<String>> {
-        let output = Command::new("gh")
+        let mut command = Command::new("gh");
+        command
             .arg("auth")
             .arg("token")
             .current_dir(repo_root)
             .stdin(Stdio::null())
-            .output();
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let output = subprocess::command_output(&mut command, "gh auth token");
         let Ok(output) = output else {
             return Ok(None);
         };
@@ -295,9 +302,11 @@ impl GithubReviewPollerAdapter {
                 .write_all(query.as_bytes())
                 .context("failed to write git credential query")?;
         }
-        let output = child
-            .wait_with_output()
-            .context("failed to wait for git credential fill")?;
+        let output = match subprocess::wait_with_output(child, "git credential fill") {
+            Ok(output) => output,
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => return Ok(None),
+            Err(error) => return Err(error).context("failed to wait for git credential fill"),
+        };
         if !output.status.success() {
             return Ok(None);
         }
@@ -572,7 +581,8 @@ impl GithubReviewPollerAdapter {
         user_agent: &str,
     ) -> io::Result<Output> {
         for attempt in 1..=CURL_SPAWN_ATTEMPTS {
-            let output = Command::new(&self.curl_path)
+            let mut command = Command::new(&self.curl_path);
+            command
                 .args([
                     "-sSfL",
                     "--connect-timeout",
@@ -585,7 +595,9 @@ impl GithubReviewPollerAdapter {
                 .args(["-H", authorization])
                 .args(["-H", user_agent])
                 .arg(url)
-                .output();
+                .stdin(Stdio::null());
+            let output =
+                subprocess::command_output(&mut command, &format!("{} {url}", self.curl_path));
             match output {
                 Ok(output) => return Ok(output),
                 Err(error)
@@ -785,3 +797,224 @@ struct GitHubUser {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod timeout_policy_tests {
+    use super::GithubReviewPollerAdapter;
+    use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn gh_auth_token_timeout_degrades_to_none() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("review-poller-gh-auth-timeout");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        write_executable_script(
+            &root,
+            "gh",
+            r#"#!/bin/sh
+set -eu
+sleep 2
+"#,
+        );
+        let _path = PathEnvGuard::prepend(&root);
+        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
+
+        let token = GithubReviewPollerAdapter::read_gh_auth_token(&root)
+            .expect("timed out gh auth token should degrade to none");
+
+        assert_eq!(token, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git_credential_fill_timeout_degrades_to_none() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("review-poller-git-credential-timeout");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        write_executable_script(
+            &root,
+            "git",
+            r#"#!/bin/sh
+set -eu
+cat >/dev/null
+sleep 2
+"#,
+        );
+        let _path = PathEnvGuard::prepend(&root);
+        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
+
+        let token = GithubReviewPollerAdapter::run_git_credential_fill(
+            &root,
+            "protocol=https\nhost=github.com\n\n",
+        )
+        .expect("timed out git credential fill should degrade to none");
+
+        assert_eq!(token, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_git_command_uses_shared_timeout_policy() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("review-poller-run-git-timeout");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        write_executable_script(
+            &root,
+            "git",
+            r#"#!/bin/sh
+set -eu
+sleep 2
+"#,
+        );
+        let _path = PathEnvGuard::prepend(&root);
+        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
+
+        let error = GithubReviewPollerAdapter::run_git_command(&root, &["rev-parse", "HEAD"])
+            .expect_err("timed out git command should surface timeout");
+        let error_chain = error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(error_chain.contains("timed out after"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fetch_json_uses_shared_timeout_policy_for_curl() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("review-poller-fetch-json-timeout");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        let script = write_executable_script(
+            &root,
+            "fake-curl",
+            r#"#!/bin/sh
+set -eu
+sleep 2
+"#,
+        );
+        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
+        let adapter = GithubReviewPollerAdapter {
+            curl_path: script.display().to_string(),
+            api_base_url: "https://api.test".to_string(),
+            user_agent: "akra-test".to_string(),
+            token: "secret-token".to_string(),
+        };
+
+        let error = adapter
+            .fetch_json("/repos/acme/widgets/pulls/42")
+            .expect_err("timed out curl should surface timeout context");
+        let error_chain = error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(error_chain.contains("timed out after"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
+    }
+
+    fn write_executable_script(root: &Path, name: &str, body: &str) -> PathBuf {
+        let script_path = root.join(name);
+        fs::write(&script_path, body).expect("script fixture should be written");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions)
+            .expect("script fixture should be executable");
+        script_path
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        &LOCK
+    }
+
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvVarGuard {
+        fn apply(updates: &[(&'static str, Option<&str>)]) -> Self {
+            let saved = updates
+                .iter()
+                .map(|(key, _)| (*key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            unsafe {
+                for (key, value) in updates {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                for (key, value) in &self.saved {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    struct PathEnvGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl PathEnvGuard {
+        fn prepend(directory: &Path) -> Self {
+            let previous = std::env::var_os("PATH");
+            let mut paths = vec![directory.to_path_buf()];
+            if let Some(path) = &previous {
+                paths.extend(std::env::split_paths(path));
+            }
+            let joined_path = std::env::join_paths(paths).expect("test PATH should join");
+            unsafe {
+                std::env::set_var("PATH", joined_path);
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for PathEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(path) => std::env::set_var("PATH", path),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+    }
+}

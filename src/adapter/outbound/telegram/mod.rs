@@ -10,6 +10,7 @@ use crate::application::port::outbound::telegram_bot_port::{
     TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
     TelegramUpdate,
 };
+use crate::subprocess;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde::Serialize;
@@ -71,9 +72,11 @@ impl CurlTelegramBotAdapter {
             .with_context(|| format!("failed to write curl config for Telegram {method_name}"))?;
         drop(stdin);
         // stdin을 닫아야 curl이 `--config -` 입력 종료를 감지하고 실제 요청을 시작한다.
-        let output = child
-            .wait_with_output()
-            .with_context(|| format!("failed to wait for curl during Telegram {method_name}"))?;
+        let output =
+            subprocess::wait_with_output(child, &format!("curl --config - Telegram {method_name}"))
+                .with_context(|| {
+                    format!("failed to wait for curl during Telegram {method_name}")
+                })?;
         if !output.status.success() {
             bail!(
                 "telegram {method_name} request failed: {}",
@@ -227,10 +230,16 @@ fn escape_curl_config_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        TelegramApiEnvelope, TelegramChatResponse, TelegramMessageResponse,
+        CurlTelegramBotAdapter, TelegramApiEnvelope, TelegramChatResponse, TelegramMessageResponse,
         TelegramSendMessageResponse, TelegramUpdateResponse, TelegramUserResponse,
         build_curl_config, escape_curl_config_value,
     };
+    use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn telegram_envelope_parses_success_payload() {
@@ -338,5 +347,105 @@ mod tests {
 
         assert_eq!(mapped.update_id, 99);
         assert!(mapped.message.is_none());
+    }
+
+    #[test]
+    fn execute_json_request_times_out_hung_curl_process() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("telegram-curl-timeout");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        let script = write_executable_script(
+            &root,
+            "fake-curl",
+            r#"#!/bin/sh
+set -eu
+cat >/dev/null
+sleep 2
+"#,
+        );
+        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
+        let adapter = CurlTelegramBotAdapter {
+            curl_path: script.display().to_string(),
+            api_base_url: "https://api.test".to_string(),
+            token: "secret-token".to_string(),
+        };
+
+        let error = adapter
+            .execute_json_request::<_, serde_json::Value>(
+                "getUpdates",
+                &serde_json::json!({"offset": 1}),
+                0,
+            )
+            .expect_err("hung curl should time out");
+        let error_chain = error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(error_chain.contains("timed out after"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
+    }
+
+    fn write_executable_script(root: &Path, name: &str, body: &str) -> PathBuf {
+        let script_path = root.join(name);
+        fs::write(&script_path, body).expect("script fixture should be written");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions)
+            .expect("script fixture should be executable");
+        script_path
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        &LOCK
+    }
+
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvVarGuard {
+        fn apply(updates: &[(&'static str, Option<&str>)]) -> Self {
+            let saved = updates
+                .iter()
+                .map(|(key, _)| (*key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            unsafe {
+                for (key, value) in updates {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                for (key, value) in &self.saved {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
     }
 }
