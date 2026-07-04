@@ -2,11 +2,18 @@
 // startup overlay와 capability copy는 이 값으로 provider launch, reattach, future local attach를 같은
 // 화면 계약에서 설명한다.
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 // bundled schema snapshot은 현재 binary가 기준으로 삼는 app-server protocol schema 파일이다.
 // startup banner가 이 label을 보여 주면 실행 중인 binary가 어떤 schema snapshot으로 빌드됐는지
 // build artifact만 보고 추적할 수 있다.
 const BUNDLED_SCHEMA_SNAPSHOT_PATH: &str = "schema/codex_app_server_protocol.v2.schemas.json";
+const BUNDLED_SCHEMA_SNAPSHOT_ID: &str =
+    "urn:codex-exec-loop-native:app-server-protocol:v2:snapshot";
+const BUNDLED_SCHEMA_SNAPSHOT_VERSION: &str = "v2";
+const BUNDLED_SCHEMA_SNAPSHOT_SOURCE: &str = "codex app-server protocol snapshot";
 // `include_str!`은 schema snapshot 내용을 binary에 embed한다. runtime filesystem에 schema 파일이 없어도
 // startup diagnostics는 빌드 시점 snapshot 크기와 출처를 표시할 수 있다.
 const BUNDLED_SCHEMA_SNAPSHOT_CONTENTS: &str =
@@ -54,20 +61,41 @@ pub struct StartupDiagnostics {
 // `StartupDiagnostics` methods는 startup snapshot 자체에 속한 작은 derived contract다.
 impl StartupDiagnostics {
     /*
-     * 이 label은 startup service가 diagnostics를 만들 때 `schema_snapshot` field에 넣는다. path와 byte
-     * length를 함께 표시해 어떤 embedded schema가 들어갔는지 startup 화면과 로그만 보고도 확인할 수 있다.
+     * 이 label은 startup service가 diagnostics를 만들 때 `schema_snapshot` field에 넣는다. path와 schema id,
+     * semantic version, checksum을 함께 표시해 어떤 embedded schema가 들어갔는지 startup 화면과 로그만 보고도
+     * 확인할 수 있다.
      */
     pub fn bundled_schema_snapshot_label() -> String {
-        /*
-         * The schema file itself is embedded at compile time, while this label is a
-         * runtime-facing breadcrumb. Including both path and byte length gives support
-         * logs enough information to identify which protocol snapshot the binary was
-         * built against even when the source tree is not present on disk.
-         */
+        let checksum = Self::bundled_schema_snapshot_sha256();
+        let schema_id = Self::bundled_schema_snapshot_string_field("$id")
+            .unwrap_or_else(|| BUNDLED_SCHEMA_SNAPSHOT_ID.to_string());
+        let version = Self::bundled_schema_snapshot_string_field("version")
+            .unwrap_or_else(|| BUNDLED_SCHEMA_SNAPSHOT_VERSION.to_string());
         format!(
-            "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({} bytes)",
+            "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({version}; {schema_id}; sha256:{}; {} bytes)",
+            &checksum[..12],
             BUNDLED_SCHEMA_SNAPSHOT_CONTENTS.len()
         )
+    }
+
+    fn bundled_schema_snapshot_sha256() -> String {
+        let digest = Sha256::digest(BUNDLED_SCHEMA_SNAPSHOT_CONTENTS.as_bytes());
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            write!(&mut hex, "{byte:02x}").expect("writing to string should not fail");
+        }
+        hex
+    }
+
+    fn bundled_schema_snapshot_string_field(field: &str) -> Option<String> {
+        Self::bundled_schema_snapshot_root()?
+            .get(field)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    }
+
+    fn bundled_schema_snapshot_root() -> Option<Value> {
+        serde_json::from_str(BUNDLED_SCHEMA_SNAPSHOT_CONTENTS).ok()
     }
 
     /*
@@ -81,5 +109,40 @@ impl StartupDiagnostics {
          * blocked only when one of the four hard dependencies is unavailable.
          */
         self.codex_binary_ok && self.workspace_ok && self.initialize_ok && self.account_ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_schema_snapshot_label_carries_id_version_and_checksum() {
+        let label = StartupDiagnostics::bundled_schema_snapshot_label();
+        assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_PATH));
+        assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_ID));
+        assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_VERSION));
+        assert!(label.contains("sha256:"));
+    }
+
+    #[test]
+    fn bundled_schema_snapshot_metadata_is_present_in_embedded_schema() {
+        assert_eq!(
+            StartupDiagnostics::bundled_schema_snapshot_string_field("$id").as_deref(),
+            Some(BUNDLED_SCHEMA_SNAPSHOT_ID)
+        );
+        assert_eq!(
+            StartupDiagnostics::bundled_schema_snapshot_string_field("version").as_deref(),
+            Some(BUNDLED_SCHEMA_SNAPSHOT_VERSION)
+        );
+        assert_eq!(
+            StartupDiagnostics::bundled_schema_snapshot_string_field("x-generated-from").as_deref(),
+            Some(BUNDLED_SCHEMA_SNAPSHOT_SOURCE)
+        );
+        assert!(StartupDiagnostics::bundled_schema_snapshot_string_field("description").is_some());
+        assert_eq!(
+            StartupDiagnostics::bundled_schema_snapshot_sha256().len(),
+            64
+        );
     }
 }

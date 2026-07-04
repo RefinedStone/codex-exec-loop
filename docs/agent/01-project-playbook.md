@@ -26,7 +26,7 @@
 - `src/adapter/outbound/git/`: local git/worktree runtime operations for parallel mode
 - `src/adapter/outbound/github/`: GitHub PR, review, and automation boundary
 - `src/adapter/outbound/telegram/`: Telegram HTTP API adapter
-- `schema/`: checked-in protocol snapshot used to pin app-server shapes
+- `schema/`: checked-in protocol snapshot used to pin app-server shapes; root provenance metadata plus the startup checksum label are the runtime support contract
 - `templates/admin/` and `assets/admin/`: admin UI templates and packaged visual assets
 - `npm/`: platform wrapper, staged npm package metadata, and runtime tests
 - `scripts/`: PR gates, native release packaging, validation capture, planning-tool wrapper, GitHub identity wrapper, and merged-worktree cleanup

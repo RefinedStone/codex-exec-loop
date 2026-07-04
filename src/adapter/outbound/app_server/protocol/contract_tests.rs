@@ -315,6 +315,71 @@ fn schema_notification_vocabulary_requires_adapter_classification() {
 }
 
 #[test]
+fn schema_fixed_width_integer_bounds_match_rust_ranges() {
+    let integer_fields = schema_integer_fields();
+    let mut missing_bounds = Vec::new();
+    let mut out_of_range = Vec::new();
+
+    for field in &integer_fields {
+        let Some((expected_min, expected_max)) = schema_format_bounds(field.format.as_str()) else {
+            continue;
+        };
+        match (field.minimum, field.maximum) {
+            (Some(minimum), Some(maximum)) => {
+                if minimum < expected_min || maximum > expected_max {
+                    out_of_range.push(format!(
+                        "{} [{}] => minimum={minimum:?}, maximum={maximum:?}, expected=[{expected_min}, {expected_max}]",
+                        field.path, field.format
+                    ));
+                }
+            }
+            _ => missing_bounds.push(format!(
+                "{} [{}] => minimum={:?}, maximum={:?}",
+                field.path, field.format, field.minimum, field.maximum
+            )),
+        }
+    }
+
+    assert!(
+        missing_bounds.is_empty() && out_of_range.is_empty(),
+        "checked-in schema snapshot must carry explicit Rust integer bounds for every fixed-width integer field. missing={missing_bounds:?}; out_of_range={out_of_range:?}"
+    );
+
+    let rollback_turns = integer_fields
+        .iter()
+        .find(|field| field.path == "$/definitions/ThreadRollbackParams/properties/numTurns")
+        .expect("thread rollback field should stay in the schema snapshot");
+    assert_eq!(rollback_turns.minimum, Some(1));
+}
+
+#[test]
+fn schema_snapshot_carries_provenance_and_reviewable_format() {
+    let body = include_str!("../../../../../schema/codex_app_server_protocol.v2.schemas.json");
+    assert!(
+        body.lines().count() > 100,
+        "checked-in schema snapshot should stay pretty-printed for reviewable diffs"
+    );
+
+    let schema = schema_root();
+    assert_eq!(
+        schema.pointer("/$id").and_then(Value::as_str),
+        Some("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot")
+    );
+    assert_eq!(schema.get("version").and_then(Value::as_str), Some("v2"));
+    assert_eq!(
+        schema.get("x-generated-from").and_then(Value::as_str),
+        Some("codex app-server protocol snapshot")
+    );
+    assert!(
+        schema
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty()),
+        "checked-in schema snapshot should explain its provenance role"
+    );
+}
+
+#[test]
 fn notification_classification_matches_reducer_ownership() {
     for method in HANDLED_NOTIFICATION_METHODS
         .iter()
@@ -456,12 +521,7 @@ fn classified_notification_methods() -> BTreeSet<String> {
 }
 
 fn schema_notification_methods() -> BTreeSet<String> {
-    let schema = serde_json::from_str::<Value>(include_str!(
-        "../../../../../schema/codex_app_server_protocol.v2.schemas.json"
-    ))
-    .expect("checked-in app-server protocol schema should parse");
-
-    schema
+    schema_root()
         .pointer("/definitions/ServerNotification/oneOf")
         .and_then(Value::as_array)
         .expect("schema should expose ServerNotification.oneOf")
@@ -474,4 +534,71 @@ fn schema_notification_methods() -> BTreeSet<String> {
                 .to_string()
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct SchemaIntegerField {
+    path: String,
+    format: String,
+    minimum: Option<i128>,
+    maximum: Option<i128>,
+}
+
+fn schema_root() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../../../schema/codex_app_server_protocol.v2.schemas.json"
+    ))
+    .expect("checked-in app-server protocol schema should parse")
+}
+
+fn schema_integer_fields() -> Vec<SchemaIntegerField> {
+    let mut fields = Vec::new();
+    collect_schema_integer_fields(&schema_root(), "$", &mut fields);
+    fields
+}
+
+fn collect_schema_integer_fields(node: &Value, path: &str, fields: &mut Vec<SchemaIntegerField>) {
+    match node {
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("integer") {
+                if let Some(format) = object.get("format").and_then(Value::as_str) {
+                    fields.push(SchemaIntegerField {
+                        path: path.to_string(),
+                        format: format.to_string(),
+                        minimum: json_integer(object.get("minimum")),
+                        maximum: json_integer(object.get("maximum")),
+                    });
+                }
+            }
+            for (key, value) in object {
+                collect_schema_integer_fields(value, &format!("{path}/{key}"), fields);
+            }
+        }
+        Value::Array(items) => {
+            for (index, value) in items.iter().enumerate() {
+                collect_schema_integer_fields(value, &format!("{path}/{index}"), fields);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn json_integer(value: Option<&Value>) -> Option<i128> {
+    value.and_then(|value| {
+        value
+            .as_i64()
+            .map(|number| number as i128)
+            .or_else(|| value.as_u64().map(|number| number as i128))
+    })
+}
+
+fn schema_format_bounds(format: &str) -> Option<(i128, i128)> {
+    match format {
+        "uint" | "uint64" => Some((0, u64::MAX as i128)),
+        "uint32" => Some((0, u32::MAX as i128)),
+        "uint16" => Some((0, u16::MAX as i128)),
+        "int32" => Some((i32::MIN as i128, i32::MAX as i128)),
+        "int64" => Some((i64::MIN as i128, i64::MAX as i128)),
+        _ => None,
+    }
 }
