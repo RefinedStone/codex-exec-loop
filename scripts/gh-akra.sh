@@ -957,6 +957,9 @@ reply_review_comment_with_api() {
 }
 
 if [[ "${1-}:${2-}" == "auth:status" ]]; then
+  if [[ -n "${git_dir:-}" ]]; then
+    repo_full_name="$(parse_repo_full_name)"
+  fi
   token="$(resolve_gh_exec_token)"
   if [[ -z "${token}" ]]; then
     token="$(resolve_token)"

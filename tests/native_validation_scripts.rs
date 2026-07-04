@@ -490,6 +490,99 @@ printf '200'
 }
 
 #[test]
+fn gh_akra_auth_status_preserves_repo_scoped_git_credential_fill() {
+    let root = make_records_dir();
+    let repo = root.join("repo");
+    let bin_dir = root.join("bin");
+    let home_root = root.join("home");
+    fs::create_dir(&repo).expect("repo fixture dir should be created");
+    fs::create_dir(&bin_dir).expect("bin fixture dir should be created");
+    fs::create_dir(&home_root).expect("home fixture dir should be created");
+
+    assert_success(
+        &Command::new("git")
+            .arg("init")
+            .arg(&repo)
+            .output()
+            .expect("git init should run"),
+        "git init",
+    );
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        ),
+        "configure origin",
+    );
+    assert_success(
+        &run_git(&repo, &["config", "credential.useHttpPath", "true"]),
+        "configure path-sensitive credential path matching",
+    );
+
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "config",
+                "credential.helper",
+                "!f() { input=$(cat); case \"$input\" in *'path=acme/widgets'*) printf 'username=akra\\npassword=path-token-123\\n' ;; *) printf 'username=akra\\npassword=generic-token-123\\n' ;; esac; }; f",
+            ],
+        ),
+        "configure path-sensitive credential helper",
+    );
+
+    write_executable_file(
+        &bin_dir.join("gh"),
+        r#"#!/bin/sh
+set -eu
+exit 1
+"#,
+    );
+    write_executable_file(
+        &bin_dir.join("curl"),
+        r#"#!/bin/sh
+set -eu
+config=$(cat)
+output_file=$(printf '%s\n' "$config" | sed -n 's/^output = "\(.*\)"$/\1/p')
+case "$config" in
+  *'Authorization: Bearer path-token-123'*)
+    printf '{"login":"akra"}' > "$output_file"
+    ;;
+  *)
+    printf '{"login":"wrong"}' > "$output_file"
+    ;;
+esac
+printf '200'
+"#,
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/gh-akra.sh"))
+        .arg("auth")
+        .arg("status")
+        .current_dir(&repo)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+        .env("HOME", &home_root)
+        .env("USERPROFILE", "")
+        .env("AKRA_GITHUB_TOKEN", "")
+        .env("GH_TOKEN", "")
+        .env("GITHUB_TOKEN", "")
+        .output()
+        .expect("gh-akra auth status should run inside a repo");
+
+    let _ = fs::remove_dir_all(&root);
+
+    assert_success(&output, "gh-akra auth status repo-scoped credential fill");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Logged in to github.com as akra"));
+}
+
+#[test]
 fn cleanup_explicit_unmerged_branch_is_skipped_by_default() {
     let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
 
