@@ -1,10 +1,6 @@
 // File sync는 admin facade가 accepted planning 문서를 workspace의 편집 가능한 파일로 내보내고 다시 읽어오는 경로다.
-// 실제 쓰기는 표준 fs API로 수행하고, planning 저장소 갱신은 facade helper에 맡긴다.
-use std::fs;
-// Workspace root와 planning-relative path를 안전하게 결합하기 위해 `Path`를 사용한다.
-use std::path::Path;
-
-// Admin API는 실패 원인을 operator에게 그대로 보여 주므로 `Context`로 어느 파일/디렉터리 작업이 실패했는지 붙이고,
+// 실제 쓰기/읽기는 workspace port를 통해 수행하고, planning 저장소 갱신은 facade helper에 맡긴다.
+// Admin API는 실패 원인을 operator에게 그대로 보여 주므로 `Context`로 어느 파일 작업이 실패했는지 붙이고,
 // parallel busy guard는 `bail!`로 즉시 중단한다.
 use anyhow::{Context, Result, bail};
 
@@ -30,13 +26,15 @@ impl PlanningAdminFacadeService {
         let documents = self.load_operator_planning_documents()?;
         // paths는 실제로 쓴 planning-relative path를 caller에게 알려 주는 기록이다. 대상 파일이 늘어나도
         // notice count와 UI 표시가 helper 호출 수와 함께 맞춰지도록 Vec으로 누적한다.
-        let mut paths = Vec::new();
-        write_candidate_file(
-            &self.workspace_dir,
-            RESULT_OUTPUT_FILE_PATH,
-            &documents.result_output_markdown,
-            &mut paths,
-        )?;
+        self.planning_workspace_port
+            .replace_planning_workspace_file(
+                self.workspace_dir.as_str(),
+                RESULT_OUTPUT_FILE_PATH,
+                Some(&documents.result_output_markdown),
+            )
+            .with_context(|| format!("failed to export {RESULT_OUTPUT_FILE_PATH}"))?;
+        let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+
         // outcome notice는 admin page flash/status copy의 원천이다. paths는 사용자가 어떤 workspace 파일을
         // 열어 편집하면 되는지 보여 주는 machine-readable 목록이다.
         Ok(PlanningAdminFileSyncOutcome {
@@ -129,32 +127,19 @@ fn describe_parallel_busy(runtime: &PlanningAuthorityRuntimeProjectionSnapshot) 
     None
 }
 
-// Accepted document body를 workspace의 planning-relative 파일로 쓴다. helper로 분리해 나중에 export 대상 파일이
-// 늘어나도 directory creation, context, path recording 규칙을 한곳에서 공유한다.
+#[cfg(test)]
 fn write_candidate_file(
-    // workspace_dir은 admin facade가 바라보는 repo/root다. relative_path와 결합해 실제 파일 시스템 경로를
-    // 만들지만, caller에게는 relative path만 결과로 돌려준다.
     workspace_dir: &str,
     relative_path: &str,
-    // body는 accepted operator document의 현재 내용이다. export는 변환이나 validation을 하지 않고 그대로 파일로
-    // 써서 operator가 실제 accepted markdown을 편집하게 한다.
     body: &str,
-    // written_paths는 caller의 outcome에 들어갈 누적 목록이다. 파일 쓰기가 성공한 뒤에만 push해 notice가
-    // 실패한 파일까지 포함하지 않게 한다.
     written_paths: &mut Vec<String>,
 ) -> Result<()> {
-    // absolute-ish workspace path는 내부 fs 작업에만 사용한다. 결과 DTO에는 repo 안에서 사용자가 인식하는
-    // planning-relative path를 남긴다.
-    let path = Path::new(workspace_dir).join(relative_path);
-    // result-output path처럼 하위 디렉터리를 포함하는 파일을 export할 수 있으므로 parent를 먼저 만든다.
-    // parent가 없을 수 있는 단일 파일 경로도 helper가 처리한다.
+    let path = std::path::Path::new(workspace_dir).join(relative_path);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
+        std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    // write 실패에는 실제 filesystem path를 붙인다. admin caller가 권한/경로 문제를 해결해야 하므로
-    // planning-relative path만으로는 진단이 부족하다.
-    fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
     written_paths.push(relative_path.to_string());
     Ok(())
 }
@@ -164,7 +149,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -225,6 +210,56 @@ mod tests {
             .facade
             .load_operator_planning_documents()
             .expect("documents should reload after apply");
+
+        assert_eq!(applied.notice, "applied 1 exported planning paths");
+        assert_eq!(applied.paths, vec![RESULT_OUTPUT_FILE_PATH.to_string()]);
+        assert_eq!(reloaded.result_output_markdown, edited_body);
+    }
+
+    #[test]
+    fn export_and_apply_round_trip_result_output_through_workspace_port() {
+        let workspace = TempPlanningWorkspace::new("admin-file-sync-port-round-trip");
+        let workspace_port = Arc::new(PortBackedResultOutputWorkspacePort::new(
+            "# Result Output\n\nSeeded workspace copy.",
+        ));
+        let (facade, _) = build_facade(workspace.path.clone(), workspace_port.clone());
+        let accepted_body = "# Result Output\n\nAccepted admin copy.".to_string();
+        let edited_body = "# Result Output\n\nEdited through workspace port.".to_string();
+
+        let mut documents = facade
+            .load_operator_planning_documents()
+            .expect("seeded documents should load");
+        documents.result_output_markdown = accepted_body.clone();
+        facade
+            .commit_operator_planning_documents(documents)
+            .expect("accepted result output should commit through workspace port");
+        let replace_count_before_export = workspace_port.replace_call_count();
+
+        let exported = facade
+            .export_active_files_for_edit()
+            .expect("active support files should export through workspace port");
+        assert_eq!(
+            exported.notice,
+            "exported 1 planning support files for editing"
+        );
+        assert_eq!(exported.paths, vec![RESULT_OUTPUT_FILE_PATH.to_string()]);
+        assert_eq!(
+            workspace_port.current_result_output().as_deref(),
+            Some(accepted_body.as_str())
+        );
+        assert_eq!(
+            workspace_port.replace_call_count(),
+            replace_count_before_export + 1,
+            "export should materialize the active file through the workspace port"
+        );
+
+        workspace_port.set_result_output(&edited_body);
+        let applied = facade
+            .apply_exported_files()
+            .expect("workspace-port export should apply back into authority");
+        let reloaded = facade
+            .load_operator_planning_documents()
+            .expect("documents should reload after workspace-port apply");
 
         assert_eq!(applied.notice, "applied 1 exported planning paths");
         assert_eq!(applied.paths, vec![RESULT_OUTPUT_FILE_PATH.to_string()]);
@@ -501,6 +536,173 @@ mod tests {
             .expect("system clock should be valid")
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
+    }
+
+    struct PortBackedResultOutputWorkspacePort {
+        result_output_markdown: Mutex<Option<String>>,
+        replace_calls: Mutex<usize>,
+    }
+
+    impl PortBackedResultOutputWorkspacePort {
+        fn new(initial_body: &str) -> Self {
+            Self {
+                result_output_markdown: Mutex::new(Some(initial_body.to_string())),
+                replace_calls: Mutex::new(0),
+            }
+        }
+
+        fn current_result_output(&self) -> Option<String> {
+            self.result_output_markdown
+                .lock()
+                .expect("workspace port state should not be poisoned")
+                .clone()
+        }
+
+        fn replace_call_count(&self) -> usize {
+            *self
+                .replace_calls
+                .lock()
+                .expect("workspace port state should not be poisoned")
+        }
+
+        fn set_result_output(&self, body: &str) {
+            *self
+                .result_output_markdown
+                .lock()
+                .expect("workspace port state should not be poisoned") = Some(body.to_string());
+        }
+    }
+
+    impl PlanningWorkspacePort for PortBackedResultOutputWorkspacePort {
+        fn stage_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _files: &[PlanningDraftFileRecord],
+        ) -> Result<PlanningDraftStageRecord> {
+            Err(anyhow::anyhow!(
+                "stage_planning_draft_files should not be called"
+            ))
+        }
+
+        fn load_planning_draft_files(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+        ) -> Result<PlanningDraftLoadRecord> {
+            Err(anyhow::anyhow!(
+                "load_planning_draft_files should not be called"
+            ))
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            _workspace_dir: &str,
+            _draft_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow::anyhow!(
+                "replace_planning_draft_file should not be called"
+            ))
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Ok(PlanningWorkspaceLoadRecord {
+                result_output_markdown: self.current_result_output(),
+            })
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            Err(anyhow::anyhow!(
+                "load_planning_workspace_candidate_files should not be called"
+            ))
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            *self
+                .result_output_markdown
+                .lock()
+                .expect("workspace port state should not be poisoned") =
+                record.result_output_markdown.clone();
+            Ok(())
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            if relative_path == RESULT_OUTPUT_FILE_PATH {
+                return Ok(self.current_result_output());
+            }
+            Ok(Some("# Supplemental Prompt\n\nExisting.".to_string()))
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<Option<String>> {
+            Err(anyhow::anyhow!(
+                "load_optional_planning_candidate_file should not be called"
+            ))
+        }
+
+        fn replace_planning_workspace_file(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+            body: Option<&str>,
+        ) -> Result<()> {
+            if relative_path == RESULT_OUTPUT_FILE_PATH {
+                *self
+                    .result_output_markdown
+                    .lock()
+                    .expect("workspace port state should not be poisoned") =
+                    body.map(str::to_string);
+                *self
+                    .replace_calls
+                    .lock()
+                    .expect("workspace port state should not be poisoned") += 1;
+                return Ok(());
+            }
+            Err(anyhow::anyhow!(
+                "replace_planning_workspace_file should only be called for result-output"
+            ))
+        }
+
+        fn remove_planning_workspace_entry(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<()> {
+            Err(anyhow::anyhow!(
+                "remove_planning_workspace_entry should not be called"
+            ))
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            _workspace_dir: &str,
+            _archive_name: &str,
+            _active_path: &str,
+            _body: &str,
+        ) -> Result<String> {
+            Err(anyhow::anyhow!(
+                "archive_rejected_planning_file should not be called"
+            ))
+        }
     }
 
     struct MissingResultOutputWorkspacePort;
