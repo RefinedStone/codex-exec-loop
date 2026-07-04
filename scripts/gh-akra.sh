@@ -8,14 +8,35 @@ usage_error() {
   exit 1
 }
 
+require_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "${value}" ]]; then
+    usage_error "missing value for ${option}"
+  fi
+}
+
+read_option_file() {
+  local option="$1"
+  local path="$2"
+
+  require_value "${option}" "${path}"
+  if [[ ! -f "${path}" ]]; then
+    usage_error "file for ${option} not found: ${path}"
+  fi
+  cat "${path}"
+}
+
 desired_login="${AKRA_GITHUB_LOGIN:-}"
 while (($# > 0)); do
   case "$1" in
     --github-login)
-      desired_login="${2-}"
+      require_value "$1" "${2-}"
+      desired_login="$2"
       shift 2
       ;;
     --github-login=*)
+      require_value "--github-login" "${1#--github-login=}"
       desired_login="${1#--github-login=}"
       shift
       ;;
@@ -475,19 +496,23 @@ list_prs_with_api() {
   while (($# > 0)); do
     case "$1" in
       --state)
-        state="${2-}"
+        require_value "$1" "${2-}"
+        state="$2"
         shift 2
         ;;
       --base)
-        base_branch="${2-}"
+        require_value "$1" "${2-}"
+        base_branch="$2"
         shift 2
         ;;
       --head)
-        head_branch="${2-}"
+        require_value "$1" "${2-}"
+        head_branch="$2"
         shift 2
         ;;
       --json)
-        json_fields="${2-}"
+        require_value "$1" "${2-}"
+        json_fields="$2"
         shift 2
         ;;
       *)
@@ -567,23 +592,27 @@ create_pr_with_api() {
   while (($# > 0)); do
     case "$1" in
       --base)
-        base_branch="${2-}"
+        require_value "$1" "${2-}"
+        base_branch="$2"
         shift 2
         ;;
       --head)
-        head_branch="${2-}"
+        require_value "$1" "${2-}"
+        head_branch="$2"
         shift 2
         ;;
       --title)
-        title="${2-}"
+        require_value "$1" "${2-}"
+        title="$2"
         shift 2
         ;;
       --body)
-        body="${2-}"
+        require_value "$1" "${2-}"
+        body="$2"
         shift 2
         ;;
       --body-file)
-        body="$(cat "${2-}")"
+        body="$(read_option_file "$1" "${2-}")"
         shift 2
         ;;
       --draft)
@@ -658,7 +687,8 @@ view_pr_with_api() {
   while (($# > 0)); do
     case "$1" in
       --json)
-        json_fields="${2-}"
+        require_value "$1" "${2-}"
+        json_fields="$2"
         shift 2
         ;;
       *)
@@ -787,19 +817,22 @@ parse_review_reply_args() {
   while (($# > 0)); do
     case "$1" in
       --pr)
-        pr_number="${2-}"
+        require_value "$1" "${2-}"
+        pr_number="$2"
         shift 2
         ;;
       --comment-id)
-        comment_id="${2-}"
+        require_value "$1" "${2-}"
+        comment_id="$2"
         shift 2
         ;;
       --body)
-        body="${2-}"
+        require_value "$1" "${2-}"
+        body="$2"
         shift 2
         ;;
       --body-file)
-        body="$(cat "${2-}")"
+        body="$(read_option_file "$1" "${2-}")"
         shift 2
         ;;
       *)

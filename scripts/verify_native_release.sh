@@ -16,6 +16,16 @@ Examples:
 EOF
 }
 
+require_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "${value}" ]]; then
+    echo "verify_native_release: missing value for ${option}" >&2
+    usage >&2
+    exit 1
+  fi
+}
+
 checksum_tool=""
 archive_path=""
 bundle_dir=""
@@ -23,11 +33,13 @@ bundle_dir=""
 while (($# > 0)); do
   case "$1" in
     --archive)
-      archive_path="${2-}"
+      require_value "$1" "${2-}"
+      archive_path="$2"
       shift 2
       ;;
     --bundle-dir)
-      bundle_dir="${2-}"
+      require_value "$1" "${2-}"
+      bundle_dir="$2"
       shift 2
       ;;
     -h|--help)

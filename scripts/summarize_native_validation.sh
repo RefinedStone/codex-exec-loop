@@ -11,7 +11,7 @@ Options:
   --check-profile <value> Validation checklist profile. Default: terminal-baseline
   --format <text|markdown>
                           Output format. Default: text
-  --fail-on-incomplete    Exit non-zero unless every required row is recorded as pass
+  --fail-on-incomplete    Gate mode. Exit non-zero unless every required row is recorded as pass
   -h, --help              Show this help text.
 EOF
 }
@@ -407,6 +407,12 @@ if [[ "${output_format}" == "text" ]]; then
   printf -- '- required non-pass: %d\n' "${required_non_pass}"
   printf -- '- optional pass: %d/%d\n' "${optional_pass}" "${optional_total}"
 
+  if ((fail_on_incomplete == 0)) && ((required_missing > 0 || required_non_pass > 0)); then
+    printf '\n'
+    printf 'WARNING\n'
+    printf '%s\n' 'Required rows are still incomplete. This summary is informational unless you rerun with --fail-on-incomplete.'
+  fi
+
   if ((${#unmatched_entries[@]} > 0)); then
     printf '\n'
     printf 'Unmatched Records\n'
@@ -424,6 +430,10 @@ else
   printf -- '- required missing: `%d`\n' "${required_missing}"
   printf -- '- required non-pass: `%d`\n' "${required_non_pass}"
   printf -- '- optional pass: `%d/%d`\n' "${optional_pass}" "${optional_total}"
+  if ((fail_on_incomplete == 0)) && ((required_missing > 0 || required_non_pass > 0)); then
+    printf '\n'
+    printf '> WARNING: required rows are still incomplete. This summary is informational unless you rerun with `--fail-on-incomplete`.\n'
+  fi
   printf '\n'
   printf '## Required Rows\n\n'
   printf '| Status | Row | Record |\n'

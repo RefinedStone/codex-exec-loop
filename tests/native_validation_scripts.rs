@@ -30,15 +30,31 @@ fn write_record(dir: &Path, file_name: &str, body: &str) {
     fs::write(dir.join(file_name), body).expect("validation record should be written");
 }
 
-fn summarize(records_dir: &Path, args: &[&str]) -> String {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new("bash")
-        .arg(repo_root.join("scripts/summarize_native_validation.sh"))
-        .arg("--records-dir")
-        .arg(records_dir)
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn run_repo_script(script_rel: &str, args: &[&str]) -> std::process::Output {
+    Command::new("bash")
+        .arg(repo_root().join(script_rel))
         .args(args)
+        .current_dir(repo_root())
         .output()
-        .expect("validation summary script should run");
+        .unwrap_or_else(|error| panic!("{script_rel} should run: {error}"))
+}
+
+fn summarize_output(records_dir: &Path, args: &[&str]) -> std::process::Output {
+    let mut summary_args = vec![
+        "--records-dir".to_string(),
+        records_dir.display().to_string(),
+    ];
+    summary_args.extend(args.iter().map(|arg| (*arg).to_string()));
+    let summary_arg_refs = summary_args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_repo_script("scripts/summarize_native_validation.sh", &summary_arg_refs)
+}
+
+fn summarize(records_dir: &Path, args: &[&str]) -> String {
+    let output = summarize_output(records_dir, args);
 
     assert!(
         output.status.success(),
@@ -54,13 +70,13 @@ fn run_release_version_check(tag: &str, manifest_body: &str) -> std::process::Ou
     let dir = make_records_dir();
     let manifest_path = dir.join("Cargo.toml");
     fs::write(&manifest_path, manifest_body).expect("manifest fixture should be written");
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = Command::new("bash")
-        .arg(repo_root.join("scripts/validate_native_release_version.sh"))
+        .arg(repo_root().join("scripts/validate_native_release_version.sh"))
         .arg("--tag")
         .arg(tag)
         .arg("--manifest")
         .arg(&manifest_path)
+        .current_dir(repo_root())
         .output()
         .expect("release version validation script should run");
     fs::remove_dir_all(dir).expect("validation temp dir should be removed");
@@ -209,6 +225,61 @@ version = "1.3.3"
 }
 
 #[test]
+fn release_version_check_rejects_unprefixed_matching_tag() {
+    let output = run_release_version_check(
+        "1.3.4",
+        r#"[package]
+name = "codex-exec-loop-native"
+version = "1.3.4"
+"#,
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("release tag must use the v<version> convention"));
+    assert!(stderr.contains("1.3.4"));
+}
+
+#[test]
+fn public_release_and_github_scripts_report_missing_option_values() {
+    let cases = [
+        (
+            "scripts/package_native_release.sh",
+            vec!["--target"],
+            "package_native_release: missing value for --target",
+        ),
+        (
+            "scripts/verify_native_release.sh",
+            vec!["--archive"],
+            "verify_native_release: missing value for --archive",
+        ),
+        (
+            "scripts/validate_native_release_version.sh",
+            vec!["--tag"],
+            "validate_native_release_version: missing value for --tag",
+        ),
+        (
+            "scripts/gh-akra.sh",
+            vec!["--github-login"],
+            "gh-akra: missing value for --github-login",
+        ),
+    ];
+
+    for (script, args, expected_error) in cases {
+        let output = run_repo_script(script, &args);
+        assert!(
+            !output.status.success(),
+            "{script} should fail for a missing option value"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected_error),
+            "{script} should explain the missing option value\nstderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
 fn cleanup_explicit_unmerged_branch_is_skipped_by_default() {
     let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
 
@@ -312,6 +383,51 @@ fn cleanup_allow_unmerged_explicit_removes_disposable_branch() {
 }
 
 #[test]
+fn cleanup_explicit_missing_target_fails_without_opt_out() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+
+    let output = run_cleanup(
+        &repo,
+        &["--base", "main", "--branch", "definitely-not-a-real-branch"],
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no explicit targets matched any worktree entries"));
+    assert!(stderr.contains("--allow-empty-explicit-targets"));
+    assert!(feature_worktree.is_dir());
+    assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
+fn cleanup_explicit_missing_target_can_be_ignored() {
+    let (root, repo, feature_worktree) = make_cleanup_worktree_fixture();
+
+    let output = run_cleanup(
+        &repo,
+        &[
+            "--base",
+            "main",
+            "--branch",
+            "definitely-not-a-real-branch",
+            "--allow-empty-explicit-targets",
+        ],
+    );
+
+    assert_success(&output, "cleanup explicit missing target with opt-out");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("allowed by --allow-empty-explicit-targets"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("dry-run complete: 0 eligible"));
+    assert!(feature_worktree.is_dir());
+    assert!(branch_exists(&repo, "feature"));
+
+    fs::remove_dir_all(root).expect("cleanup fixture should be removed");
+}
+
+#[test]
 fn prompt_input_delay_profile_counts_tmux_detached_pty_row() {
     let records_dir = make_records_dir();
     write_record(
@@ -406,6 +522,66 @@ notes: baseline only
     assert!(output.contains("baseline-terminal-app.txt"));
     assert!(!output.contains("prompt-tmux.txt"));
     assert!(!output.contains("Unmatched Records"));
+
+    fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
+}
+
+#[test]
+fn default_summary_warns_when_required_rows_are_incomplete() {
+    let records_dir = make_records_dir();
+    write_record(
+        &records_dir,
+        "baseline-terminal-app.txt",
+        r#"date: 2026-05-09
+commit: abc123
+os: macOS 14.5
+terminal: Terminal.app
+shell: zsh
+frontend: inline
+term: xterm-256color
+check_profile: terminal-baseline
+checks:
+- launch and exit
+result: pass
+notes: baseline only
+"#,
+    );
+
+    let output = summarize(&records_dir, &[]);
+
+    assert!(output.contains("WARNING"));
+    assert!(output.contains("--fail-on-incomplete"));
+
+    fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
+}
+
+#[test]
+fn fail_on_incomplete_turns_summary_into_a_gate() {
+    let records_dir = make_records_dir();
+    write_record(
+        &records_dir,
+        "baseline-terminal-app.txt",
+        r#"date: 2026-05-09
+commit: abc123
+os: macOS 14.5
+terminal: Terminal.app
+shell: zsh
+frontend: inline
+term: xterm-256color
+check_profile: terminal-baseline
+checks:
+- launch and exit
+result: pass
+notes: baseline only
+"#,
+    );
+
+    let output = summarize_output(&records_dir, &["--fail-on-incomplete"]);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("summary output should be utf8");
+    assert!(stdout.contains("required missing: 7"));
+    assert!(!stdout.contains("WARNING"));
 
     fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
 }

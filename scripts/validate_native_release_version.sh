@@ -5,12 +5,22 @@ usage() {
   cat <<'EOF'
 Usage: scripts/validate_native_release_version.sh [--tag <tag>] [--manifest <path>]
 
-Validate that a release tag matches the Rust package version in Cargo.toml.
+Validate that a release tag using the v<version> convention matches the Rust package version in Cargo.toml.
 
 Examples:
   scripts/validate_native_release_version.sh --tag v1.3.4
-  scripts/validate_native_release_version.sh --tag 1.3.4 --manifest Cargo.toml
+  GITHUB_REF_NAME=v1.3.4 scripts/validate_native_release_version.sh
 EOF
+}
+
+require_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "${value}" ]]; then
+    echo "validate_native_release_version: missing value for ${option}" >&2
+    usage >&2
+    exit 1
+  fi
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,11 +31,13 @@ tag_name="${GITHUB_REF_NAME:-}"
 while (($# > 0)); do
   case "$1" in
     --tag)
-      tag_name="${2-}"
+      require_value "$1" "${2-}"
+      tag_name="$2"
       shift 2
       ;;
     --manifest)
-      manifest_path="${2-}"
+      require_value "$1" "${2-}"
+      manifest_path="$2"
       shift 2
       ;;
     -h|--help)
@@ -50,11 +62,11 @@ if [[ ! -f "${manifest_path}" ]]; then
   exit 1
 fi
 
-release_version="${tag_name#v}"
-if [[ -z "${release_version}" || "${tag_name}" == "v" ]]; then
-  echo "validate_native_release_version: invalid release tag: ${tag_name}" >&2
+if [[ "${tag_name}" != v* || "${tag_name}" == "v" ]]; then
+  echo "validate_native_release_version: release tag must use the v<version> convention: ${tag_name}" >&2
   exit 1
 fi
+release_version="${tag_name#v}"
 
 crate_version="$(
   sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${manifest_path}" | head -n 1

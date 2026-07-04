@@ -22,6 +22,9 @@ Options:
                         and any remaining local changes are disposable.
   --keep-branch <name>  Skip this branch. May be repeated.
   --keep-path <path>    Skip this worktree path. May be repeated.
+  --allow-empty-explicit-targets
+                        Allow explicit --branch/--path requests to match no
+                        worktree entries without failing.
   -h, --help            Show this help text.
 EOF
 }
@@ -160,6 +163,7 @@ report_cleanup() {
 apply_mode=false
 allow_unmerged_explicit=false
 force_dirty=false
+allow_empty_explicit_targets=false
 base_ref="origin/prerelease"
 remote_name="origin"
 target_branches=()
@@ -175,6 +179,10 @@ while (($# > 0)); do
       ;;
     --allow-unmerged-explicit)
       allow_unmerged_explicit=true
+      shift
+      ;;
+    --allow-empty-explicit-targets)
+      allow_empty_explicit_targets=true
       shift
       ;;
     --force-dirty)
@@ -244,6 +252,7 @@ removed_count=0
 dry_run_count=0
 skipped_count=0
 targeted_mode=false
+explicit_match_count=0
 
 if ((${#target_branches[@]} > 0 || ${#target_paths[@]} > 0)); then
   targeted_mode=true
@@ -269,6 +278,7 @@ process_entry() {
 
   if branch_is_targeted "${branch_name}" || path_is_targeted "${path}"; then
     explicitly_targeted=true
+    explicit_match_count=$((explicit_match_count + 1))
   fi
   if [[ ! -d "${path}" ]]; then
     path_missing=true
@@ -370,6 +380,14 @@ done < <(git worktree list --porcelain)
 
 process_entry "${current_path}" "${current_branch}"
 
+if [[ "${targeted_mode}" == "true" && ${explicit_match_count} -eq 0 ]]; then
+  if [[ "${allow_empty_explicit_targets}" == "true" ]]; then
+    printf 'cleanup_merged_worktrees: no explicit targets matched any worktree entries; allowed by --allow-empty-explicit-targets\n' >&2
+  else
+    printf 'cleanup_merged_worktrees: no explicit targets matched any worktree entries; rerun with --allow-empty-explicit-targets to allow this\n' >&2
+    exit 1
+  fi
+fi
 if [[ "${apply_mode}" == "true" ]]; then
   git worktree prune
   printf 'cleanup complete: removed %d worktree(s), skipped %d\n' "${removed_count}" "${skipped_count}"
