@@ -10,6 +10,8 @@ Options:
   --frontend <value>   Validation row frontend label. Required.
   --check-profile <value>
                        Validation checklist profile. Default: terminal-baseline.
+  --capture-role <value>
+                       counted-row or supplemental-unmatched. Default: counted-row.
   --terminal <value>   Terminal app/version label. Default: detected from env.
   --shell <value>      Shell label. Default: detected from env.
   --term <value>       TERM value to record. Default: current TERM.
@@ -167,6 +169,7 @@ EOF
 
 frontend=""
 check_profile="terminal-baseline"
+capture_role="counted-row"
 terminal=""
 shell_name=""
 term_value="${TERM-}"
@@ -188,6 +191,18 @@ while (($# > 0)); do
     --check-profile)
       require_value "$1" "${2-}"
       check_profile="$2"
+      shift 2
+      ;;
+    --capture-role)
+      require_value "$1" "${2-}"
+      capture_role="$2"
+      case "$capture_role" in
+        counted-row|supplemental-unmatched) ;;
+        *)
+          printf 'unsupported --capture-role: %s\n' "$capture_role" >&2
+          exit 1
+          ;;
+      esac
       shift 2
       ;;
     --terminal)
@@ -297,7 +312,7 @@ terminal: ${terminal}
 shell: ${shell_name}
 frontend: ${frontend}
 term: ${term_value}
-capture_role: counted-row
+capture_role: ${capture_role}
 check_profile: ${check_profile}
 checks:
 ${checks_block}

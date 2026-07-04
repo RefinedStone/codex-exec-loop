@@ -76,6 +76,33 @@ fn summarize(records_dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("summary output should be utf8")
 }
 
+#[test]
+fn capture_helpers_expose_capture_role_contract() {
+    let output = run_repo_script(
+        "scripts/capture_native_validation.sh",
+        &[
+            "--frontend",
+            "inline",
+            "--capture-role",
+            "supplemental-unmatched",
+            "--terminal",
+            "Test Terminal",
+            "--shell",
+            "bash",
+            "--notes",
+            "capture role smoke",
+        ],
+    );
+    assert!(output.status.success(), "capture helper failed");
+    let stdout = String::from_utf8(output.stdout).expect("capture helper output should be utf8");
+    assert!(stdout.contains("capture_role: supplemental-unmatched"));
+
+    let ps1 = fs::read_to_string(repo_root().join("scripts/capture_native_validation.ps1"))
+        .expect("powershell capture helper should be readable");
+    assert!(ps1.contains("ValidateSet(\"counted-row\", \"supplemental-unmatched\")"));
+    assert!(ps1.contains("capture_role: $CaptureRole"));
+}
+
 fn run_release_version_check(tag: &str, manifest_body: &str) -> std::process::Output {
     let dir = make_records_dir();
     let manifest_path = dir.join("Cargo.toml");

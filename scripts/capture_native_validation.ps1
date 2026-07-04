@@ -4,6 +4,8 @@ param(
     [string]$Frontend,
 
     [string]$CheckProfile = "terminal-baseline",
+    [ValidateSet("counted-row", "supplemental-unmatched")]
+    [string]$CaptureRole = "counted-row",
     [string]$Terminal,
     [string]$Shell,
     [string]$Term = $env:TERM,
@@ -159,7 +161,7 @@ $report = @(
     "shell: $detectedShell"
     "frontend: $Frontend"
     "term: $Term"
-    "capture_role: counted-row"
+    "capture_role: $CaptureRole"
     "check_profile: $CheckProfile"
     "checks:"
     ($checks -join [Environment]::NewLine)
