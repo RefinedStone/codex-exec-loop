@@ -83,6 +83,7 @@ pub struct ParallelModePoolResetReport {
     pub slot_reports: Vec<ParallelModePoolResetSlotReport>,
     pub reset_session_keys: Vec<String>,
     pub reset_queue_item_ids: Vec<String>,
+    pub reset_dispatch_command_ids: Vec<String>,
 }
 
 impl ParallelModePoolResetReport {
@@ -93,6 +94,7 @@ impl ParallelModePoolResetReport {
             slot_reports: Vec::new(),
             reset_session_keys: Vec::new(),
             reset_queue_item_ids: Vec::new(),
+            reset_dispatch_command_ids: Vec::new(),
         }
     }
 

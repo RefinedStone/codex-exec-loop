@@ -991,6 +991,7 @@ impl SqlitePlanningAuthorityAdapter {
         let mut invalid_rows = 0;
         let mut session_rows = 0;
         let mut queue_rows = 0;
+        let mut dispatch_command_rows = 0;
         let mut claim_rows = 0;
 
         for slot_id in &reset_slot_ids {
@@ -1038,13 +1039,24 @@ impl SqlitePlanningAuthorityAdapter {
                 })?;
         }
 
+        for command_id in &report.reset_dispatch_command_ids {
+            dispatch_command_rows += transaction
+                .execute(
+                    "DELETE FROM runtime_dispatch_commands WHERE command_id = ?1",
+                    params![command_id],
+                )
+                .with_context(|| {
+                    format!("failed to clear reset runtime dispatch command `{command_id}`")
+                })?;
+        }
+
         append_runtime_event(
             &transaction,
             "parallel_pool_reset_report_applied",
             "parallel_runtime",
             report.run_id.as_str(),
             &format!(
-                "parallel pool reset report applied / reset_slots: {} / live_blockers: {} / failures: {} / leases: {lease_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / claims: {claim_rows} / dispatch_blocks_preserved: {dispatch_block_rows}",
+                "parallel pool reset report applied / reset_slots: {} / live_blockers: {} / failures: {} / leases: {lease_rows} / invalid: {invalid_rows} / sessions: {session_rows} / queue: {queue_rows} / dispatch_commands: {dispatch_command_rows} / claims: {claim_rows} / dispatch_blocks_preserved: {dispatch_block_rows}",
                 reset_slot_ids.len(),
                 report.live_blocker_count(),
                 report.failed_reset_count()

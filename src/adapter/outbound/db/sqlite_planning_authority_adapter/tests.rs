@@ -2087,6 +2087,15 @@ fn pool_reset_report_clears_only_successful_slots_and_reads_unfiltered_events() 
             .expect("blocked queue claim should acquire")
     );
 
+    let pending_command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        Some("queue-head-success".to_string()),
+        Some(31),
+        "2026-05-08T00:00:02+00:00",
+    );
+    adapter
+        .enqueue_runtime_dispatch_command(&workspace_dir, &pending_command)
+        .expect("pending dispatch command should persist before mixed reset");
     let mut report = ParallelModePoolResetReport::new(
         ParallelModePoolResetRunId::new("mixed-reset-run"),
         ParallelModePoolResetPolicy::ProtectLive,
@@ -2129,6 +2138,9 @@ fn pool_reset_report_clears_only_successful_slots_and_reads_unfiltered_events() 
     report
         .reset_queue_item_ids
         .push("queue-success".to_string());
+    report
+        .reset_dispatch_command_ids
+        .push(pending_command.command_id.clone());
 
     adapter
         .apply_parallel_pool_reset_report(&workspace_dir, &report)
@@ -2145,6 +2157,12 @@ fn pool_reset_report_clears_only_successful_slots_and_reads_unfiltered_events() 
     assert!(snapshot.invalid_slot_leases.contains("slot-failed"));
     assert!(snapshot.session_details.is_empty());
     assert_eq!(snapshot.distributor_queue_records.len(), 1);
+    assert!(
+        snapshot
+            .dispatch_commands
+            .iter()
+            .all(|command| command.command_id != pending_command.command_id)
+    );
     assert_eq!(
         snapshot.distributor_queue_records[0].queue_item_id,
         "queue-blocked"

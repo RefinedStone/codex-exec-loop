@@ -13,9 +13,9 @@ use crate::application::port::outbound::planning_authority_port::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
-    ParallelModeAgentSessionDetailSnapshot, ParallelModePoolBoardSnapshot,
-    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolResetRunId,
-    ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
+    ParallelModePoolBoardSnapshot, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
+    ParallelModePoolResetRunId, ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
     ParallelModePoolResetSlotReport, ParallelModePoolSlotCleanupDecision,
     ParallelModePoolSlotSnapshot, ParallelModeReadinessSnapshot, ParallelModeSlotLeaseSnapshot,
     ParallelModeSlotLeaseState, ParallelModeTaskDispatchBlockSnapshot,
@@ -165,6 +165,7 @@ pub(super) struct PoolRuntimeContext {
     pub(super) session_details: Vec<ParallelModeAgentSessionDetailSnapshot>,
     pub(super) task_dispatch_blocks: Vec<ParallelModeTaskDispatchBlockSnapshot>,
     pub(super) distributor_queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
+    pub(super) dispatch_commands: Vec<ParallelModeDispatchCommandSnapshot>,
     pub(super) runtime_events: Vec<PlanningAuthorityRuntimeEventRecord>,
 }
 pub(super) type PoolBoardWithContextResult = Result<
@@ -566,6 +567,17 @@ fn collect_reset_projection_keys(
             report
                 .reset_queue_item_ids
                 .push(queue_record.queue_item_id.clone());
+        }
+    }
+    for command in &context.dispatch_commands {
+        if !command.is_terminal()
+            && !report
+                .reset_dispatch_command_ids
+                .contains(&command.command_id)
+        {
+            report
+                .reset_dispatch_command_ids
+                .push(command.command_id.clone());
         }
     }
 }
@@ -993,6 +1005,7 @@ fn load_pool_runtime_context_from_roots(
         session_details: runtime_projections.session_details,
         task_dispatch_blocks: runtime_projections.task_dispatch_blocks,
         distributor_queue_records: runtime_projections.distributor_queue_records,
+        dispatch_commands: runtime_projections.dispatch_commands,
         runtime_events: runtime_projections.runtime_events,
     })
 }

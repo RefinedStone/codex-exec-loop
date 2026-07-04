@@ -4,6 +4,10 @@ use crate::application::port::outbound::planning_authority_port::{
     NoopPlanningAuthorityPort, PlanningAuthorityPort,
 };
 use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
+use crate::domain::parallel_mode::{
+    ParallelModeAutomationTrigger, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchCommandState,
+};
 use std::process::Command;
 use std::sync::Mutex;
 use tracing_subscriber::EnvFilter;
@@ -204,6 +208,7 @@ fn context_with_runtime_rows(
     leases: Vec<ParallelModeSlotLeaseSnapshot>,
     session_details: Vec<ParallelModeAgentSessionDetailSnapshot>,
     queue_records: Vec<PlanningAuthorityDistributorQueueRecord>,
+    dispatch_commands: Vec<ParallelModeDispatchCommandSnapshot>,
 ) -> PoolRuntimeContext {
     PoolRuntimeContext {
         repo_root: "/tmp/repo".to_string(),
@@ -219,6 +224,7 @@ fn context_with_runtime_rows(
         session_details,
         task_dispatch_blocks: Vec::new(),
         distributor_queue_records: queue_records,
+        dispatch_commands,
         runtime_events: Vec::new(),
     }
 }
@@ -239,6 +245,22 @@ fn reset_report_for_slots(slot_ids: &[&str]) -> ParallelModePoolResetReport {
             ));
     }
     report
+}
+
+fn dispatch_command(
+    command_id: &str,
+    state: ParallelModeDispatchCommandState,
+) -> ParallelModeDispatchCommandSnapshot {
+    let mut command = ParallelModeDispatchCommandSnapshot::dispatch_ready_queue(
+        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+        Some(format!("queue-head-{command_id}")),
+        Some(1),
+        "2026-05-23T00:00:00Z",
+    );
+    command.command_id = command_id.to_string();
+    command.state = state;
+    command.updated_at = "2026-05-23T00:00:00Z".to_string();
+    command
 }
 
 fn temp_repo_path(prefix: &str) -> PathBuf {
@@ -460,6 +482,10 @@ fn reset_projection_helpers_deduplicate_sessions_queues_and_disposable_task_ids(
             queue_record("queue-1", "slot-1", "task-a"),
             queue_record("queue-2", "slot-2", "task-c"),
         ],
+        vec![
+            dispatch_command("command-pending", ParallelModeDispatchCommandState::Pending),
+            dispatch_command("command-blocked", ParallelModeDispatchCommandState::Blocked),
+        ],
     );
     let mut report = reset_report_for_slots(&["slot-1"]);
 
@@ -468,6 +494,7 @@ fn reset_projection_helpers_deduplicate_sessions_queues_and_disposable_task_ids(
 
     assert_eq!(report.reset_session_keys, vec![slot_one.session_key()]);
     assert_eq!(report.reset_queue_item_ids, vec!["queue-1"]);
+    assert_eq!(report.reset_dispatch_command_ids, vec!["command-pending"]);
     assert_eq!(
         disposable_runtime_task_ids(&context),
         vec!["task-a", "task-b", "task-c"]
