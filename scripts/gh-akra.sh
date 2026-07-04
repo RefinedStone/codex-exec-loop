@@ -428,13 +428,6 @@ resolve_token() {
     printf '%s\n' "${AKRA_GITHUB_TOKEN}"
     return 0
   fi
-
-  if token_from_git_credential_fill ||
-    token_from_named_credential_files ||
-    token_from_git_credential_files; then
-    return 0
-  fi
-
   if [[ -n "${GH_TOKEN:-}" ]]; then
     printf '%s\n' "${GH_TOKEN}"
     return 0
@@ -443,29 +436,6 @@ resolve_token() {
     printf '%s\n' "${GITHUB_TOKEN}"
     return 0
   fi
-
-  true
-}
-
-resolve_gh_exec_token() {
-  if [[ -n "${AKRA_GITHUB_TOKEN:-}" ]]; then
-    printf '%s\n' "${AKRA_GITHUB_TOKEN}"
-    return 0
-  fi
-
-  if token_from_git_credential_fill; then
-    return 0
-  fi
-
-  if [[ -n "${GH_TOKEN:-}" ]]; then
-    printf '%s\n' "${GH_TOKEN}"
-    return 0
-  fi
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    printf '%s\n' "${GITHUB_TOKEN}"
-    return 0
-  fi
-
   if command -v gh >/dev/null 2>&1; then
     local gh_auth_token
     gh_auth_token="$(GH_HOST=github.com gh auth token 2>/dev/null || true)"
@@ -474,7 +444,16 @@ resolve_gh_exec_token() {
       return 0
     fi
   fi
+  if token_from_git_credential_fill ||
+    token_from_named_credential_files ||
+    token_from_git_credential_files; then
+    return 0
+  fi
   true
+}
+
+resolve_gh_exec_token() {
+  resolve_token
 }
 
 gh_api_login() {
