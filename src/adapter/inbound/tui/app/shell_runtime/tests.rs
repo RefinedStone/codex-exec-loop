@@ -809,6 +809,25 @@ fn ctrl_q_requests_quit() {
     assert!(runtime.should_quit());
 }
 #[test]
+fn confirmed_exit_hides_modal_then_quits_after_redraw() {
+    let mut runtime = make_test_runtime();
+    runtime
+        .app_mut()
+        .dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('y'),
+        KeyModifiers::NONE,
+    )));
+
+    assert!(!runtime.should_quit());
+    assert!(!runtime.app().is_exit_confirmation_visible());
+    assert!(runtime.take_redraw_request());
+
+    runtime.finish_pending_quit_after_draw();
+    assert!(runtime.should_quit());
+}
+#[test]
 fn non_press_key_events_are_ignored() {
     let mut runtime = make_test_runtime();
 

@@ -76,8 +76,8 @@ fn run_event_loop(
         runtime.poll_background_messages();
         if runtime.take_due_draw_request(std::time::Instant::now()) {
             adapter.draw_inline_transaction(runtime)?;
+            runtime.finish_pending_quit_after_draw();
         }
-
         /*
          * poll timeout은 기본 idle wait와 다음 scheduled draw deadline의 교집합이다. 입력이 없어도
          * delayed draw 시점에는 poll이 깨어나 frame coalescing이 실제 화면에 반영된다.

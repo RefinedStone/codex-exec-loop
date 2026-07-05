@@ -404,7 +404,10 @@ impl NativeTuiApp {
             return None;
         }
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationHidden);
+                Some(true)
+            }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationHidden);
                 Some(false)
@@ -894,7 +897,7 @@ mod tests {
             app.handle_exit_confirmation_key(modified_key(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
             Some(true)
         );
-
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
         app.exit_confirmation_state = ExitConfirmationState::Visible;
         assert_eq!(
             app.handle_exit_confirmation_key(key(KeyCode::Char('n'))),

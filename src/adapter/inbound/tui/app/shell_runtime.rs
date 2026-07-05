@@ -21,6 +21,7 @@ const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
 pub(super) struct ShellRuntime {
     app: NativeTuiApp,
     should_quit: bool,
+    quit_after_redraw: bool,
     frame_scheduler: TuiFrameScheduler,
     last_live_activity_pulse: Option<u64>,
     background_drain_limited: bool,
@@ -32,6 +33,7 @@ impl ShellRuntime {
         Self {
             app,
             should_quit: false,
+            quit_after_redraw: false,
             frame_scheduler: TuiFrameScheduler::new(now),
             last_live_activity_pulse: None,
             background_drain_limited: false,
@@ -66,6 +68,12 @@ impl ShellRuntime {
     }
     fn request_redraw_at(&mut self, now: Instant) {
         self.frame_scheduler.request_immediate(now);
+    }
+    pub(super) fn finish_pending_quit_after_draw(&mut self) {
+        if self.quit_after_redraw {
+            self.quit_after_redraw = false;
+            self.should_quit = true;
+        }
     }
     pub(super) fn poll_background_messages(&mut self) {
         self.poll_background_messages_at(Instant::now());
@@ -190,6 +198,9 @@ impl ShellRuntime {
     }
 
     fn handle_terminal_event_at(&mut self, event: Event, now: Instant) {
+        if self.quit_after_redraw {
+            return;
+        }
         match event {
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
@@ -216,11 +227,9 @@ impl ShellRuntime {
         // Exit confirmation owns the first key pass so Escape/Enter cannot leak into
         // overlays or prompt editing while the quit dialog is active.
         if let Some(confirmed_exit) = self.app.handle_exit_confirmation_key(key) {
-            if !confirmed_exit {
-                self.request_redraw_at(now);
-            }
+            self.request_redraw_at(now);
             if confirmed_exit {
-                self.should_quit = true;
+                self.quit_after_redraw = true;
             }
             return;
         }
