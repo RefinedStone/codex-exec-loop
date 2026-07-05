@@ -1421,6 +1421,8 @@ fn exit_confirmation_uses_shared_akra_chrome() {
 
     assert!(rendered.contains("Akra / Confirm Exit"));
     assert!(rendered.contains("Exit codex-exec-loop?"));
+    assert!(rendered.contains("ready: send a task or reopen a session"));
+    assert!(!rendered.contains("████"));
 }
 #[test]
 fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {

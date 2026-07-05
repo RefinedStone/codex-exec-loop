@@ -49,10 +49,7 @@ fn compact_inspection_tail_lines(
     lines: Vec<Line<'static>>,
 ) -> Vec<Line<'static>> {
     const MAX_INSPECTION_TAIL_ROWS: usize = 6;
-    if content_width == 0
-        || (app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible())
-        || context.startup_screen_is_active()
-    {
+    if content_width == 0 || app.shell_overlay == ShellOverlay::Hidden || context.startup_screen_is_active() {
         return lines;
     }
 

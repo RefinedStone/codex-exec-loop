@@ -28,19 +28,18 @@ pub(super) fn build_inline_terminal_flow_layout(
      * hidden-overlay mode에서는 tail이 primary interaction surface라 더 많은 공간을 준다.
      * inspection/confirmation mode에서는 작은 terminal에서도 overlay content가 밀려나지 않도록 tail을 작게 제한한다.
      */
-    let tail_max_height =
-        if app.shell_overlay == ShellOverlay::Hidden && !app.is_exit_confirmation_visible() {
-            if app
-                .inline_history_render_mode
-                .mirrors_recent_transcript_in_tail()
-            {
-                MAX_INLINE_REPLAY_TAIL_HEIGHT
-            } else {
-                MAX_INLINE_TAIL_HEIGHT
-            }
+    let tail_max_height = if app.shell_overlay == ShellOverlay::Hidden {
+        if app
+            .inline_history_render_mode
+            .mirrors_recent_transcript_in_tail()
+        {
+            MAX_INLINE_REPLAY_TAIL_HEIGHT
         } else {
-            MAX_INLINE_INSPECTION_TAIL_HEIGHT
-        };
+            MAX_INLINE_TAIL_HEIGHT
+        }
+    } else {
+        MAX_INLINE_INSPECTION_TAIL_HEIGHT
+    };
     let tail_height = inline_body_height(tail_lines, area.width, tail_max_height);
     Layout::default()
         .direction(Direction::Vertical)
