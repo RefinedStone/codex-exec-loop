@@ -1044,7 +1044,6 @@ notes: missing checks block
     fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
 }
 
-
 #[test]
 fn missing_check_profile_does_not_count_toward_terminal_baseline() {
     let records_dir = make_records_dir();
@@ -1075,6 +1074,24 @@ notes: missing check profile
 
     fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
 }
+#[test]
+fn crlf_counted_rows_still_count_toward_terminal_baseline() {
+    let records_dir = make_records_dir();
+    write_record(
+        &records_dir,
+        "crlf-terminal-app.txt",
+        "date: 2026-05-09\r\ncommit: abc123\r\nos: macOS 14.5\r\nterminal: Terminal.app\r\nshell: zsh\r\nfrontend: inline\r\nterm: xterm-256color\r\ncapture_role: counted-row\r\ncheck_profile: terminal-baseline\r\nchecks:\r\n- launch and exit\r\nresult: pass\r\nnotes: crlf baseline row\r\n",
+    );
+
+    let output = summarize(&records_dir, &[]);
+
+    assert!(output.contains("required pass: 1/4"));
+    assert!(output.contains("crlf-terminal-app.txt"));
+    assert!(!output.contains("Unmatched Records"));
+
+    fs::remove_dir_all(records_dir).expect("validation temp dir should be removed");
+}
+
 #[test]
 fn default_summary_warns_when_required_rows_are_incomplete() {
     let records_dir = make_records_dir();

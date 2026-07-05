@@ -119,7 +119,7 @@ canonical_frontend() {
 read_field() {
   local file="$1"
   local field="$2"
-  sed -n "s/^${field}:[[:space:]]*//p" "${file}" | head -n 1
+  sed -n "s/^${field}:[[:space:]]*//p" "${file}" | head -n 1 | tr -d '\r'
 }
 
 has_checks_block() {
