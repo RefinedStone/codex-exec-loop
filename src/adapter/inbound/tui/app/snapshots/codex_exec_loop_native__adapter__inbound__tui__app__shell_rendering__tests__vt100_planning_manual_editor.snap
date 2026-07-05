@@ -27,6 +27,6 @@ controls: Tab/BackTab switches files  |  arrows move the cursor
 controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word
 controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning
 controls: Esc/Ctrl+C closes this surface
-Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
+Akra  |  Workflows: ready  |  Sessions: idle  |  Reviews: off
 >
 prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help

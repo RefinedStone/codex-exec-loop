@@ -27,6 +27,6 @@ skipped tasks: 1 / blocked by tasks: task-2(in_progress)
 
 Keys
 Esc/Ctrl+C: close  |  :planning: update files
-Akra  |  Workflows: ready  |  Queues: ready to load  |  Observability: off
+Akra  |  Workflows: ready  |  Sessions: idle  |  Reviews: off
 >
 prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help

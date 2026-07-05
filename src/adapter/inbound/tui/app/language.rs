@@ -71,18 +71,18 @@ impl TuiLanguage {
     pub(super) fn startup_axis_row(
         self,
         workflow_status: &str,
-        queue_status: &str,
-        observability_status: &str,
+        session_status: &str,
+        review_status: &str,
     ) -> String {
         match self {
             Self::English => {
                 format!(
-                    "  |  Workflows: {workflow_status}  |  Queues: {queue_status}  |  Observability: {observability_status}"
+                    "  |  Workflows: {workflow_status}  |  Sessions: {session_status}  |  Reviews: {review_status}"
                 )
             }
             Self::Korean => {
                 format!(
-                    "  |  워크플로: {workflow_status}  |  큐: {queue_status}  |  관찰: {observability_status}"
+                    "  |  워크플로: {workflow_status}  |  세션: {session_status}  |  리뷰: {review_status}"
                 )
             }
         }
@@ -130,38 +130,31 @@ impl TuiLanguage {
         }
     }
 
-    pub(super) const fn startup_conversation_label(self) -> &'static str {
+    pub(super) const fn startup_ready_action_line(self) -> &'static str {
         match self {
-            Self::English => "conversation",
-            Self::Korean => "대화",
+            Self::English => "ready: send a task or reopen a session",
+            Self::Korean => "준비됨: 작업을 보내거나 세션을 다시 여세요",
         }
     }
 
-    pub(super) const fn startup_first_reply_hint(self) -> &'static str {
+    pub(super) const fn startup_examples_line(self) -> &'static str {
         match self {
-            Self::English => "first reply appears here after you send the opening prompt",
-            Self::Korean => "첫 응답은 프롬프트 전송 후 표시됩니다",
+            Self::English => "examples: fix src/...  |  review PR #123  |  explain tests/...",
+            Self::Korean => "예시: src/... 수정  |  PR #123 검토  |  tests/... 설명",
         }
     }
 
-    pub(super) fn startup_starter_line(self, starter_copy: &str) -> String {
+    pub(super) const fn startup_shortcuts_line(self) -> &'static str {
         match self {
-            Self::English => format!("starter: {starter_copy}"),
-            Self::Korean => format!("시작: {starter_copy}"),
+            Self::English => "shortcuts: r sessions  |  Ctrl+d diagnostics  |  :help",
+            Self::Korean => "단축키: r 세션  |  Ctrl+d 진단  |  :help",
         }
     }
 
-    pub(super) const fn startup_empty_starter_copy(self) -> &'static str {
+    pub(super) const fn startup_buffered_prompt_line(self) -> &'static str {
         match self {
-            Self::English => "start with a task, file path, or bug summary",
-            Self::Korean => "작업, 파일, 버그 요약으로 시작",
-        }
-    }
-
-    pub(super) const fn startup_buffered_starter_copy(self) -> &'static str {
-        match self {
-            Self::English => "opening prompt buffered below",
-            Self::Korean => "아래에 시작 프롬프트 입력됨",
+            Self::English => "draft: opening prompt buffered below",
+            Self::Korean => "초안: 아래 입력 프롬프트가 대기 중",
         }
     }
 
@@ -217,80 +210,68 @@ impl TuiLanguage {
 
     pub(super) const fn recent_session_status_waiting_for_startup(self) -> &'static str {
         match self {
-            Self::English => "waiting for startup checks",
-            Self::Korean => "startup 검사 대기 중",
+            Self::English => "waiting startup",
+            Self::Korean => "startup 대기",
         }
     }
 
     pub(super) const fn recent_session_status_blocked_by_startup(self) -> &'static str {
         match self {
-            Self::English => "blocked by startup diagnostics",
-            Self::Korean => "startup 진단으로 차단됨",
+            Self::English => "blocked",
+            Self::Korean => "차단됨",
         }
     }
 
     pub(super) const fn recent_session_status_not_requested(self) -> &'static str {
         match self {
-            Self::English => "not requested yet",
-            Self::Korean => "아직 요청 안 함",
+            Self::English => "idle",
+            Self::Korean => "대기",
         }
     }
 
     pub(super) const fn recent_session_status_ready_to_load(self) -> &'static str {
         match self {
-            Self::English => "ready to load",
-            Self::Korean => "로드 준비됨",
+            Self::English => "idle",
+            Self::Korean => "대기",
         }
     }
 
     pub(super) const fn recent_session_status_loading(self) -> &'static str {
         match self {
-            Self::English => "loading from codex app-server",
-            Self::Korean => "codex app-server에서 로드 중",
+            Self::English => "loading",
+            Self::Korean => "로드 중",
         }
     }
 
     pub(super) const fn recent_session_status_load_failed(self) -> &'static str {
         match self {
-            Self::English => "load failed",
-            Self::Korean => "로드 실패",
+            Self::English => "error",
+            Self::Korean => "오류",
         }
     }
 
-    pub(super) fn recent_session_status_unsupported(self, tier: SessionCatalogTier) -> String {
+    pub(super) fn recent_session_status_unsupported(self, _tier: SessionCatalogTier) -> String {
         match self {
-            Self::English => format!("{}: catalog unsupported", tier.label()),
-            Self::Korean => format!("{}: 카탈로그 미지원", self.session_catalog_tier_label(tier)),
+            Self::English => "no catalog".to_string(),
+            Self::Korean => "카탈로그 없음".to_string(),
         }
     }
 
-    pub(super) fn recent_session_status_partial(self, tier: SessionCatalogTier) -> String {
+    pub(super) fn recent_session_status_partial(self, _tier: SessionCatalogTier) -> String {
         match self {
-            Self::English => format!("{}: partial catalog", tier.label()),
-            Self::Korean => format!("{}: 부분 카탈로그", self.session_catalog_tier_label(tier)),
+            Self::English => "partial".to_string(),
+            Self::Korean => "부분".to_string(),
         }
     }
 
     pub(super) fn recent_session_status_loaded(
         self,
-        tier: SessionCatalogTier,
+        _tier: SessionCatalogTier,
         count: usize,
     ) -> String {
         match self {
-            Self::English => format!("{}: {count} loaded", tier.label()),
-            Self::Korean => format!(
-                "{}: {count}개 로드됨",
-                self.session_catalog_tier_label(tier)
-            ),
-        }
-    }
-
-    fn session_catalog_tier_label(self, tier: SessionCatalogTier) -> &'static str {
-        match (self, tier) {
-            (Self::English, _) => tier.label(),
-            (Self::Korean, SessionCatalogTier::AttachOnly) => "attach-only 카탈로그",
-            (Self::Korean, SessionCatalogTier::HandleBasedReattach) => "handle 기반 reattach",
-            (Self::Korean, SessionCatalogTier::ProviderBackedCatalog) => "provider-backed 카탈로그",
+            Self::English => format!("{count} loaded"),
+            Self::Korean => format!("{count}개 로드"),
         }
     }
 
@@ -606,12 +587,12 @@ mod tests {
         assert!(
             TuiLanguage::English
                 .startup_axis_row("ready", "idle", "ok")
-                .contains("Workflows")
+                .contains("Sessions")
         );
         assert!(
             TuiLanguage::Korean
                 .startup_axis_row("준비", "대기", "정상")
-                .contains("워크플로")
+                .contains("세션")
         );
         assert_eq!(
             TuiLanguage::English.startup_workspace_line("/repo"),
@@ -637,48 +618,41 @@ mod tests {
             TuiLanguage::Korean.startup_warning_line("설정 확인"),
             "경고: 설정 확인"
         );
-        assert_eq!(
-            TuiLanguage::English.startup_conversation_label(),
-            "conversation"
-        );
-        assert_eq!(TuiLanguage::Korean.startup_conversation_label(), "대화");
         assert!(
             TuiLanguage::English
-                .startup_first_reply_hint()
-                .contains("first reply")
+                .startup_ready_action_line()
+                .contains("send a task")
         );
         assert!(
             TuiLanguage::Korean
-                .startup_first_reply_hint()
-                .contains("첫 응답")
-        );
-        assert_eq!(
-            TuiLanguage::English.startup_starter_line("fix bug"),
-            "starter: fix bug"
-        );
-        assert_eq!(
-            TuiLanguage::Korean.startup_starter_line("버그 수정"),
-            "시작: 버그 수정"
+                .startup_ready_action_line()
+                .contains("작업을 보내")
         );
         assert!(
             TuiLanguage::English
-                .startup_empty_starter_copy()
-                .contains("task")
+                .startup_examples_line()
+                .contains("review PR")
+        );
+        assert!(TuiLanguage::Korean.startup_examples_line().contains("검토"));
+        assert!(
+            TuiLanguage::English
+                .startup_shortcuts_line()
+                .contains("Ctrl+d diagnostics")
         );
         assert!(
             TuiLanguage::Korean
-                .startup_empty_starter_copy()
-                .contains("작업")
+                .startup_shortcuts_line()
+                .contains("Ctrl+d 진단")
         );
         assert!(
             TuiLanguage::English
-                .startup_buffered_starter_copy()
+                .startup_buffered_prompt_line()
                 .contains("buffered")
         );
         assert!(
             TuiLanguage::Korean
-                .startup_buffered_starter_copy()
-                .contains("입력됨")
+                .startup_buffered_prompt_line()
+                .contains("대기 중")
         );
         assert!(
             TuiLanguage::English
@@ -730,11 +704,11 @@ mod tests {
     fn recent_session_copy_covers_states_tiers_and_counts() {
         assert_eq!(
             TuiLanguage::English.recent_session_status_waiting_for_startup(),
-            "waiting for startup checks"
+            "waiting startup"
         );
         assert_eq!(
             TuiLanguage::Korean.recent_session_status_waiting_for_startup(),
-            "startup 검사 대기 중"
+            "startup 대기"
         );
         assert!(
             TuiLanguage::English
@@ -748,35 +722,35 @@ mod tests {
         );
         assert_eq!(
             TuiLanguage::English.recent_session_status_not_requested(),
-            "not requested yet"
+            "idle"
         );
         assert_eq!(
             TuiLanguage::Korean.recent_session_status_not_requested(),
-            "아직 요청 안 함"
+            "대기"
         );
         assert_eq!(
             TuiLanguage::English.recent_session_status_ready_to_load(),
-            "ready to load"
+            "idle"
         );
         assert_eq!(
             TuiLanguage::Korean.recent_session_status_ready_to_load(),
-            "로드 준비됨"
+            "대기"
         );
         assert_eq!(
             TuiLanguage::English.recent_session_status_loading(),
-            "loading from codex app-server"
+            "loading"
         );
         assert_eq!(
             TuiLanguage::Korean.recent_session_status_loading(),
-            "codex app-server에서 로드 중"
+            "로드 중"
         );
         assert_eq!(
             TuiLanguage::English.recent_session_status_load_failed(),
-            "load failed"
+            "error"
         );
         assert_eq!(
             TuiLanguage::Korean.recent_session_status_load_failed(),
-            "로드 실패"
+            "오류"
         );
 
         for tier in [
@@ -787,22 +761,22 @@ mod tests {
             assert!(
                 TuiLanguage::English
                     .recent_session_status_unsupported(tier)
-                    .contains("catalog unsupported")
+                    .contains("no catalog")
             );
             assert!(
                 TuiLanguage::Korean
                     .recent_session_status_unsupported(tier)
-                    .contains("카탈로그 미지원")
+                    .contains("카탈로그 없음")
             );
             assert!(
                 TuiLanguage::English
                     .recent_session_status_partial(tier)
-                    .contains("partial catalog")
+                    .contains("partial")
             );
             assert!(
                 TuiLanguage::Korean
                     .recent_session_status_partial(tier)
-                    .contains("부분 카탈로그")
+                    .contains("부분")
             );
             assert!(
                 TuiLanguage::English
@@ -812,7 +786,7 @@ mod tests {
             assert!(
                 TuiLanguage::Korean
                     .recent_session_status_loaded(tier, 3)
-                    .contains("3개 로드됨")
+                    .contains("3개 로드")
             );
         }
     }

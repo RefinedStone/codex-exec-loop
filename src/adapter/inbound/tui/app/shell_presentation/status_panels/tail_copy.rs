@@ -365,7 +365,11 @@ fn build_inline_startup_screen_lines_with_context(
     because no transcript exists yet. Once the operator starts typing, callers
     switch to the compact startup overlay tail to keep the prompt close to hand.
     */
-    let mut lines = startup_masthead_lines();
+    let mut lines = if matches!(context.startup_state, StartupState::Ready(_)) {
+        Vec::new()
+    } else {
+        startup_masthead_lines()
+    };
     lines.push(Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
         ratatui::text::Span::raw(
@@ -414,15 +418,15 @@ fn build_inline_startup_screen_lines_with_context(
                     &compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT),
                 )));
             }
-            lines.push(Line::from(
-                context.tui_language.startup_conversation_label(),
-            ));
-            lines.push(Line::from(context.tui_language.startup_first_reply_hint()));
-            lines.push(Line::from(
-                context
-                    .tui_language
-                    .startup_starter_line(inline_starter_copy_in_context(context)),
-            ));
+            lines.push(Line::from(context.tui_language.startup_ready_action_line()));
+            if startup_prompt_buffered_in_context(context) {
+                lines.push(Line::from(
+                    context.tui_language.startup_buffered_prompt_line(),
+                ));
+            } else {
+                lines.push(Line::from(context.tui_language.startup_examples_line()));
+            }
+            lines.push(Line::from(context.tui_language.startup_shortcuts_line()));
         }
         StartupState::Failed(message) => {
             lines.push(Line::from(
@@ -500,19 +504,11 @@ fn startup_masthead_lines() -> Vec<Line<'static>> {
     ]
 }
 
-fn inline_starter_copy_in_context(context: &ShellCorePresentationContext<'_>) -> &'static str {
+fn startup_prompt_buffered_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
     let Some(conversation) = context.ready_conversation() else {
-        /*
-        Without a ready conversation there is no input buffer to inspect, so the
-        starter copy must be generic and safe for loading/failed startup states.
-        */
-        return context.tui_language.startup_empty_starter_copy();
+        return false;
     };
-    if conversation.input_buffer.trim().is_empty() {
-        context.tui_language.startup_empty_starter_copy()
-    } else {
-        context.tui_language.startup_buffered_starter_copy()
-    }
+    !conversation.input_buffer.trim().is_empty()
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
@@ -787,7 +783,8 @@ mod coverage_tests {
         let ready = render_tail(&app, None);
         assert!(ready.contains("workspace: /tmp/root"));
         assert!(ready.contains("first warning should stay visible"));
-        assert!(ready.contains("first reply appears here after you send the opening prompt"));
+        assert!(ready.contains("ready: send a task or reopen a session"));
+        assert!(!ready.contains("████"));
 
         app.startup_state = StartupState::Failed("codex missing".to_string());
         let failed = render_tail(&app, None);
@@ -802,15 +799,12 @@ mod coverage_tests {
         let context = ShellCorePresentationContext::from_app(&app);
         assert!(
             rendered(build_inline_startup_screen_lines_with_context(&context))
-                .contains("opening prompt buffered below")
+                .contains("draft: opening prompt buffered below")
         );
 
         app.conversation_state = ConversationState::Loading;
         let loading_context = ShellCorePresentationContext::from_app(&app);
-        assert_eq!(
-            inline_starter_copy_in_context(&loading_context),
-            loading_context.tui_language.startup_empty_starter_copy()
-        );
+        assert!(!startup_prompt_buffered_in_context(&loading_context));
     }
 
     #[test]
