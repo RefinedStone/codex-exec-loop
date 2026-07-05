@@ -52,9 +52,12 @@ impl PlanningAdminFacadeService {
         self.ensure_no_parallel_working("apply exported planning support files")?;
         let exported_result_output = self
             .planning_workspace_port
-            // apply는 export된 파일이 있어야 의미가 있다. None을 빈 문서로 처리하면 실수로 accepted
-            // result-output을 지울 수 있으므로 명시적 missing error로 중단한다.
-            .load_optional_planning_file(self.workspace_dir.as_str(), RESULT_OUTPUT_FILE_PATH)?
+            // apply는 export된 candidate 파일이 있어야 의미가 있다. authority-backed active read로 되돌아가면
+            // operator가 실제 workspace에서 고친 내용이 사라질 수 있으므로 candidate copy만 읽는다.
+            .load_optional_planning_candidate_file(
+                self.workspace_dir.as_str(),
+                RESULT_OUTPUT_FILE_PATH,
+            )?
             .ok_or_else(|| anyhow::anyhow!("missing exported file: {RESULT_OUTPUT_FILE_PATH}"))?;
         // 기존 operator documents를 읽고 대상 필드만 export된 파일 내용으로 교체한다. 다른 planning support
         // document가 생겨도 이 함수가 의도치 않게 나머지 필드를 초기화하지 않게 하기 위해서다.
@@ -243,7 +246,7 @@ mod tests {
         );
         assert_eq!(exported.paths, vec![RESULT_OUTPUT_FILE_PATH.to_string()]);
         assert_eq!(
-            workspace_port.current_result_output().as_deref(),
+            workspace_port.current_candidate_result_output().as_deref(),
             Some(accepted_body.as_str())
         );
         assert_eq!(
@@ -538,22 +541,31 @@ mod tests {
     }
 
     struct PortBackedResultOutputWorkspacePort {
-        result_output_markdown: Mutex<Option<String>>,
+        accepted_result_output_markdown: Mutex<Option<String>>,
+        candidate_result_output_markdown: Mutex<Option<String>>,
         replace_calls: Mutex<usize>,
     }
 
     impl PortBackedResultOutputWorkspacePort {
         fn new(initial_body: &str) -> Self {
             Self {
-                result_output_markdown: Mutex::new(Some(initial_body.to_string())),
+                accepted_result_output_markdown: Mutex::new(Some(initial_body.to_string())),
+                candidate_result_output_markdown: Mutex::new(None),
                 replace_calls: Mutex::new(0),
             }
         }
 
         fn current_result_output(&self) -> Option<String> {
-            self.result_output_markdown
+            self.accepted_result_output_markdown
                 .lock()
                 .expect("workspace port state should not be poisoned")
+                .clone()
+        }
+
+        fn current_candidate_result_output(&self) -> Option<String> {
+            self.candidate_result_output_markdown
+                .lock()
+                .expect("workspace port candidate state should not be poisoned")
                 .clone()
         }
 
@@ -566,9 +578,10 @@ mod tests {
 
         fn set_result_output(&self, body: &str) {
             *self
-                .result_output_markdown
+                .candidate_result_output_markdown
                 .lock()
-                .expect("workspace port state should not be poisoned") = Some(body.to_string());
+                .expect("workspace port candidate state should not be poisoned") =
+                Some(body.to_string());
         }
     }
 
@@ -630,7 +643,7 @@ mod tests {
             record: &PlanningWorkspaceLoadRecord,
         ) -> Result<()> {
             *self
-                .result_output_markdown
+                .accepted_result_output_markdown
                 .lock()
                 .expect("workspace port state should not be poisoned") =
                 record.result_output_markdown.clone();
@@ -651,11 +664,12 @@ mod tests {
         fn load_optional_planning_candidate_file(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
+            relative_path: &str,
         ) -> Result<Option<String>> {
-            Err(anyhow::anyhow!(
-                "load_optional_planning_candidate_file should not be called"
-            ))
+            if relative_path == RESULT_OUTPUT_FILE_PATH {
+                return Ok(self.current_candidate_result_output());
+            }
+            Ok(Some("# Supplemental Prompt\n\nExisting.".to_string()))
         }
 
         fn replace_planning_workspace_file(
@@ -666,9 +680,9 @@ mod tests {
         ) -> Result<()> {
             if relative_path == RESULT_OUTPUT_FILE_PATH {
                 *self
-                    .result_output_markdown
+                    .candidate_result_output_markdown
                     .lock()
-                    .expect("workspace port state should not be poisoned") =
+                    .expect("workspace port candidate state should not be poisoned") =
                     body.map(str::to_string);
                 *self
                     .replace_calls
@@ -782,11 +796,12 @@ mod tests {
         fn load_optional_planning_candidate_file(
             &self,
             _workspace_dir: &str,
-            _relative_path: &str,
+            relative_path: &str,
         ) -> Result<Option<String>> {
-            Err(anyhow::anyhow!(
-                "load_optional_planning_candidate_file should not be called"
-            ))
+            if relative_path == RESULT_OUTPUT_FILE_PATH {
+                return Ok(None);
+            }
+            Ok(Some("# Supplemental Prompt\n\nExisting.".to_string()))
         }
 
         fn replace_planning_workspace_file(

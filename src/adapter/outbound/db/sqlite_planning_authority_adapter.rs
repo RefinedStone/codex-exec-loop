@@ -364,12 +364,16 @@ impl SqlitePlanningAuthorityAdapter {
             "last_direction_authority_commit_at",
         )?;
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
-        replace_direction_authority_tables(&transaction, commit.directions)?;
-        replace_task_authority_tables(
-            &transaction,
-            commit.task_authority,
-            commit.queue_projection,
-        )?;
+        if !direction_unchanged {
+            replace_direction_authority_tables(&transaction, commit.directions)?;
+        }
+        if !task_unchanged {
+            replace_task_authority_tables(
+                &transaction,
+                commit.task_authority,
+                commit.queue_projection,
+            )?;
+        }
         let planning_revision = bump_planning_revision(&transaction)?;
         transaction
             .commit()
