@@ -4,6 +4,7 @@
 use super::pool_reset::ParallelModePoolResetPolicy;
 use serde::{Deserialize, Serialize};
 
+pub const PARALLEL_DISPATCH_COMMAND_STALE_AFTER_SECS: i64 = 300;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModePoolResetScope {
     PoolOnly,

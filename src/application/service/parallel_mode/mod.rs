@@ -10,13 +10,13 @@ use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
-    ParallelModeCapabilityState, ParallelModeDispatchCommandSnapshot,
-    ParallelModeDispatchTaskCandidate, ParallelModeOrchestratorState,
-    ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
-    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeRuntimeEvent, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState,
-    ParallelModeSupervisorSnapshot,
+    PARALLEL_DISPATCH_COMMAND_STALE_AFTER_SECS, ParallelModeAutomationTrigger,
+    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchTaskCandidate,
+    ParallelModeOrchestratorState, ParallelModeOrchestratorStateMachine,
+    ParallelModePoolResetPolicy, ParallelModePoolResetReport, ParallelModePoolSlotState,
+    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeRuntimeEvent,
+    ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorSnapshot,
 };
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
@@ -604,7 +604,7 @@ impl ParallelModeService {
                         Utc::now()
                             .signed_duration_since(timestamp.with_timezone(&Utc))
                             .num_seconds()
-                            >= 300
+                            >= PARALLEL_DISPATCH_COMMAND_STALE_AFTER_SECS
                     })
                     .unwrap_or(true)
             }
@@ -676,7 +676,7 @@ impl ParallelModeService {
         snapshot: &PlanningAuthorityRuntimeProjectionSnapshot,
         epoch_id: u64,
     ) -> Option<ParallelModeDispatchCommandSnapshot> {
-        if !snapshot.session_details.is_empty() {
+        if !snapshot.session_details.is_empty() || !snapshot.slot_leases.is_empty() {
             return None;
         }
         snapshot
@@ -773,21 +773,14 @@ impl ParallelModeService {
         if !has_orphaned_running {
             return Ok(false);
         }
-        let matching_slot_ids = current_task_id
-            .as_ref()
-            .map(|task_id| {
-                snapshot
-                    .slot_leases
-                    .values()
-                    .filter(|lease| lease.task_id == *task_id)
-                    .map(|lease| lease.slot_id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for slot_id in matching_slot_ids {
-            self.planning_authority
-                .remove_runtime_slot_lease(workspace_dir, &slot_id)
-                .map_err(|error| error.to_string())?;
+        let has_matching_slot_lease = current_task_id.as_ref().is_some_and(|task_id| {
+            snapshot
+                .slot_leases
+                .values()
+                .any(|lease| lease.task_id == *task_id)
+        });
+        if has_matching_slot_lease {
+            return Ok(false);
         }
         self.update_dispatch_command(workspace_dir, &replacement)?;
         Ok(true)

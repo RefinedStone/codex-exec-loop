@@ -73,7 +73,8 @@ const OFFICIAL_REFRESH_SCOPE_KEY: &str = "official-refresh";
 // distributor queue head claim을 runtime_claims table에서 식별하는 claim kind이다.
 const DISTRIBUTOR_QUEUE_CLAIM_KIND: &str = "distributor-queue-head";
 // claim owner가 갱신하지 않은 채 이 시간을 넘기면 다른 worker가 stale claim으로 볼 수 있다.
-const CLAIM_STALE_AFTER_SECS: i64 = 300;
+const CLAIM_STALE_AFTER_SECS: i64 =
+    crate::domain::parallel_mode::PARALLEL_DISPATCH_COMMAND_STALE_AFTER_SECS;
 // task authority 문서 version을 metadata table에 저장할 때 쓰는 key이다.
 const TASK_LEDGER_VERSION_METADATA_KEY: &str = "task_authority_version";
 #[derive(Default)]

@@ -39,9 +39,9 @@ pub use self::orchestrator::ParallelModeControlPlaneEntryDecision;
 pub(crate) use self::orchestrator::ParallelModeDispatchTaskCandidate;
 #[allow(unused_imports)]
 pub use self::orchestrator::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
-    ParallelModeDispatchCommandSnapshot, ParallelModeDispatchCommandState,
-    ParallelModeDispatchOutcome, ParallelModeOrchestratorState,
+    PARALLEL_DISPATCH_COMMAND_STALE_AFTER_SECS, ParallelModeAutomationTrigger,
+    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
+    ParallelModeDispatchCommandState, ParallelModeDispatchOutcome, ParallelModeOrchestratorState,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetScope,
     ParallelModePostTurnQueueDecision, ParallelModePostTurnQueueSignal, ParallelModeRuntimeEvent,
     ParallelModeTaskDispatchBlockSnapshot,

@@ -422,6 +422,7 @@ impl ParallelModeControlPlaneRuntime {
             self.store.mode_enabled = true;
             self.store.projection_ready = true;
         } else {
+            self.store.mode_enabled = false;
             self.store.workspace_directory = None;
             self.store.current_epoch_id = None;
             self.clear_process_effect_state();
@@ -1747,6 +1748,17 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn force_mode_for_test_false_clears_enabled_state() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.force_mode_for_test("/repo", true);
+        runtime.force_mode_for_test("/repo", false);
+
+        assert!(!runtime.store().mode_enabled);
+        assert_eq!(runtime.store().workspace_directory, None);
+        assert_eq!(runtime.store().current_epoch_id, None);
     }
 
     #[test]

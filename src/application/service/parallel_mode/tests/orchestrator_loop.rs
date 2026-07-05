@@ -807,7 +807,7 @@ fn pending_dispatch_wake_returns_recovery_wake_for_fresh_running_command() {
 }
 
 #[test]
-fn pending_dispatch_wake_returns_recovery_wake_for_fresh_running_command_with_matching_lease() {
+fn pending_dispatch_wake_skips_fresh_running_command_with_matching_lease() {
     let repo = TempGitRepo::new("orchestrator-fresh-running-recovery-wake-with-lease");
     let workspace_dir = repo.workspace_dir();
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
@@ -856,17 +856,8 @@ fn pending_dispatch_wake_returns_recovery_wake_for_fresh_running_command_with_ma
 
     let wake = service
         .pending_dispatch_wake(&workspace_dir, 224)
-        .expect("fresh running command should be inspectable")
-        .expect("fresh running command with matching lease should trigger a recovery wake");
-    assert_eq!(
-        wake.trigger,
-        ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
-    );
-    assert_eq!(wake.epoch_id, 224);
-    assert_eq!(
-        wake.enqueue_trigger,
-        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch)
-    );
+        .expect("fresh running command should be inspectable");
+    assert!(wake.is_none());
 }
 
 #[test]
@@ -1295,7 +1286,7 @@ fn dispatch_tick_recovers_fresh_running_command_without_waiting_for_timeout() {
 }
 
 #[test]
-fn dispatch_tick_recovers_fresh_running_command_with_matching_lease() {
+fn dispatch_tick_does_not_recover_fresh_running_command_with_matching_lease() {
     let repo = TempGitRepo::new("orchestrator-fresh-running-recovery-with-lease");
     let workspace_dir = repo.workspace_dir();
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
@@ -1361,21 +1352,19 @@ fn dispatch_tick_recovers_fresh_running_command_with_matching_lease() {
         ParallelModeAutomationTrigger::TaskIntakeAfterEpoch
     );
     assert_eq!(result.outcome.epoch_id, 224);
-    assert_eq!(result.outcome.launched_task_ids.len(), 1);
-    for _ in 0..100 {
-        if worker_port.launch_count() >= 1 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(worker_port.launch_count(), 1);
+    assert!(result.outcome.launched_task_ids.is_empty());
+    assert_eq!(worker_port.launch_count(), 0);
+    assert_eq!(
+        result.outcome.blocked_reason.as_deref(),
+        Some("no pending durable dispatch command")
+    );
     let projections = authority
         .load_runtime_projections(&workspace_dir)
         .expect("runtime projections should load");
     assert_eq!(projections.dispatch_commands.len(), 1);
     assert_eq!(
         projections.dispatch_commands[0].state,
-        ParallelModeDispatchCommandState::Completed
+        ParallelModeDispatchCommandState::Running
     );
 }
 
