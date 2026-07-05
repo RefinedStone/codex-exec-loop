@@ -8,7 +8,7 @@ expression: rendered
 "attachment: provider-launched  |  recovery: provider-thread-id                  "
 "ready: send a task or reopen a session                                          "
 "examples: fix src/...  |  review PR #123  |  explain tests/...                  "
-"shortcuts: r sessions  |  Ctrl+d diagnostics  |  :help                          "
+"shortcuts: Ctrl+o sessions  |  Ctrl+d diagnostics  |  :help                     "
 "                                                                                "
 ">                                                                               "
 "prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help                 "

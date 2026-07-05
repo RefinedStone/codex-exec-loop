@@ -237,7 +237,7 @@ fn inline_main_buffer_tail_frame_does_not_render_startup_ascii_art_transiently()
     assert!(rendered.contains("diagnostics: codex ok  |  app-server ok  |  account ok"));
     assert!(rendered.contains("attachment: provider-launched  |  recovery: provider-thread-id"));
     assert!(rendered.contains("ready: send a task or reopen a session"));
-    assert!(rendered.contains("shortcuts: r sessions"));
+    assert!(rendered.contains("shortcuts: Ctrl+o sessions"));
     assert!(rendered.contains("prompt: new thread ready"));
 }
 
@@ -258,7 +258,7 @@ fn inline_startup_screen_uses_selected_korean_language() {
     assert!(rendered.contains("진단: codex 정상  |  app-server 정상  |  계정 정상"));
     assert!(rendered.contains("연결: provider-launched  |  복구: provider-thread-id"));
     assert!(rendered.contains("준비됨: 작업을 보내거나 세션을 다시 여세요"));
-    assert!(rendered.contains("단축키: r 세션"));
+    assert!(rendered.contains("단축키: Ctrl+o 세션"));
 }
 #[test]
 fn startup_prompt_command_palette_remains_visible_after_colon_input() {

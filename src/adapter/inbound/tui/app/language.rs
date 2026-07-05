@@ -146,8 +146,8 @@ impl TuiLanguage {
 
     pub(super) const fn startup_shortcuts_line(self) -> &'static str {
         match self {
-            Self::English => "shortcuts: r sessions  |  Ctrl+d diagnostics  |  :help",
-            Self::Korean => "단축키: r 세션  |  Ctrl+d 진단  |  :help",
+            Self::English => "shortcuts: Ctrl+o sessions  |  Ctrl+d diagnostics  |  :help",
+            Self::Korean => "단축키: Ctrl+o 세션  |  Ctrl+d 진단  |  :help",
         }
     }
 
@@ -637,12 +637,12 @@ mod tests {
         assert!(
             TuiLanguage::English
                 .startup_shortcuts_line()
-                .contains("Ctrl+d diagnostics")
+                .contains("Ctrl+o sessions")
         );
         assert!(
             TuiLanguage::Korean
                 .startup_shortcuts_line()
-                .contains("Ctrl+d 진단")
+                .contains("Ctrl+o 세션")
         );
         assert!(
             TuiLanguage::English
