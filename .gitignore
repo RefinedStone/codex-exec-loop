@@ -1,5 +1,6 @@
 logs/
 artifacts/
+.gjc/
 .codex
 .idea/
 target/
