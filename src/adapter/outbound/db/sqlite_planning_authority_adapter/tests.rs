@@ -63,6 +63,56 @@ fn temp_workspace(prefix: &str) -> String {
     std::fs::create_dir_all(&path).expect("workspace should create");
     path.display().to_string()
 }
+fn run_git_command(repo_root: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git command should spawn");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn temp_git_repo_with_linked_worktree(prefix: &str) -> (String, String) {
+    let repo_root = std::path::PathBuf::from(temp_workspace(prefix)).join("repo");
+    std::fs::create_dir_all(&repo_root).expect("temp git repo should be created");
+    run_git_command(&repo_root, &["init", "-b", "prerelease"]);
+    run_git_command(&repo_root, &["config", "user.name", "Akra Test"]);
+    run_git_command(
+        &repo_root,
+        &["config", "user.email", "akra-test@example.com"],
+    );
+    std::fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
+    run_git_command(&repo_root, &["add", "README.md"]);
+    run_git_command(&repo_root, &["commit", "-m", "seed repo"]);
+
+    let linked_worktree = repo_root
+        .parent()
+        .expect("temp git repo parent should exist")
+        .join("linked-worktree");
+    run_git_command(
+        &repo_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature/test-linked",
+            linked_worktree.to_string_lossy().as_ref(),
+            "prerelease",
+        ],
+    );
+
+    (
+        repo_root.display().to_string(),
+        linked_worktree.display().to_string(),
+    )
+}
 
 fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
     let location =
@@ -194,9 +244,22 @@ fn insert_invalid_slot_marker(workspace_dir: &str, slot_id: &str) {
 }
 #[test]
 fn review_center_repository_port_round_trips_workspace_scoped_data() {
-    let workspace_a = temp_workspace("review-center-a");
-    let workspace_b = temp_workspace("review-center-b");
+    let (workspace_a, workspace_b) = temp_git_repo_with_linked_worktree("review-center");
     let adapter = SqlitePlanningAuthorityAdapter::new();
+    let location_a =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_a)
+            .expect("workspace A authority location should resolve");
+    let location_b =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_b)
+            .expect("workspace B authority location should resolve");
+    assert_eq!(
+        location_a.authority_store_path, location_b.authority_store_path,
+        "linked worktrees in the same repo should share one authority DB"
+    );
+    assert_ne!(
+        location_a.workspace_root, location_b.workspace_root,
+        "linked worktrees should keep distinct workspace roots"
+    );
 
     let mut thread_review = ReviewCenterThreadProjection::new(
         "thread-a",
@@ -260,21 +323,21 @@ fn review_center_repository_port_round_trips_workspace_scoped_data() {
             .load_thread_reviews(&workspace_b, "thread-a")
             .expect("workspace B thread review should load")
             .is_empty(),
-        "workspace B should stay isolated from workspace A review rows"
+        "workspace B should stay isolated from workspace A review rows even in the shared repo DB"
     );
     assert!(
         adapter
             .load_pending_inbox(&workspace_b)
             .expect("workspace B inbox should load")
             .is_empty(),
-        "workspace B should stay isolated from workspace A inbox rows"
+        "workspace B should stay isolated from workspace A inbox rows even in the shared repo DB"
     );
     assert!(
         adapter
             .load_recent_history(&workspace_b)
             .expect("workspace B history should load")
             .is_empty(),
-        "workspace B should stay isolated from workspace A history rows"
+        "workspace B should stay isolated from workspace A history rows even in the shared repo DB"
     );
 }
 
