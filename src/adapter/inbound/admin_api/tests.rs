@@ -5,6 +5,10 @@ use super::helpers::{
 use super::pages::{draft_mutation_path, extract_file_updates, nav_for_kind};
 use super::views::{EditorActionPaths, EditorTemplate};
 use super::{build_admin_state, build_router, parse_args, parse_reset_target};
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterInboxItem, ReviewCenterRepositoryPort, ReviewCenterThreadProjection,
+};
 use crate::application::service::planning::admin::{
     PlanningAdminDraftFileView, PlanningAdminValidationView,
 };
@@ -914,6 +918,62 @@ async fn admin_html_page_routes_render_live_templates() {
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
         }
     }
+}
+
+#[tokio::test]
+async fn reviews_page_renders_thread_spotlight_content_from_repository_projection() {
+    let workspace = TempAdminWorkspace::new("reviews-page");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let mut thread_review = ReviewCenterThreadProjection::new(
+        "thread-1",
+        "review-1",
+        "Manual review",
+        "pending",
+        "Need operator follow-up",
+        "2026-07-06T10:00:00Z",
+        "2026-07-06T10:01:00Z",
+    );
+    thread_review.handoff_target = Some("operator".to_string());
+    thread_review.handoff_note = Some("open review center inbox".to_string());
+    let mut inbox_item = ReviewCenterInboxItem::new(
+        "review-1",
+        "thread-1",
+        "pending",
+        "Need operator follow-up",
+        "2026-07-06T10:00:00Z",
+        "2026-07-06T10:01:00Z",
+    );
+    inbox_item.handoff_target = Some("operator".to_string());
+
+    adapter
+        .upsert_thread_review(&workspace.path, &thread_review)
+        .expect("thread review should persist");
+    adapter
+        .replace_pending_inbox(&workspace.path, &[inbox_item])
+        .expect("inbox should persist");
+
+    let router = admin_test_router(&workspace);
+    let (cookie, _, _) = bootstrap_admin_html_session(&router).await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin/reviews")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("reviews page request should build"),
+        )
+        .await
+        .expect("reviews page request should be served");
+    let body = text_body(response).await;
+
+    assert!(body.contains("Thread spotlight"));
+    assert!(body.contains("thread-1"));
+    assert!(body.contains("Manual review"));
+    assert!(body.contains("Need operator follow-up"));
+    assert!(body.contains("handoff → operator: open review center inbox"));
 }
 
 #[tokio::test]
