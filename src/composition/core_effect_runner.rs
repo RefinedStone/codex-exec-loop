@@ -3,7 +3,9 @@ use std::thread;
 
 use anyhow::Result;
 
-use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::conversation_service::{
+    ConversationService, LoadedConversationThreadSnapshot,
+};
 use crate::application::service::manual_prompt_preparation::{
     ManualPromptPreparationRequest, ManualPromptPreparationService,
 };
@@ -18,7 +20,6 @@ use crate::composition::core_turn_submission;
 use crate::core::app::{ConversationReadySnapshot, SessionCatalogReadySnapshot};
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
-use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -99,7 +100,7 @@ impl CoreEffectRunner {
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
             let completion = conversation_snapshot_completion(
-                conversation_service.load_snapshot(thread_id.as_str()),
+                conversation_service.load_thread_snapshot(thread_id.as_str()),
             );
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
@@ -161,18 +162,46 @@ fn session_catalog_completion(result: Result<SessionCatalog>) -> CoreEffectCompl
     )
 }
 
-fn conversation_snapshot_completion(result: Result<ConversationSnapshot>) -> CoreEffectCompletion {
+fn conversation_snapshot_completion(
+    result: Result<LoadedConversationThreadSnapshot>,
+) -> CoreEffectCompletion {
     CoreEffectCompletion::ConversationLoaded(
         result
-            .map(ConversationReadySnapshot::from)
+            .map(conversation_ready_snapshot)
             .map(Box::new)
             .map_err(|error| error.to_string()),
+    )
+}
+
+fn conversation_ready_snapshot(
+    snapshot: LoadedConversationThreadSnapshot,
+) -> ConversationReadySnapshot {
+    ConversationReadySnapshot::from_parts(
+        snapshot.conversation,
+        snapshot
+            .thread_review
+            .into_iter()
+            .map(|review| {
+                ConversationReadySnapshot::thread_review_snapshot(
+                    review.thread_id,
+                    review.review_id,
+                    review.review_label,
+                    review.review_state,
+                    review.review_summary,
+                    review.requested_at,
+                    review.updated_at,
+                    review.handoff_target,
+                    review.handoff_note,
+                )
+            })
+            .collect(),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection;
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalogTier};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -274,7 +303,7 @@ mod tests {
 
     #[test]
     fn conversation_snapshot_success_maps_to_core_completion() {
-        let conversation = ConversationSnapshot {
+        let conversation = crate::domain::conversation::ConversationSnapshot {
             thread_id: "thread-1".to_string(),
             title: "Core runtime".to_string(),
             cwd: "/tmp/workspace".to_string(),
@@ -287,11 +316,38 @@ mod tests {
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
         };
+        let mut thread_review = ReviewCenterThreadProjection::new(
+            "thread-1",
+            "review-1",
+            "Manual review",
+            "pending",
+            "Need operator follow-up",
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T11:00:00Z",
+        );
+        thread_review.handoff_target = Some("operator".to_string());
+        thread_review.handoff_note = Some("resume in inbox".to_string());
 
         assert_eq!(
-            conversation_snapshot_completion(Ok(conversation.clone())),
+            conversation_snapshot_completion(Ok(LoadedConversationThreadSnapshot {
+                conversation: conversation.clone(),
+                thread_review: vec![thread_review],
+            })),
             CoreEffectCompletion::ConversationLoaded(Ok(Box::new(
-                ConversationReadySnapshot::from(conversation)
+                ConversationReadySnapshot::from_parts(
+                    conversation,
+                    vec![ConversationReadySnapshot::thread_review_snapshot(
+                        "thread-1".to_string(),
+                        "review-1".to_string(),
+                        "Manual review".to_string(),
+                        "pending".to_string(),
+                        "Need operator follow-up".to_string(),
+                        "2026-07-06T10:00:00Z".to_string(),
+                        "2026-07-06T11:00:00Z".to_string(),
+                        Some("operator".to_string()),
+                        Some("resume in inbox".to_string()),
+                    )],
+                )
             )))
         );
     }

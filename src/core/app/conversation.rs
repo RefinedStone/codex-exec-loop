@@ -1,6 +1,19 @@
 use crate::domain::conversation::ConversationSnapshot as DomainConversationSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationThreadReviewSnapshot {
+    pub thread_id: String,
+    pub review_id: String,
+    pub review_label: String,
+    pub review_state: String,
+    pub review_summary: String,
+    pub requested_at: String,
+    pub updated_at: String,
+    pub handoff_target: Option<String>,
+    pub handoff_note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationReadySnapshot {
     pub conversation: Box<DomainConversationSnapshot>,
     pub thread_id: String,
@@ -9,10 +22,14 @@ pub struct ConversationReadySnapshot {
     pub message_count: usize,
     pub warning_count: usize,
     pub runtime_notice_count: usize,
+    pub thread_review: Vec<ConversationThreadReviewSnapshot>,
 }
 
-impl From<DomainConversationSnapshot> for ConversationReadySnapshot {
-    fn from(conversation: DomainConversationSnapshot) -> Self {
+impl ConversationReadySnapshot {
+    pub fn from_parts(
+        conversation: DomainConversationSnapshot,
+        thread_review: Vec<ConversationThreadReviewSnapshot>,
+    ) -> Self {
         Self {
             thread_id: conversation.thread_id.clone(),
             title: conversation.title.clone(),
@@ -21,7 +38,38 @@ impl From<DomainConversationSnapshot> for ConversationReadySnapshot {
             warning_count: conversation.warnings.len(),
             runtime_notice_count: conversation.runtime_notices.len(),
             conversation: Box::new(conversation),
+            thread_review,
         }
+    }
+
+    pub fn thread_review_snapshot(
+        thread_id: String,
+        review_id: String,
+        review_label: String,
+        review_state: String,
+        review_summary: String,
+        requested_at: String,
+        updated_at: String,
+        handoff_target: Option<String>,
+        handoff_note: Option<String>,
+    ) -> ConversationThreadReviewSnapshot {
+        ConversationThreadReviewSnapshot {
+            thread_id,
+            review_id,
+            review_label,
+            review_state,
+            review_summary,
+            requested_at,
+            updated_at,
+            handoff_target,
+            handoff_note,
+        }
+    }
+}
+
+impl From<DomainConversationSnapshot> for ConversationReadySnapshot {
+    fn from(conversation: DomainConversationSnapshot) -> Self {
+        Self::from_parts(conversation, Vec::new())
     }
 }
 
@@ -88,8 +136,41 @@ mod tests {
                 message_count: 1,
                 warning_count: 1,
                 runtime_notice_count: 1,
+                thread_review: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn ready_snapshot_from_parts_keeps_thread_review() {
+        let conversation = DomainConversationSnapshot {
+            thread_id: "thread-1".to_string(),
+            title: "Build core runtime".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        };
+
+        let ready = ConversationReadySnapshot::from_parts(
+            conversation.clone(),
+            vec![ConversationThreadReviewSnapshot {
+                thread_id: "thread-1".to_string(),
+                review_id: "review-1".to_string(),
+                review_label: "Manual review".to_string(),
+                review_state: "pending".to_string(),
+                review_summary: "Need operator follow-up".to_string(),
+                requested_at: "2026-07-06T10:00:00Z".to_string(),
+                updated_at: "2026-07-06T11:00:00Z".to_string(),
+                handoff_target: Some("operator".to_string()),
+                handoff_note: Some("resume in inbox".to_string()),
+            }],
+        );
+
+        assert_eq!(ready.conversation, Box::new(conversation));
+        assert_eq!(ready.thread_review.len(), 1);
+        assert_eq!(ready.thread_review[0].review_id, "review-1");
+        assert_eq!(ready.thread_review[0].handoff_target.as_deref(), Some("operator"));
     }
 
     #[test]

@@ -70,10 +70,22 @@ pub(crate) fn build_planning_status_surface_projection(
 // fall back to the runtime detail only when no queue framing is available.
 pub(crate) fn build_resumed_session_status_text(
     runtime_projection: &PlanningRuntimeProjection,
+    resumed_thread_review_summary: Option<&str>,
+    resumed_thread_manual_handoff_context: Option<&str>,
 ) -> String {
     let mut status_text = format!(
         "thread loaded / planning status: {}",
         runtime_projection.preview_status_label()
+    );
+    append_resumed_status_detail(
+        &mut status_text,
+        "review",
+        resumed_thread_review_summary,
+    );
+    append_resumed_status_detail(
+        &mut status_text,
+        "manual handoff",
+        resumed_thread_manual_handoff_context,
     );
     if let Some(queue_summary) = build_queue_framing_summary_from_projection(
         runtime_projection,
@@ -90,6 +102,23 @@ pub(crate) fn build_resumed_session_status_text(
     }
 
     status_text
+}
+
+fn append_resumed_status_detail(
+    status_text: &mut String,
+    label: &str,
+    detail: Option<&str>,
+) {
+    let Some(detail) = detail.filter(|detail| !detail.trim().is_empty()) else {
+        return;
+    };
+    status_text.push_str(" / ");
+    status_text.push_str(label);
+    status_text.push_str(": ");
+    status_text.push_str(&compact_whitespace_detail(
+        detail,
+        RESUMED_SESSION_DETAIL_LIMIT,
+    ));
 }
 
 // Summary generation stays delegated to the planning service so the TUI does
@@ -446,11 +475,28 @@ mod tests {
             None,
             None,
         );
-        let status_text = build_resumed_session_status_text(&runtime_projection);
+        let status_text = build_resumed_session_status_text(&runtime_projection, None, None);
 
         assert!(status_text.contains("thread loaded / planning status: ready"));
         assert!(status_text.contains("queue summary: now: Ship resume status"));
         assert!(status_text.contains("next: Review overlays"));
+    }
+    #[test]
+    fn resumed_session_status_includes_repository_review_summary_and_manual_handoff_context() {
+        let runtime_projection = PlanningRuntimeProjection::ready_with_details(
+            "Planning Context".to_string(),
+            "queue summary unavailable".to_string(),
+            None,
+            None,
+        );
+        let status_text = build_resumed_session_status_text(
+            &runtime_projection,
+            Some("manual handoff (waiting): operator follow-up required"),
+            Some("operator: open review center inbox"),
+        );
+
+        assert!(status_text.contains("review: manual handoff (waiting): operator follow-up required"));
+        assert!(status_text.contains("manual handoff: operator: open review center inbox"));
     }
     #[test]
     fn queue_framing_summary_skips_duplicate_next_when_projection_has_no_explicit_next_task() {

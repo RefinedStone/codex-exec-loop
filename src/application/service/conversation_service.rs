@@ -8,20 +8,28 @@ use std::sync::mpsc::Sender;
 
 // `anyhow::Result`는 application service가 adapter 오류를 상위 TUI 흐름에 전달하는 공통 결과 타입이다.
 // 여기서는 오류 종류를 새 도메인 enum으로 재포장하지 않고, runtime port의 실패 맥락을 그대로 보존한다.
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 // `InteractiveTurnRuntimePort`는 application 계층이 outbound runtime에 기대하는 최소 계약이다.
 // 실제 구현은 Codex app-server adapter이지만, TUI와 service는 trait object만 보므로 테스트 fake나 다른 runtime으로
 // 교체해도 호출 코드는 바뀌지 않는다.
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+use crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection;
 // conversation runtime event는 이전 계층에서 정리한 스트림 계약이다.
 // service는 이 이벤트 타입을 알고 있지만 이벤트 payload를 직접 만들거나 줄이지 않는다.
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::review_center::ReviewCenterReadService;
 // snapshot은 저장된 대화 상태를 읽는 결과이고, control truth는 "중단/실행 제어를 누가 담당하는가"를
 // 나타내는 도메인 값이다. 둘 다 TUI가 런타임 구현 세부사항 없이 화면 상태를 구성하는 데 쓰인다.
 use crate::domain::conversation::{
     ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedConversationThreadSnapshot {
+    pub conversation: ConversationSnapshot,
+    pub thread_review: Vec<ReviewCenterThreadProjection>,
+}
 
 #[derive(Clone)]
 // `ConversationService`는 TUI inbound adapter와 outbound interactive runtime port 사이의
@@ -36,6 +44,7 @@ pub struct ConversationService {
     // trait object를 `Arc`에 담아 소유한다. `dyn InteractiveTurnRuntimePort`는 런타임의 실제 타입을
     // 숨기고, `Arc`는 service clone이 많아져도 같은 runtime 제어면을 공유하게 한다.
     interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>,
+    review_center_read_service: Option<ReviewCenterReadService>,
 }
 
 impl ConversationService {
@@ -44,7 +53,16 @@ impl ConversationService {
     pub fn new(interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>) -> Self {
         Self {
             interactive_turn_runtime_port,
+            review_center_read_service: None,
         }
+    }
+
+    pub fn with_review_center_read_service(
+        mut self,
+        review_center_read_service: ReviewCenterReadService,
+    ) -> Self {
+        self.review_center_read_service = Some(review_center_read_service);
+        self
     }
 
     // 저장된 conversation snapshot을 읽는 조회 메서드이다. TUI는 thread id만 알고 있고,
@@ -54,6 +72,19 @@ impl ConversationService {
             // port 메서드 이름에는 `conversation`을 포함해 outbound 경계에서의 책임을 더 분명히 한다.
             // service 메서드는 TUI 쪽 호출 문맥에 맞춰 더 짧은 `load_snapshot`으로 노출한다.
             .load_conversation_snapshot(thread_id)
+    }
+
+    pub fn load_thread_snapshot(&self, thread_id: &str) -> Result<LoadedConversationThreadSnapshot> {
+        let conversation = self.load_snapshot(thread_id)?;
+        let thread_review = self
+            .review_center_read_service
+            .as_ref()
+            .context("review-center read service is required for resumed thread hydration")?
+            .load_thread_reviews(thread_id)?;
+        Ok(LoadedConversationThreadSnapshot {
+            conversation,
+            thread_review,
+        })
     }
 
     // runtime control truth는 "중단 버튼, 전체 세션 정지, 실행 상태 판단을 어느 runtime이

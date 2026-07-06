@@ -19,6 +19,8 @@ use crate::application::service::planning::{
     PlanningAutoFollowBlockReason, PlanningRuntimeAutoFollowDecision,
     PlanningRuntimeAutoFollowRequest, PlanningRuntimeUseCases,
 };
+use crate::core::app::conversation::ConversationThreadReviewSnapshot;
+
 use crate::application::service::planning::{PlanningRuntimeProjection, PlanningTaskHandoff};
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
@@ -78,6 +80,13 @@ pub(crate) struct PlanningRepairState {
     pub(crate) latest_request: PlanningRepairRequestSnapshot,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct HydratedThreadReviewStatusProjection {
+    summary: Option<String>,
+    manual_handoff_context: Option<String>,
+}
+
+
 #[derive(Debug, Clone)]
 pub(crate) struct ConversationViewModel {
     pub(crate) thread_id: String,
@@ -121,6 +130,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) turn_control_truth: ConversationRuntimeControlTruth,
     pub(crate) last_auto_follow_activity: Option<RecordedAutoFollowActivity>,
+    hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
     pub(crate) status_text: String,
 }
@@ -161,6 +171,7 @@ impl ConversationViewModel {
             approval_review: None,
             turn_control_truth,
             last_auto_follow_activity: None,
+            hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection::default(),
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
@@ -177,17 +188,21 @@ impl ConversationViewModel {
             snapshot,
             draft_workspace_directory,
             ConversationRuntimeControlTruth::default(),
+            Vec::new(),
         )
     }
     pub(crate) fn from_snapshot_with_truth(
         snapshot: ConversationSnapshot,
         draft_workspace_directory: String,
         turn_control_truth: ConversationRuntimeControlTruth,
+        thread_review: Vec<ConversationThreadReviewSnapshot>,
     ) -> Self {
         // Snapshot warnings are preserved as the immutable baseline for this loaded thread.
         let base_warnings = snapshot.warnings;
         let runtime_notices = snapshot.runtime_notices;
         let warnings = base_warnings.clone();
+        let hydrated_thread_review_status_projection =
+            hydrate_thread_review_status_projection(&thread_review);
         let base_status = "thread loaded".to_string();
         let mut view_model = Self {
             thread_id: snapshot.thread_id,
@@ -215,6 +230,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             approval_review: None,
             turn_control_truth,
+            hydrated_thread_review_status_projection,
             last_auto_follow_activity: None,
             last_planning_task_handoff: None,
             status_text: String::new(),
@@ -225,6 +241,16 @@ impl ConversationViewModel {
     }
     pub(crate) fn turn_control_truth(&self) -> ConversationRuntimeControlTruth {
         self.turn_control_truth
+    }
+    pub(crate) fn resumed_thread_review_summary(&self) -> Option<&str> {
+        self.hydrated_thread_review_status_projection
+            .summary
+            .as_deref()
+    }
+    pub(crate) fn resumed_thread_review_manual_handoff_context(&self) -> Option<&str> {
+        self.hydrated_thread_review_status_projection
+            .manual_handoff_context
+            .as_deref()
     }
     pub(crate) fn reducer_event_projection_cache(&self) -> &PlanningRuntimeProjection {
         &self.reducer_event_projection_cache
@@ -616,4 +642,132 @@ fn clamp_to_char_boundary(buffer: &str, index: usize) -> usize {
         clamped_index -= 1;
     }
     clamped_index
+}
+
+fn hydrate_thread_review_status_projection(
+    thread_review: &[ConversationThreadReviewSnapshot],
+) -> HydratedThreadReviewStatusProjection {
+    HydratedThreadReviewStatusProjection {
+        summary: thread_review
+            .iter()
+            .rev()
+            .find_map(build_thread_review_status_summary),
+        manual_handoff_context: thread_review
+            .iter()
+            .rev()
+            .find_map(build_thread_review_manual_handoff_context),
+    }
+}
+
+fn build_thread_review_status_summary(review: &ConversationThreadReviewSnapshot) -> Option<String> {
+    let review_label = review.review_label.trim();
+    let review_state = review.review_state.trim();
+    let review_summary = review.review_summary.trim();
+    if review_label.is_empty() && review_state.is_empty() && review_summary.is_empty() {
+        return None;
+    }
+
+    Some(match (
+        review_label.is_empty(),
+        review_state.is_empty(),
+        review_summary.is_empty(),
+    ) {
+        (false, false, false) => format!("{review_label} ({review_state}): {review_summary}"),
+        (false, false, true) => format!("{review_label} ({review_state})"),
+        (false, true, false) => format!("{review_label}: {review_summary}"),
+        (true, false, false) => format!("{review_state}: {review_summary}"),
+        (false, true, true) => review_label.to_string(),
+        (true, false, true) => review_state.to_string(),
+        (true, true, false) => review_summary.to_string(),
+        (true, true, true) => unreachable!(),
+    })
+}
+
+fn build_thread_review_manual_handoff_context(
+    review: &ConversationThreadReviewSnapshot,
+) -> Option<String> {
+    let handoff_target = review.handoff_target.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let handoff_note = review.handoff_note.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    match (handoff_target, handoff_note) {
+        (Some(target), Some(note)) => Some(format!("{target}: {note}")),
+        (Some(target), None) => Some(target.to_string()),
+        (None, Some(note)) => Some(note.to_string()),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_hydration_keeps_latest_review_summary_and_manual_handoff_context() {
+        let conversation = ConversationViewModel::from_snapshot_with_truth(
+            sample_conversation_snapshot(),
+            "/tmp/root".to_string(),
+            ConversationRuntimeControlTruth::default(),
+            vec![
+                sample_thread_review(
+                    "approval review",
+                    "pending",
+                    "older repository summary",
+                    None,
+                    None,
+                    "2026-05-01T00:00:00Z",
+                    "2026-05-01T00:00:00Z",
+                ),
+                sample_thread_review(
+                    "manual handoff",
+                    "waiting",
+                    "operator follow-up required",
+                    Some("operator"),
+                    Some("open review center inbox"),
+                    "2026-05-02T00:00:00Z",
+                    "2026-05-02T00:00:00Z",
+                ),
+            ],
+        );
+
+        assert_eq!(
+            conversation.resumed_thread_review_summary(),
+            Some("manual handoff (waiting): operator follow-up required")
+        );
+        assert_eq!(
+            conversation.resumed_thread_review_manual_handoff_context(),
+            Some("operator: open review center inbox")
+        );
+    }
+
+    fn sample_conversation_snapshot() -> ConversationSnapshot {
+        ConversationSnapshot {
+            thread_id: "thread-1".to_string(),
+            title: "thread-1".to_string(),
+            cwd: "/tmp/root".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        }
+    }
+
+    fn sample_thread_review(
+        review_label: &str,
+        review_state: &str,
+        review_summary: &str,
+        handoff_target: Option<&str>,
+        handoff_note: Option<&str>,
+        requested_at: &str,
+        updated_at: &str,
+    ) -> ConversationThreadReviewSnapshot {
+        ConversationThreadReviewSnapshot {
+            thread_id: "thread-1".to_string(),
+            review_id: format!("review-{updated_at}"),
+            review_label: review_label.to_string(),
+            review_state: review_state.to_string(),
+            review_summary: review_summary.to_string(),
+            requested_at: requested_at.to_string(),
+            updated_at: updated_at.to_string(),
+            handoff_target: handoff_target.map(str::to_string),
+            handoff_note: handoff_note.map(str::to_string),
+        }
+    }
 }

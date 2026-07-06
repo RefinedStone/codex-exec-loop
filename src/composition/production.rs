@@ -151,12 +151,13 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
     let ports = build_shared_ports();
     let startup_service = StartupService::new(ports.app_server_adapter.clone());
     let session_service = SessionService::new(ports.app_server_adapter.clone());
-    let conversation_service = ConversationService::new(ports.app_server_adapter.clone());
     let workspace_dir = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
     let review_center_read_service =
         ReviewCenterReadService::new(workspace_dir, ports.review_center_repository_port.clone());
+    let conversation_service = ConversationService::new(ports.app_server_adapter.clone())
+        .with_review_center_read_service(review_center_read_service.clone());
     let planning = planning_services_from_ports(&ports);
     let parallel_mode_control_plane = parallel_mode_control_plane_from_parts(
         planning,

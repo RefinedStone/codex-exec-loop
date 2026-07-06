@@ -97,11 +97,17 @@ pub(super) fn reduce_conversation_lifecycle(
                 CoreConversationSnapshot::Idle => state.conversation_state,
                 CoreConversationSnapshot::Loading => ConversationState::Loading,
                 CoreConversationSnapshot::Ready(ready) => {
+                    let crate::core::app::ConversationReadySnapshot {
+                        conversation,
+                        thread_review,
+                        ..
+                    } = *ready;
                     // Loaded snapshot도 shell이 가진 turn-control truth를 주입받아 runtime 제어를 공유한다.
                     ConversationState::ready(ConversationViewModel::from_snapshot_with_truth(
-                        *ready.conversation,
+                        *conversation,
                         draft_workspace_directory,
                         state.turn_control_truth,
+                        thread_review,
                     ))
                 }
                 CoreConversationSnapshot::Failed { message } => ConversationState::Failed(message),
@@ -185,14 +191,13 @@ mod tests {
 
     #[test]
     fn core_ready_snapshot_builds_ready_view_model() {
+        let mut ready =
+            crate::core::app::ConversationReadySnapshot::from(sample_conversation_snapshot("thread-3"));
+        ready.thread_review = vec![sample_thread_review()];
         let reduced = reduce_conversation_lifecycle(
             sample_state(),
             ConversationLifecycleEvent::CoreConversationSnapshotApplied {
-                snapshot: CoreConversationSnapshot::Ready(Box::new(
-                    crate::core::app::ConversationReadySnapshot::from(
-                        sample_conversation_snapshot("thread-3"),
-                    ),
-                )),
+                snapshot: CoreConversationSnapshot::Ready(Box::new(ready)),
                 draft_workspace_directory: "/tmp/root".to_string(),
             },
         );
@@ -202,6 +207,14 @@ mod tests {
         };
         assert_eq!(conversation.thread_id, "thread-3");
         assert_eq!(conversation.status_text, "thread loaded");
+        assert_eq!(
+            conversation.resumed_thread_review_summary(),
+            Some("manual handoff (waiting): open inbox")
+        );
+        assert_eq!(
+            conversation.resumed_thread_review_manual_handoff_context(),
+            Some("operator: check review center")
+        );
         assert!(reduced.effects.is_empty());
     }
 
@@ -247,6 +260,20 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+        }
+    }
+
+    fn sample_thread_review() -> crate::core::app::conversation::ConversationThreadReviewSnapshot {
+        crate::core::app::conversation::ConversationThreadReviewSnapshot {
+            thread_id: "thread-3".to_string(),
+            review_id: "review-1".to_string(),
+            review_label: "manual handoff".to_string(),
+            review_state: "waiting".to_string(),
+            review_summary: "open inbox".to_string(),
+            requested_at: "2026-05-02T00:00:00Z".to_string(),
+            updated_at: "2026-05-02T00:00:00Z".to_string(),
+            handoff_target: Some("operator".to_string()),
+            handoff_note: Some("check review center".to_string()),
         }
     }
 
