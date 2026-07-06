@@ -86,7 +86,6 @@ struct HydratedThreadReviewStatusProjection {
     manual_handoff_context: Option<String>,
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct ConversationViewModel {
     pub(crate) thread_id: String,
@@ -171,7 +170,8 @@ impl ConversationViewModel {
             approval_review: None,
             turn_control_truth,
             last_auto_follow_activity: None,
-            hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection::default(),
+            hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection::default(
+            ),
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
@@ -204,10 +204,15 @@ impl ConversationViewModel {
         let hydrated_thread_review_status_projection =
             hydrate_thread_review_status_projection(&thread_review);
         let base_status = "thread loaded".to_string();
+        let conversation_cwd = if snapshot.cwd.trim().is_empty() {
+            draft_workspace_directory.clone()
+        } else {
+            snapshot.cwd
+        };
         let mut view_model = Self {
             thread_id: snapshot.thread_id,
             title: snapshot.title,
-            cwd: snapshot.cwd,
+            cwd: conversation_cwd,
             draft_workspace_directory,
             messages: snapshot.messages,
             cached_conversation_lines: Vec::new(),
@@ -667,27 +672,37 @@ fn build_thread_review_status_summary(review: &ConversationThreadReviewSnapshot)
         return None;
     }
 
-    Some(match (
-        review_label.is_empty(),
-        review_state.is_empty(),
-        review_summary.is_empty(),
-    ) {
-        (false, false, false) => format!("{review_label} ({review_state}): {review_summary}"),
-        (false, false, true) => format!("{review_label} ({review_state})"),
-        (false, true, false) => format!("{review_label}: {review_summary}"),
-        (true, false, false) => format!("{review_state}: {review_summary}"),
-        (false, true, true) => review_label.to_string(),
-        (true, false, true) => review_state.to_string(),
-        (true, true, false) => review_summary.to_string(),
-        (true, true, true) => unreachable!(),
-    })
+    Some(
+        match (
+            review_label.is_empty(),
+            review_state.is_empty(),
+            review_summary.is_empty(),
+        ) {
+            (false, false, false) => format!("{review_label} ({review_state}): {review_summary}"),
+            (false, false, true) => format!("{review_label} ({review_state})"),
+            (false, true, false) => format!("{review_label}: {review_summary}"),
+            (true, false, false) => format!("{review_state}: {review_summary}"),
+            (false, true, true) => review_label.to_string(),
+            (true, false, true) => review_state.to_string(),
+            (true, true, false) => review_summary.to_string(),
+            (true, true, true) => unreachable!(),
+        },
+    )
 }
 
 fn build_thread_review_manual_handoff_context(
     review: &ConversationThreadReviewSnapshot,
 ) -> Option<String> {
-    let handoff_target = review.handoff_target.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let handoff_note = review.handoff_note.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let handoff_target = review
+        .handoff_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let handoff_note = review
+        .handoff_note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     match (handoff_target, handoff_note) {
         (Some(target), Some(note)) => Some(format!("{target}: {note}")),
         (Some(target), None) => Some(target.to_string()),
@@ -735,6 +750,29 @@ mod tests {
         assert_eq!(
             conversation.resumed_thread_review_manual_handoff_context(),
             Some("operator: open review center inbox")
+        );
+    }
+
+    #[test]
+    fn snapshot_hydration_falls_back_to_draft_workspace_when_snapshot_cwd_missing() {
+        let conversation = ConversationViewModel::from_snapshot_with_truth(
+            ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "thread-1".to_string(),
+                cwd: String::new(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+            "/tmp/fallback-root".to_string(),
+            ConversationRuntimeControlTruth::default(),
+            Vec::new(),
+        );
+
+        assert_eq!(conversation.cwd, "/tmp/fallback-root");
+        assert_eq!(
+            conversation.planning_workspace_directory(),
+            "/tmp/fallback-root"
         );
     }
 

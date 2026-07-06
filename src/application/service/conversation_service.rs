@@ -8,7 +8,7 @@ use std::sync::mpsc::Sender;
 
 // `anyhow::Result`는 application service가 adapter 오류를 상위 TUI 흐름에 전달하는 공통 결과 타입이다.
 // 여기서는 오류 종류를 새 도메인 enum으로 재포장하지 않고, runtime port의 실패 맥락을 그대로 보존한다.
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 // `InteractiveTurnRuntimePort`는 application 계층이 outbound runtime에 기대하는 최소 계약이다.
 // 실제 구현은 Codex app-server adapter이지만, TUI와 service는 trait object만 보므로 테스트 fake나 다른 runtime으로
@@ -78,12 +78,28 @@ impl ConversationService {
         &self,
         thread_id: &str,
     ) -> Result<LoadedConversationThreadSnapshot> {
-        let conversation = self.load_snapshot(thread_id)?;
-        let thread_review = self
-            .review_center_read_service
-            .as_ref()
-            .context("review-center read service is required for resumed thread hydration")?
-            .load_thread_reviews_for_workspace(conversation.cwd.as_str(), thread_id)?;
+        let mut conversation = self.load_snapshot(thread_id)?;
+        let thread_review = match self.review_center_read_service.as_ref() {
+            Some(review_center_read_service) => {
+                let workspace_dir = if conversation.cwd.trim().is_empty() {
+                    review_center_read_service.workspace_dir()
+                } else {
+                    conversation.cwd.as_str()
+                };
+                match review_center_read_service
+                    .load_thread_reviews_for_workspace(workspace_dir, thread_id)
+                {
+                    Ok(thread_review) => thread_review,
+                    Err(error) => {
+                        conversation
+                            .runtime_notices
+                            .push(format!("review hydration unavailable: {error}"));
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
         Ok(LoadedConversationThreadSnapshot {
             conversation,
             thread_review,
@@ -291,6 +307,122 @@ mod tests {
                 .expect("workspace tracker mutex poisoned")
                 .as_slice(),
             ["/tmp/loaded-workspace"]
+        );
+    }
+
+    #[test]
+    fn resumed_thread_snapshot_uses_bound_workspace_when_snapshot_cwd_missing() {
+        let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: String::new(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+        });
+        let review_repository = Arc::new(FakeReviewCenterRepository {
+            requested_workspaces: Mutex::new(Vec::new()),
+            thread_reviews: Vec::new(),
+        });
+        let service = ConversationService::new(runtime_port).with_review_center_read_service(
+            ReviewCenterReadService::new("/tmp/launch-workspace", review_repository.clone()),
+        );
+
+        let snapshot = service
+            .load_thread_snapshot("thread-1")
+            .expect("resumed thread snapshot should load");
+
+        assert!(snapshot.thread_review.is_empty());
+        assert_eq!(
+            review_repository
+                .requested_workspaces
+                .lock()
+                .expect("workspace tracker mutex poisoned")
+                .as_slice(),
+            ["/tmp/launch-workspace"]
+        );
+    }
+
+    #[test]
+    fn resumed_thread_snapshot_keeps_loading_when_review_lookup_fails() {
+        struct FailingReviewCenterRepository;
+
+        impl ReviewCenterRepositoryPort for FailingReviewCenterRepository {
+            fn load_thread_reviews(
+                &self,
+                _workspace_dir: &str,
+                _thread_id: &str,
+            ) -> Result<Vec<ReviewCenterThreadProjection>> {
+                Err(anyhow::anyhow!("review db unavailable"))
+            }
+
+            fn load_pending_inbox(
+                &self,
+                _workspace_dir: &str,
+            ) -> Result<Vec<ReviewCenterInboxItem>> {
+                Ok(Vec::new())
+            }
+
+            fn load_recent_history(
+                &self,
+                _workspace_dir: &str,
+            ) -> Result<Vec<ReviewCenterHistoryEntry>> {
+                Ok(Vec::new())
+            }
+
+            fn upsert_thread_review(
+                &self,
+                _workspace_dir: &str,
+                _review: &ReviewCenterThreadProjection,
+            ) -> Result<()> {
+                Ok(())
+            }
+
+            fn replace_pending_inbox(
+                &self,
+                _workspace_dir: &str,
+                _inbox: &[ReviewCenterInboxItem],
+            ) -> Result<()> {
+                Ok(())
+            }
+
+            fn append_history_entry(
+                &self,
+                _workspace_dir: &str,
+                _entry: &ReviewCenterHistoryEntry,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/loaded-workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+        });
+        let service = ConversationService::new(runtime_port).with_review_center_read_service(
+            ReviewCenterReadService::new(
+                "/tmp/launch-workspace",
+                Arc::new(FailingReviewCenterRepository),
+            ),
+        );
+
+        let snapshot = service
+            .load_thread_snapshot("thread-1")
+            .expect("review lookup failure should not block loading the conversation");
+
+        assert!(snapshot.thread_review.is_empty());
+        assert!(
+            snapshot.conversation.runtime_notices.iter().any(
+                |notice| notice.contains("review hydration unavailable: review db unavailable")
+            )
         );
     }
 }

@@ -41,6 +41,10 @@ impl ReviewCenterReadService {
             .load_recent_history(&self.workspace_dir)
     }
 
+    pub fn workspace_dir(&self) -> &str {
+        self.workspace_dir.as_str()
+    }
+
     pub fn load_thread_reviews_for_workspace(
         &self,
         workspace_dir: &str,
