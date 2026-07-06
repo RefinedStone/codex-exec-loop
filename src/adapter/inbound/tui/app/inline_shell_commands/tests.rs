@@ -382,6 +382,21 @@ fn queue_command_hint_is_argument_aware() {
 }
 
 #[test]
+fn reviews_command_hint_is_argument_aware() {
+    let plain = InlineShellCommandInput::parse(":reviews").expect("command should parse");
+    let invalid = InlineShellCommandInput::parse(":reviews later").expect("command should parse");
+
+    assert_eq!(
+        plain.buffered_hint(),
+        "Press Enter to open the review center inspection."
+    );
+    assert_eq!(
+        invalid.buffered_hint(),
+        "`:reviews` does not accept arguments (`later`); press Enter to open the review center inspection."
+    );
+}
+
+#[test]
 fn parallel_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":parallel").expect("command should parse");
     let off = InlineShellCommandInput::parse(":parallel off").expect("command should parse");
@@ -572,6 +587,7 @@ fn execution_status_stays_alias_neutral() {
     let cases = [
         (":diag", Some("opened diagnostics inspection")),
         (":sessions", Some("opened recent sessions inspection")),
+        (":reviews", Some("opened review center inspection")),
         (":queue", Some("opened planning queue inspection")),
         (":doctor", None),
         (":planning", None),

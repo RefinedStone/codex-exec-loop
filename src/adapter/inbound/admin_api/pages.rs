@@ -9,7 +9,7 @@ use super::helpers::{
 use super::views::{
     AkraDashboardTemplate, AkraMetricsTemplate, AppServerPromptLogView, AppServerPromptsTemplate,
     ControlsTemplate, DashboardTemplate, DirectionsTemplate, DraftStatusTemplate,
-    EditorActionPaths, EditorTemplate, TasksTemplate,
+    EditorActionPaths, EditorTemplate, ReviewsTemplate, TasksTemplate,
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
@@ -342,6 +342,35 @@ async fn render_tasks_page(
             task_delete_path: surface.task_delete_path(),
             overview,
             management,
+        },
+    )
+}
+
+pub(super) async fn reviews_page(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    // review center page는 shared projection을 read-only로 노출해 operator가 inbox와 recent history를 한 화면에서 확인하게 한다.
+    let (jar, csrf_token) = ensure_csrf_cookie(jar);
+    let inbox = state
+        .review_center_read_service
+        .load_pending_inbox()
+        .map_err(internal_server_error)?;
+    let history = state
+        .review_center_read_service
+        .load_recent_history()
+        .map_err(internal_server_error)?;
+    render_html(
+        jar,
+        ReviewsTemplate {
+            page_title: "Reviews".to_string(),
+            current_nav: "reviews",
+            workspace_dir: state.facade.workspace_dir().to_string(),
+            csrf_token,
+            notice: query.get("notice").cloned(),
+            inbox,
+            history,
         },
     )
 }

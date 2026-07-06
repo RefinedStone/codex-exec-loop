@@ -17,6 +17,7 @@ pub(crate) enum InlineShellCommand {
     Parallel,
     Peek,
     Sessions,
+    Reviews,
     Queue,
     Directions,
     Turns,
@@ -65,7 +66,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :queue  :directions  :turns <number|infinite>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :reviews  :queue  :directions  :turns <number|infinite>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
@@ -111,6 +112,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         suggestion_detail: "recent sessions",
         buffered_hint: "Press Enter to open the recent-sessions inspection.",
         execution_status: Some("opened recent sessions inspection"),
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Reviews,
+        primary_name: ":reviews",
+        aliases: &[":reviews", ":review"],
+        suggestion_detail: "review center",
+        buffered_hint: "Press Enter to open the review center inspection.",
+        execution_status: Some("opened review center inspection"),
         requires_argument: false,
     },
     InlineShellCommandSpec {
@@ -267,6 +277,7 @@ impl InlineShellCommandInput {
             InlineShellCommand::Queue => {
                 planning_overlay_argument_hint(self.argument(), InlineShellCommand::Queue, "queue")
             }
+            InlineShellCommand::Reviews => reviews_argument_hint(self.argument()),
             InlineShellCommand::Reset => match parse_reset_argument(self.argument()) {
                 Some(parsed) => reset_argument_hint(parsed),
                 None => reset_argument_recovery_hint(self.argument()),
@@ -279,6 +290,7 @@ impl InlineShellCommandInput {
         // status from their controller handlers, not the generic command layer.
         match self.command {
             InlineShellCommand::Queue if self.argument().is_some() => None,
+            InlineShellCommand::Reviews if self.argument().is_some() => None,
             InlineShellCommand::Turns => None,
             InlineShellCommand::Stop => None,
             InlineShellCommand::Model => None,
@@ -409,6 +421,7 @@ impl InlineShellCommand {
             | InlineShellCommand::Parallel
             | InlineShellCommand::Peek
             | InlineShellCommand::Sessions
+            | InlineShellCommand::Reviews
             | InlineShellCommand::Queue
             | InlineShellCommand::Directions
             | InlineShellCommand::Stop
@@ -432,6 +445,7 @@ impl InlineShellCommand {
             InlineShellCommand::Parallel => ":parallel [off]",
             InlineShellCommand::Peek => ":peek",
             InlineShellCommand::Queue => ":queue",
+            InlineShellCommand::Reviews => ":reviews",
             InlineShellCommand::Directions => ":directions",
             InlineShellCommand::Turns => ":turns <number|infinite>",
             InlineShellCommand::Stop => ":stop",
@@ -595,6 +609,18 @@ fn planning_overlay_argument_hint(
             command.command_name().trim_start_matches(':'),
             error.argument(),
             label
+        ),
+    }
+}
+fn reviews_argument_hint(argument: Option<&str>) -> String {
+    match parse_planning_overlay_shell_argument(argument) {
+        Ok(()) => InlineShellCommand::Reviews
+            .spec()
+            .buffered_hint
+            .to_string(),
+        Err(error) => format!(
+            "`:reviews` does not accept arguments (`{}`); press Enter to open the review center inspection.",
+            error.argument()
         ),
     }
 }

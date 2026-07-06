@@ -10,6 +10,9 @@ use super::akra_dashboard::AkraAdminDashboardView;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptOutputRecord,
 };
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem,
+};
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::application::service::planning::{
     PlanningAdminManagementView, PlanningAdminOverview, PlanningAdminSessionView,
@@ -103,6 +106,19 @@ pub(super) struct ControlsTemplate {
     pub(super) overview: PlanningAdminOverview,
     pub(super) agent_profile_config: ParallelAgentProfileConfig,
     pub(super) agent_profile_config_json: String,
+}
+
+// reviews page는 shared review-center projection을 그대로 읽어 inbox/history를 보여주는 read-only operator surface다.
+#[derive(Template)]
+#[template(path = "admin/reviews.html")]
+pub(super) struct ReviewsTemplate {
+    pub(super) page_title: String,
+    pub(super) current_nav: &'static str,
+    pub(super) workspace_dir: String,
+    pub(super) csrf_token: String,
+    pub(super) notice: Option<String>,
+    pub(super) inbox: Vec<ReviewCenterInboxItem>,
+    pub(super) history: Vec<ReviewCenterHistoryEntry>,
 }
 
 #[derive(Debug, Clone)]

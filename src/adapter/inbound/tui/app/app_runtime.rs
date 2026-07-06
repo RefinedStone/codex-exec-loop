@@ -331,6 +331,25 @@ impl NativeTuiApplicationHandle {
     ) -> Result<ConversationSnapshot, String> {
         self.conversations.load_snapshot(thread_id)
     }
+
+    pub(super) fn load_review_center_thread_reviews(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection>, String> {
+        self.conversations.load_review_center_thread_reviews(thread_id)
+    }
+
+    pub(super) fn load_review_center_pending_inbox(
+        &self,
+    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterInboxItem>, String> {
+        self.conversations.load_review_center_pending_inbox()
+    }
+
+    pub(super) fn load_review_center_recent_history(
+        &self,
+    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String> {
+        self.conversations.load_review_center_recent_history()
+    }
 }
 
 #[derive(Clone)]
@@ -358,8 +377,32 @@ impl NativeTuiConversationHandle {
             .load_snapshot(thread_id)
             .map_err(|error| error.to_string())
     }
-}
 
+    pub(super) fn load_review_center_thread_reviews(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection>, String> {
+        self.service
+            .load_review_center_thread_reviews(thread_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn load_review_center_pending_inbox(
+        &self,
+    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterInboxItem>, String> {
+        self.service
+            .load_review_center_pending_inbox()
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn load_review_center_recent_history(
+        &self,
+    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String> {
+        self.service
+            .load_review_center_recent_history()
+            .map_err(|error| error.to_string())
+    }
+}
 #[derive(Clone)]
 pub(super) struct NativeTuiPlanningHandle {
     services: PlanningServices,

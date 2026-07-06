@@ -18,6 +18,7 @@ pub enum ShellOverlay {
     Supersession,
     ParallelPeek,
     Help,
+    Reviews,
     Queue,
     DirectionsMaintenance,
     PlanningInit,
@@ -109,6 +110,7 @@ pub enum ShellChromeEvent {
     SupersessionOverlayShown,
     ParallelPeekOverlayShown,
     HelpOverlayShown,
+    ReviewsOverlayShown,
     QueueOverlayShown,
     DirectionsMaintenanceOverlayShown,
     PlanningInitOverlayShown,
@@ -223,6 +225,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::HelpOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Help;
+        }
+        ShellChromeEvent::ReviewsOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::Reviews;
         }
         ShellChromeEvent::QueueOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;

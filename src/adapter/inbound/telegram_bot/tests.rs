@@ -252,6 +252,36 @@ fn parse_message_maps_parallel_status_to_parallel_control_surface() {
 }
 
 #[test]
+fn parse_message_maps_reviews_to_review_center_command() {
+    for raw in ["/reviews", "/reviews@AkraBot"] {
+        assert_eq!(
+            parse_message(Some(raw)),
+            TelegramParsedMessage::Command(TelegramInboundCommand::Reviews),
+            "Telegram input `{raw}` should map to the shared review center surface"
+        );
+    }
+    assert_eq!(
+        parse_message(Some("/reviews now")),
+        TelegramParsedMessage::Error("사용법: /reviews".to_string())
+    );
+}
+
+#[test]
+fn help_reply_mentions_reviews_command() {
+    let (_gateway, runner) = build_runner(&[42]);
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 1,
+            chat_id: 777,
+            text: Some("/help".to_string()),
+            sender_display_name: Some("operator".to_string()),
+        })
+        .expect("handler should succeed")
+        .expect("reply should exist");
+    assert!(reply.contains("/reviews"));
+}
+
+#[test]
 fn parse_message_ignores_empty_and_plain_chat_text() {
     for raw in [None, Some(""), Some("   "), Some("hello akra")] {
         assert_eq!(parse_message(raw), TelegramParsedMessage::Ignore);

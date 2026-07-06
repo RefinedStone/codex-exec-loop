@@ -82,6 +82,10 @@ impl NativeTuiApp {
         self.refresh_ready_conversation_planning_runtime_projection();
         self.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
     }
+    pub(super) fn show_reviews_overlay(&mut self) {
+        self.dispatch_shell_chrome(ShellChromeEvent::ReviewsOverlayShown);
+    }
+
     pub(super) fn toggle_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayToggled);
     }
@@ -141,6 +145,7 @@ impl NativeTuiApp {
             }
             InlineShellCommand::Peek => self.open_parallel_peek_overlay(command_input.argument()),
             InlineShellCommand::Sessions => self.show_session_overlay(),
+            InlineShellCommand::Reviews => self.show_reviews_overlay(),
             InlineShellCommand::Queue => self.handle_queue_shell_command(command_input.argument()),
             InlineShellCommand::Directions => {
                 self.handle_directions_shell_command(command_input.argument())
@@ -796,6 +801,10 @@ mod tests {
         app.execute_inline_shell_command_input(command(":help"));
         assert_eq!(app.shell_overlay, ShellOverlay::Help);
         assert!(status_text(&app).contains("opened shell command help"));
+        app.execute_inline_shell_command_input(command(":reviews"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Reviews);
+        assert!(status_text(&app).contains("opened review center inspection"));
+
 
         app.execute_inline_shell_command_input(command(":turns 4"));
         assert_eq!(

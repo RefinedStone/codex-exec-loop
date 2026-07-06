@@ -154,6 +154,67 @@ pub(crate) struct QueueOverlayView {
 }
 
 /*
+ * Review center overlay keeps the current thread, inbox, and recent history as
+ * separate read-only panels. Each review row carries one headline plus a few
+ * supporting detail lines so popup and inline renderers can reuse the same
+ * compact projection without reformatting repository payloads.
+ */
+pub(crate) struct ReviewOverlayView {
+    // One-line review headline used for fast scanning.
+    pub(crate) summary_line: Line<'static>,
+    // Optional timestamps, thread ids, or handoff detail shown under the headline.
+    pub(crate) detail_lines: Vec<Line<'static>>,
+}
+
+pub(crate) struct ReviewsOverlayView {
+    // Overlay title and workspace-level framing.
+    pub(crate) header_lines: Vec<Line<'static>>,
+    // Workspace, active thread, and aggregate inbox/history facts.
+    pub(crate) summary_lines: Vec<Line<'static>>,
+    // Stored review rows for the currently active thread.
+    pub(crate) current_thread_reviews: Vec<ReviewOverlayView>,
+    // Pending inbox rows that still need operator attention.
+    pub(crate) inbox_reviews: Vec<ReviewOverlayView>,
+    // Recent history rows that show the last review outcomes/events.
+    pub(crate) history_reviews: Vec<ReviewOverlayView>,
+    // Read-only navigation and close hints.
+    pub(crate) key_lines: Vec<Line<'static>>,
+}
+
+impl ReviewsOverlayView {
+    pub(in crate::adapter::inbound::tui::app) fn current_thread_section_lines(&self) -> Vec<Line<'static>> {
+        flatten_review_lines(
+            &self.current_thread_reviews,
+            "No active thread review context.",
+        )
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn inbox_section_lines(&self) -> Vec<Line<'static>> {
+        flatten_review_lines(&self.inbox_reviews, "No pending inbox items.")
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn history_section_lines(&self) -> Vec<Line<'static>> {
+        flatten_review_lines(&self.history_reviews, "No recent review history.")
+    }
+}
+
+fn flatten_review_lines(entries: &[ReviewOverlayView], empty_message: &str) -> Vec<Line<'static>> {
+    if entries.is_empty() {
+        return vec![Line::from(empty_message.to_string())];
+    }
+
+    let mut lines = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        lines.push(entry.summary_line.clone());
+        lines.extend(entry.detail_lines.iter().cloned());
+        if index + 1 != entries.len() {
+            lines.push(Line::from(""));
+        }
+    }
+    lines
+}
+
+/*
  * Planning init overlay is the shared setup modal shape. Selection, existing
  * workspace review, manual editor entry, and simple review all collapse to this
  * DTO so the renderer can keep one section layout across setup modes.

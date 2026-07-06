@@ -6,8 +6,9 @@ use super::super::shell_presentation::{
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_session_overlay_view,
-    build_startup_overlay_view, build_supersession_overlay_view, build_view_selection_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view, build_reviews_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, build_supersession_overlay_view,
+    build_view_selection_overlay_view,
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
@@ -79,6 +80,7 @@ pub(super) fn draw_inline_shell_inspection(
             draw_inline_parallel_peek_inspection(frame, inspection_area, app)
         }
         ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area),
+        ShellOverlay::Reviews => draw_inline_reviews_inspection(frame, inspection_area, app),
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
         ShellOverlay::DirectionsMaintenance => {
             draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
@@ -86,6 +88,7 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
+
     }
 }
 
@@ -671,6 +674,63 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     );
     render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
     render_inline_titled_panel(frame, layout[2], Line::from("Queue"), content_lines, false);
+    render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+}
+fn draw_inline_reviews_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
+    let overlay_view = build_reviews_overlay_view(app);
+    let current_thread_lines = overlay_view.current_thread_section_lines();
+    let inbox_lines = overlay_view.inbox_section_lines();
+    let history_lines = overlay_view.history_section_lines();
+    let body_lines = take_panel_body_lines(overlay_view.header_lines);
+    let summary_lines = overlay_view.summary_lines;
+    let key_lines = overlay_view.key_lines;
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inline_section_height(&body_lines, 4)),
+            Constraint::Length(inline_section_height(&summary_lines, 5)),
+            Constraint::Min(8),
+            Constraint::Length(inline_section_height(&key_lines, 3)),
+        ])
+        .split(area);
+
+    render_inline_titled_panel(
+        frame,
+        layout[0],
+        inline_overlay_title("Review Center"),
+        body_lines,
+        true,
+    );
+    render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .split(layout[2]);
+    render_inline_titled_panel(
+        frame,
+        content_layout[0],
+        Line::from("Active Thread"),
+        current_thread_lines,
+        false,
+    );
+    render_inline_titled_panel(
+        frame,
+        content_layout[1],
+        Line::from("Inbox"),
+        inbox_lines,
+        false,
+    );
+    render_inline_titled_panel(
+        frame,
+        content_layout[2],
+        Line::from("Recent History"),
+        history_lines,
+        false,
+    );
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {

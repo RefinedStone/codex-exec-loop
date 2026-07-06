@@ -8,13 +8,15 @@ use std::sync::mpsc::Sender;
 
 // `anyhow::Result`는 application service가 adapter 오류를 상위 TUI 흐름에 전달하는 공통 결과 타입이다.
 // 여기서는 오류 종류를 새 도메인 enum으로 재포장하지 않고, runtime port의 실패 맥락을 그대로 보존한다.
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 // `InteractiveTurnRuntimePort`는 application 계층이 outbound runtime에 기대하는 최소 계약이다.
 // 실제 구현은 Codex app-server adapter이지만, TUI와 service는 trait object만 보므로 테스트 fake나 다른 runtime으로
 // 교체해도 호출 코드는 바뀌지 않는다.
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
-use crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection;
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
+};
 // conversation runtime event는 이전 계층에서 정리한 스트림 계약이다.
 // service는 이 이벤트 타입을 알고 있지만 이벤트 payload를 직접 만들거나 줄이지 않는다.
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
@@ -104,6 +106,30 @@ impl ConversationService {
             conversation,
             thread_review,
         })
+    }
+
+    pub fn load_review_center_thread_reviews(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<ReviewCenterThreadProjection>> {
+        self.review_center_read_service
+            .as_ref()
+            .context("review-center read service is required for review overlay")?
+            .load_thread_reviews(thread_id)
+    }
+
+    pub fn load_review_center_pending_inbox(&self) -> Result<Vec<ReviewCenterInboxItem>> {
+        self.review_center_read_service
+            .as_ref()
+            .context("review-center read service is required for review overlay")?
+            .load_pending_inbox()
+    }
+
+    pub fn load_review_center_recent_history(&self) -> Result<Vec<ReviewCenterHistoryEntry>> {
+        self.review_center_read_service
+            .as_ref()
+            .context("review-center read service is required for review overlay")?
+            .load_recent_history()
     }
 
     // runtime control truth는 "중단 버튼, 전체 세션 정지, 실행 상태 판단을 어느 runtime이

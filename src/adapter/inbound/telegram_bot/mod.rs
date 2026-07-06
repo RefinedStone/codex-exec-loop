@@ -14,6 +14,7 @@ use crate::application::service::parallel_mode::control_plane::ParallelModeContr
 use crate::application::service::planning::{
     PlanningControlCommand, PlanningControlRequest, PlanningControlService,
 };
+use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
 
 /*
@@ -67,7 +68,8 @@ where
         args.poll_timeout_seconds,
         args.drop_pending_updates,
         DEFAULT_FAILURE_BACKOFF,
-    );
+    )
+    .with_review_center_read_service(application.review_center_read_service);
     println!("telegram bot control listening for local workspace {workspace_dir}");
     runner.run()
 }
@@ -75,6 +77,7 @@ where
 struct TelegramApplication {
     control_service: PlanningControlService,
     parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
+    review_center_read_service: ReviewCenterReadService,
 }
 
 fn build_telegram_application(workspace_dir: String) -> TelegramApplication {
@@ -90,6 +93,7 @@ fn build_telegram_application(workspace_dir: String) -> TelegramApplication {
             workspace_dir,
             control_plane: application.parallel_mode_control_plane,
         }),
+        review_center_read_service: application.review_center_read_service,
     }
 }
 
@@ -148,6 +152,7 @@ struct TelegramBotRunner {
     // Application boundary shared with non-Telegram control surfaces.
     control_service: PlanningControlService,
     parallel_control_surface: Arc<dyn TelegramParallelControlSurface>,
+    review_center_read_service: Option<ReviewCenterReadService>,
     policy: TelegramBotPolicy,
     // Long polling timeout is configurable because Telegram HTTP infrastructure decides practical latency.
     poll_timeout_seconds: u16,
@@ -170,11 +175,20 @@ impl TelegramBotRunner {
             gateway,
             control_service,
             parallel_control_surface,
+            review_center_read_service: None,
             policy,
             poll_timeout_seconds,
             drop_pending_updates,
             failure_backoff,
         }
+    }
+
+    fn with_review_center_read_service(
+        mut self,
+        review_center_read_service: ReviewCenterReadService,
+    ) -> Self {
+        self.review_center_read_service = Some(review_center_read_service);
+        self
     }
 
     fn run(&self) -> Result<()> {
@@ -297,6 +311,12 @@ impl TelegramBotRunner {
                     self.parallel_control_surface.render_parallel_status()?,
                 ))
             }
+            TelegramParsedMessage::Command(TelegramInboundCommand::Reviews) => {
+                if !self.policy.is_allowed(message.chat_id) {
+                    return Ok(Some(self.render_unauthorized(message.chat_id)));
+                }
+                Ok(Some(self.render_reviews_summary()?))
+            }
             TelegramParsedMessage::Command(TelegramInboundCommand::Planning(command)) => {
                 // Help is safe without allowlist because it only describes commands and includes `/whoami`.
                 if matches!(command, PlanningControlCommand::Help) {
@@ -348,7 +368,56 @@ impl TelegramBotRunner {
 
     fn render_help(&self) -> String {
         // `/whoami` lives in this adapter, so append it to the shared planning control help text.
-        format!("{}\n/parallel\n/whoami", self.control_service.help_text())
+        format!("{}\n/parallel\n/reviews\n/whoami", self.control_service.help_text())
+    }
+
+    fn render_reviews_summary(&self) -> Result<String> {
+        let review_center_read_service = self
+            .review_center_read_service
+            .as_ref()
+            .context("telegram review center read service is not configured")?;
+        let inbox = review_center_read_service.load_pending_inbox()?;
+        let history = review_center_read_service.load_recent_history()?;
+
+        let mut lines = vec![
+            "리뷰 센터".to_string(),
+            format!("inbox: {}", inbox.len()),
+        ];
+
+        if inbox.is_empty() {
+            lines.push("- empty".to_string());
+        } else {
+            lines.extend(inbox.iter().take(5).map(|item| {
+                let handoff = item
+                    .handoff_target
+                    .as_deref()
+                    .map(|target| format!(" → {target}"))
+                    .unwrap_or_default();
+                format!(
+                    "- {} [{}] {}{}",
+                    item.thread_id,
+                    item.inbox_state,
+                    compact_review_text(&item.summary, 72),
+                    handoff,
+                )
+            }));
+        }
+
+        lines.push(format!("history: {}", history.len()));
+        if history.is_empty() {
+            lines.push("- empty".to_string());
+        } else {
+            lines.extend(history.iter().take(5).map(|entry| {
+                format!(
+                    "- {} [{}] {}",
+                    entry.thread_id,
+                    entry.event_kind,
+                    compact_review_text(&entry.summary, 72),
+                )
+            }));
+        }
+
+        Ok(lines.join("\n"))
     }
 
     fn render_command_failure(
@@ -369,6 +438,14 @@ impl TelegramBotRunner {
             thread::sleep(self.failure_backoff);
         }
     }
+}
+
+fn compact_review_text(text: &str, limit: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= limit {
+        return normalized;
+    }
+    normalized.chars().take(limit.saturating_sub(1)).collect::<String>() + "…"
 }
 
 #[cfg(test)]

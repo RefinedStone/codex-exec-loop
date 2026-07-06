@@ -853,6 +853,7 @@ async fn admin_html_page_routes_render_live_templates() {
         ("/admin?notice=hello", "hello"),
         ("/admin/directions", "Directions"),
         ("/admin/tasks", "Task catalog view"),
+        ("/admin/reviews", "Shared review-center inbox"),
         ("/admin/controls", "Controls"),
         ("/admin/app-server-prompts", "App-server prompt I/O"),
         ("/admin/akra", "data-admin-graphic"),
@@ -906,6 +907,10 @@ async fn admin_html_page_routes_render_live_templates() {
             assert!(body.contains(r#"<body class="akra-graphic">"#));
             assert!(body.contains(r#"<a href="/admin/akra/tasks" class="active"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
             assert!(!body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
+        }
+        if uri == "/admin/reviews" {
+            assert!(body.contains(r#"<a href="/admin/reviews" class="active">Reviews</a>"#));
+            assert!(!body.contains(r#"<body class="akra-graphic">"#));
         }
     }
 }

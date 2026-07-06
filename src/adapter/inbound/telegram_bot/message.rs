@@ -24,6 +24,11 @@ pub(super) enum TelegramInboundCommand {
     WhoAmI,
     ParallelStatus,
     /*
+     * `/reviews`는 review center projection을 읽어 inbox/history 요약만 렌더링한다.
+     * 승인/거절 같은 mutation은 아직 열지 않고, runner가 read service를 직접 호출한다.
+     */
+    Reviews,
+    /*
      * 나머지 운영 명령은 application service의 planning control 언어로 넘긴다.
      * adapter가 service 내부 모델을 다시 만들지 않도록 여기서 바로 감싼다.
      */
@@ -116,6 +121,13 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
             "/queue",
         ),
         /*
+         * `/reviews`는 review center inbox/history 조회 전용 entrypoint다.
+         * 현재 Telegram에서는 slash command만 공식 surface로 열어 일반 대화 오인식을 피한다.
+         */
+        "/reviews" => {
+            parse_command_without_arguments(&arguments, TelegramInboundCommand::Reviews, "/reviews")
+        }
+        /*
          * `/plan`은 planning command namespace의 확장 지점이다. 지금은 status만 열어
          * 두지만, 하위 명령이 늘어나면 parse_plan_arguments에만 분기를 추가하면 된다.
          */
@@ -156,7 +168,7 @@ pub(super) fn parse_message(text: Option<&str>) -> TelegramParsedMessage {
          * 막아 파서가 여전히 순수한 문자열 해석 경계로 남는다.
          */
         token if token.starts_with('/') => TelegramParsedMessage::Error(format!(
-            "지원하지 않는 명령어입니다: {token}\n{}",
+            "지원하지 않는 명령어입니다: {token}\n{}\n/parallel\n/reviews\n/whoami",
             PlanningControlService::new(Arc::new(NoopPlanningControlSurface)).help_text()
         )),
         /*

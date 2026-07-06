@@ -1,0 +1,92 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="metric-row">
+  <div class="metric"><span>pending inbox</span><strong>{{ inbox.len() }}</strong></div>
+  <div class="metric"><span>recent history</span><strong>{{ history.len() }}</strong></div>
+</section>
+
+<section class="grid">
+  <article class="card span-7">
+    <div class="list-header">
+      <div>
+        <h2>Inbox</h2>
+        <p>Shared review-center inbox for operator follow-up. This surface is read-only.</p>
+      </div>
+    </div>
+    {% if inbox.is_empty() %}
+    <p>No pending review inbox items are projected for this workspace.</p>
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Review</th>
+          <th>State</th>
+          <th>Requested</th>
+          <th>Last activity</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in inbox %}
+        <tr>
+          <td data-label="Review">
+            <strong>{{ item.summary }}</strong><br>
+            <small class="mono">{{ item.review_id }}</small><br>
+            <small class="mono">thread {{ item.thread_id }}</small>
+            {% if let Some(target) = item.handoff_target %}
+            <br><small>handoff → {{ target }}</small>
+            {% endif %}
+          </td>
+          <td data-label="State"><span class="status-pill {{ item.inbox_state }}">{{ item.inbox_state }}</span></td>
+          <td data-label="Requested" class="mono">{{ item.requested_at }}</td>
+          <td data-label="Last activity" class="mono">{{ item.last_activity_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </article>
+
+  <article class="card span-5">
+    <h2>Operator guidance</h2>
+    <p>Use this page to confirm what needs attention before opening the matching thread or downstream surface.</p>
+    <ul>
+      <li>Inbox shows the current pending review queue.</li>
+      <li>History shows the most recent review-center events already recorded.</li>
+      <li>No approve or deny actions are exposed here yet.</li>
+    </ul>
+  </article>
+</section>
+
+<section class="card">
+  <div class="list-header">
+    <div>
+      <h2>Recent history</h2>
+      <p>Latest recorded review-center activity from the shared repository projection.</p>
+    </div>
+  </div>
+  {% if history.is_empty() %}
+  <p>No review-center history entries are available yet.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Event</th>
+        <th>Summary</th>
+        <th>Review</th>
+        <th>Recorded</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in history %}
+      <tr>
+        <td data-label="Event"><span class="status-pill">{{ entry.event_kind }}</span></td>
+        <td data-label="Summary">{{ entry.summary }}</td>
+        <td data-label="Review"><span class="mono">{{ entry.review_id }}</span><br><small class="mono">thread {{ entry.thread_id }}</small></td>
+        <td data-label="Recorded" class="mono">{{ entry.recorded_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}
