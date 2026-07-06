@@ -17,6 +17,7 @@ use crate::application::port::outbound::planning_authority_port::PlanningAuthori
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
 use crate::application::port::outbound::telegram_bot_port::TelegramBotPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
@@ -27,6 +28,7 @@ use crate::application::service::planning::{
     PlanningAdminFacadeService, PlanningControlFacadeService, PlanningControlService,
     PlanningServices,
 };
+use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::github_review::GithubPullRequestTarget;
@@ -37,11 +39,15 @@ pub(crate) struct ProductionAdminApplication {
     pub(crate) facade: Arc<PlanningAdminFacadeService>,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
     pub(crate) app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    #[allow(dead_code)]
+    pub(crate) review_center_read_service: ReviewCenterReadService,
 }
 
 pub(crate) struct ProductionTelegramApplication {
     pub(crate) control_service: PlanningControlService,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    #[allow(dead_code)]
+    pub(crate) review_center_read_service: ReviewCenterReadService,
 }
 
 pub(crate) struct ProductionNativeTuiApplicationServices {
@@ -49,16 +55,21 @@ pub(crate) struct ProductionNativeTuiApplicationServices {
     pub(crate) session_service: SessionService,
     pub(crate) conversation_service: ConversationService,
     pub(crate) parallel_mode_control_plane: ParallelModeControlPlaneComposition,
+    #[allow(dead_code)]
+    pub(crate) review_center_read_service: ReviewCenterReadService,
 }
 
 struct ProductionSharedPorts {
     app_server_adapter: Arc<CodexAppServerAdapter>,
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    #[allow(dead_code)]
+    review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort>,
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    review_center_read_service: ReviewCenterReadService,
 }
 
 pub(crate) fn build_planning_services() -> PlanningServices {
@@ -87,6 +98,7 @@ pub(crate) fn build_parallel_mode_control_plane_composition() -> ParallelModeCon
 pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminApplication {
     let ports = build_shared_ports();
     let planning = planning_services_from_ports(&ports);
+    let review_center_read_service = ports.review_center_read_service.clone();
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_parts(
         planning.clone(),
         ports.planning_authority_port.clone(),
@@ -103,12 +115,14 @@ pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminA
         facade,
         parallel_mode_control_plane,
         app_server_prompt_log_port: ports.app_server_prompt_log_port,
+        review_center_read_service,
     }
 }
 
 pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTelegramApplication {
     let ports = build_shared_ports();
     let planning = planning_services_from_ports(&ports);
+    let review_center_read_service = ports.review_center_read_service.clone();
     let control_service = PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
         workspace_dir,
         planning.clone(),
@@ -121,6 +135,7 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
     ProductionTelegramApplication {
         control_service,
         parallel_mode_control_plane,
+        review_center_read_service,
     }
 }
 
@@ -133,6 +148,7 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
     let startup_service = StartupService::new(ports.app_server_adapter.clone());
     let session_service = SessionService::new(ports.app_server_adapter.clone());
     let conversation_service = ConversationService::new(ports.app_server_adapter.clone());
+    let review_center_read_service = ports.review_center_read_service.clone();
     let planning = planning_services_from_ports(&ports);
     let parallel_mode_control_plane = parallel_mode_control_plane_from_parts(
         planning,
@@ -143,6 +159,7 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
         startup_service,
         session_service,
         conversation_service,
+        review_center_read_service,
         parallel_mode_control_plane,
     }
 }
@@ -180,6 +197,10 @@ fn build_shared_ports() -> ProductionSharedPorts {
     let app_server_adapter = app_server_adapter(app_server_prompt_log_port.clone());
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
+    let review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort> =
+        planning_authority_adapter.clone();
+    let review_center_read_service =
+        ReviewCenterReadService::new(review_center_repository_port.clone());
     let planning_workspace_port: Arc<dyn PlanningWorkspacePort> =
         Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
             planning_authority_adapter.clone(),
@@ -192,10 +213,12 @@ fn build_shared_ports() -> ProductionSharedPorts {
         app_server_adapter,
         planning_authority_port,
         planning_task_repository_port,
+        review_center_repository_port,
         planning_workspace_port,
         planning_worker_port,
         parallel_agent_worker_port,
         app_server_prompt_log_port,
+        review_center_read_service,
     }
 }
 

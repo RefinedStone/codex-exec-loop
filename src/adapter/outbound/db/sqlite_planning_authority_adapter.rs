@@ -11,6 +11,7 @@ metadata/revision 갱신"이라는 adapter orchestration 역할을 한다.
 작업으로 번역한다.
 */
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,6 +33,10 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
+use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
+use crate::application::service::review_center::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModePoolResetReport, ParallelModeRuntimeEventsSnapshot, ParallelModeSlotLeaseSnapshot,
@@ -65,7 +70,7 @@ use crate::domain::planning::{
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 5;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 6;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 // official refresh claim은 repo 전체에 하나만 있어야 하므로 고정 scope key를 사용한다.
@@ -96,6 +101,94 @@ impl SqlitePlanningAuthorityAdapter {
     */
     pub fn new() -> Self {
         Self
+    }
+
+    fn resolve_current_process_authority_location() -> Result<PlanningAuthorityLocation> {
+        let workspace_dir =
+            env::current_dir().context("failed to resolve current workspace directory")?;
+        Self::resolve_authority_location_from_workspace(workspace_dir.to_string_lossy().as_ref())
+    }
+
+    pub(crate) fn load_review_center_thread_reviews_snapshot(
+        thread_id: &str,
+    ) -> Result<Vec<ReviewCenterThreadProjection>> {
+        let location = Self::resolve_current_process_authority_location()?;
+        let connection = open_authority_connection(&location)?;
+        load_review_center_thread_reviews_rows(&connection, thread_id)
+    }
+
+    pub(crate) fn load_review_center_pending_inbox_snapshot() -> Result<Vec<ReviewCenterInboxItem>>
+    {
+        let location = Self::resolve_current_process_authority_location()?;
+        let connection = open_authority_connection(&location)?;
+        load_review_center_pending_inbox_rows(&connection)
+    }
+
+    pub(crate) fn load_review_center_recent_history_snapshot()
+    -> Result<Vec<ReviewCenterHistoryEntry>> {
+        let location = Self::resolve_current_process_authority_location()?;
+        let connection = open_authority_connection(&location)?;
+        load_review_center_recent_history_rows(&connection)
+    }
+
+    pub(crate) fn upsert_review_center_thread_review(
+        review: &ReviewCenterThreadProjection,
+    ) -> Result<()> {
+        let location = Self::resolve_current_process_authority_location()?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open review center thread review transaction")?;
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_review_center_thread_review_updated_at",
+        )?;
+        upsert_review_center_thread_review_row(&transaction, review)?;
+        transaction
+            .commit()
+            .context("failed to commit review center thread review transaction")?;
+        Ok(())
+    }
+
+    pub(crate) fn replace_review_center_pending_inbox(
+        inbox: &[ReviewCenterInboxItem],
+    ) -> Result<()> {
+        let location = Self::resolve_current_process_authority_location()?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open review center inbox transaction")?;
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_review_center_inbox_updated_at",
+        )?;
+        replace_review_center_pending_inbox_rows(&transaction, inbox)?;
+        transaction
+            .commit()
+            .context("failed to commit review center inbox transaction")?;
+        Ok(())
+    }
+
+    pub(crate) fn append_review_center_history_entry(
+        entry: &ReviewCenterHistoryEntry,
+    ) -> Result<()> {
+        let location = Self::resolve_current_process_authority_location()?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open review center history transaction")?;
+        upsert_authority_metadata(
+            &transaction,
+            &location,
+            "last_review_center_history_appended_at",
+        )?;
+        append_review_center_history_row(&transaction, entry)?;
+        transaction
+            .commit()
+            .context("failed to commit review center history transaction")?;
+        Ok(())
     }
 
     /*
@@ -1032,6 +1125,38 @@ impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
     }
 }
 
+/*
+application의 `ReviewCenterRepositoryPort`를 같은 SQLite authority DB 구현에 연결한다.
+
+review center는 planning authority와 별도 논리 port이지만, 같은 repo-scoped SQLite 파일에 thread review,
+inbox, history projection을 저장한다. 이 impl은 review center read/write 계약을 현재 process의 canonical
+repository authority DB로 연결해 TUI/admin/telegram이 같은 projection을 보게 한다.
+*/
+impl ReviewCenterRepositoryPort for SqlitePlanningAuthorityAdapter {
+    fn load_thread_reviews(&self, thread_id: &str) -> Result<Vec<ReviewCenterThreadProjection>> {
+        Self::load_review_center_thread_reviews_snapshot(thread_id)
+    }
+
+    fn load_pending_inbox(&self) -> Result<Vec<ReviewCenterInboxItem>> {
+        Self::load_review_center_pending_inbox_snapshot()
+    }
+
+    fn load_recent_history(&self) -> Result<Vec<ReviewCenterHistoryEntry>> {
+        Self::load_review_center_recent_history_snapshot()
+    }
+
+    fn upsert_thread_review(&self, review: &ReviewCenterThreadProjection) -> Result<()> {
+        Self::upsert_review_center_thread_review(review)
+    }
+
+    fn replace_pending_inbox(&self, inbox: &[ReviewCenterInboxItem]) -> Result<()> {
+        Self::replace_review_center_pending_inbox(inbox)
+    }
+
+    fn append_history_entry(&self, entry: &ReviewCenterHistoryEntry) -> Result<()> {
+        Self::append_review_center_history_entry(entry)
+    }
+}
 /*
 authority DB connection을 열고, 모든 caller가 의존하는 기본 DB 상태를 보장한다.
 

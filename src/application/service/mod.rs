@@ -7,6 +7,8 @@ pub mod conversation_runtime_event;
 pub mod conversation_service;
 // github_review_poller_service는 GitHub review thread 상태를 polling 유스케이스로 묶는다.
 pub mod github_review_poller_service;
+// review_center는 approval/review inbox와 thread/history 조회를 application read facade로 묶는다.
+pub mod review_center;
 // manual_prompt_preparation은 TUI가 직접 bootstrap/intake를 조립하지 않게 하는 application preflight다.
 pub mod manual_prompt_preparation;
 // parallel_agent_profile은 병렬 agent의 이름, 역할, avatar, persona prompt 설정을 관리한다.

@@ -8,6 +8,8 @@ pub mod app_server_prompt_log_port;
 pub mod github_automation_port;
 // GitHub review poller port는 review thread 조회와 상태 수집 계약을 정의한다.
 pub mod github_review_poller_port;
+// review center repository port는 approval/review inbox와 history truth를 읽고 쓰는 저장소 경계다.
+pub mod review_center_repository_port;
 // interactive turn runtime port는 app-server와 대화 turn을 실행하는 능력을 분리한다.
 pub mod interactive_turn_runtime_port;
 // parallel agent worker port는 병렬 lane에서 실제 agent 작업을 시작하는 경계다.

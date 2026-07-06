@@ -22,6 +22,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::review_center::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
+};
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningAuthorityLocation,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskAuthorityDocument,
@@ -138,6 +141,45 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 PRIMARY KEY (bucket, rank, task_id),
                 FOREIGN KEY (task_id) REFERENCES planning_tasks(task_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS review_center_thread_reviews (
+                thread_id TEXT NOT NULL,
+                review_id TEXT NOT NULL,
+                review_label TEXT NOT NULL,
+                review_state TEXT NOT NULL,
+                review_summary TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                handoff_target TEXT,
+                handoff_note TEXT,
+                PRIMARY KEY (thread_id, review_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS review_center_inbox (
+                review_id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                inbox_state TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                handoff_target TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS review_center_history (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                review_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                event_kind TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_review_center_thread_reviews_thread_updated
+                ON review_center_thread_reviews(thread_id, updated_at DESC, review_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_review_center_inbox_requested
+                ON review_center_inbox(requested_at DESC, review_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_review_center_history_recorded
+                ON review_center_history(recorded_at DESC, sequence DESC);
 
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_status_priority_updated
                 ON planning_tasks(status, combined_priority, updated_at);
@@ -950,4 +992,175 @@ pub(super) fn prune_task_authority_to_direction_ids(
             .retain(|task_id| !removed_task_ids.contains(task_id.trim()));
     }
     true
+}
+
+pub(super) fn load_review_center_thread_reviews_rows(
+    connection: &Connection,
+    thread_id: &str,
+) -> Result<Vec<ReviewCenterThreadProjection>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT thread_id, review_id, review_label, review_state, review_summary,
+                    requested_at, updated_at, handoff_target, handoff_note
+             FROM review_center_thread_reviews
+             WHERE thread_id = ?1
+             ORDER BY requested_at ASC, updated_at ASC, review_id ASC",
+        )
+        .context("failed to prepare review center thread review query")?;
+    let rows = statement
+        .query_map(params![thread_id], |row| {
+            Ok(ReviewCenterThreadProjection {
+                thread_id: row.get(0)?,
+                review_id: row.get(1)?,
+                review_label: row.get(2)?,
+                review_state: row.get(3)?,
+                review_summary: row.get(4)?,
+                requested_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                handoff_target: row.get(7)?,
+                handoff_note: row.get(8)?,
+            })
+        })
+        .context("failed to iterate review center thread review rows")?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to decode review center thread review rows")
+}
+
+pub(super) fn load_review_center_pending_inbox_rows(
+    connection: &Connection,
+) -> Result<Vec<ReviewCenterInboxItem>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT review_id, thread_id, inbox_state, summary, requested_at,
+                    last_activity_at, handoff_target
+             FROM review_center_inbox
+             ORDER BY requested_at DESC, review_id ASC",
+        )
+        .context("failed to prepare review center inbox query")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ReviewCenterInboxItem {
+                review_id: row.get(0)?,
+                thread_id: row.get(1)?,
+                inbox_state: row.get(2)?,
+                summary: row.get(3)?,
+                requested_at: row.get(4)?,
+                last_activity_at: row.get(5)?,
+                handoff_target: row.get(6)?,
+            })
+        })
+        .context("failed to iterate review center inbox rows")?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to decode review center inbox rows")
+}
+
+pub(super) fn load_review_center_recent_history_rows(
+    connection: &Connection,
+) -> Result<Vec<ReviewCenterHistoryEntry>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT review_id, thread_id, event_kind, summary, recorded_at
+             FROM review_center_history
+             ORDER BY recorded_at DESC, sequence DESC",
+        )
+        .context("failed to prepare review center history query")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ReviewCenterHistoryEntry {
+                review_id: row.get(0)?,
+                thread_id: row.get(1)?,
+                event_kind: row.get(2)?,
+                summary: row.get(3)?,
+                recorded_at: row.get(4)?,
+            })
+        })
+        .context("failed to iterate review center history rows")?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to decode review center history rows")
+}
+
+pub(super) fn upsert_review_center_thread_review_row(
+    transaction: &rusqlite::Transaction<'_>,
+    review: &ReviewCenterThreadProjection,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO review_center_thread_reviews (
+                thread_id, review_id, review_label, review_state, review_summary,
+                requested_at, updated_at, handoff_target, handoff_note
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(thread_id, review_id) DO UPDATE SET
+                review_label = excluded.review_label,
+                review_state = excluded.review_state,
+                review_summary = excluded.review_summary,
+                requested_at = excluded.requested_at,
+                updated_at = excluded.updated_at,
+                handoff_target = excluded.handoff_target,
+                handoff_note = excluded.handoff_note",
+            params![
+                review.thread_id,
+                review.review_id,
+                review.review_label,
+                review.review_state,
+                review.review_summary,
+                review.requested_at,
+                review.updated_at,
+                review.handoff_target,
+                review.handoff_note,
+            ],
+        )
+        .context("failed to upsert review center thread review row")?;
+    Ok(())
+}
+
+pub(super) fn replace_review_center_pending_inbox_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    inbox: &[ReviewCenterInboxItem],
+) -> Result<()> {
+    transaction
+        .execute("DELETE FROM review_center_inbox", [])
+        .context("failed to clear review center inbox rows")?;
+    let mut statement = transaction
+        .prepare(
+            "INSERT INTO review_center_inbox (
+                review_id, thread_id, inbox_state, summary,
+                requested_at, last_activity_at, handoff_target
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .context("failed to prepare review center inbox insert")?;
+    for item in inbox {
+        statement
+            .execute(params![
+                item.review_id,
+                item.thread_id,
+                item.inbox_state,
+                item.summary,
+                item.requested_at,
+                item.last_activity_at,
+                item.handoff_target,
+            ])
+            .context("failed to insert review center inbox row")?;
+    }
+    Ok(())
+}
+
+pub(super) fn append_review_center_history_row(
+    transaction: &rusqlite::Transaction<'_>,
+    entry: &ReviewCenterHistoryEntry,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO review_center_history (
+                review_id, thread_id, event_kind, summary, recorded_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                entry.review_id,
+                entry.thread_id,
+                entry.event_kind,
+                entry.summary,
+                entry.recorded_at,
+            ],
+        )
+        .context("failed to append review center history row")?;
+    Ok(())
 }
