@@ -11,7 +11,6 @@ metadata/revision 갱신"이라는 adapter orchestration 역할을 한다.
 작업으로 번역한다.
 */
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -103,38 +102,36 @@ impl SqlitePlanningAuthorityAdapter {
         Self
     }
 
-    fn resolve_current_process_authority_location() -> Result<PlanningAuthorityLocation> {
-        let workspace_dir =
-            env::current_dir().context("failed to resolve current workspace directory")?;
-        Self::resolve_authority_location_from_workspace(workspace_dir.to_string_lossy().as_ref())
-    }
-
     pub(crate) fn load_review_center_thread_reviews_snapshot(
+        workspace_dir: &str,
         thread_id: &str,
     ) -> Result<Vec<ReviewCenterThreadProjection>> {
-        let location = Self::resolve_current_process_authority_location()?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         load_review_center_thread_reviews_rows(&connection, thread_id)
     }
 
-    pub(crate) fn load_review_center_pending_inbox_snapshot() -> Result<Vec<ReviewCenterInboxItem>>
-    {
-        let location = Self::resolve_current_process_authority_location()?;
+    pub(crate) fn load_review_center_pending_inbox_snapshot(
+        workspace_dir: &str,
+    ) -> Result<Vec<ReviewCenterInboxItem>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         load_review_center_pending_inbox_rows(&connection)
     }
 
-    pub(crate) fn load_review_center_recent_history_snapshot()
-    -> Result<Vec<ReviewCenterHistoryEntry>> {
-        let location = Self::resolve_current_process_authority_location()?;
+    pub(crate) fn load_review_center_recent_history_snapshot(
+        workspace_dir: &str,
+    ) -> Result<Vec<ReviewCenterHistoryEntry>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         load_review_center_recent_history_rows(&connection)
     }
 
     pub(crate) fn upsert_review_center_thread_review(
+        workspace_dir: &str,
         review: &ReviewCenterThreadProjection,
     ) -> Result<()> {
-        let location = Self::resolve_current_process_authority_location()?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
             .transaction()
@@ -152,9 +149,10 @@ impl SqlitePlanningAuthorityAdapter {
     }
 
     pub(crate) fn replace_review_center_pending_inbox(
+        workspace_dir: &str,
         inbox: &[ReviewCenterInboxItem],
     ) -> Result<()> {
-        let location = Self::resolve_current_process_authority_location()?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
             .transaction()
@@ -172,9 +170,10 @@ impl SqlitePlanningAuthorityAdapter {
     }
 
     pub(crate) fn append_review_center_history_entry(
+        workspace_dir: &str,
         entry: &ReviewCenterHistoryEntry,
     ) -> Result<()> {
-        let location = Self::resolve_current_process_authority_location()?;
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         let transaction = connection
             .transaction()
@@ -1133,28 +1132,44 @@ inbox, history projection을 저장한다. 이 impl은 review center read/write 
 repository authority DB로 연결해 TUI/admin/telegram이 같은 projection을 보게 한다.
 */
 impl ReviewCenterRepositoryPort for SqlitePlanningAuthorityAdapter {
-    fn load_thread_reviews(&self, thread_id: &str) -> Result<Vec<ReviewCenterThreadProjection>> {
-        Self::load_review_center_thread_reviews_snapshot(thread_id)
+    fn load_thread_reviews(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> Result<Vec<ReviewCenterThreadProjection>> {
+        Self::load_review_center_thread_reviews_snapshot(workspace_dir, thread_id)
     }
 
-    fn load_pending_inbox(&self) -> Result<Vec<ReviewCenterInboxItem>> {
-        Self::load_review_center_pending_inbox_snapshot()
+    fn load_pending_inbox(&self, workspace_dir: &str) -> Result<Vec<ReviewCenterInboxItem>> {
+        Self::load_review_center_pending_inbox_snapshot(workspace_dir)
     }
 
-    fn load_recent_history(&self) -> Result<Vec<ReviewCenterHistoryEntry>> {
-        Self::load_review_center_recent_history_snapshot()
+    fn load_recent_history(&self, workspace_dir: &str) -> Result<Vec<ReviewCenterHistoryEntry>> {
+        Self::load_review_center_recent_history_snapshot(workspace_dir)
     }
 
-    fn upsert_thread_review(&self, review: &ReviewCenterThreadProjection) -> Result<()> {
-        Self::upsert_review_center_thread_review(review)
+    fn upsert_thread_review(
+        &self,
+        workspace_dir: &str,
+        review: &ReviewCenterThreadProjection,
+    ) -> Result<()> {
+        Self::upsert_review_center_thread_review(workspace_dir, review)
     }
 
-    fn replace_pending_inbox(&self, inbox: &[ReviewCenterInboxItem]) -> Result<()> {
-        Self::replace_review_center_pending_inbox(inbox)
+    fn replace_pending_inbox(
+        &self,
+        workspace_dir: &str,
+        inbox: &[ReviewCenterInboxItem],
+    ) -> Result<()> {
+        Self::replace_review_center_pending_inbox(workspace_dir, inbox)
     }
 
-    fn append_history_entry(&self, entry: &ReviewCenterHistoryEntry) -> Result<()> {
-        Self::append_review_center_history_entry(entry)
+    fn append_history_entry(
+        &self,
+        workspace_dir: &str,
+        entry: &ReviewCenterHistoryEntry,
+    ) -> Result<()> {
+        Self::append_review_center_history_entry(workspace_dir, entry)
     }
 }
 /*

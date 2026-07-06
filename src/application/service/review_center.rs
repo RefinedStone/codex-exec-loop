@@ -103,12 +103,17 @@ impl ReviewCenterHistoryEntry {
 
 #[derive(Clone)]
 pub struct ReviewCenterReadService {
+    workspace_dir: String,
     review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
 }
 
 impl ReviewCenterReadService {
-    pub fn new(review_center_repository: Arc<dyn ReviewCenterRepositoryPort>) -> Self {
+    pub fn new(
+        workspace_dir: impl Into<String>,
+        review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
+    ) -> Self {
         Self {
+            workspace_dir: workspace_dir.into(),
             review_center_repository,
         }
     }
@@ -117,14 +122,17 @@ impl ReviewCenterReadService {
         &self,
         thread_id: &str,
     ) -> Result<Vec<ReviewCenterThreadProjection>> {
-        self.review_center_repository.load_thread_reviews(thread_id)
+        self.review_center_repository
+            .load_thread_reviews(&self.workspace_dir, thread_id)
     }
 
     pub fn load_pending_inbox(&self) -> Result<Vec<ReviewCenterInboxItem>> {
-        self.review_center_repository.load_pending_inbox()
+        self.review_center_repository
+            .load_pending_inbox(&self.workspace_dir)
     }
 
     pub fn load_recent_history(&self) -> Result<Vec<ReviewCenterHistoryEntry>> {
-        self.review_center_repository.load_recent_history()
+        self.review_center_repository
+            .load_recent_history(&self.workspace_dir)
     }
 }

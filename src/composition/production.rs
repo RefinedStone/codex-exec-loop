@@ -63,13 +63,11 @@ struct ProductionSharedPorts {
     app_server_adapter: Arc<CodexAppServerAdapter>,
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
-    #[allow(dead_code)]
     review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort>,
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
-    review_center_read_service: ReviewCenterReadService,
 }
 
 pub(crate) fn build_planning_services() -> PlanningServices {
@@ -98,7 +96,10 @@ pub(crate) fn build_parallel_mode_control_plane_composition() -> ParallelModeCon
 pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminApplication {
     let ports = build_shared_ports();
     let planning = planning_services_from_ports(&ports);
-    let review_center_read_service = ports.review_center_read_service.clone();
+    let review_center_read_service = ReviewCenterReadService::new(
+        workspace_dir.clone(),
+        ports.review_center_repository_port.clone(),
+    );
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_parts(
         planning.clone(),
         ports.planning_authority_port.clone(),
@@ -122,7 +123,10 @@ pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminA
 pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTelegramApplication {
     let ports = build_shared_ports();
     let planning = planning_services_from_ports(&ports);
-    let review_center_read_service = ports.review_center_read_service.clone();
+    let review_center_read_service = ReviewCenterReadService::new(
+        workspace_dir.clone(),
+        ports.review_center_repository_port.clone(),
+    );
     let control_service = PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
         workspace_dir,
         planning.clone(),
@@ -148,7 +152,11 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
     let startup_service = StartupService::new(ports.app_server_adapter.clone());
     let session_service = SessionService::new(ports.app_server_adapter.clone());
     let conversation_service = ConversationService::new(ports.app_server_adapter.clone());
-    let review_center_read_service = ports.review_center_read_service.clone();
+    let workspace_dir = std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    let review_center_read_service =
+        ReviewCenterReadService::new(workspace_dir, ports.review_center_repository_port.clone());
     let planning = planning_services_from_ports(&ports);
     let parallel_mode_control_plane = parallel_mode_control_plane_from_parts(
         planning,
@@ -199,8 +207,6 @@ fn build_shared_ports() -> ProductionSharedPorts {
         planning_authority_adapter.clone();
     let review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort> =
         planning_authority_adapter.clone();
-    let review_center_read_service =
-        ReviewCenterReadService::new(review_center_repository_port.clone());
     let planning_workspace_port: Arc<dyn PlanningWorkspacePort> =
         Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
             planning_authority_adapter.clone(),
@@ -218,7 +224,6 @@ fn build_shared_ports() -> ProductionSharedPorts {
         planning_worker_port,
         parallel_agent_worker_port,
         app_server_prompt_log_port,
-        review_center_read_service,
     }
 }
 
