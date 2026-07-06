@@ -107,6 +107,26 @@ impl NativeTuiApp {
                     })),
                 );
             }
+            ConversationRuntimeEffect::PersistApprovalReview {
+                workspace_directory,
+                thread_id,
+                review,
+            } => {
+                if let Err(error) = self
+                    .application
+                    .persist_review_center_approval_review_for_workspace(
+                        &workspace_directory,
+                        &thread_id,
+                        &review,
+                    )
+                {
+                    self.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::RuntimeNoticeObserved {
+                            notice: format!("review-center persistence failed: {error}"),
+                        },
+                    );
+                }
+            }
             ConversationRuntimeEffect::DispatchOperatorAlert { alert } => {
                 let _ = self.tx.send(super::BackgroundMessage::OperatorAlert(alert));
             }

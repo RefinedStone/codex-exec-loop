@@ -508,7 +508,7 @@ fn runner_executes_parallel_status_for_allowed_chat() {
 }
 
 #[test]
-fn runner_reviews_summary_mentions_thread_spotlight() {
+fn runner_reviews_summary_mentions_top_pending_inbox_thread() {
     let repository = Arc::new(FakeReviewCenterRepository {
         inbox: vec![ReviewCenterInboxItem::new(
             "review-1",
@@ -546,7 +546,7 @@ fn runner_reviews_summary_mentions_thread_spotlight() {
         .expect("handler should succeed")
         .expect("reply should exist");
 
-    assert!(reply.contains("thread spotlight: thread-1"));
+    assert!(reply.contains("top pending inbox thread: thread-1"));
     assert!(reply.contains("Manual review [pending] Need operator follow-up"));
 }
 

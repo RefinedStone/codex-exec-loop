@@ -20,11 +20,12 @@ use crate::application::port::outbound::review_center_repository_port::{
 // conversation runtime event는 이전 계층에서 정리한 스트림 계약이다.
 // service는 이 이벤트 타입을 알고 있지만 이벤트 payload를 직접 만들거나 줄이지 않는다.
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::review_center::ReviewCenterReadService;
-// snapshot은 저장된 대화 상태를 읽는 결과이고, control truth는 "중단/실행 제어를 누가 담당하는가"를
-// 나타내는 도메인 값이다. 둘 다 TUI가 런타임 구현 세부사항 없이 화면 상태를 구성하는 데 쓰인다.
+use crate::application::service::review_center::{
+    ReviewCenterReadService, ReviewCenterWriteService,
+};
 use crate::domain::conversation::{
-    ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+    ConversationApprovalReview, ConversationRuntimeControlTruth, ConversationSnapshot,
+    ConversationTurnOptions,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,7 @@ pub struct ConversationService {
     // 숨기고, `Arc`는 service clone이 많아져도 같은 runtime 제어면을 공유하게 한다.
     interactive_turn_runtime_port: Arc<dyn InteractiveTurnRuntimePort>,
     review_center_read_service: Option<ReviewCenterReadService>,
+    review_center_write_service: Option<ReviewCenterWriteService>,
 }
 
 impl ConversationService {
@@ -56,6 +58,7 @@ impl ConversationService {
         Self {
             interactive_turn_runtime_port,
             review_center_read_service: None,
+            review_center_write_service: None,
         }
     }
 
@@ -63,6 +66,7 @@ impl ConversationService {
         mut self,
         review_center_read_service: ReviewCenterReadService,
     ) -> Self {
+        self.review_center_write_service = Some(review_center_read_service.write_service());
         self.review_center_read_service = Some(review_center_read_service);
         self
     }
@@ -164,6 +168,22 @@ impl ConversationService {
             .load_recent_history_for_workspace(workspace_dir)
     }
 
+    pub fn persist_review_center_approval_review_for_workspace(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+        review: &ConversationApprovalReview,
+    ) -> Result<()> {
+        if let Some(review_center_write_service) = self.review_center_write_service.as_ref() {
+            review_center_write_service.persist_approval_review_for_workspace(
+                workspace_dir,
+                thread_id,
+                review,
+            )?;
+        }
+        Ok(())
+    }
+
     // runtime control truth는 "중단 버튼, 전체 세션 정지, 실행 상태 판단을 어느 runtime이
     // 실제로 담당하는지"를 알려 주는 값이다. AppRuntime 초기화 시 이 값을 읽어 TUI 제어 모델을 맞춘다.
     pub fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
@@ -226,7 +246,10 @@ mod tests {
         ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
         ReviewCenterThreadProjection,
     };
-    use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationTurnOptions};
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus,
+        ConversationRuntimeControlTruth, ConversationTurnOptions,
+    };
     use anyhow::Result;
     use std::sync::mpsc::Sender;
     use std::sync::{Arc, Mutex};
@@ -234,7 +257,9 @@ mod tests {
     #[derive(Default)]
     struct FakeReviewCenterRepository {
         requested_workspaces: Mutex<Vec<String>>,
-        thread_reviews: Vec<ReviewCenterThreadProjection>,
+        thread_reviews: Mutex<Vec<ReviewCenterThreadProjection>>,
+        pending_inbox: Mutex<Vec<ReviewCenterInboxItem>>,
+        history: Mutex<Vec<ReviewCenterHistoryEntry>>,
     }
 
     impl ReviewCenterRepositoryPort for FakeReviewCenterRepository {
@@ -247,41 +272,69 @@ mod tests {
                 .lock()
                 .expect("workspace tracker mutex poisoned")
                 .push(workspace_dir.to_string());
-            Ok(self.thread_reviews.clone())
+            Ok(self
+                .thread_reviews
+                .lock()
+                .expect("thread review mutex poisoned")
+                .clone())
         }
 
         fn load_pending_inbox(&self, _workspace_dir: &str) -> Result<Vec<ReviewCenterInboxItem>> {
-            Ok(Vec::new())
+            Ok(self
+                .pending_inbox
+                .lock()
+                .expect("pending inbox mutex poisoned")
+                .clone())
         }
 
         fn load_recent_history(
             &self,
             _workspace_dir: &str,
         ) -> Result<Vec<ReviewCenterHistoryEntry>> {
-            Ok(Vec::new())
+            Ok(self.history.lock().expect("history mutex poisoned").clone())
         }
 
         fn upsert_thread_review(
             &self,
             _workspace_dir: &str,
-            _review: &ReviewCenterThreadProjection,
+            review: &ReviewCenterThreadProjection,
         ) -> Result<()> {
+            let mut thread_reviews = self
+                .thread_reviews
+                .lock()
+                .expect("thread review mutex poisoned");
+            if let Some(existing) = thread_reviews
+                .iter_mut()
+                .find(|existing| existing.review_id == review.review_id)
+            {
+                *existing = review.clone();
+            } else {
+                thread_reviews.push(review.clone());
+            }
             Ok(())
         }
 
         fn replace_pending_inbox(
             &self,
             _workspace_dir: &str,
-            _inbox: &[ReviewCenterInboxItem],
+            inbox: &[ReviewCenterInboxItem],
         ) -> Result<()> {
+            *self
+                .pending_inbox
+                .lock()
+                .expect("pending inbox mutex poisoned") = inbox.to_vec();
             Ok(())
         }
 
         fn append_history_entry(
             &self,
             _workspace_dir: &str,
-            _entry: &ReviewCenterHistoryEntry,
+            entry: &ReviewCenterHistoryEntry,
         ) -> Result<()> {
+            self.history
+                .lock()
+                .expect("history mutex poisoned")
+                .push(entry.clone());
             Ok(())
         }
     }
@@ -338,7 +391,7 @@ mod tests {
         });
         let review_repository = Arc::new(FakeReviewCenterRepository {
             requested_workspaces: Mutex::new(Vec::new()),
-            thread_reviews: vec![ReviewCenterThreadProjection::new(
+            thread_reviews: Mutex::new(vec![ReviewCenterThreadProjection::new(
                 "thread-1",
                 "review-1",
                 "Manual review",
@@ -346,7 +399,9 @@ mod tests {
                 "Need operator follow-up",
                 "2026-07-06T10:00:00Z",
                 "2026-07-06T10:01:00Z",
-            )],
+            )]),
+            pending_inbox: Mutex::new(Vec::new()),
+            history: Mutex::new(Vec::new()),
         });
         let service = ConversationService::new(runtime_port).with_review_center_read_service(
             ReviewCenterReadService::new("/tmp/launch-workspace", review_repository.clone()),
@@ -382,7 +437,9 @@ mod tests {
         });
         let review_repository = Arc::new(FakeReviewCenterRepository {
             requested_workspaces: Mutex::new(Vec::new()),
-            thread_reviews: Vec::new(),
+            thread_reviews: Mutex::new(Vec::new()),
+            pending_inbox: Mutex::new(Vec::new()),
+            history: Mutex::new(Vec::new()),
         });
         let service = ConversationService::new(runtime_port).with_review_center_read_service(
             ReviewCenterReadService::new("/tmp/launch-workspace", review_repository.clone()),
@@ -482,5 +539,166 @@ mod tests {
                 |notice| notice.contains("review hydration unavailable: review db unavailable")
             )
         );
+    }
+    #[test]
+    fn persist_review_center_approval_review_writes_thread_inbox_and_history() {
+        let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/loaded-workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+        });
+        let review_repository = Arc::new(FakeReviewCenterRepository::default());
+        let service = ConversationService::new(runtime_port).with_review_center_read_service(
+            ReviewCenterReadService::new("/tmp/launch-workspace", review_repository.clone()),
+        );
+
+        service
+            .persist_review_center_approval_review_for_workspace(
+                "/tmp/repo",
+                "thread-1",
+                &ConversationApprovalReview {
+                    target_item_id: "tool-7".to_string(),
+                    status: ConversationApprovalReviewStatus::Unknown(
+                        "human_review_requested".to_string(),
+                    ),
+                    risk_level: Some("high".to_string()),
+                    rationale: Some("Need operator follow-up".to_string()),
+                },
+            )
+            .expect("approval review should persist");
+
+        let stored_reviews = review_repository
+            .thread_reviews
+            .lock()
+            .expect("thread review mutex poisoned")
+            .clone();
+        assert_eq!(stored_reviews.len(), 1);
+        assert_eq!(stored_reviews[0].thread_id, "thread-1");
+        assert_eq!(stored_reviews[0].review_id, "tool-7");
+        assert_eq!(stored_reviews[0].review_label, "manual handoff");
+        assert_eq!(stored_reviews[0].review_state, "waiting");
+        assert_eq!(stored_reviews[0].review_summary, "Need operator follow-up");
+        assert_eq!(
+            stored_reviews[0].handoff_target.as_deref(),
+            Some("operator")
+        );
+        assert_eq!(
+            stored_reviews[0].handoff_note.as_deref(),
+            Some("open review center inbox")
+        );
+
+        let inbox = review_repository
+            .pending_inbox
+            .lock()
+            .expect("pending inbox mutex poisoned")
+            .clone();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].review_id, "tool-7");
+        assert_eq!(inbox[0].thread_id, "thread-1");
+        assert_eq!(inbox[0].inbox_state, "waiting");
+        assert_eq!(inbox[0].summary, "Need operator follow-up");
+        assert_eq!(inbox[0].handoff_target.as_deref(), Some("operator"));
+
+        let history = review_repository
+            .history
+            .lock()
+            .expect("history mutex poisoned")
+            .clone();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].review_id, "tool-7");
+        assert_eq!(history[0].thread_id, "thread-1");
+        assert_eq!(
+            history[0].event_kind,
+            "manual_handoff_human_review_requested"
+        );
+        assert_eq!(history[0].summary, "Need operator follow-up");
+    }
+
+    #[test]
+    fn persist_review_center_approval_review_removes_terminal_inbox_and_preserves_requested_at() {
+        let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/loaded-workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+        });
+        let mut existing_review = ReviewCenterThreadProjection::new(
+            "thread-1",
+            "tool-7",
+            "manual handoff",
+            "waiting",
+            "Need operator follow-up",
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T10:01:00Z",
+        );
+        existing_review.handoff_target = Some("operator".to_string());
+        existing_review.handoff_note = Some("open review center inbox".to_string());
+        let review_repository = Arc::new(FakeReviewCenterRepository {
+            requested_workspaces: Mutex::new(Vec::new()),
+            thread_reviews: Mutex::new(vec![existing_review]),
+            pending_inbox: Mutex::new(vec![ReviewCenterInboxItem::new(
+                "tool-7",
+                "thread-1",
+                "waiting",
+                "Need operator follow-up",
+                "2026-07-06T10:00:00Z",
+                "2026-07-06T10:01:00Z",
+            )]),
+            history: Mutex::new(Vec::new()),
+        });
+        let service = ConversationService::new(runtime_port).with_review_center_read_service(
+            ReviewCenterReadService::new("/tmp/launch-workspace", review_repository.clone()),
+        );
+
+        service
+            .persist_review_center_approval_review_for_workspace(
+                "/tmp/repo",
+                "thread-1",
+                &ConversationApprovalReview {
+                    target_item_id: "tool-7".to_string(),
+                    status: ConversationApprovalReviewStatus::Approved,
+                    risk_level: Some("high".to_string()),
+                    rationale: Some("Approved by operator".to_string()),
+                },
+            )
+            .expect("approved review should persist");
+
+        let stored_reviews = review_repository
+            .thread_reviews
+            .lock()
+            .expect("thread review mutex poisoned")
+            .clone();
+        assert_eq!(stored_reviews.len(), 1);
+        assert_eq!(stored_reviews[0].review_label, "approval review");
+        assert_eq!(stored_reviews[0].review_state, "approved");
+        assert_eq!(stored_reviews[0].review_summary, "Approved by operator");
+        assert_eq!(stored_reviews[0].requested_at, "2026-07-06T10:00:00Z");
+        assert!(stored_reviews[0].handoff_target.is_none());
+        assert!(stored_reviews[0].handoff_note.is_none());
+
+        let inbox = review_repository
+            .pending_inbox
+            .lock()
+            .expect("pending inbox mutex poisoned")
+            .clone();
+        assert!(inbox.is_empty());
+
+        let history = review_repository
+            .history
+            .lock()
+            .expect("history mutex poisoned")
+            .clone();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].event_kind, "review_approved");
+        assert_eq!(history[0].summary, "Approved by operator");
     }
 }

@@ -10,7 +10,7 @@
     <div class="list-header">
       <div>
         <h2>Inbox</h2>
-        <p>Shared review-center inbox for operator follow-up. This surface is read-only.</p>
+        <p>Shared review-center inbox for operator follow-up. This read-only page also projects the top pending inbox thread.</p>
       </div>
     </div>
     {% if inbox.is_empty() %}
@@ -47,11 +47,11 @@
   </article>
 
   <article class="card span-5">
-    <h2>Thread spotlight</h2>
+    <h2>Top pending inbox thread</h2>
     {% if let Some(thread_id) = current_thread_id %}
       <p><strong class="mono">{{ thread_id }}</strong></p>
       {% if current_thread_reviews.is_empty() %}
-      <p>No current-thread review rows are available for the top pending thread.</p>
+      <p>No review rows are available for the top pending inbox thread yet.</p>
       {% else %}
       <ul>
         {% for review in current_thread_reviews %}
@@ -67,13 +67,13 @@
       </ul>
       {% endif %}
     {% else %}
-      <p>No pending thread is available to spotlight yet.</p>
+      <p>No pending inbox thread is available to project yet.</p>
     {% endif %}
     <h2>Operator guidance</h2>
-    <p>Use this page to confirm what needs attention before opening the matching thread or downstream surface.</p>
+    <p>Use this page to confirm which inbox item is currently at the head of the shared review queue before opening the matching thread or downstream surface.</p>
     <ul>
-      <li>Inbox shows the current pending review queue.</li>
-      <li>Thread spotlight shows the top pending thread's current review context.</li>
+      <li>Inbox shows the shared pending review queue.</li>
+      <li>Top pending inbox thread shows the first inbox item's current review context, not the local active shell thread.</li>
       <li>History shows the most recent review-center events already recorded.</li>
       <li>No approve or deny actions are exposed here yet.</li>
     </ul>

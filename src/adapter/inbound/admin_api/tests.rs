@@ -914,14 +914,14 @@ async fn admin_html_page_routes_render_live_templates() {
         }
         if uri == "/admin/reviews" {
             assert!(body.contains(r#"<a href="/admin/reviews" class="active">Reviews</a>"#));
-            assert!(body.contains("Thread spotlight"));
+            assert!(body.contains("Top pending inbox thread"));
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
         }
     }
 }
 
 #[tokio::test]
-async fn reviews_page_renders_thread_spotlight_content_from_repository_projection() {
+async fn reviews_page_renders_top_pending_inbox_thread_content_from_repository_projection() {
     let workspace = TempAdminWorkspace::new("reviews-page");
     let adapter = SqlitePlanningAuthorityAdapter::new();
 
@@ -969,8 +969,12 @@ async fn reviews_page_renders_thread_spotlight_content_from_repository_projectio
         .expect("reviews page request should be served");
     let body = text_body(response).await;
 
-    assert!(body.contains("Thread spotlight"));
-    assert!(body.contains("thread-1"));
+    assert!(body.contains("Top pending inbox thread"));
+    assert!(
+        body.contains(
+            "first inbox item's current review context, not the local active shell thread"
+        )
+    );
     assert!(body.contains("Manual review"));
     assert!(body.contains("Need operator follow-up"));
     assert!(body.contains("handoff → operator: open review center inbox"));

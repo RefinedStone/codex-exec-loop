@@ -159,11 +159,29 @@ pub(super) fn core_turn_stream_event_from_application(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::test_helpers;
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+    use crate::application::port::outbound::review_center_repository_port::{
+        ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
+        ReviewCenterThreadProjection,
+    };
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::application::port::outbound::startup_probe_port::{
+        AppServerStartupContext, StartupProbePort,
+    };
+    use crate::application::service::review_center::ReviewCenterReadService;
+    use crate::application::service::session_service::SessionService;
+    use crate::application::service::startup_service::StartupService;
+    use crate::core::app::TurnStreamState;
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
     };
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+    use anyhow::Result;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn application_stream_events_map_to_core_stream_events() {
@@ -297,6 +315,247 @@ mod tests {
             other => panic!("unexpected background message: {other:?}"),
         }
     }
+
+    #[derive(Default)]
+    struct FakeReviewCenterRepository {
+        thread_reviews: Mutex<Vec<ReviewCenterThreadProjection>>,
+        pending_inbox: Mutex<Vec<ReviewCenterInboxItem>>,
+        history: Mutex<Vec<ReviewCenterHistoryEntry>>,
+    }
+
+    impl ReviewCenterRepositoryPort for FakeReviewCenterRepository {
+        fn load_thread_reviews(
+            &self,
+            _workspace_dir: &str,
+            _thread_id: &str,
+        ) -> Result<Vec<ReviewCenterThreadProjection>> {
+            Ok(self
+                .thread_reviews
+                .lock()
+                .expect("thread review mutex poisoned")
+                .clone())
+        }
+
+        fn load_pending_inbox(&self, _workspace_dir: &str) -> Result<Vec<ReviewCenterInboxItem>> {
+            Ok(self
+                .pending_inbox
+                .lock()
+                .expect("pending inbox mutex poisoned")
+                .clone())
+        }
+
+        fn load_recent_history(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Vec<ReviewCenterHistoryEntry>> {
+            Ok(self.history.lock().expect("history mutex poisoned").clone())
+        }
+
+        fn upsert_thread_review(
+            &self,
+            _workspace_dir: &str,
+            review: &ReviewCenterThreadProjection,
+        ) -> Result<()> {
+            let mut thread_reviews = self
+                .thread_reviews
+                .lock()
+                .expect("thread review mutex poisoned");
+            if let Some(existing) = thread_reviews
+                .iter_mut()
+                .find(|existing| existing.review_id == review.review_id)
+            {
+                *existing = review.clone();
+            } else {
+                thread_reviews.push(review.clone());
+            }
+            Ok(())
+        }
+
+        fn replace_pending_inbox(
+            &self,
+            _workspace_dir: &str,
+            inbox: &[ReviewCenterInboxItem],
+        ) -> Result<()> {
+            *self
+                .pending_inbox
+                .lock()
+                .expect("pending inbox mutex poisoned") = inbox.to_vec();
+            Ok(())
+        }
+
+        fn append_history_entry(
+            &self,
+            _workspace_dir: &str,
+            entry: &ReviewCenterHistoryEntry,
+        ) -> Result<()> {
+            self.history
+                .lock()
+                .expect("history mutex poisoned")
+                .push(entry.clone());
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct ReviewPersistenceRuntimePort;
+
+    impl StartupProbePort for ReviewPersistenceRuntimePort {
+        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+            Ok(AppServerStartupContext {
+                attachment_profile: TerminalBridgeAttachmentProfile::codex_app_server(),
+                initialize_detail: "ok".to_string(),
+                account_detail: "ok".to_string(),
+                account_ok: true,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    impl SessionCatalogPort for ReviewPersistenceRuntimePort {
+        fn load_session_catalog(&self, _request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            Ok(RecentSessions {
+                items: Vec::new(),
+                warnings: Vec::new(),
+                next_cursor: None,
+            }
+            .into())
+        }
+    }
+
+    impl InteractiveTurnRuntimePort for ReviewPersistenceRuntimePort {
+        fn runtime_control_truth(
+            &self,
+        ) -> crate::domain::conversation::ConversationRuntimeControlTruth {
+            crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server()
+        }
+
+        fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot> {
+            Ok(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            })
+        }
+
+        fn request_stop_all_sessions(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _options: crate::domain::conversation::ConversationTurnOptions,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            _options: crate::domain::conversation::ConversationTurnOptions,
+            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn review_persistence_app(review_repository: Arc<FakeReviewCenterRepository>) -> NativeTuiApp {
+        let runtime_port = Arc::new(ReviewPersistenceRuntimePort);
+        let planning = test_helpers::test_planning_services(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        let parallel_mode_binding = NativeTuiParallelModeBinding::from_composition(
+            test_helpers::test_parallel_mode_control_plane_composition(planning),
+        );
+        let conversation_service =
+            ConversationService::new(runtime_port.clone()).with_review_center_read_service(
+                ReviewCenterReadService::new("/tmp/root", review_repository),
+            );
+        NativeTuiApp::new(
+            StartupService::new(runtime_port.clone()),
+            SessionService::new(runtime_port),
+            conversation_service,
+            parallel_mode_binding,
+        )
+    }
+
+    #[test]
+    fn dispatch_conversation_runtime_persists_active_thread_approval_review() {
+        let review_repository = Arc::new(FakeReviewCenterRepository::default());
+        let mut app = review_persistence_app(review_repository.clone());
+        let mut stream_state = TurnStreamState::new();
+
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
+            Box::new(
+                stream_state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
+                    thread_id: "thread-1".to_string(),
+                    title: "Thread".to_string(),
+                    cwd: "/tmp/root".to_string(),
+                }),
+            ),
+        ));
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
+            Box::new(
+                stream_state.apply_stream_event(TurnStreamEvent::TurnStarted {
+                    turn_id: "turn-1".to_string(),
+                }),
+            ),
+        ));
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
+            Box::new(
+                stream_state.apply_stream_event(TurnStreamEvent::ApprovalReviewUpdated {
+                    review: ConversationApprovalReview {
+                        target_item_id: "tool-9".to_string(),
+                        status: ConversationApprovalReviewStatus::Unknown(
+                            "human_review_requested".to_string(),
+                        ),
+                        risk_level: Some("medium".to_string()),
+                        rationale: Some("Need operator follow-up".to_string()),
+                    },
+                }),
+            ),
+        ));
+
+        let thread_reviews = review_repository
+            .thread_reviews
+            .lock()
+            .expect("thread review mutex poisoned")
+            .clone();
+        assert_eq!(thread_reviews.len(), 1);
+        assert_eq!(thread_reviews[0].thread_id, "thread-1");
+        assert_eq!(thread_reviews[0].review_id, "tool-9");
+        assert_eq!(thread_reviews[0].review_label, "manual handoff");
+        assert_eq!(thread_reviews[0].review_state, "waiting");
+
+        let inbox = review_repository
+            .pending_inbox
+            .lock()
+            .expect("pending inbox mutex poisoned")
+            .clone();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].review_id, "tool-9");
+        assert_eq!(inbox[0].thread_id, "thread-1");
+        assert_eq!(inbox[0].inbox_state, "waiting");
+
+        let history = review_repository
+            .history
+            .lock()
+            .expect("history mutex poisoned")
+            .clone();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].review_id, "tool-9");
+        assert_eq!(history[0].thread_id, "thread-1");
+        assert_eq!(
+            history[0].event_kind,
+            "manual_handoff_human_review_requested"
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -358,6 +617,16 @@ impl NativeTuiApplicationHandle {
         self.conversations
             .load_review_center_recent_history_for_workspace(workspace_dir)
     }
+
+    pub(super) fn persist_review_center_approval_review_for_workspace(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+        review: &crate::domain::conversation::ConversationApprovalReview,
+    ) -> Result<(), String> {
+        self.conversations
+            .persist_review_center_approval_review_for_workspace(workspace_dir, thread_id, review)
+    }
 }
 
 #[derive(Clone)]
@@ -413,6 +682,17 @@ impl NativeTuiConversationHandle {
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String>{
         self.service
             .load_review_center_recent_history_for_workspace(workspace_dir)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn persist_review_center_approval_review_for_workspace(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+        review: &crate::domain::conversation::ConversationApprovalReview,
+    ) -> Result<(), String> {
+        self.service
+            .persist_review_center_approval_review_for_workspace(workspace_dir, thread_id, review)
             .map_err(|error| error.to_string())
     }
 }

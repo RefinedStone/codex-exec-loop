@@ -351,7 +351,7 @@ pub(super) async fn reviews_page(
     jar: CookieJar,
     query: Query<HashMap<String, String>>,
 ) -> std::result::Result<Response, StatusCode> {
-    // review center page는 shared projection을 read-only로 노출해 operator가 inbox와 recent history를 한 화면에서 확인하게 한다.
+    // review center page는 shared projection을 read-only로 노출해 operator가 inbox, inbox-head thread, recent history를 한 화면에서 확인하게 한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
     let inbox = state
         .review_center_read_service

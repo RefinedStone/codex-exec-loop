@@ -409,9 +409,9 @@ impl TelegramBotRunner {
         }
 
         if let Some(thread_id) = current_thread_id.as_deref() {
-            lines.push(format!("thread spotlight: {thread_id}"));
+            lines.push(format!("top pending inbox thread: {thread_id}"));
             if current_thread_reviews.is_empty() {
-                lines.push("- no current-thread review rows".to_string());
+                lines.push("- no review rows for the top pending inbox thread".to_string());
             } else {
                 lines.extend(current_thread_reviews.iter().take(3).map(|review| {
                     let handoff = match (
