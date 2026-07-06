@@ -143,6 +143,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             );
 
             CREATE TABLE IF NOT EXISTS review_center_thread_reviews (
+                workspace_root TEXT NOT NULL,
                 thread_id TEXT NOT NULL,
                 review_id TEXT NOT NULL,
                 review_label TEXT NOT NULL,
@@ -152,21 +153,24 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 updated_at TEXT NOT NULL,
                 handoff_target TEXT,
                 handoff_note TEXT,
-                PRIMARY KEY (thread_id, review_id)
+                PRIMARY KEY (workspace_root, thread_id, review_id)
             );
 
             CREATE TABLE IF NOT EXISTS review_center_inbox (
-                review_id TEXT PRIMARY KEY,
+                workspace_root TEXT NOT NULL,
+                review_id TEXT NOT NULL,
                 thread_id TEXT NOT NULL,
                 inbox_state TEXT NOT NULL,
                 summary TEXT NOT NULL,
                 requested_at TEXT NOT NULL,
                 last_activity_at TEXT NOT NULL,
-                handoff_target TEXT
+                handoff_target TEXT,
+                PRIMARY KEY (workspace_root, review_id)
             );
 
             CREATE TABLE IF NOT EXISTS review_center_history (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_root TEXT NOT NULL,
                 review_id TEXT NOT NULL,
                 thread_id TEXT NOT NULL,
                 event_kind TEXT NOT NULL,
@@ -174,12 +178,12 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 recorded_at TEXT NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_review_center_thread_reviews_thread_updated
-                ON review_center_thread_reviews(thread_id, updated_at DESC, review_id ASC);
-            CREATE INDEX IF NOT EXISTS idx_review_center_inbox_requested
-                ON review_center_inbox(requested_at DESC, review_id ASC);
-            CREATE INDEX IF NOT EXISTS idx_review_center_history_recorded
-                ON review_center_history(recorded_at DESC, sequence DESC);
+            CREATE INDEX IF NOT EXISTS idx_review_center_thread_reviews_workspace_thread_updated
+                ON review_center_thread_reviews(workspace_root, thread_id, updated_at DESC, review_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_review_center_inbox_workspace_requested
+                ON review_center_inbox(workspace_root, requested_at DESC, review_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_review_center_history_workspace_recorded
+                ON review_center_history(workspace_root, recorded_at DESC, sequence DESC);
 
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_status_priority_updated
                 ON planning_tasks(status, combined_priority, updated_at);
@@ -996,6 +1000,7 @@ pub(super) fn prune_task_authority_to_direction_ids(
 
 pub(super) fn load_review_center_thread_reviews_rows(
     connection: &Connection,
+    workspace_root: &str,
     thread_id: &str,
 ) -> Result<Vec<ReviewCenterThreadProjection>> {
     let mut statement = connection
@@ -1003,12 +1008,12 @@ pub(super) fn load_review_center_thread_reviews_rows(
             "SELECT thread_id, review_id, review_label, review_state, review_summary,
                     requested_at, updated_at, handoff_target, handoff_note
              FROM review_center_thread_reviews
-             WHERE thread_id = ?1
+             WHERE workspace_root = ?1 AND thread_id = ?2
              ORDER BY requested_at ASC, updated_at ASC, review_id ASC",
         )
         .context("failed to prepare review center thread review query")?;
     let rows = statement
-        .query_map(params![thread_id], |row| {
+        .query_map(params![workspace_root, thread_id], |row| {
             Ok(ReviewCenterThreadProjection {
                 thread_id: row.get(0)?,
                 review_id: row.get(1)?,
@@ -1028,17 +1033,19 @@ pub(super) fn load_review_center_thread_reviews_rows(
 
 pub(super) fn load_review_center_pending_inbox_rows(
     connection: &Connection,
+    workspace_root: &str,
 ) -> Result<Vec<ReviewCenterInboxItem>> {
     let mut statement = connection
         .prepare(
             "SELECT review_id, thread_id, inbox_state, summary, requested_at,
                     last_activity_at, handoff_target
              FROM review_center_inbox
+             WHERE workspace_root = ?1
              ORDER BY requested_at DESC, review_id ASC",
         )
         .context("failed to prepare review center inbox query")?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(params![workspace_root], |row| {
             Ok(ReviewCenterInboxItem {
                 review_id: row.get(0)?,
                 thread_id: row.get(1)?,
@@ -1056,16 +1063,18 @@ pub(super) fn load_review_center_pending_inbox_rows(
 
 pub(super) fn load_review_center_recent_history_rows(
     connection: &Connection,
+    workspace_root: &str,
 ) -> Result<Vec<ReviewCenterHistoryEntry>> {
     let mut statement = connection
         .prepare(
             "SELECT review_id, thread_id, event_kind, summary, recorded_at
              FROM review_center_history
+             WHERE workspace_root = ?1
              ORDER BY recorded_at DESC, sequence DESC",
         )
         .context("failed to prepare review center history query")?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(params![workspace_root], |row| {
             Ok(ReviewCenterHistoryEntry {
                 review_id: row.get(0)?,
                 thread_id: row.get(1)?,
@@ -1081,15 +1090,16 @@ pub(super) fn load_review_center_recent_history_rows(
 
 pub(super) fn upsert_review_center_thread_review_row(
     transaction: &rusqlite::Transaction<'_>,
+    workspace_root: &str,
     review: &ReviewCenterThreadProjection,
 ) -> Result<()> {
     transaction
         .execute(
             "INSERT INTO review_center_thread_reviews (
-                thread_id, review_id, review_label, review_state, review_summary,
+                workspace_root, thread_id, review_id, review_label, review_state, review_summary,
                 requested_at, updated_at, handoff_target, handoff_note
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-            ON CONFLICT(thread_id, review_id) DO UPDATE SET
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(workspace_root, thread_id, review_id) DO UPDATE SET
                 review_label = excluded.review_label,
                 review_state = excluded.review_state,
                 review_summary = excluded.review_summary,
@@ -1098,6 +1108,7 @@ pub(super) fn upsert_review_center_thread_review_row(
                 handoff_target = excluded.handoff_target,
                 handoff_note = excluded.handoff_note",
             params![
+                workspace_root,
                 review.thread_id,
                 review.review_id,
                 review.review_label,
@@ -1115,22 +1126,27 @@ pub(super) fn upsert_review_center_thread_review_row(
 
 pub(super) fn replace_review_center_pending_inbox_rows(
     transaction: &rusqlite::Transaction<'_>,
+    workspace_root: &str,
     inbox: &[ReviewCenterInboxItem],
 ) -> Result<()> {
     transaction
-        .execute("DELETE FROM review_center_inbox", [])
+        .execute(
+            "DELETE FROM review_center_inbox WHERE workspace_root = ?1",
+            params![workspace_root],
+        )
         .context("failed to clear review center inbox rows")?;
     let mut statement = transaction
         .prepare(
             "INSERT INTO review_center_inbox (
-                review_id, thread_id, inbox_state, summary,
+                workspace_root, review_id, thread_id, inbox_state, summary,
                 requested_at, last_activity_at, handoff_target
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .context("failed to prepare review center inbox insert")?;
     for item in inbox {
         statement
             .execute(params![
+                workspace_root,
                 item.review_id,
                 item.thread_id,
                 item.inbox_state,
@@ -1146,14 +1162,16 @@ pub(super) fn replace_review_center_pending_inbox_rows(
 
 pub(super) fn append_review_center_history_row(
     transaction: &rusqlite::Transaction<'_>,
+    workspace_root: &str,
     entry: &ReviewCenterHistoryEntry,
 ) -> Result<()> {
     transaction
         .execute(
             "INSERT INTO review_center_history (
-                review_id, thread_id, event_kind, summary, recorded_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                workspace_root, review_id, thread_id, event_kind, summary, recorded_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
+                workspace_root,
                 entry.review_id,
                 entry.thread_id,
                 entry.event_kind,

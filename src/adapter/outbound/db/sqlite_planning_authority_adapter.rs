@@ -108,7 +108,7 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<Vec<ReviewCenterThreadProjection>> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
-        load_review_center_thread_reviews_rows(&connection, thread_id)
+        load_review_center_thread_reviews_rows(&connection, &location.workspace_root, thread_id)
     }
 
     pub(crate) fn load_review_center_pending_inbox_snapshot(
@@ -116,7 +116,7 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<Vec<ReviewCenterInboxItem>> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
-        load_review_center_pending_inbox_rows(&connection)
+        load_review_center_pending_inbox_rows(&connection, &location.workspace_root)
     }
 
     pub(crate) fn load_review_center_recent_history_snapshot(
@@ -124,7 +124,7 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<Vec<ReviewCenterHistoryEntry>> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
-        load_review_center_recent_history_rows(&connection)
+        load_review_center_recent_history_rows(&connection, &location.workspace_root)
     }
 
     pub(crate) fn upsert_review_center_thread_review(
@@ -141,7 +141,7 @@ impl SqlitePlanningAuthorityAdapter {
             &location,
             "last_review_center_thread_review_updated_at",
         )?;
-        upsert_review_center_thread_review_row(&transaction, review)?;
+        upsert_review_center_thread_review_row(&transaction, &location.workspace_root, review)?;
         transaction
             .commit()
             .context("failed to commit review center thread review transaction")?;
@@ -162,7 +162,7 @@ impl SqlitePlanningAuthorityAdapter {
             &location,
             "last_review_center_inbox_updated_at",
         )?;
-        replace_review_center_pending_inbox_rows(&transaction, inbox)?;
+        replace_review_center_pending_inbox_rows(&transaction, &location.workspace_root, inbox)?;
         transaction
             .commit()
             .context("failed to commit review center inbox transaction")?;
@@ -183,7 +183,7 @@ impl SqlitePlanningAuthorityAdapter {
             &location,
             "last_review_center_history_appended_at",
         )?;
-        append_review_center_history_row(&transaction, entry)?;
+        append_review_center_history_row(&transaction, &location.workspace_root, entry)?;
         transaction
             .commit()
             .context("failed to commit review center history transaction")?;
