@@ -342,16 +342,21 @@ impl NativeTuiApplicationHandle {
             .load_review_center_thread_reviews_for_workspace(workspace_dir, thread_id)
     }
 
-    pub(super) fn load_review_center_pending_inbox(
+
+    pub(super) fn load_review_center_pending_inbox_for_workspace(
         &self,
+        workspace_dir: &str,
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterInboxItem>, String> {
-        self.conversations.load_review_center_pending_inbox()
+        self.conversations
+            .load_review_center_pending_inbox_for_workspace(workspace_dir)
     }
 
-    pub(super) fn load_review_center_recent_history(
+    pub(super) fn load_review_center_recent_history_for_workspace(
         &self,
+        workspace_dir: &str,
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String> {
-        self.conversations.load_review_center_recent_history()
+        self.conversations
+            .load_review_center_recent_history_for_workspace(workspace_dir)
     }
 }
 
@@ -392,19 +397,22 @@ impl NativeTuiConversationHandle {
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn load_review_center_pending_inbox(
+
+    pub(super) fn load_review_center_pending_inbox_for_workspace(
         &self,
+        workspace_dir: &str,
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterInboxItem>, String> {
         self.service
-            .load_review_center_pending_inbox()
+            .load_review_center_pending_inbox_for_workspace(workspace_dir)
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn load_review_center_recent_history(
+    pub(super) fn load_review_center_recent_history_for_workspace(
         &self,
+        workspace_dir: &str,
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String> {
         self.service
-            .load_review_center_recent_history()
+            .load_review_center_recent_history_for_workspace(workspace_dir)
             .map_err(|error| error.to_string())
     }
 }

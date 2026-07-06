@@ -49,13 +49,13 @@ impl NativeTuiApp {
         };
         let inbox_state = load_section(
             self.application
-                .load_review_center_pending_inbox()
+                .load_review_center_pending_inbox_for_workspace(&workspace_directory)
                 .map_err(anyhow::Error::msg)
                 .map(|inbox| build_inbox_review_views(&inbox)),
         );
         let history_state = load_section(
             self.application
-                .load_review_center_recent_history()
+                .load_review_center_recent_history_for_workspace(&workspace_directory)
                 .map_err(anyhow::Error::msg)
                 .map(|history| build_history_review_views(&history)),
         );
@@ -95,7 +95,7 @@ impl NativeTuiApp {
             inbox_reviews: inbox_state.into_entries(),
             history_reviews: history_state.into_entries(),
             key_lines: vec![AkraTheme::key_line(
-                "Esc/Ctrl+C: close  |  read-only: use admin/telegram for actions",
+                "Esc/Ctrl+C: close  |  read-only review status",
             )],
         }
     }
