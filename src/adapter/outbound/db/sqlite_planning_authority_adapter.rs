@@ -32,9 +32,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
-use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
-use crate::application::service::review_center::{
-    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
+    ReviewCenterThreadProjection,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
