@@ -1,0 +1,28 @@
+{
+  "name": "codex-exec-loop",
+  "version": "1.0.0",
+  "description": "Akra is the native Rust terminal client in this repository for `codex app-server`. The repository name remains `codex-exec-loop`; the operator-facing command is `akra`.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "test": "tests"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RefinedStone/codex-exec-loop.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/RefinedStone/codex-exec-loop/issues"
+  },
+  "homepage": "https://github.com/RefinedStone/codex-exec-loop#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.6.2"
+  }
+}
