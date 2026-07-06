@@ -1,6 +1,7 @@
 use crate::adapter::inbound::tui::app::{
     ConversationState, NativeTuiApp, NativeTuiParallelModeBinding, test_helpers,
 };
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
@@ -12,6 +13,7 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeProjection,
 };
+use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::core::app::StartupReadySnapshot;
@@ -133,10 +135,15 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
         test_helpers::test_parallel_mode_control_plane_composition(planning);
     let parallel_mode_binding =
         NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
+    let conversation_service = ConversationService::new(codex_port.clone())
+        .with_review_center_read_service(ReviewCenterReadService::new(
+            "/tmp/root",
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        ));
     let mut app = NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
-        ConversationService::new(codex_port),
+        conversation_service,
         parallel_mode_binding,
     );
     app.show_startup_ascii_art = false;

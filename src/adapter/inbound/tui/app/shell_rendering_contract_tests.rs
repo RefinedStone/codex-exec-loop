@@ -4,6 +4,11 @@ use crate::adapter::inbound::tui::app::shell_presentation::{
     format_conversation_lines_for_view, format_conversation_lines_with_debug,
 };
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
+use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
+    ReviewCenterThreadProjection,
+};
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
@@ -18,6 +23,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 use ratatui::style::Color;
+use std::fs;
 
 // Rendering contract tests use TestBackend snapshots instead of golden files so
 // each assertion can name the specific TUI invariant it protects.
@@ -472,6 +478,160 @@ fn inline_help_inspection_renders_command_help() {
     assert!(!rendered.contains("Shell commands: :diag  :parallel"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+#[test]
+fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_workspace() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let wrong_workspace = std::env::temp_dir().join(format!(
+        "codex-exec-loop-review-overlay-root-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&wrong_workspace).expect("wrong workspace should exist");
+    let wrong_workspace = wrong_workspace.display().to_string();
+    let thread_workspace = std::env::temp_dir().join(format!(
+        "codex-exec-loop-review-overlay-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&thread_workspace).expect("thread workspace should exist");
+    let thread_workspace = thread_workspace.display().to_string();
+    let root_adapter = SqlitePlanningAuthorityAdapter::new();
+    let mut root_review = ReviewCenterThreadProjection::new(
+        "thread-1",
+        "root-review",
+        "Root review",
+        "pending",
+        "wrong workspace review",
+        "2026-07-06T10:00:00Z",
+        "2026-07-06T10:01:00Z",
+    );
+    root_review.handoff_target = Some("operator".to_string());
+    root_adapter
+        .upsert_thread_review(&wrong_workspace, &root_review)
+        .expect("root review should persist");
+    root_adapter
+        .replace_pending_inbox(
+            &wrong_workspace,
+            &[ReviewCenterInboxItem::new(
+                "root-review",
+                "thread-1",
+                "pending",
+                "wrong workspace inbox",
+                "2026-07-06T10:00:00Z",
+                "2026-07-06T10:01:00Z",
+            )],
+        )
+        .expect("root inbox should persist");
+    root_adapter
+        .append_history_entry(
+            &wrong_workspace,
+            &ReviewCenterHistoryEntry::new(
+                "root-review",
+                "thread-1",
+                "review_requested",
+                "wrong workspace history",
+                "2026-07-06T10:02:00Z",
+            ),
+        )
+        .expect("root history should persist");
+
+    let thread_adapter = SqlitePlanningAuthorityAdapter::new();
+    let mut thread_review = ReviewCenterThreadProjection::new(
+        "thread-1",
+        "thread-review",
+        "Thread review",
+        "pending",
+        "correct workspace review",
+        "2026-07-06T11:00:00Z",
+        "2026-07-06T11:01:00Z",
+    );
+    thread_review.handoff_target = Some("operator".to_string());
+    thread_adapter
+        .upsert_thread_review(&thread_workspace, &thread_review)
+        .expect("thread review should persist");
+    thread_adapter
+        .replace_pending_inbox(
+            &thread_workspace,
+            &[ReviewCenterInboxItem::new(
+                "thread-review",
+                "thread-1",
+                "pending",
+                "correct workspace inbox",
+                "2026-07-06T11:00:00Z",
+                "2026-07-06T11:01:00Z",
+            )],
+        )
+        .expect("thread inbox should persist");
+    thread_adapter
+        .append_history_entry(
+            &thread_workspace,
+            &ReviewCenterHistoryEntry::new(
+                "thread-review",
+                "thread-1",
+                "review_requested",
+                "correct workspace history",
+                "2026-07-06T11:02:00Z",
+            ),
+        )
+        .expect("thread history should persist");
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should have a ready conversation");
+    };
+    conversation.record_thread_prepared(
+        "thread-1".to_string(),
+        "Loaded thread".to_string(),
+        thread_workspace.clone(),
+    );
+    app.shell_overlay = ShellOverlay::Reviews;
+
+    let overlay_view = app.build_reviews_overlay_view();
+
+    assert!(overlay_view.header_lines.iter().any(|line| {
+        line.to_string()
+            .contains("Review Center / shell inspection")
+    }));
+    assert_eq!(overlay_view.current_thread_reviews.len(), 1);
+    assert_eq!(overlay_view.inbox_reviews.len(), 1);
+    assert!(
+        overlay_view.inbox_reviews[0]
+            .summary_line
+            .to_string()
+            .contains("correct workspace inbox")
+    );
+    assert_eq!(overlay_view.history_reviews.len(), 1);
+    assert!(
+        overlay_view.history_reviews[0]
+            .summary_line
+            .to_string()
+            .contains("correct workspace history")
+    );
+    assert!(
+        !overlay_view.current_thread_reviews[0]
+            .summary_line
+            .to_string()
+            .contains("wrong workspace review")
+    );
+    assert!(
+        !overlay_view.inbox_reviews[0]
+            .summary_line
+            .to_string()
+            .contains("wrong workspace inbox")
+    );
+    assert!(
+        !overlay_view.history_reviews[0]
+            .summary_line
+            .to_string()
+            .contains("wrong workspace history")
+    );
 }
 
 #[test]

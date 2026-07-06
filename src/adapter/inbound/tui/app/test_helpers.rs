@@ -26,6 +26,7 @@ use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::{PlanningRuntimeProjection, PlanningServices};
+use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
@@ -361,10 +362,15 @@ pub(super) fn test_native_tui_app() -> NativeTuiApp {
     let parallel_mode_binding = NativeTuiParallelModeBinding::from_composition(
         test_parallel_mode_control_plane_composition(planning),
     );
+    let conversation_service = ConversationService::new(app_server_port.clone())
+        .with_review_center_read_service(ReviewCenterReadService::new(
+            "/tmp/root",
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        ));
     let mut app = NativeTuiApp::new(
         StartupService::new(app_server_port.clone()),
         SessionService::new(app_server_port.clone()),
-        ConversationService::new(app_server_port),
+        conversation_service,
         parallel_mode_binding,
     );
     app.show_startup_ascii_art = false;
