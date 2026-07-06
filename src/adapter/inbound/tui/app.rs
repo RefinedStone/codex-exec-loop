@@ -75,8 +75,6 @@ mod conversation_runtime;
 mod directions_maintenance_ui;
 #[path = "app/github_polling.rs"]
 mod github_polling;
-#[path = "app/reviews_overlay_ui.rs"]
-mod reviews_overlay_ui;
 #[path = "app/history_insertion.rs"]
 mod history_insertion;
 #[path = "app/inline_shell_commands.rs"]
@@ -119,6 +117,8 @@ mod planning_worker_debug_preview;
 mod post_turn_continuation;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
+#[path = "app/reviews_overlay_ui.rs"]
+mod reviews_overlay_ui;
 #[path = "app/session_overlay_ui.rs"]
 mod session_overlay_ui;
 #[path = "app/session_shell_controller.rs"]

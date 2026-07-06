@@ -77,11 +77,7 @@ pub(crate) fn build_resumed_session_status_text(
         "thread loaded / planning status: {}",
         runtime_projection.preview_status_label()
     );
-    append_resumed_status_detail(
-        &mut status_text,
-        "review",
-        resumed_thread_review_summary,
-    );
+    append_resumed_status_detail(&mut status_text, "review", resumed_thread_review_summary);
     append_resumed_status_detail(
         &mut status_text,
         "manual handoff",
@@ -104,11 +100,7 @@ pub(crate) fn build_resumed_session_status_text(
     status_text
 }
 
-fn append_resumed_status_detail(
-    status_text: &mut String,
-    label: &str,
-    detail: Option<&str>,
-) {
+fn append_resumed_status_detail(status_text: &mut String, label: &str, detail: Option<&str>) {
     let Some(detail) = detail.filter(|detail| !detail.trim().is_empty()) else {
         return;
     };
@@ -495,7 +487,9 @@ mod tests {
             Some("operator: open review center inbox"),
         );
 
-        assert!(status_text.contains("review: manual handoff (waiting): operator follow-up required"));
+        assert!(
+            status_text.contains("review: manual handoff (waiting): operator follow-up required")
+        );
         assert!(status_text.contains("manual handoff: operator: open review center inbox"));
     }
     #[test]

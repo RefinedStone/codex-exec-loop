@@ -24,21 +24,24 @@ impl NativeTuiApp {
             Line::from("Check inbox pressure, active-thread review context, and recent outcomes."),
         ];
         let active_thread = match &self.conversation_state {
-            ConversationState::Ready(conversation) if conversation.has_active_thread() => {
-                Some((
-                    conversation.thread_id.clone(),
-                    conversation.resumed_thread_review_summary().map(str::to_string),
-                    conversation
-                        .resumed_thread_review_manual_handoff_context()
-                        .map(str::to_string),
-                ))
-            }
+            ConversationState::Ready(conversation) if conversation.has_active_thread() => Some((
+                conversation.thread_id.clone(),
+                conversation
+                    .resumed_thread_review_summary()
+                    .map(str::to_string),
+                conversation
+                    .resumed_thread_review_manual_handoff_context()
+                    .map(str::to_string),
+            )),
             _ => None,
         };
         let current_thread_state = match active_thread.as_ref() {
             Some((thread_id, _, _)) => load_section(
                 self.application
-                    .load_review_center_thread_reviews_for_workspace(&workspace_directory, thread_id)
+                    .load_review_center_thread_reviews_for_workspace(
+                        &workspace_directory,
+                        thread_id,
+                    )
                     .map_err(anyhow::Error::msg)
                     .map(|reviews| build_thread_review_views(&reviews)),
             ),
@@ -68,7 +71,10 @@ impl NativeTuiApp {
             "thread: {}  |  inbox: {}  |  history: {}",
             active_thread
                 .as_ref()
-                .map(|(thread_id, _, _)| compact_whitespace_detail(thread_id, REVIEW_ID_DETAIL_LIMIT))
+                .map(|(thread_id, _, _)| compact_whitespace_detail(
+                    thread_id,
+                    REVIEW_ID_DETAIL_LIMIT
+                ))
                 .unwrap_or_else(|| "draft".to_string()),
             inbox_state.count_label("pending"),
             history_state.count_label("recent")
@@ -153,7 +159,10 @@ fn build_thread_review_views(
                 "{} [{}] {}",
                 compact_whitespace_detail(review.review_label.trim(), REVIEW_ID_DETAIL_LIMIT),
                 compact_whitespace_detail(review.review_state.trim(), 18),
-                compact_whitespace_detail(review.review_summary.trim(), REVIEW_SUMMARY_DETAIL_LIMIT)
+                compact_whitespace_detail(
+                    review.review_summary.trim(),
+                    REVIEW_SUMMARY_DETAIL_LIMIT
+                )
             )),
             detail_lines: build_thread_review_detail_lines(review),
         })
@@ -222,7 +231,9 @@ fn build_inbox_review_detail_lines(item: &ReviewCenterInboxItem) -> Vec<Line<'st
     lines
 }
 
-fn build_history_review_views(history: &[ReviewCenterHistoryEntry]) -> (usize, Vec<ReviewOverlayView>) {
+fn build_history_review_views(
+    history: &[ReviewCenterHistoryEntry],
+) -> (usize, Vec<ReviewOverlayView>) {
     let mut entries = history
         .iter()
         .take(REVIEW_ENTRY_LIMIT)
@@ -259,8 +270,12 @@ fn push_hidden_count_line(entries: &mut Vec<ReviewOverlayView>, total_count: usi
 }
 
 fn format_handoff(handoff_target: Option<&str>, handoff_note: Option<&str>) -> Option<String> {
-    let handoff_target = handoff_target.map(str::trim).filter(|value| !value.is_empty());
-    let handoff_note = handoff_note.map(str::trim).filter(|value| !value.is_empty());
+    let handoff_target = handoff_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let handoff_note = handoff_note
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     match (handoff_target, handoff_note) {
         (Some(target), Some(note)) => Some(format!("{target}: {note}")),
         (Some(target), None) => Some(target.to_string()),

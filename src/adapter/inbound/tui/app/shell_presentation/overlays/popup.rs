@@ -34,7 +34,6 @@ pub(crate) use reviews::build_reviews_overlay_view;
 pub(crate) use supersession::build_supersession_overlay_view;
 pub(crate) use view_selection::build_view_selection_overlay_view;
 
-
 // builder와 view DTO를 함께 re-export해 popup 호출부가 variant별 module split을
 // 몰라도 type과 constructor를 같은 surface에서 다룰 수 있게 한다.
 pub(crate) use views::{

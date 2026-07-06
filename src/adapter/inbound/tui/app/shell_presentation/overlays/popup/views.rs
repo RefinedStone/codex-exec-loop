@@ -182,7 +182,9 @@ pub(crate) struct ReviewsOverlayView {
 }
 
 impl ReviewsOverlayView {
-    pub(in crate::adapter::inbound::tui::app) fn current_thread_section_lines(&self) -> Vec<Line<'static>> {
+    pub(in crate::adapter::inbound::tui::app) fn current_thread_section_lines(
+        &self,
+    ) -> Vec<Line<'static>> {
         flatten_review_lines(
             &self.current_thread_reviews,
             "No active thread review context.",
@@ -193,7 +195,9 @@ impl ReviewsOverlayView {
         flatten_review_lines(&self.inbox_reviews, "No pending inbox items.")
     }
 
-    pub(in crate::adapter::inbound::tui::app) fn history_section_lines(&self) -> Vec<Line<'static>> {
+    pub(in crate::adapter::inbound::tui::app) fn history_section_lines(
+        &self,
+    ) -> Vec<Line<'static>> {
         flatten_review_lines(&self.history_reviews, "No recent review history.")
     }
 }

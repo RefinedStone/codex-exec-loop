@@ -6,13 +6,13 @@ use super::{
     TelegramBotPolicy, TelegramBotRunner, TelegramInboundCommand, TelegramParallelControlSurface,
     TelegramParsedMessage, parse_message,
 };
-use crate::application::port::outbound::telegram_bot_port::{
-    TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
-    TelegramUpdate,
-};
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
+};
+use crate::application::port::outbound::telegram_bot_port::{
+    TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
+    TelegramUpdate,
 };
 use crate::application::service::planning::PlanningResetTarget;
 use crate::application::service::planning::control::{
@@ -236,10 +236,8 @@ fn build_runner_with_reviews(
     let (gateway, runner) = build_runner(allowed_chat_ids);
     (
         gateway,
-        runner.with_review_center_read_service(ReviewCenterReadService::new(
-            "/tmp/repo",
-            repository,
-        )),
+        runner
+            .with_review_center_read_service(ReviewCenterReadService::new("/tmp/repo", repository)),
     )
 }
 

@@ -614,10 +614,7 @@ fn planning_overlay_argument_hint(
 }
 fn reviews_argument_hint(argument: Option<&str>) -> String {
     match parse_planning_overlay_shell_argument(argument) {
-        Ok(()) => InlineShellCommand::Reviews
-            .spec()
-            .buffered_hint
-            .to_string(),
+        Ok(()) => InlineShellCommand::Reviews.spec().buffered_hint.to_string(),
         Err(error) => format!(
             "`:reviews` does not accept arguments (`{}`); press Enter to open the review center inspection.",
             error.argument()

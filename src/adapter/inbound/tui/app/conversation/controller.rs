@@ -107,8 +107,9 @@ impl NativeTuiApp {
         let Some(mut conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        let resumed_thread_review_summary =
-            conversation.resumed_thread_review_summary().map(str::to_string);
+        let resumed_thread_review_summary = conversation
+            .resumed_thread_review_summary()
+            .map(str::to_string);
         let resumed_thread_manual_handoff_context = conversation
             .resumed_thread_review_manual_handoff_context()
             .map(str::to_string);

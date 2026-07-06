@@ -368,7 +368,10 @@ impl TelegramBotRunner {
 
     fn render_help(&self) -> String {
         // `/whoami` lives in this adapter, so append it to the shared planning control help text.
-        format!("{}\n/parallel\n/reviews\n/whoami", self.control_service.help_text())
+        format!(
+            "{}\n/parallel\n/reviews\n/whoami",
+            self.control_service.help_text()
+        )
     }
 
     fn render_reviews_summary(&self) -> Result<String> {
@@ -384,10 +387,7 @@ impl TelegramBotRunner {
         };
         let history = review_center_read_service.load_recent_history()?;
 
-        let mut lines = vec![
-            "리뷰 센터".to_string(),
-            format!("inbox: {}", inbox.len()),
-        ];
+        let mut lines = vec!["리뷰 센터".to_string(), format!("inbox: {}", inbox.len())];
 
         if inbox.is_empty() {
             lines.push("- empty".to_string());
@@ -414,11 +414,18 @@ impl TelegramBotRunner {
                 lines.push("- no current-thread review rows".to_string());
             } else {
                 lines.extend(current_thread_reviews.iter().take(3).map(|review| {
-                    let handoff = match (review.handoff_target.as_deref(), review.handoff_note.as_deref()) {
-                        (Some(target), Some(note)) if !target.trim().is_empty() && !note.trim().is_empty() => {
+                    let handoff = match (
+                        review.handoff_target.as_deref(),
+                        review.handoff_note.as_deref(),
+                    ) {
+                        (Some(target), Some(note))
+                            if !target.trim().is_empty() && !note.trim().is_empty() =>
+                        {
                             format!(" / handoff: {target}: {note}")
                         }
-                        (Some(target), _) if !target.trim().is_empty() => format!(" / handoff: {target}"),
+                        (Some(target), _) if !target.trim().is_empty() => {
+                            format!(" / handoff: {target}")
+                        }
                         _ => String::new(),
                     };
                     format!(
@@ -474,7 +481,11 @@ fn compact_review_text(text: &str, limit: usize) -> String {
     if normalized.chars().count() <= limit {
         return normalized;
     }
-    normalized.chars().take(limit.saturating_sub(1)).collect::<String>() + "…"
+    normalized
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>()
+        + "…"
 }
 
 #[cfg(test)]

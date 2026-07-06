@@ -58,13 +58,15 @@ impl ReviewCenterReadService {
         &self,
         workspace_dir: &str,
     ) -> Result<Vec<ReviewCenterInboxItem>> {
-        self.review_center_repository.load_pending_inbox(workspace_dir)
+        self.review_center_repository
+            .load_pending_inbox(workspace_dir)
     }
 
     pub fn load_recent_history_for_workspace(
         &self,
         workspace_dir: &str,
     ) -> Result<Vec<ReviewCenterHistoryEntry>> {
-        self.review_center_repository.load_recent_history(workspace_dir)
+        self.review_center_repository
+            .load_recent_history(workspace_dir)
     }
 }

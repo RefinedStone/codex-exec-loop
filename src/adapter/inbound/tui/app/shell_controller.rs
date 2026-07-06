@@ -805,7 +805,6 @@ mod tests {
         assert_eq!(app.shell_overlay, ShellOverlay::Reviews);
         assert!(status_text(&app).contains("opened review center inspection"));
 
-
         app.execute_inline_shell_command_input(command(":turns 4"));
         assert_eq!(
             ready_conversation(&app)

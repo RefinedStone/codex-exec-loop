@@ -98,20 +98,15 @@ impl CoreEffectRunner {
         });
     }
 
-    pub fn spawn_conversation_load(
-        &self,
-        thread_id: String,
-        fallback_workspace_directory: String,
-    ) {
+    pub fn spawn_conversation_load(&self, thread_id: String, fallback_workspace_directory: String) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
-            let completion = conversation_snapshot_completion(
-                conversation_service.load_thread_snapshot(
+            let completion =
+                conversation_snapshot_completion(conversation_service.load_thread_snapshot(
                     thread_id.as_str(),
                     fallback_workspace_directory.as_str(),
-                ),
-            );
+                ));
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }

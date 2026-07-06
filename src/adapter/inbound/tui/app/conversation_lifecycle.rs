@@ -205,8 +205,9 @@ mod tests {
 
     #[test]
     fn core_ready_snapshot_builds_ready_view_model() {
-        let mut ready =
-            crate::core::app::ConversationReadySnapshot::from(sample_conversation_snapshot("thread-3"));
+        let mut ready = crate::core::app::ConversationReadySnapshot::from(
+            sample_conversation_snapshot("thread-3"),
+        );
         ready.thread_review = vec![sample_thread_review()];
         let reduced = reduce_conversation_lifecycle(
             sample_state(),

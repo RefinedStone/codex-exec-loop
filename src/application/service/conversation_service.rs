@@ -89,7 +89,8 @@ impl ConversationService {
                 } else {
                     conversation.cwd.as_str()
                 };
-                match review_center_read_service.load_thread_reviews_for_workspace(workspace_dir, thread_id)
+                match review_center_read_service
+                    .load_thread_reviews_for_workspace(workspace_dir, thread_id)
                 {
                     Ok(thread_review) => thread_review,
                     Err(error) => {

@@ -64,7 +64,9 @@ impl InlineTerminalSyncPolicy {
     }
 
     fn host_insert_mode(self) -> Option<HistoryInsertionMode> {
-        self.render_mode.writes_host_scrollback().then_some(self.insert_mode)
+        self.render_mode
+            .writes_host_scrollback()
+            .then_some(self.insert_mode)
     }
 }
 

@@ -88,7 +88,6 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
-
     }
 }
 
