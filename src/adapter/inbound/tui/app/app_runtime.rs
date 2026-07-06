@@ -693,8 +693,14 @@ impl NativeTuiApp {
 
     fn execute_conversation_lifecycle_effect(&mut self, effect: ConversationLifecycleEffect) {
         match effect {
-            ConversationLifecycleEffect::LoadConversation { thread_id } => {
-                self.dispatch_core_command(AppCommand::LoadConversation { thread_id });
+            ConversationLifecycleEffect::LoadConversation {
+                thread_id,
+                fallback_workspace_directory,
+            } => {
+                self.dispatch_core_command(AppCommand::LoadConversation {
+                    thread_id,
+                    fallback_workspace_directory,
+                });
             }
         }
     }
@@ -811,6 +817,7 @@ impl NativeTuiApp {
                 self.reset_planning_worker_panel_state();
                 self.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
                     session,
+                    fallback_workspace_directory: self.current_workspace_directory(),
                 });
             }
             ConversationIntentEffect::ShowExitConfirmation => {

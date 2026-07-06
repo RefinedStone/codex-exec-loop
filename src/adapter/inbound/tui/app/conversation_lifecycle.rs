@@ -25,6 +25,7 @@ pub(super) enum ConversationLifecycleEvent {
     SessionChosen {
         // Summary는 shell chrome에 즉시 보관하고, body는 snapshot load effect 뒤에 채운다.
         session: SessionSummary,
+        fallback_workspace_directory: String,
     },
     CoreConversationSnapshotApplied {
         // Loading/Ready/Failed lifecycle authority는 core AppSnapshot에서 내려온다.
@@ -37,7 +38,10 @@ pub(super) enum ConversationLifecycleEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Effect는 reducer 밖에서 실행할 IO 요청이다. 이 파일은 어떤 thread를 읽을지만 선언한다.
 pub(super) enum ConversationLifecycleEffect {
-    LoadConversation { thread_id: String },
+    LoadConversation {
+        thread_id: String,
+        fallback_workspace_directory: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -82,12 +86,18 @@ pub(super) fn reduce_conversation_lifecycle(
                     state.turn_control_truth,
                 ));
         }
-        ConversationLifecycleEvent::SessionChosen { session } => {
+        ConversationLifecycleEvent::SessionChosen {
+            session,
+            fallback_workspace_directory,
+        } => {
             // Summary는 state로 move되므로 effect용 thread id를 먼저 복사한다. Body lifecycle은
             // 이어서 발생하는 core ConversationChanged(Loading) snapshot이 정한다.
             let thread_id = session.id.clone();
             state.active_session = Some(session);
-            effects.push(ConversationLifecycleEffect::LoadConversation { thread_id });
+            effects.push(ConversationLifecycleEffect::LoadConversation {
+                thread_id,
+                fallback_workspace_directory,
+            });
         }
         ConversationLifecycleEvent::CoreConversationSnapshotApplied {
             snapshot,
@@ -130,7 +140,10 @@ mod tests {
 
         let reduced = reduce_conversation_lifecycle(
             state,
-            ConversationLifecycleEvent::SessionChosen { session },
+            ConversationLifecycleEvent::SessionChosen {
+                session,
+                fallback_workspace_directory: "/tmp/root".to_string(),
+            },
         );
 
         assert!(matches!(
@@ -148,7 +161,8 @@ mod tests {
         assert_eq!(
             reduced.effects,
             vec![ConversationLifecycleEffect::LoadConversation {
-                thread_id: "thread-2".to_string()
+                thread_id: "thread-2".to_string(),
+                fallback_workspace_directory: "/tmp/root".to_string(),
             }]
         );
     }

@@ -77,17 +77,17 @@ impl ConversationService {
     pub fn load_thread_snapshot(
         &self,
         thread_id: &str,
+        fallback_workspace_directory: &str,
     ) -> Result<LoadedConversationThreadSnapshot> {
         let mut conversation = self.load_snapshot(thread_id)?;
         let thread_review = match self.review_center_read_service.as_ref() {
             Some(review_center_read_service) => {
                 let workspace_dir = if conversation.cwd.trim().is_empty() {
-                    review_center_read_service.workspace_dir()
+                    fallback_workspace_directory
                 } else {
                     conversation.cwd.as_str()
                 };
-                match review_center_read_service
-                    .load_thread_reviews_for_workspace(workspace_dir, thread_id)
+                match review_center_read_service.load_thread_reviews_for_workspace(workspace_dir, thread_id)
                 {
                     Ok(thread_review) => thread_review,
                     Err(error) => {
@@ -295,7 +295,7 @@ mod tests {
         );
 
         let snapshot = service
-            .load_thread_snapshot("thread-1")
+            .load_thread_snapshot("thread-1", "/tmp/launch-workspace")
             .expect("resumed thread snapshot should load");
 
         assert_eq!(snapshot.conversation.cwd, "/tmp/loaded-workspace");
@@ -331,7 +331,7 @@ mod tests {
         );
 
         let snapshot = service
-            .load_thread_snapshot("thread-1")
+            .load_thread_snapshot("thread-1", "/tmp/shell-workspace")
             .expect("resumed thread snapshot should load");
 
         assert!(snapshot.thread_review.is_empty());
@@ -341,7 +341,7 @@ mod tests {
                 .lock()
                 .expect("workspace tracker mutex poisoned")
                 .as_slice(),
-            ["/tmp/launch-workspace"]
+            ["/tmp/shell-workspace"]
         );
     }
 
@@ -415,7 +415,7 @@ mod tests {
         );
 
         let snapshot = service
-            .load_thread_snapshot("thread-1")
+            .load_thread_snapshot("thread-1", "/tmp/shell-workspace")
             .expect("review lookup failure should not block loading the conversation");
 
         assert!(snapshot.thread_review.is_empty());

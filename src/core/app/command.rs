@@ -16,6 +16,7 @@ pub enum AppCommand {
     },
     LoadConversation {
         thread_id: String,
+        fallback_workspace_directory: String,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),
     SubmitTurn(TurnSubmissionRequest),

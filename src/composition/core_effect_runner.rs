@@ -75,7 +75,10 @@ impl CoreEffectRunner {
                 limit,
                 workspace_directory,
             } => self.spawn_session_catalog_load(limit, workspace_directory),
-            CoreEffect::LoadConversation { thread_id } => self.spawn_conversation_load(thread_id),
+            CoreEffect::LoadConversation {
+                thread_id,
+                fallback_workspace_directory,
+            } => self.spawn_conversation_load(thread_id, fallback_workspace_directory),
             CoreEffect::PrepareManualPrompt(request) => {
                 self.spawn_manual_prompt_preparation(*request)
             }
@@ -95,12 +98,19 @@ impl CoreEffectRunner {
         });
     }
 
-    pub fn spawn_conversation_load(&self, thread_id: String) {
+    pub fn spawn_conversation_load(
+        &self,
+        thread_id: String,
+        fallback_workspace_directory: String,
+    ) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
             let completion = conversation_snapshot_completion(
-                conversation_service.load_thread_snapshot(thread_id.as_str()),
+                conversation_service.load_thread_snapshot(
+                    thread_id.as_str(),
+                    fallback_workspace_directory.as_str(),
+                ),
             );
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });

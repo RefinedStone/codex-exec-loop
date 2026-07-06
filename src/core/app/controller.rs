@@ -49,9 +49,15 @@ impl CoreController {
                     workspace_directory,
                 }])
             }
-            CoreInput::Command(AppCommand::LoadConversation { thread_id }) => {
+            CoreInput::Command(AppCommand::LoadConversation {
+                thread_id,
+                fallback_workspace_directory,
+            }) => {
                 self.state.mark_conversation_loading();
-                self.conversation_changed_outcome(vec![CoreEffect::LoadConversation { thread_id }])
+                self.conversation_changed_outcome(vec![CoreEffect::LoadConversation {
+                    thread_id,
+                    fallback_workspace_directory,
+                }])
             }
             CoreInput::Command(AppCommand::PrepareManualPrompt(request)) => CoreDispatchOutcome {
                 events: Vec::new(),
@@ -364,6 +370,7 @@ mod tests {
 
         let outcome = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/root".to_string(),
         }));
 
         assert_eq!(outcome.snapshot.revision, 1);
@@ -375,7 +382,8 @@ mod tests {
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::LoadConversation {
-                thread_id: "thread-1".to_string()
+                thread_id: "thread-1".to_string(),
+                fallback_workspace_directory: "/tmp/root".to_string(),
             }]
         );
     }
