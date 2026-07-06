@@ -22,6 +22,10 @@ use crate::application::port::outbound::planning_task_repository_port::{
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
 };
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
+    ReviewCenterThreadProjection,
+};
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
@@ -187,6 +191,91 @@ fn insert_invalid_slot_marker(workspace_dir: &str, slot_id: &str) {
             (slot_id, "2026-05-04T10:06:00+00:00"),
         )
         .expect("invalid slot marker should insert");
+}
+#[test]
+fn review_center_repository_port_round_trips_workspace_scoped_data() {
+    let workspace_a = temp_workspace("review-center-a");
+    let workspace_b = temp_workspace("review-center-b");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let mut thread_review = ReviewCenterThreadProjection::new(
+        "thread-a",
+        "review-a",
+        "manual handoff",
+        "review needed",
+        "approval review needs human review",
+        "2026-07-06T00:30:00Z",
+        "2026-07-06T00:30:10Z",
+    );
+    thread_review.handoff_target = Some("operator".to_string());
+    thread_review.handoff_note = Some("open inbox".to_string());
+    let mut inbox_item = ReviewCenterInboxItem::new(
+        "review-a",
+        "thread-a",
+        "pending",
+        "approval review needs human review",
+        "2026-07-06T00:30:00Z",
+        "2026-07-06T00:30:10Z",
+    );
+    inbox_item.handoff_target = Some("operator".to_string());
+    let history_entry = ReviewCenterHistoryEntry::new(
+        "review-a",
+        "thread-a",
+        "review_requested",
+        "approval review needs human review",
+        "2026-07-06T00:30:11Z",
+    );
+
+    adapter
+        .upsert_thread_review(&workspace_a, &thread_review)
+        .expect("workspace A thread review should persist");
+    adapter
+        .replace_pending_inbox(&workspace_a, &[inbox_item.clone()])
+        .expect("workspace A inbox should persist");
+    adapter
+        .append_history_entry(&workspace_a, &history_entry)
+        .expect("workspace A history should persist");
+
+    assert_eq!(
+        adapter
+            .load_thread_reviews(&workspace_a, "thread-a")
+            .expect("workspace A thread review should load"),
+        vec![thread_review.clone()]
+    );
+    assert_eq!(
+        adapter
+            .load_pending_inbox(&workspace_a)
+            .expect("workspace A inbox should load"),
+        vec![inbox_item.clone()]
+    );
+    assert_eq!(
+        adapter
+            .load_recent_history(&workspace_a)
+            .expect("workspace A history should load"),
+        vec![history_entry.clone()]
+    );
+
+    assert!(
+        adapter
+            .load_thread_reviews(&workspace_b, "thread-a")
+            .expect("workspace B thread review should load")
+            .is_empty(),
+        "workspace B should stay isolated from workspace A review rows"
+    );
+    assert!(
+        adapter
+            .load_pending_inbox(&workspace_b)
+            .expect("workspace B inbox should load")
+            .is_empty(),
+        "workspace B should stay isolated from workspace A inbox rows"
+    );
+    assert!(
+        adapter
+            .load_recent_history(&workspace_b)
+            .expect("workspace B history should load")
+            .is_empty(),
+        "workspace B should stay isolated from workspace A history rows"
+    );
 }
 
 #[test]
