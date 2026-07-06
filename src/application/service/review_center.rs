@@ -40,4 +40,13 @@ impl ReviewCenterReadService {
         self.review_center_repository
             .load_recent_history(&self.workspace_dir)
     }
+
+    pub fn load_thread_reviews_for_workspace(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> Result<Vec<ReviewCenterThreadProjection>> {
+        self.review_center_repository
+            .load_thread_reviews(workspace_dir, thread_id)
+    }
 }

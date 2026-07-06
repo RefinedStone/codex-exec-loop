@@ -74,13 +74,16 @@ impl ConversationService {
             .load_conversation_snapshot(thread_id)
     }
 
-    pub fn load_thread_snapshot(&self, thread_id: &str) -> Result<LoadedConversationThreadSnapshot> {
+    pub fn load_thread_snapshot(
+        &self,
+        thread_id: &str,
+    ) -> Result<LoadedConversationThreadSnapshot> {
         let conversation = self.load_snapshot(thread_id)?;
         let thread_review = self
             .review_center_read_service
             .as_ref()
             .context("review-center read service is required for resumed thread hydration")?
-            .load_thread_reviews(thread_id)?;
+            .load_thread_reviews_for_workspace(conversation.cwd.as_str(), thread_id)?;
         Ok(LoadedConversationThreadSnapshot {
             conversation,
             thread_review,
@@ -139,5 +142,155 @@ impl ConversationService {
             // 기존 thread에서의 turn 실행도 service가 직접 구현하지 않는다.
             // port 경계를 통과시켜 app-server adapter가 프로토콜과 세션 저장 책임을 계속 소유하게 한다.
             .run_turn_stream(thread_id, prompt, options, event_sender)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::port::outbound::review_center_repository_port::{
+        ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
+        ReviewCenterThreadProjection,
+    };
+    use crate::domain::conversation::{ConversationRuntimeControlTruth, ConversationTurnOptions};
+    use anyhow::Result;
+    use std::sync::mpsc::Sender;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct FakeReviewCenterRepository {
+        requested_workspaces: Mutex<Vec<String>>,
+        thread_reviews: Vec<ReviewCenterThreadProjection>,
+    }
+
+    impl ReviewCenterRepositoryPort for FakeReviewCenterRepository {
+        fn load_thread_reviews(
+            &self,
+            workspace_dir: &str,
+            _thread_id: &str,
+        ) -> Result<Vec<ReviewCenterThreadProjection>> {
+            self.requested_workspaces
+                .lock()
+                .expect("workspace tracker mutex poisoned")
+                .push(workspace_dir.to_string());
+            Ok(self.thread_reviews.clone())
+        }
+
+        fn load_pending_inbox(&self, _workspace_dir: &str) -> Result<Vec<ReviewCenterInboxItem>> {
+            Ok(Vec::new())
+        }
+
+        fn load_recent_history(
+            &self,
+            _workspace_dir: &str,
+        ) -> Result<Vec<ReviewCenterHistoryEntry>> {
+            Ok(Vec::new())
+        }
+
+        fn upsert_thread_review(
+            &self,
+            _workspace_dir: &str,
+            _review: &ReviewCenterThreadProjection,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn replace_pending_inbox(
+            &self,
+            _workspace_dir: &str,
+            _inbox: &[ReviewCenterInboxItem],
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn append_history_entry(
+            &self,
+            _workspace_dir: &str,
+            _entry: &ReviewCenterHistoryEntry,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FakeInteractiveTurnRuntimePort {
+        snapshot: ConversationSnapshot,
+    }
+
+    impl InteractiveTurnRuntimePort for FakeInteractiveTurnRuntimePort {
+        fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
+            ConversationRuntimeControlTruth::default()
+        }
+
+        fn load_conversation_snapshot(&self, _thread_id: &str) -> Result<ConversationSnapshot> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn request_stop_all_sessions(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_new_thread_stream(
+            &self,
+            _cwd: &str,
+            _prompt: &str,
+            _options: ConversationTurnOptions,
+            _event_sender: Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn run_turn_stream(
+            &self,
+            _thread_id: &str,
+            _prompt: &str,
+            _options: ConversationTurnOptions,
+            _event_sender: Sender<ConversationStreamEvent>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resumed_thread_snapshot_uses_snapshot_workspace_for_review_lookup() {
+        let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/loaded-workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+        });
+        let review_repository = Arc::new(FakeReviewCenterRepository {
+            requested_workspaces: Mutex::new(Vec::new()),
+            thread_reviews: vec![ReviewCenterThreadProjection::new(
+                "thread-1",
+                "review-1",
+                "Manual review",
+                "pending",
+                "Need operator follow-up",
+                "2026-07-06T10:00:00Z",
+                "2026-07-06T10:01:00Z",
+            )],
+        });
+        let service = ConversationService::new(runtime_port).with_review_center_read_service(
+            ReviewCenterReadService::new("/tmp/launch-workspace", review_repository.clone()),
+        );
+
+        let snapshot = service
+            .load_thread_snapshot("thread-1")
+            .expect("resumed thread snapshot should load");
+
+        assert_eq!(snapshot.conversation.cwd, "/tmp/loaded-workspace");
+        assert_eq!(snapshot.thread_review.len(), 1);
+        assert_eq!(
+            review_repository
+                .requested_workspaces
+                .lock()
+                .expect("workspace tracker mutex poisoned")
+                .as_slice(),
+            ["/tmp/loaded-workspace"]
+        );
     }
 }
