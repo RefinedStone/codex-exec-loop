@@ -38,7 +38,7 @@ impl NativeTuiApp {
         let current_thread_state = match active_thread.as_ref() {
             Some((thread_id, _, _)) => load_section(
                 self.application
-                    .load_review_center_thread_reviews(thread_id)
+                    .load_review_center_thread_reviews_for_workspace(&workspace_directory, thread_id)
                     .map_err(anyhow::Error::msg)
                     .map(|reviews| build_thread_review_views(&reviews)),
             ),

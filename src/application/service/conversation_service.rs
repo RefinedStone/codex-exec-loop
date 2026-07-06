@@ -132,6 +132,17 @@ impl ConversationService {
             .load_recent_history()
     }
 
+    pub fn load_review_center_thread_reviews_for_workspace(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> Result<Vec<ReviewCenterThreadProjection>> {
+        self.review_center_read_service
+            .as_ref()
+            .context("review-center read service is required for review overlay")?
+            .load_thread_reviews_for_workspace(workspace_dir, thread_id)
+    }
+
     // runtime control truth는 "중단 버튼, 전체 세션 정지, 실행 상태 판단을 어느 runtime이
     // 실제로 담당하는지"를 알려 주는 값이다. AppRuntime 초기화 시 이 값을 읽어 TUI 제어 모델을 맞춘다.
     pub fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {

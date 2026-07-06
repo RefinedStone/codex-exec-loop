@@ -332,11 +332,14 @@ impl NativeTuiApplicationHandle {
         self.conversations.load_snapshot(thread_id)
     }
 
-    pub(super) fn load_review_center_thread_reviews(
+
+    pub(super) fn load_review_center_thread_reviews_for_workspace(
         &self,
+        workspace_dir: &str,
         thread_id: &str,
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection>, String> {
-        self.conversations.load_review_center_thread_reviews(thread_id)
+        self.conversations
+            .load_review_center_thread_reviews_for_workspace(workspace_dir, thread_id)
     }
 
     pub(super) fn load_review_center_pending_inbox(
@@ -378,12 +381,14 @@ impl NativeTuiConversationHandle {
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn load_review_center_thread_reviews(
+
+    pub(super) fn load_review_center_thread_reviews_for_workspace(
         &self,
+        workspace_dir: &str,
         thread_id: &str,
     ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection>, String> {
         self.service
-            .load_review_center_thread_reviews(thread_id)
+            .load_review_center_thread_reviews_for_workspace(workspace_dir, thread_id)
             .map_err(|error| error.to_string())
     }
 
