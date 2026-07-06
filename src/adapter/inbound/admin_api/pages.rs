@@ -357,6 +357,14 @@ pub(super) async fn reviews_page(
         .review_center_read_service
         .load_pending_inbox()
         .map_err(internal_server_error)?;
+    let current_thread_id = inbox.first().map(|item| item.thread_id.clone());
+    let current_thread_reviews = match current_thread_id.as_deref() {
+        Some(thread_id) => state
+            .review_center_read_service
+            .load_thread_reviews(thread_id)
+            .map_err(internal_server_error)?,
+        None => Vec::new(),
+    };
     let history = state
         .review_center_read_service
         .load_recent_history()
@@ -369,6 +377,8 @@ pub(super) async fn reviews_page(
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
             notice: query.get("notice").cloned(),
+            current_thread_id,
+            current_thread_reviews,
             inbox,
             history,
         },

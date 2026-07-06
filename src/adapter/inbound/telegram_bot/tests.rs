@@ -10,11 +10,16 @@ use crate::application::port::outbound::telegram_bot_port::{
     TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
     TelegramUpdate,
 };
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
+    ReviewCenterThreadProjection,
+};
 use crate::application::service::planning::PlanningResetTarget;
 use crate::application::service::planning::control::{
     PlanningControlCommand, PlanningControlQueueEntry, PlanningControlResetOutcome,
     PlanningControlService, PlanningControlStatusSnapshot, PlanningControlSurface,
 };
+use crate::application::service::review_center::ReviewCenterReadService;
 use anyhow::{Result, anyhow, bail};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -173,6 +178,69 @@ fn build_runner(allowed_chat_ids: &[i64]) -> (Arc<FakeTelegramBotPort>, Telegram
         Duration::ZERO,
     );
     (gateway, runner)
+}
+
+#[derive(Default)]
+struct FakeReviewCenterRepository {
+    inbox: Vec<ReviewCenterInboxItem>,
+    history: Vec<ReviewCenterHistoryEntry>,
+    thread_reviews: Vec<ReviewCenterThreadProjection>,
+}
+
+impl ReviewCenterRepositoryPort for FakeReviewCenterRepository {
+    fn load_thread_reviews(
+        &self,
+        _workspace_dir: &str,
+        _thread_id: &str,
+    ) -> Result<Vec<ReviewCenterThreadProjection>> {
+        Ok(self.thread_reviews.clone())
+    }
+
+    fn load_pending_inbox(&self, _workspace_dir: &str) -> Result<Vec<ReviewCenterInboxItem>> {
+        Ok(self.inbox.clone())
+    }
+
+    fn load_recent_history(&self, _workspace_dir: &str) -> Result<Vec<ReviewCenterHistoryEntry>> {
+        Ok(self.history.clone())
+    }
+
+    fn upsert_thread_review(
+        &self,
+        _workspace_dir: &str,
+        _review: &ReviewCenterThreadProjection,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn replace_pending_inbox(
+        &self,
+        _workspace_dir: &str,
+        _inbox: &[ReviewCenterInboxItem],
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn append_history_entry(
+        &self,
+        _workspace_dir: &str,
+        _entry: &ReviewCenterHistoryEntry,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn build_runner_with_reviews(
+    allowed_chat_ids: &[i64],
+    repository: Arc<FakeReviewCenterRepository>,
+) -> (Arc<FakeTelegramBotPort>, TelegramBotRunner) {
+    let (gateway, runner) = build_runner(allowed_chat_ids);
+    (
+        gateway,
+        runner.with_review_center_read_service(ReviewCenterReadService::new(
+            "/tmp/repo",
+            repository,
+        )),
+    )
 }
 
 // Parser tests protect the user-facing chat grammar before service dispatch is involved.
@@ -439,6 +507,49 @@ fn runner_executes_parallel_status_for_allowed_chat() {
     let reply = reply.expect("reply should exist");
     assert!(reply.contains("병렬 상태"));
     assert!(reply.contains("queue_depth: 2"));
+}
+
+#[test]
+fn runner_reviews_summary_mentions_thread_spotlight() {
+    let repository = Arc::new(FakeReviewCenterRepository {
+        inbox: vec![ReviewCenterInboxItem::new(
+            "review-1",
+            "thread-1",
+            "pending",
+            "Need operator follow-up",
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T10:01:00Z",
+        )],
+        history: vec![ReviewCenterHistoryEntry::new(
+            "review-1",
+            "thread-1",
+            "review_requested",
+            "Need operator follow-up",
+            "2026-07-06T10:02:00Z",
+        )],
+        thread_reviews: vec![ReviewCenterThreadProjection::new(
+            "thread-1",
+            "review-1",
+            "Manual review",
+            "pending",
+            "Need operator follow-up",
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T10:01:00Z",
+        )],
+    });
+    let (_gateway, runner) = build_runner_with_reviews(&[42], repository);
+    let reply = runner
+        .handle_message(&TelegramInboundMessage {
+            message_id: 2,
+            chat_id: 42,
+            text: Some("/reviews".to_string()),
+            sender_display_name: Some("operator".to_string()),
+        })
+        .expect("handler should succeed")
+        .expect("reply should exist");
+
+    assert!(reply.contains("thread spotlight: thread-1"));
+    assert!(reply.contains("Manual review [pending] Need operator follow-up"));
 }
 
 #[test]

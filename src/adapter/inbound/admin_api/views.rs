@@ -11,7 +11,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptOutputRecord,
 };
 use crate::application::port::outbound::review_center_repository_port::{
-    ReviewCenterHistoryEntry, ReviewCenterInboxItem,
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
 };
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::application::service::planning::{
@@ -117,6 +117,8 @@ pub(super) struct ReviewsTemplate {
     pub(super) workspace_dir: String,
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
+    pub(super) current_thread_id: Option<String>,
+    pub(super) current_thread_reviews: Vec<ReviewCenterThreadProjection>,
     pub(super) inbox: Vec<ReviewCenterInboxItem>,
     pub(super) history: Vec<ReviewCenterHistoryEntry>,
 }

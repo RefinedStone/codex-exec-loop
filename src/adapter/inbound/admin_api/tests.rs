@@ -910,6 +910,7 @@ async fn admin_html_page_routes_render_live_templates() {
         }
         if uri == "/admin/reviews" {
             assert!(body.contains(r#"<a href="/admin/reviews" class="active">Reviews</a>"#));
+            assert!(body.contains("Thread spotlight"));
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
         }
     }

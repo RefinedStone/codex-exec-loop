@@ -377,6 +377,11 @@ impl TelegramBotRunner {
             .as_ref()
             .context("telegram review center read service is not configured")?;
         let inbox = review_center_read_service.load_pending_inbox()?;
+        let current_thread_id = inbox.first().map(|item| item.thread_id.clone());
+        let current_thread_reviews = match current_thread_id.as_deref() {
+            Some(thread_id) => review_center_read_service.load_thread_reviews(thread_id)?,
+            None => Vec::new(),
+        };
         let history = review_center_read_service.load_recent_history()?;
 
         let mut lines = vec![
@@ -401,6 +406,30 @@ impl TelegramBotRunner {
                     handoff,
                 )
             }));
+        }
+
+        if let Some(thread_id) = current_thread_id.as_deref() {
+            lines.push(format!("thread spotlight: {thread_id}"));
+            if current_thread_reviews.is_empty() {
+                lines.push("- no current-thread review rows".to_string());
+            } else {
+                lines.extend(current_thread_reviews.iter().take(3).map(|review| {
+                    let handoff = match (review.handoff_target.as_deref(), review.handoff_note.as_deref()) {
+                        (Some(target), Some(note)) if !target.trim().is_empty() && !note.trim().is_empty() => {
+                            format!(" / handoff: {target}: {note}")
+                        }
+                        (Some(target), _) if !target.trim().is_empty() => format!(" / handoff: {target}"),
+                        _ => String::new(),
+                    };
+                    format!(
+                        "- {} [{}] {}{}",
+                        review.review_label,
+                        review.review_state,
+                        compact_review_text(&review.review_summary, 72),
+                        handoff,
+                    )
+                }));
+            }
         }
 
         lines.push(format!("history: {}", history.len()));

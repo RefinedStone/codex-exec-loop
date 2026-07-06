@@ -47,10 +47,33 @@
   </article>
 
   <article class="card span-5">
+    <h2>Thread spotlight</h2>
+    {% if let Some(thread_id) = current_thread_id %}
+      <p><strong class="mono">{{ thread_id }}</strong></p>
+      {% if current_thread_reviews.is_empty() %}
+      <p>No current-thread review rows are available for the top pending thread.</p>
+      {% else %}
+      <ul>
+        {% for review in current_thread_reviews %}
+        <li>
+          <strong>{{ review.review_label }}</strong>
+          <span class="status-pill">{{ review.review_state }}</span><br>
+          <small>{{ review.review_summary }}</small>
+          {% if let Some(target) = review.handoff_target %}
+          <br><small>handoff → {{ target }}{% if let Some(note) = review.handoff_note %}: {{ note }}{% endif %}</small>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% else %}
+      <p>No pending thread is available to spotlight yet.</p>
+    {% endif %}
     <h2>Operator guidance</h2>
     <p>Use this page to confirm what needs attention before opening the matching thread or downstream surface.</p>
     <ul>
       <li>Inbox shows the current pending review queue.</li>
+      <li>Thread spotlight shows the top pending thread's current review context.</li>
       <li>History shows the most recent review-center events already recorded.</li>
       <li>No approve or deny actions are exposed here yet.</li>
     </ul>
