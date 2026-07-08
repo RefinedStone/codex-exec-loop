@@ -8,7 +8,7 @@ use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgen
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
     ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
-    ParallelModeOrchestratorTrigger, ParallelModeService,
+    ParallelModeOrchestratorTrigger, ParallelModeService, distributor_integration_branch,
 };
 use crate::application::service::planning::PlanningServices;
 use crate::diagnostics::event_log;
@@ -299,7 +299,8 @@ where
                                 "off->on entry"
                             };
                             Ok(format!(
-                                "reset {count} pool slot worktree(s) to prerelease after {entry_label}{live_suffix} / {}",
+                                "reset {count} pool slot worktree(s) to {} after {entry_label}{live_suffix} / {}",
+                                distributor_integration_branch(),
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
                             ))
                         })

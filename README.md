@@ -233,6 +233,8 @@ Important current rules:
   it commit-ready.
 - Distributor delivery is serial: source branch push, PR automation, integration into `prerelease`,
   and slot cleanup.
+- `AKRA_PARALLEL_INTEGRATION_BRANCH=<branch>` overrides the distributor/pool integration branch
+  when a repository needs a lane other than `prerelease`.
 - Recovery is store-backed. Retryable distributor push recovery is limited to source branch push
   failures; integration branch push blocks remain operator-owned.
 
@@ -288,6 +290,9 @@ the `x-csrf-token` header.
 
 Useful admin environment variables:
 
+- `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY` and
+  `CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE` override the app-server execution policy. The default
+  Akra session policy is now `on-request` approvals with `workspace-write` sandboxing.
 - `AKRA_ADMIN_GRAPHIC_ENABLED=0` disables the graphical admin dashboard layer.
 - `AKRA_ADMIN_API_BASE_URL=<url>` overrides the API base URL used by the admin graphic client.
 - `AKRA_ADMIN_GRAPHIC_POLL_MS=<milliseconds>` sets graphic polling. Values below 5000 are ignored.

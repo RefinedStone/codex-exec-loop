@@ -5,8 +5,8 @@ use std::path::Path;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
 use super::super::{
-    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH,
-    local_branch_ref, remote_tracking_branch_ref,
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, local_branch_ref,
+    pool_baseline_branch, remote_tracking_branch_ref,
 };
 use super::{
     GitWorktreeRecord, SlotGitStatus, command_succeeds, current_branch_name,
@@ -24,7 +24,7 @@ repository처럼 local/remote 표준 branch가 모두 없으면 현재 workspace
 사용해 사용자가 방금 어떤 pool 구조 변화가 일어났는지 알 수 있게 한다.
 */
 pub(super) fn ensure_pool_baseline_branch(repo_root: &str) -> Result<(String, bool), ()> {
-    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
+    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch());
     if command_succeeds(
         "git",
         [
@@ -47,11 +47,11 @@ fn sync_pool_baseline_branch_from_remote(
     remote_ref: &str,
 ) -> Result<(String, bool), ()> {
     let remote_head = resolve_branch_head(repo_root, remote_ref).ok_or(())?;
-    let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
+    let local_head = resolve_branch_head(repo_root, pool_baseline_branch());
     if local_head.as_deref() == Some(remote_head.as_str()) {
         return Ok((remote_head, false));
     }
-    if current_branch_name(Path::new(repo_root)).as_deref() == Some(POOL_BASELINE_BRANCH) {
+    if current_branch_name(Path::new(repo_root)).as_deref() == Some(pool_baseline_branch()) {
         return Err(());
     }
 
@@ -63,7 +63,7 @@ fn sync_pool_baseline_branch_from_remote(
             repo_root,
             "branch",
             "-f",
-            POOL_BASELINE_BRANCH,
+            pool_baseline_branch(),
             remote_ref,
         ],
     ) {
@@ -83,9 +83,9 @@ fn seed_pool_baseline_branch_from_workspace_head(
     }
 
     let workspace_head = resolve_branch_head(repo_root, "HEAD").ok_or(())?;
-    let local_head = resolve_branch_head(repo_root, POOL_BASELINE_BRANCH);
+    let local_head = resolve_branch_head(repo_root, pool_baseline_branch());
     if let Some(local_head) = local_head {
-        let local_ref = local_branch_ref(POOL_BASELINE_BRANCH);
+        let local_ref = local_branch_ref(pool_baseline_branch());
         let push_refspec = format!("{local_ref}:{local_ref}");
         if !command_succeeds(
             "git",
@@ -116,7 +116,7 @@ fn seed_pool_baseline_branch_from_workspace_head(
         return Ok((local_head, false));
     }
 
-    if current_branch != POOL_BASELINE_BRANCH
+    if current_branch != pool_baseline_branch()
         && !command_succeeds(
             "git",
             [
@@ -124,7 +124,7 @@ fn seed_pool_baseline_branch_from_workspace_head(
                 repo_root,
                 "branch",
                 "-f",
-                POOL_BASELINE_BRANCH,
+                pool_baseline_branch(),
                 "HEAD",
             ],
         )
@@ -132,7 +132,7 @@ fn seed_pool_baseline_branch_from_workspace_head(
         return Err(());
     }
 
-    let local_ref = local_branch_ref(POOL_BASELINE_BRANCH);
+    let local_ref = local_branch_ref(pool_baseline_branch());
     let push_refspec = format!("{local_ref}:{local_ref}");
     if !command_succeeds(
         "git",
@@ -230,7 +230,7 @@ pub(super) fn provision_missing_slots(
                 "add",
                 "--detach",
                 slot_path_string.as_str(),
-                POOL_BASELINE_BRANCH,
+                pool_baseline_branch(),
             ],
         ) {
             /*

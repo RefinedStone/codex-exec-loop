@@ -1019,7 +1019,7 @@ fn distributor_bubble(state: ParallelModeQueueItemState) -> &'static str {
         ParallelModeQueueItemState::Pushing => "origin push 중",
         ParallelModeQueueItemState::PrPending => "PR 확인 중",
         ParallelModeQueueItemState::MergePending => "merge 준비 중",
-        ParallelModeQueueItemState::Integrating => "prerelease 통합 중",
+        ParallelModeQueueItemState::Integrating => "통합 브랜치 반영 중",
         ParallelModeQueueItemState::Cleaning => "slot 정리 요청",
         ParallelModeQueueItemState::Done => "배포 완료",
         ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed => "배포 막힘",
@@ -1754,7 +1754,7 @@ mod tests {
             (ParallelModeQueueItemState::MergePending, "merge 준비 중"),
             (
                 ParallelModeQueueItemState::Integrating,
-                "prerelease 통합 중",
+                "통합 브랜치 반영 중",
             ),
             (ParallelModeQueueItemState::Cleaning, "slot 정리 요청"),
             (ParallelModeQueueItemState::Done, "배포 완료"),

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
+const POOL_BASELINE_BRANCH: &str = "prerelease";
 #[derive(Default)]
 struct MirrorRuntime {
     existing_paths: BTreeSet<PathBuf>,

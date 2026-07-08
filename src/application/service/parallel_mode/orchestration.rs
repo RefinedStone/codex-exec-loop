@@ -7,7 +7,7 @@ use chrono::DateTime;
 // orchestration service는 slot pool의 runtime 관찰값과 distributor queue를 함께 본다.
 // 하위 pool helper가 repo root 탐색과 git 상태 판정을 맡고, 이 파일은 tick을 막을지 결정한다.
 use super::pool::{PoolRuntimeContext, detect_canonical_repo_root, inspect_slot_git_status};
-use super::{DISTRIBUTOR_INTEGRATION_BRANCH, current_branch_name};
+use super::{current_branch_name, distributor_integration_branch};
 
 /*
 병렬 디스패처가 새 작업을 고를 때 이미 "누군가 처리 중인" 작업을 다시 뽑으면
@@ -128,9 +128,10 @@ pub(super) fn inspect_akra_integration_worktree_blocker(
     let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)?;
     // integration queue 처리는 항상 지정 브랜치에서만 수행되어야 하므로 현재 브랜치를 먼저 본다.
     let branch_name = current_branch_name(&canonical_repo_root)?;
-    if branch_name != DISTRIBUTOR_INTEGRATION_BRANCH {
+    if branch_name != distributor_integration_branch() {
         return Some(format!(
-            "orchestrator blocked / integration worktree must be checked out to `{DISTRIBUTOR_INTEGRATION_BRANCH}` but is `{branch_name}`"
+            "orchestrator blocked / integration worktree must be checked out to `{}` but is `{branch_name}`",
+            distributor_integration_branch()
         ));
     }
 

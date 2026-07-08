@@ -1,6 +1,7 @@
 use super::*;
 use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
 
+use crate::application::service::parallel_mode::distributor_integration_branch;
 const AKRA_GITHUB_PR_MODE_ENV: &str = "AKRA_GITHUB_PR_MODE";
 const AKRA_GITHUB_PR_MODE_CONFIG_KEY: &str = "akra.githubPrMode";
 
@@ -252,10 +253,10 @@ pub(super) fn distributor_ensure_pull_request(
         &record.integration_note,
     );
 
-    // ensure는 idempotent boundary이다. retry 시 기존 PR을 재사용해야 queue가 중복 PR을 만들지 않는다.
+    let integration_branch = distributor_integration_branch();
     let pull_request = match github_automation.ensure_pull_request(
         &repo_root,
-        DISTRIBUTOR_INTEGRATION_BRANCH,
+        integration_branch,
         &record.branch_name,
         &build_distributor_pull_request_title(record),
         &build_distributor_pull_request_body(record),
@@ -392,8 +393,8 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
             format!("pull request #{} is still a draft", pull_request.number),
         );
     }
-    if pull_request.base_branch != DISTRIBUTOR_INTEGRATION_BRANCH {
-        // base drift는 다른 integration lane으로 향한 PR일 수 있으므로 현재 distributor queue에서 통합하지 않는다.
+    let integration_branch = distributor_integration_branch();
+    if pull_request.base_branch != integration_branch {
         return block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -402,8 +403,8 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
             Some(&resolution.lease),
             record,
             format!(
-                "pull request #{} targets `{}` instead of `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
-                pull_request.number, pull_request.base_branch
+                "pull request #{} targets `{}` instead of `{}`",
+                pull_request.number, pull_request.base_branch, integration_branch
             ),
         );
     }
@@ -424,8 +425,9 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
     }
 
     record.integration_note = format!(
-        "pull request #{} is open and ready for integration into `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
-        pull_request.number
+        "pull request #{} is open and ready for integration into `{}`",
+        pull_request.number,
+        distributor_integration_branch()
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
@@ -541,7 +543,8 @@ fn distributor_skip_pull_request_workflow(
 ) -> Result<String, String> {
     record.queue_state = ParallelModeQueueItemState::MergePending;
     record.integration_note = format!(
-        "pull request workflow skipped ({reason}); queued branch will be integrated directly into `{DISTRIBUTOR_INTEGRATION_BRANCH}`"
+        "pull request workflow skipped ({reason}); queued branch will be integrated directly into `{}`",
+        distributor_integration_branch()
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(

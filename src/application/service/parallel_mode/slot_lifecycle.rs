@@ -7,10 +7,10 @@ use crate::domain::parallel_mode::{
 };
 
 use super::{
-    POOL_BASELINE_BRANCH, ParallelModeService, acquire_pool_allocation_lock,
-    allocate_agent_branch_name, branch_is_cleanup_ready, build_pool_slots, cleanup_slot,
-    command_succeeds, current_branch_name, current_timestamp, discard_unstarted_slot_branch,
-    inspect_slot_git_status, load_pool_runtime_context, reconcile_pool_board,
+    ParallelModeService, acquire_pool_allocation_lock, allocate_agent_branch_name,
+    branch_is_cleanup_ready, build_pool_slots, cleanup_slot, command_succeeds, current_branch_name,
+    current_timestamp, discard_unstarted_slot_branch, inspect_slot_git_status,
+    load_pool_runtime_context, pool_baseline_branch, reconcile_pool_board,
     record_assigned_session_detail, record_cleanup_pending_session_detail,
     record_failed_start_session_detail, record_running_session_detail,
     record_thread_prepared_session_detail, remove_slot_lease, resolve_workspace_slot_lease,
@@ -103,7 +103,7 @@ impl ParallelModeService {
                 "checkout",
                 "-b",
                 branch_name.as_str(),
-                POOL_BASELINE_BRANCH,
+                pool_baseline_branch(),
             ],
         ) {
             return Err(format!(
@@ -321,8 +321,9 @@ impl ParallelModeService {
         // baseline에 통합됐다는 증거가 없으면 여기서 멈춰 변경 손실을 막는다.
         if !branch_is_cleanup_ready(&context.repo_root, &lease.branch_name) {
             return Err(format!(
-                "slot `{slot_id}` branch `{}` is not integrated into `{POOL_BASELINE_BRANCH}` yet",
-                lease.branch_name
+                "slot `{slot_id}` branch `{}` is not integrated into `{}` yet",
+                lease.branch_name,
+                pool_baseline_branch()
             ));
         }
 
@@ -444,8 +445,9 @@ impl ParallelModeService {
                 &resolution.lease,
             );
             return Err(format!(
-                "slot `{}` could not be reset to `{POOL_BASELINE_BRANCH}` after startup failure",
-                resolution.lease.slot_id
+                "slot `{}` could not be reset to `{}` after startup failure",
+                resolution.lease.slot_id,
+                pool_baseline_branch()
             ));
         }
 

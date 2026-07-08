@@ -1,6 +1,6 @@
 use super::super::supervisor::selected_runtime_session_detail;
 use super::super::{
-    DISTRIBUTOR_INTEGRATION_BRANCH, PoolRuntimeContext, current_branch_name,
+    PoolRuntimeContext, current_branch_name, distributor_integration_branch,
     inspect_slot_git_status, short_sha,
 };
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
@@ -203,16 +203,18 @@ fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> Strin
     let Some(branch_name) = current_branch_name(repo_root) else {
         return "unknown: branch could not be inspected".to_string();
     };
-    if branch_name != DISTRIBUTOR_INTEGRATION_BRANCH {
+    let integration_branch = distributor_integration_branch();
+    if branch_name != integration_branch {
         return format!(
-            "blocked: expected `{DISTRIBUTOR_INTEGRATION_BRANCH}` but checked out `{branch_name}`"
+            "blocked: expected `{}` but checked out `{branch_name}`",
+            integration_branch
         );
     }
     let Some(status) = inspect_slot_git_status(repo_root) else {
         return "unknown: git status could not be inspected".to_string();
     };
     if status.is_ready_for_integration() {
-        format!("ready: {DISTRIBUTOR_INTEGRATION_BRANCH} worktree clean")
+        format!("ready: {} worktree clean", integration_branch)
     } else {
         format!("blocked: {}", status.detail_label())
     }
@@ -293,9 +295,10 @@ fn rebase_provenance_label(record: &ParallelModeDistributorQueueRecord) -> Optio
         .unwrap_or(record.commit_sha.as_str());
     (original_commit_sha != record.commit_sha).then(|| {
         format!(
-            "rebased {} -> {} onto `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
+            "rebased {} -> {} onto `{}`",
             short_sha(original_commit_sha),
-            short_sha(&record.commit_sha)
+            short_sha(&record.commit_sha),
+            distributor_integration_branch()
         )
     })
 }
@@ -366,7 +369,12 @@ fn build_distributor_completion_feed(
         ParallelModeCompletionFeedEntry::new(
             "merged",
             latest_history_summary_across_records(history, &["merged", "cleaned"]).unwrap_or_else(
-                || format!("nothing has been integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} yet"),
+                || {
+                    format!(
+                        "nothing has been integrated into {} yet",
+                        distributor_integration_branch()
+                    )
+                },
             ),
         ),
     ]
@@ -416,7 +424,10 @@ pub(super) fn build_placeholder_distributor_snapshot(
             ),
             ParallelModeCompletionFeedEntry::new(
                 "merged",
-                format!("nothing has been integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} yet"),
+                format!(
+                    "nothing has been integrated into {} yet",
+                    distributor_integration_branch()
+                ),
             ),
         ],
         head_summary,

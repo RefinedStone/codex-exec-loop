@@ -1,14 +1,14 @@
 use super::{
-    DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH, PoolRuntimeContext,
-    WorkspaceSlotLeaseResolution, branch_exists, branch_is_integrated_into, cleanup_slot,
-    command_succeeds, current_branch_name, current_timestamp, inspect_slot_git_status,
-    lease_session_key, load_pool_runtime_context, reconcile_pool_board,
-    record_cleaned_session_detail, record_cleanup_pending_session_detail,
-    record_integrating_session_detail, record_merge_pending_session_detail,
-    record_merge_queued_session_detail, record_official_completion_recovery_needed_session_detail,
-    record_pr_pending_session_detail, record_pushing_session_detail, remote_branch_name,
-    remote_tracking_branch_ref, resolve_workspace_head_sha, resolve_workspace_slot_lease,
-    run_command, short_sha, write_slot_lease,
+    DEFAULT_PUSH_REMOTE_NAME, PoolRuntimeContext, WorkspaceSlotLeaseResolution, branch_exists,
+    branch_is_integrated_into, cleanup_slot, command_succeeds, current_branch_name,
+    current_timestamp, distributor_integration_branch, inspect_slot_git_status, lease_session_key,
+    load_pool_runtime_context, reconcile_pool_board, record_cleaned_session_detail,
+    record_cleanup_pending_session_detail, record_integrating_session_detail,
+    record_merge_pending_session_detail, record_merge_queued_session_detail,
+    record_official_completion_recovery_needed_session_detail, record_pr_pending_session_detail,
+    record_pushing_session_detail, remote_branch_name, remote_tracking_branch_ref,
+    resolve_workspace_head_sha, resolve_workspace_slot_lease, run_command, short_sha,
+    write_slot_lease,
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -25,7 +25,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 const STALE_LEDGER_REFRESHING_AFTER_SECS: i64 = 300;
-const INTEGRATION_BRANCH_PUSH_BLOCK_FRAGMENT: &str = "`prerelease` could not be pushed to `origin`";
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
 mod delivery;
 mod queue_keys;
@@ -743,14 +742,21 @@ fn recover_retryable_blocked_queue_record(
 // retryable block 목록은 delivery가 남기는 integration_note 문구와 맞물린다.
 // 영구 복구가 필요한 상태까지 자동 재시도하지 않도록 명시적으로 알려진 임시 실패만 통과시킨다.
 fn is_retryable_distributor_block(detail: &str) -> bool {
+    let integration_branch = distributor_integration_branch();
     detail.contains("pull request ensure failed")
         || detail.contains("could not be inspected")
         || detail.contains("could not cherry-pick")
-        || detail.contains("integration worktree must be checked out to `prerelease`")
+        || detail.contains(&format!(
+            "integration worktree must be checked out to `{}`",
+            integration_branch
+        ))
         || detail.contains("integration worktree must be clean before cherry-pick delivery")
         || detail.contains("push capability is unavailable for distributor delivery")
         || detail.contains("source branch `") && detail.contains("` could not be pushed to `")
-        || detail.contains(INTEGRATION_BRANCH_PUSH_BLOCK_FRAGMENT)
+        || detail.contains(&format!(
+            "`{}` could not be pushed to `{}`",
+            integration_branch, DEFAULT_PUSH_REMOTE_NAME
+        ))
         || detail.contains("source branch was pushed but GitHub automation is unavailable")
         || detail.contains("source branch was pushed but pull request workflow is unavailable")
         || detail.contains("pull request workflow is required but unavailable")
@@ -777,18 +783,16 @@ fn queue_record_is_integrated_or_patch_equivalent(
     record: &ParallelModeDistributorQueueRecord,
 ) -> bool {
     let source_branch = record.effective_source_branch();
+    let integration_branch = distributor_integration_branch();
     branch_is_integrated_into(
         &context.repo_root,
         source_branch.as_str(),
-        DISTRIBUTOR_INTEGRATION_BRANCH,
-    ) || branch_is_integrated_into(
-        &context.repo_root,
-        &record.branch_name,
-        DISTRIBUTOR_INTEGRATION_BRANCH,
-    ) || commit_patch_equivalent_in_integration_branch(
-        &context.repo_root,
-        &record.effective_source_commit_sha(),
-    )
+        integration_branch,
+    ) || branch_is_integrated_into(&context.repo_root, &record.branch_name, integration_branch)
+        || commit_patch_equivalent_in_integration_branch(
+            &context.repo_root,
+            &record.effective_source_commit_sha(),
+        )
 }
 
 fn commit_patch_equivalent_in_integration_branch(repo_root: &str, commit_sha: &str) -> bool {
@@ -801,7 +805,7 @@ fn commit_patch_equivalent_in_integration_branch(repo_root: &str, commit_sha: &s
             "-C",
             repo_root,
             "cherry",
-            DISTRIBUTOR_INTEGRATION_BRANCH,
+            distributor_integration_branch(),
             commit_sha,
         ],
         None,
@@ -871,7 +875,8 @@ fn recover_integrated_queue_record(
     } else if !branch_exists(&context.repo_root, &record.branch_name) {
         record.queue_state = ParallelModeQueueItemState::Done;
         record.integration_note = format!(
-            "recovered after restart: branch is already integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} and slot cleanup completed"
+            "recovered after restart: branch is already integrated into {} and slot cleanup completed",
+            distributor_integration_branch()
         );
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
@@ -886,7 +891,8 @@ fn recover_integrated_queue_record(
 
     record.queue_state = ParallelModeQueueItemState::Cleaning;
     record.integration_note = format!(
-        "recovered after restart: branch is already integrated into {DISTRIBUTOR_INTEGRATION_BRANCH} and cleanup is pending"
+        "recovered after restart: branch is already integrated into {} and cleanup is pending",
+        distributor_integration_branch()
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(

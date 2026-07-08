@@ -1,6 +1,7 @@
 use super::helpers::{
     encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
     notice_location, render_fragment, render_html, verify_form_csrf, verify_header_csrf,
+    verify_local_admin_request,
 };
 use super::pages::{draft_mutation_path, extract_file_updates, nav_for_kind};
 use super::views::{EditorActionPaths, EditorTemplate};
@@ -395,6 +396,37 @@ fn admin_http_helpers_cover_csrf_redirect_htmx_and_render_failures() {
     htmx_headers.insert("hx-request", HeaderValue::from_static("true"));
     assert!(is_htmx_request(&htmx_headers));
 
+    let local_headers = HeaderMap::new();
+    assert!(verify_local_admin_request(&local_headers).is_ok());
+
+    let mut remote_host_headers = HeaderMap::new();
+    remote_host_headers.insert(header::HOST, HeaderValue::from_static("evil.example"));
+    assert_eq!(
+        verify_local_admin_request(&remote_host_headers),
+        Err(StatusCode::FORBIDDEN)
+    );
+
+    let mut local_host_headers = HeaderMap::new();
+    local_host_headers.insert(header::HOST, HeaderValue::from_static("localhost:18442"));
+    local_host_headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("http://127.0.0.1:18442"),
+    );
+    local_host_headers.insert(
+        header::REFERER,
+        HeaderValue::from_static("http://localhost:18442/admin"),
+    );
+    assert!(verify_local_admin_request(&local_host_headers).is_ok());
+
+    local_host_headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("http://evil.example"),
+    );
+    assert_eq!(
+        verify_local_admin_request(&local_host_headers),
+        Err(StatusCode::FORBIDDEN)
+    );
+
     assert_eq!(
         render_fragment(BrokenTemplate).expect_err("fragment render should fail"),
         StatusCode::INTERNAL_SERVER_ERROR
@@ -437,6 +469,27 @@ async fn admin_json_summary_and_runtime_bootstrap_csrf_session() {
         "runtime API should return the application projection"
     );
     assert_eq!(csrf_token.len(), 32);
+}
+
+#[tokio::test]
+async fn admin_router_rejects_non_local_host_on_read_only_routes() {
+    let workspace = TempAdminWorkspace::new("host-guard");
+    let router = admin_test_router(&workspace);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .header(header::HOST, "evil.example")
+                .body(Body::empty())
+                .expect("summary request should build"),
+        )
+        .await
+        .expect("summary request should be served");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

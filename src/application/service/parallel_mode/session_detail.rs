@@ -1,4 +1,4 @@
-use super::current_timestamp;
+use super::{current_timestamp, distributor_integration_branch};
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
@@ -575,17 +575,21 @@ pub(super) fn record_cleanup_pending_session_detail(
             let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
             detail.state_label = "cleanup_pending".to_string();
             detail.completion_state_label = "merged".to_string();
-            detail.latest_summary =
-                "agent branch is merged into prerelease and awaiting slot cleanup".to_string();
-            detail.distributor_outcome = Some(
-                "branch is merged into prerelease and the slot is awaiting cleanup".to_string(),
+            let integration_branch = distributor_integration_branch();
+            detail.latest_summary = format!(
+                "agent branch is merged into {} and awaiting slot cleanup",
+                integration_branch
             );
+            detail.distributor_outcome = Some(format!(
+                "branch is merged into {} and the slot is awaiting cleanup",
+                integration_branch
+            ));
             detail.updated_at = timestamp.clone();
             push_session_history(
                 &mut detail,
                 "merged",
                 timestamp.clone(),
-                "branch is integrated into prerelease".to_string(),
+                format!("branch is integrated into {}", integration_branch),
             );
             push_session_history(
                 &mut detail,
@@ -621,10 +625,13 @@ pub(super) fn record_cleaned_session_detail(
             let mut detail = current.unwrap_or_else(|| build_assigned_session_detail(lease));
             detail.state_label = "cleaned".to_string();
             detail.completion_state_label = "cleaned".to_string();
+            let integration_branch = distributor_integration_branch();
             detail.latest_summary =
                 "merged session cleaned up and the slot returned to the idle pool".to_string();
-            detail.distributor_outcome =
-                Some("branch merged into prerelease and the slot returned to idle".to_string());
+            detail.distributor_outcome = Some(format!(
+                "branch merged into {} and the slot returned to idle",
+                integration_branch
+            ));
             detail.updated_at = timestamp.clone();
             push_session_history(
                 &mut detail,

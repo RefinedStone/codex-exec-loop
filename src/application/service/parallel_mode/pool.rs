@@ -26,7 +26,7 @@ use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME,
     NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL, NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION,
-    POOL_BASELINE_BRANCH, ensure_directory_exists, remote_tracking_branch_ref,
+    ensure_directory_exists, pool_baseline_branch, remote_tracking_branch_ref,
 };
 
 /*
@@ -386,7 +386,7 @@ pub(super) fn reset_pool_for_parallel_enable(
                 "pool_root": pool_root,
                 "slot_id": slot_id,
                 "slot_path": slot_path,
-                "baseline_branch": POOL_BASELINE_BRANCH,
+                "baseline_branch": pool_baseline_branch(),
             })
         });
         let reset_report = reset_slot_worktree_to_akra_with_retry(&slot_path);
@@ -407,7 +407,7 @@ pub(super) fn reset_pool_for_parallel_enable(
                     "pool_root": pool_root,
                     "slot_id": slot_id,
                     "slot_path": slot_path,
-                    "baseline_branch": POOL_BASELINE_BRANCH,
+                    "baseline_branch": pool_baseline_branch(),
                     "succeeded": true,
                 })
             });
@@ -432,7 +432,7 @@ pub(super) fn reset_pool_for_parallel_enable(
                 "pool_root": pool_root,
                 "slot_id": slot_id,
                 "slot_path": slot_path,
-                "baseline_branch": POOL_BASELINE_BRANCH,
+                "baseline_branch": pool_baseline_branch(),
                 "succeeded": false,
                 "failure": failure_summary,
             })

@@ -1,6 +1,6 @@
 use crate::application::service::planning::validate_planning_draft_name;
 use askama::Template;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
@@ -84,6 +84,83 @@ pub(super) fn verify_header_csrf(
 
 pub(super) fn verify_draft_name_path(draft_name: &str) -> std::result::Result<(), StatusCode> {
     validate_planning_draft_name(draft_name).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+// loopback-only admin surface는 Host/Origin/Referer가 local authority를 가리키는지 확인한다.
+pub(super) fn verify_local_admin_request(
+    headers: &HeaderMap,
+) -> std::result::Result<(), StatusCode> {
+    if let Some(host) = header_text(headers, "host")
+        && !authority_uses_local_host(host)
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if let Some(origin) = header_text(headers, "origin")
+        && !url_uses_local_host(origin)
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if let Some(referer) = header_text(headers, "referer")
+        && !url_uses_local_host(referer)
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
+}
+
+fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn authority_uses_local_host(value: &str) -> bool {
+    authority_host_label(value).is_some_and(is_loopback_host_label)
+}
+
+fn url_uses_local_host(value: &str) -> bool {
+    value
+        .parse::<Uri>()
+        .ok()
+        .and_then(|uri| uri.host().map(str::to_string))
+        .as_deref()
+        .is_some_and(is_loopback_host_label)
+}
+
+fn authority_host_label(value: &str) -> Option<&str> {
+    let authority = value
+        .trim()
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(value.trim());
+    if authority.is_empty() {
+        return None;
+    }
+    if authority.starts_with('[') {
+        let closing = authority.find(']')?;
+        let host = &authority[1..closing];
+        let suffix = &authority[(closing + 1)..];
+        return if suffix.is_empty() || suffix.starts_with(':') {
+            Some(host)
+        } else {
+            None
+        };
+    }
+    if authority.matches(':').count() > 1 {
+        return Some(authority);
+    }
+    Some(
+        authority
+            .split_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(authority),
+    )
+}
+
+fn is_loopback_host_label(value: &str) -> bool {
+    matches!(value, "127.0.0.1" | "localhost" | "::1")
 }
 
 // cookie, hidden form field, request header를 통해 echo해도 되는 opaque token을 만든다.

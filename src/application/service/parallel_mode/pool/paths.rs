@@ -55,9 +55,9 @@ seed하거나 remote 기준으로 local branch를 맞춘다.
 pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
     resolve_branch_head(
         repo_root,
-        &remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH),
+        &remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch()),
     )
-    .or_else(|| resolve_branch_head(repo_root, POOL_BASELINE_BRANCH))
+    .or_else(|| resolve_branch_head(repo_root, pool_baseline_branch()))
 }
 
 pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {

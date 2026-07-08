@@ -22,8 +22,8 @@ use super::session_detail::{
 };
 // completion 흐름은 parallel mode service 본체와 pool baseline branch, timestamp helper를 공유한다.
 use super::{
-    POOL_BASELINE_BRANCH, ParallelModeOfficialCompletionReport, ParallelModeService,
-    current_timestamp,
+    ParallelModeOfficialCompletionReport, ParallelModeService, current_timestamp,
+    pool_baseline_branch,
 };
 
 // 이 impl 조각은 parallel slot이 "작업 실행 완료"에서 "ledger 반영, queue 통합, cleanup"으로
@@ -443,8 +443,9 @@ impl ParallelModeService {
             &resolution.lease.branch_name,
         ) {
             return Err(format!(
-                "slot `{}` could not be reset to `{POOL_BASELINE_BRANCH}` after successful completion",
-                resolution.lease.slot_id
+                "slot `{}` could not be reset to `{}` after successful completion",
+                resolution.lease.slot_id,
+                pool_baseline_branch()
             ));
         }
         // cleanup 성공 후 session detail에도 cleaned 이벤트를 남긴다.

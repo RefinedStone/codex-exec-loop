@@ -32,16 +32,15 @@ pub(super) struct AppServerExecutionPolicy {
 
 impl Default for AppServerExecutionPolicy {
     /*
-     * 기본값은 intentionally permissive하다. 현재 TUI는 app-server approval prompt를
-     * 완전한 interactive loop로 처리하지 못하므로, default가 approval을 요구하면 turn stream이
-     * 멈추고 사용자는 아무 피드백 없이 대기할 수 있다. 운영자가 더 엄격한 모드를 원하면 env override로
-     * 좁히는 구조다.
+     * 기본값은 secure-by-default다. 명시적 override가 없으면 app-server 세션도
+     * approval review와 workspace sandbox 안에서 시작한다. 더 관대한 실행이 꼭 필요하면
+     * 운영자가 env override로 명시적으로 풀어야 한다.
      */
     fn default() -> Self {
         Self {
-            approval_policy: ApprovalPolicyValue::Never,
+            approval_policy: ApprovalPolicyValue::OnRequest,
             approvals_reviewer: Some(ApprovalsReviewerValue::User),
-            sandbox_mode: SandboxModeValue::DangerFullAccess,
+            sandbox_mode: SandboxModeValue::WorkspaceWrite,
         }
     }
 }
@@ -153,17 +152,17 @@ mod tests {
     };
 
     #[test]
-    fn execution_policy_defaults_to_full_access_without_approvals() {
+    fn execution_policy_defaults_to_workspace_write_with_on_request_approval() {
         /*
-         * default는 main TUI path의 startup 계약이다. approval loop가 준비되지 않은 상태에서
-         * app-server가 permission prompt를 기다리면 사용자 turn이 멈추므로 이 값을 회귀 테스트로 고정한다.
+         * env override가 없을 때도 app-server 기본 동작은 reviewable/sandboxed여야 한다.
+         * 이 회귀 테스트가 깨지면 Akra 전체가 다시 무승인·무샌드박스로 후퇴할 수 있다.
          */
         assert_eq!(
             AppServerExecutionPolicy::from_env_values(None, None, None),
             AppServerExecutionPolicy {
-                approval_policy: ApprovalPolicyValue::Never,
+                approval_policy: ApprovalPolicyValue::OnRequest,
                 approvals_reviewer: Some(ApprovalsReviewerValue::User),
-                sandbox_mode: SandboxModeValue::DangerFullAccess,
+                sandbox_mode: SandboxModeValue::WorkspaceWrite,
             }
         );
     }
@@ -176,14 +175,14 @@ mod tests {
          */
         assert_eq!(
             AppServerExecutionPolicy::from_env_values(
-                Some("on_request"),
+                Some("never"),
                 Some("guardian-subagent"),
-                Some("workspace write")
+                Some("danger full access")
             ),
             AppServerExecutionPolicy {
-                approval_policy: ApprovalPolicyValue::OnRequest,
+                approval_policy: ApprovalPolicyValue::Never,
                 approvals_reviewer: Some(ApprovalsReviewerValue::GuardianSubagent),
-                sandbox_mode: SandboxModeValue::WorkspaceWrite,
+                sandbox_mode: SandboxModeValue::DangerFullAccess,
             }
         );
     }
@@ -191,8 +190,8 @@ mod tests {
     #[test]
     fn execution_policy_ignores_invalid_environment_values() {
         /*
-         * invalid override는 hard error가 아니라 default fallback이어야 한다. app-server
-         * adapter가 실행 정책 parse 문제로 전체 startup을 막으면 TUI 복구 경로가 사라지기 때문이다.
+         * invalid override는 hard error가 아니라 secure default fallback이어야 한다.
+         * 오타 난 env 값이 다시 무승인·무샌드박스 실행으로 새어 나가면 안 된다.
          */
         assert_eq!(
             AppServerExecutionPolicy::from_env_values(Some("bogus"), Some("nope"), Some("unknown")),

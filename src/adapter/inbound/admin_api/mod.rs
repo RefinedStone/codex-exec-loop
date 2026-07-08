@@ -5,7 +5,10 @@ use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
+use axum::extract::Request;
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::routing::{get, post};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -30,6 +33,7 @@ mod views;
 
 use self::helpers::{
     ensure_csrf_cookie, internal_server_error, verify_draft_name_path, verify_header_csrf,
+    verify_local_admin_request,
 };
 
 const DEFAULT_PORT: u16 = 18442;
@@ -131,6 +135,14 @@ impl AdminGraphicConfig {
             polling_interval_ms,
         }
     }
+}
+
+async fn local_admin_request_guard(
+    request: Request,
+    next: Next,
+) -> std::result::Result<Response, StatusCode> {
+    verify_local_admin_request(request.headers())?;
+    Ok(next.run(request).await)
 }
 
 fn build_router(state: AdminAppState) -> Router {
@@ -244,6 +256,7 @@ fn build_router(state: AdminAppState) -> Router {
         )
         .route("/api/admin/akra/events", get(api::akra_events_api))
         .with_state(state)
+        .layer(middleware::from_fn(local_admin_request_guard))
 }
 
 fn parse_reset_target(target: &str) -> std::result::Result<PlanningResetTarget, StatusCode> {

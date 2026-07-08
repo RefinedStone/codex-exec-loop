@@ -21,7 +21,7 @@ use crate::domain::parallel_mode::{
 use crate::domain::planning::PlanningOfficialCompletionRefreshContract;
 use crate::domain::planning::PriorityQueueTask;
 use chrono::{DateTime, Utc};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 mod branch_names;
 mod completion;
 pub mod control_plane;
@@ -85,18 +85,69 @@ use self::supervisor::ParallelModeSupervisorService;
 pub(super) use self::support::{
     current_branch_name, current_timestamp, discard_unstarted_slot_branch, ensure_directory_exists,
 };
-pub(crate) const PARALLEL_MODE_INTEGRATION_BRANCH: &str = "prerelease";
-const DISTRIBUTOR_INTEGRATION_BRANCH: &str = PARALLEL_MODE_INTEGRATION_BRANCH;
-const POOL_BASELINE_BRANCH: &str = DISTRIBUTOR_INTEGRATION_BRANCH;
+const AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR: &str = "AKRA_PARALLEL_INTEGRATION_BRANCH";
+pub(crate) const DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH: &str = "prerelease";
 const DEFAULT_PUSH_REMOTE_NAME: &str = DEFAULT_GITHUB_PUSH_REMOTE_NAME;
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
 const MAX_AGENT_BRANCH_SLUG_LEN: usize = 96;
 const AGENT_BRANCH_TRUNCATION_HASH_LEN: usize = 10;
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL: &str =
-    "agent branch is not integrated into `prerelease` and has no lease metadata";
+    "agent branch is not integrated into the baseline branch and has no lease metadata";
 const NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION: &str =
     "inspect the slot branch, merge or discard it manually, then rerun reconcile";
+
+pub(crate) fn parallel_mode_integration_branch() -> &'static str {
+    configured_parallel_mode_integration_branch()
+}
+
+fn distributor_integration_branch() -> &'static str {
+    parallel_mode_integration_branch()
+}
+
+fn pool_baseline_branch() -> &'static str {
+    distributor_integration_branch()
+}
+
+fn configured_parallel_mode_integration_branch() -> &'static str {
+    static VALUE: OnceLock<String> = OnceLock::new();
+    VALUE
+        .get_or_init(|| {
+            normalize_parallel_mode_integration_branch(
+                std::env::var(AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR)
+                    .ok()
+                    .as_deref(),
+            )
+            .unwrap_or_else(|| DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH.to_string())
+        })
+        .as_str()
+}
+
+fn normalize_parallel_mode_integration_branch(value: Option<&str>) -> Option<String> {
+    let raw_value = value?.trim();
+    if raw_value.is_empty()
+        || raw_value == "HEAD"
+        || raw_value.starts_with('-')
+        || raw_value.starts_with('/')
+        || raw_value.ends_with('/')
+        || raw_value.ends_with('.')
+        || raw_value.contains("..")
+        || raw_value.contains("@{")
+        || raw_value.ends_with(".lock")
+        || raw_value
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+    {
+        return None;
+    }
+    if raw_value
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(raw_value.to_string())
+}
 fn remote_branch_name(remote_name: &str, branch_name: &str) -> String {
     format!("{remote_name}/{branch_name}")
 }

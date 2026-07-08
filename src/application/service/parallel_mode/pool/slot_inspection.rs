@@ -73,7 +73,7 @@ pub(super) fn inspect_pool_slot(
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
             ParallelModePoolSlotState::Missing,
-            POOL_BASELINE_BRANCH,
+            pool_baseline_branch(),
             base_worktree_label,
             "reconcile pending",
         );
@@ -96,7 +96,7 @@ pub(super) fn inspect_pool_slot(
                 .unwrap_or_else(|| "operator recovery".to_string()),
         );
     };
-    if worktree_record.branch_name.as_deref() == Some(POOL_BASELINE_BRANCH)
+    if worktree_record.branch_name.as_deref() == Some(pool_baseline_branch())
         || (worktree_record.detached && worktree_record.head_sha == context.baseline_head)
     {
         /*
@@ -106,9 +106,9 @@ pub(super) fn inspect_pool_slot(
         자동 재사용을 막는다.
         */
         let branch_label = if worktree_record.detached {
-            format!("{POOL_BASELINE_BRANCH} (detached)")
+            format!("{} (detached)", pool_baseline_branch())
         } else {
-            POOL_BASELINE_BRANCH.to_string()
+            pool_baseline_branch().to_string()
         };
         if let Some(slot_lease) = slot_lease {
             return ParallelModePoolSlotSnapshot::new(
@@ -287,7 +287,7 @@ pub(super) fn inspect_pool_slot(
         detached_label,
         annotate_worktree_label(
             base_worktree_label,
-            &format!("detached away from `{POOL_BASELINE_BRANCH}` baseline"),
+            &format!("detached away from `{}` baseline", pool_baseline_branch()),
         ),
         slot_lease
             .map(ParallelModeSlotLeaseSnapshot::owner_label)
@@ -329,7 +329,7 @@ pub(super) fn summarize_pool_reconcile_status(
     if let Some(execution) = execution.filter(|execution| execution.has_actions()) {
         let mut action_parts = Vec::new();
         if execution.created_baseline_branch {
-            action_parts.push(format!("created `{POOL_BASELINE_BRANCH}`"));
+            action_parts.push(format!("created `{}`", pool_baseline_branch()));
         }
         if execution.created_pool_root {
             action_parts.push("created pool root".to_string());
@@ -373,14 +373,16 @@ pub(super) fn summarize_pool_reconcile_status(
     }
     if awaiting_cleanup_slots > 0 {
         return format!(
-            "{}cleanup pending / {awaiting_cleanup_slots} slot(s) still need reset to `{POOL_BASELINE_BRANCH}`",
-            prefix
+            "{}cleanup pending / {awaiting_cleanup_slots} slot(s) still need reset to `{}`",
+            prefix,
+            pool_baseline_branch()
         );
     }
     if idle_slots == slots.len() && !slots.is_empty() {
         return format!(
-            "{}reconcile complete / all slots are clean on `{POOL_BASELINE_BRANCH}` baseline",
-            prefix
+            "{}reconcile complete / all slots are clean on `{}` baseline",
+            prefix,
+            pool_baseline_branch()
         );
     }
 
@@ -448,6 +450,7 @@ pub(in crate::application::service::parallel_mode) fn pool_operator_recovery_not
 }
 fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> String {
     format!(
-        "{slot_id} branch `{branch_name}` is not integrated into `{POOL_BASELINE_BRANCH}` and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}"
+        "{slot_id} branch `{branch_name}` is not integrated into `{}` and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}",
+        pool_baseline_branch()
     )
 }

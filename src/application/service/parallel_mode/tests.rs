@@ -1,16 +1,16 @@
 use super::distributor::load_distributor_queue_records;
 use super::{
-    DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, MAX_AGENT_BRANCH_SLUG_LEN, POOL_BASELINE_BRANCH,
+    DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, MAX_AGENT_BRANCH_SLUG_LEN,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
     agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
     command_succeeds, derive_default_pool_root, detect_canonical_repo_root, inspect_akra_branch,
     inspect_authority_store, inspect_gh_auth, inspect_gh_binary, inspect_git_worktree,
     inspect_planning_projection, inspect_push_remote, inspect_slot_git_status, lease_session_key,
-    local_branch_ref, parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
-    record_assigned_session_detail, remote_branch_name, remote_tracking_branch_ref,
-    resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash, slot_id,
-    slot_lease_file_path,
+    local_branch_ref, normalize_parallel_mode_integration_branch, parse_https_remote,
+    read_agent_session_detail_record, reconcile_pool_board, record_assigned_session_detail,
+    remote_branch_name, remote_tracking_branch_ref, resolve_workspace_slot_lease, run_command,
+    sanitize_task_slug, short_branch_slug_hash, slot_id, slot_lease_file_path,
 };
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -47,6 +47,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+const POOL_BASELINE_BRANCH: &str = "prerelease";
 
 // parallel_mode 서비스 테스트는 실제 git worktree, branch ref, pool 파일을 함께
 // 다룬다. 이 fixture는 각 테스트가 독립 repo를 만들고 authority store와
@@ -1203,4 +1205,34 @@ fn parse_https_remote_extracts_host_and_path() {
         parse_https_remote("git@github.com:RefinedStone/codex-exec-loop.git"),
         None
     );
+}
+
+#[test]
+fn parallel_mode_integration_branch_parser_accepts_git_branch_names() {
+    assert_eq!(
+        normalize_parallel_mode_integration_branch(Some("pre-release")),
+        Some("pre-release".to_string())
+    );
+    assert_eq!(
+        normalize_parallel_mode_integration_branch(Some("release/candidate")),
+        Some("release/candidate".to_string())
+    );
+}
+
+#[test]
+fn parallel_mode_integration_branch_parser_rejects_invalid_values() {
+    for value in [
+        "",
+        "HEAD",
+        "../oops",
+        "bad branch",
+        "topic.lock",
+        "topic@{1}",
+    ] {
+        assert_eq!(
+            normalize_parallel_mode_integration_branch(Some(value)),
+            None,
+            "value `{value}` should be rejected"
+        );
+    }
 }

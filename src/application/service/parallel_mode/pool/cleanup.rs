@@ -16,8 +16,8 @@ use super::super::{
 };
 use super::paths::resolve_git_dir;
 use super::{
-    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, POOL_BASELINE_BRANCH,
-    SlotGitStatus, inspect_slot_git_status, remove_slot_lease, slot_id,
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, SlotGitStatus,
+    inspect_slot_git_status, pool_baseline_branch, remove_slot_lease, slot_id,
 };
 
 const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
@@ -249,7 +249,7 @@ fn worktree_is_clean_reusable_baseline(
     if !inspect_slot_git_status(slot_path).is_some_and(SlotGitStatus::is_clean_baseline) {
         return false;
     }
-    let branch_is_baseline = worktree_record.branch_name.as_deref() == Some(POOL_BASELINE_BRANCH);
+    let branch_is_baseline = worktree_record.branch_name.as_deref() == Some(pool_baseline_branch());
     let detached_at_baseline =
         worktree_record.detached && worktree_record.head_sha == baseline_head;
     if branch_is_baseline || detached_at_baseline {
@@ -257,7 +257,7 @@ fn worktree_is_clean_reusable_baseline(
     }
 
     worktree_record.detached
-        && branch_is_integrated_into(repo_root, &worktree_record.head_sha, POOL_BASELINE_BRANCH)
+        && branch_is_integrated_into(repo_root, &worktree_record.head_sha, pool_baseline_branch())
 }
 
 fn delete_stale_agent_branch(repo_root: &str, branch_name: &str) -> bool {
@@ -293,7 +293,7 @@ fn leased_at_is_stale(leased_at: &str) -> bool {
 }
 
 fn branch_is_integrated_into_akra(repo_root: &str, branch_name: &str) -> bool {
-    branch_is_integrated_into(repo_root, branch_name, POOL_BASELINE_BRANCH)
+    branch_is_integrated_into(repo_root, branch_name, pool_baseline_branch())
 }
 
 /*
@@ -414,7 +414,7 @@ pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_akr
                     "checkout",
                     "--force",
                     "--detach",
-                    POOL_BASELINE_BRANCH,
+                    pool_baseline_branch(),
                 ],
             ),
             GitCommandStep::new(
@@ -424,7 +424,7 @@ pub(in crate::application::service::parallel_mode) fn reset_slot_worktree_to_akr
                     slot_path_string.as_str(),
                     "reset",
                     "--hard",
-                    POOL_BASELINE_BRANCH,
+                    pool_baseline_branch(),
                 ],
             ),
             GitCommandStep::new(

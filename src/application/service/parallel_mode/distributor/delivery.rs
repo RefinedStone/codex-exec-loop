@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::application::service::parallel_mode::distributor_integration_branch;
 // delivery는 GitHub-facing 단계와 local integration 단계를 나눠 각 boundary의 실패 복구를 독립시킨다.
 mod github;
 mod integration;
@@ -203,12 +204,15 @@ fn distributor_integrate_branch(
     }
 
     record.queue_state = ParallelModeQueueItemState::Integrating;
+    let integration_branch = distributor_integration_branch();
     record.integration_note = match record.pull_request_number {
         Some(pr_number) => format!(
-            "pull request #{pr_number} is ready and distributor is integrating the queued branch into {DISTRIBUTOR_INTEGRATION_BRANCH}"
+            "pull request #{pr_number} is ready and distributor is integrating the queued branch into {}",
+            integration_branch
         ),
         None => format!(
-            "distributor is integrating the queued branch into {DISTRIBUTOR_INTEGRATION_BRANCH}"
+            "distributor is integrating the queued branch into {}",
+            integration_branch
         ),
     };
     record.updated_at = current_timestamp();
@@ -219,7 +223,6 @@ fn distributor_integrate_branch(
         &resolution.context.pool_root,
         record,
     )?;
-    // session detail은 queue record와 별개로 supervisor detail timeline을 갱신하므로 실패를 무시한다.
     let _ = record_integrating_session_detail(
         planning_authority,
         runtime,
@@ -229,14 +232,9 @@ fn distributor_integrate_branch(
         &record.integration_note,
     );
 
-    // integration은 canonical repo root에서 수행해 slot worktree가 아닌 prerelease worktree 기준으로 반영한다.
     let integration_repo_root = resolution.context.canonical_repo_root.display().to_string();
 
-    if !branch_is_integrated_into(
-        &integration_repo_root,
-        &source_branch,
-        DISTRIBUTOR_INTEGRATION_BRANCH,
-    ) {
+    if !branch_is_integrated_into(&integration_repo_root, &source_branch, integration_branch) {
         if let Err(notice) = ensure_distributor_integration_worktree_ready(
             planning_authority,
             runtime,
@@ -249,14 +247,15 @@ fn distributor_integrate_branch(
 
         if commit_patch_equivalent_in_branch(
             &integration_repo_root,
-            DISTRIBUTOR_INTEGRATION_BRANCH,
+            integration_branch,
             &source_commit_sha,
         ) {
             record.integration_state = "done".to_string();
             record.integration_note = format!(
-                "commit `{}` from `{}` is already patch-equivalent in `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
+                "commit `{}` from `{}` is already patch-equivalent in `{}`",
                 short_sha(&source_commit_sha),
-                source_branch
+                source_branch,
+                integration_branch
             );
             record.updated_at = current_timestamp();
             write_distributor_queue_record(
@@ -300,9 +299,10 @@ fn distributor_integrate_branch(
                 Some(&resolution.lease),
                 record,
                 format!(
-                    "commit `{}` from `{}` could not cherry-pick into `{DISTRIBUTOR_INTEGRATION_BRANCH}` cleanly{}",
+                    "commit `{}` from `{}` could not cherry-pick into `{}` cleanly{}",
                     short_sha(&source_commit_sha),
                     source_branch,
+                    integration_branch,
                     format_conflict_file_suffix(&conflict_files),
                 ),
             );
@@ -310,9 +310,10 @@ fn distributor_integrate_branch(
 
         record.integration_state = "done".to_string();
         record.integration_note = format!(
-            "commit `{}` from `{}` cherry-picked into `{DISTRIBUTOR_INTEGRATION_BRANCH}`",
+            "commit `{}` from `{}` cherry-picked into `{}`",
             short_sha(&source_commit_sha),
-            source_branch
+            source_branch,
+            integration_branch
         );
         record.updated_at = current_timestamp();
         write_distributor_queue_record(
@@ -325,16 +326,16 @@ fn distributor_integrate_branch(
     }
 
     let repo_root = integration_repo_root;
-    if let Err(error) =
-        github_automation.push_integration_branch(&repo_root, DISTRIBUTOR_INTEGRATION_BRANCH)
-    {
+    if let Err(error) = github_automation.push_integration_branch(&repo_root, integration_branch) {
         if fetch_integration_remote_branch(&repo_root)
             && commit_patch_equivalent_in_remote_integration_branch(&repo_root, &source_commit_sha)
             && reset_integration_branch_to_remote(&repo_root)
         {
             record.integration_state = "done".to_string();
             record.integration_note = format!(
-                "remote `{DEFAULT_PUSH_REMOTE_NAME}/{DISTRIBUTOR_INTEGRATION_BRANCH}` already contains commit `{}` from `{}`; local integration branch was aligned to remote after push rejection",
+                "remote `{}/{}` already contains commit `{}` from `{}`; local integration branch was aligned to remote after push rejection",
+                DEFAULT_PUSH_REMOTE_NAME,
+                integration_branch,
                 short_sha(&source_commit_sha),
                 source_branch
             );
@@ -347,7 +348,6 @@ fn distributor_integrate_branch(
                 record,
             )?;
         } else {
-            // local integration이 성공해도 remote push 실패는 operator가 다시 밀어야 하는 delivery block이다.
             return block_distributor_queue_record(
                 planning_authority,
                 runtime,
@@ -356,7 +356,8 @@ fn distributor_integrate_branch(
                 Some(&resolution.lease),
                 record,
                 format!(
-                    "`{DISTRIBUTOR_INTEGRATION_BRANCH}` could not be pushed to `{DEFAULT_PUSH_REMOTE_NAME}`: {error}"
+                    "`{}` could not be pushed to `{}`: {error}",
+                    integration_branch, DEFAULT_PUSH_REMOTE_NAME
                 ),
             );
         }
@@ -407,7 +408,8 @@ fn distributor_integrate_branch(
     )?;
 
     Ok(format!(
-        "distributor integrated queue head into {DISTRIBUTOR_INTEGRATION_BRANCH} / slot: {} / agent: {} / commit: {}",
+        "distributor integrated queue head into {} / slot: {} / agent: {} / commit: {}",
+        integration_branch,
         resolution.lease.slot_id,
         resolution.lease.agent_id,
         short_sha(&record.commit_sha)
@@ -499,25 +501,31 @@ fn distributor_cleanup_integrated_slot(
 }
 
 fn delivery_completion_note(used_pull_request: bool) -> String {
+    let integration_branch = distributor_integration_branch();
     if used_pull_request {
         format!(
-            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin, PR delivery completed, and the slot is entering cleanup"
+            "branch integrated into {}, pushed to origin, PR delivery completed, and the slot is entering cleanup",
+            integration_branch
         )
     } else {
         format!(
-            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, pushed to origin without PR automation, and the slot is entering cleanup"
+            "branch integrated into {}, pushed to origin without PR automation, and the slot is entering cleanup",
+            integration_branch
         )
     }
 }
 
 fn cleanup_completion_note(used_pull_request: bool) -> String {
+    let integration_branch = distributor_integration_branch();
     if used_pull_request {
         format!(
-            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, PR delivery completed, and the slot returned to idle"
+            "branch integrated into {}, PR delivery completed, and the slot returned to idle",
+            integration_branch
         )
     } else {
         format!(
-            "branch integrated into {DISTRIBUTOR_INTEGRATION_BRANCH}, direct delivery completed without PR automation, and the slot returned to idle"
+            "branch integrated into {}, direct delivery completed without PR automation, and the slot returned to idle",
+            integration_branch
         )
     }
 }

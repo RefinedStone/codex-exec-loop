@@ -1,5 +1,5 @@
 use super::{
-    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH, current_branch_name,
+    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_PUSH_REMOTE_NAME, current_branch_name, pool_baseline_branch,
     remote_branch_name, remote_tracking_branch_ref,
 };
 use crate::application::port::outbound::github_automation_port::GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH;
@@ -68,8 +68,8 @@ pub(super) fn inspect_akra_branch(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    let remote_branch = remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
-    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
+    let remote_branch = remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch());
+    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch());
     if runtime.command_succeeds(
         "git",
         &[

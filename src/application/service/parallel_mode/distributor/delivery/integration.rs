@@ -2,6 +2,7 @@
 // queue record 차단, slot lease context, Git 상태 조회와 같은 주변 흐름을 같은 어휘로 다루게 한다.
 use super::*;
 
+use crate::application::service::parallel_mode::distributor_integration_branch;
 /*
 integration worktree readiness는 cherry-pick 직전의 마지막 안전 게이트이다.
 distributor는 source branch commit을 integration branch에 로컬 cherry-pick하므로, 현재 worktree가
@@ -24,18 +25,13 @@ pub(super) fn ensure_distributor_integration_worktree_ready(
     // cherry-pick을 실행할 별도 integration worktree의 루트 경로이다.
     integration_repo_root: &str,
 ) -> Result<(), String> {
-    // 다른 브랜치에서 cherry-pick하면 integration branch가 아닌 곳에 source patch를
-    // 밀어 넣게 되므로, 브랜치 이름 검사는 dirty check보다 먼저 실패시켜야 한다.
-    if current_branch_name(Path::new(integration_repo_root)).as_deref()
-        != Some(DISTRIBUTOR_INTEGRATION_BRANCH)
+    let integration_branch = distributor_integration_branch();
+    if current_branch_name(Path::new(integration_repo_root)).as_deref() != Some(integration_branch)
     {
-        // 같은 message를 queue block record와 함수 오류 양쪽에 사용해 UI와 caller 로그가
-        // 서로 다른 원인을 말하지 않게 한다.
         let message = format!(
-            "integration worktree must be checked out to `{DISTRIBUTOR_INTEGRATION_BRANCH}` before cherry-pick delivery"
+            "integration worktree must be checked out to `{}` before cherry-pick delivery",
+            integration_branch
         );
-        // lease를 포함해 차단하면 supervisor가 어떤 slot worktree를 operator가 정리해야
-        // 하는지 추적할 수 있다. 저장 실패는 `?`로 caller에게 올려 delivery loop를 멈춘다.
         let _ = block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -45,8 +41,6 @@ pub(super) fn ensure_distributor_integration_worktree_ready(
             record,
             message.clone(),
         )?;
-        // block 상태 저장 뒤에도 오류를 반환해야, 호출자가 실제 cherry-pick 단계로
-        // 계속 진행하지 않고 현재 queue item 처리를 끝낼 수 있다.
         return Err(message);
     }
 
@@ -139,6 +133,7 @@ pub(super) fn commit_patch_equivalent_in_branch(
 }
 
 pub(super) fn fetch_integration_remote_branch(repo_root: &str) -> bool {
+    let integration_branch = distributor_integration_branch();
     command_succeeds(
         "git",
         [
@@ -148,11 +143,9 @@ pub(super) fn fetch_integration_remote_branch(repo_root: &str) -> bool {
             "--quiet",
             DEFAULT_PUSH_REMOTE_NAME,
             &format!(
-                "{DISTRIBUTOR_INTEGRATION_BRANCH}:{}",
-                remote_tracking_branch_ref(
-                    DEFAULT_PUSH_REMOTE_NAME,
-                    DISTRIBUTOR_INTEGRATION_BRANCH
-                )
+                "{}:{}",
+                integration_branch,
+                remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, integration_branch)
             ),
         ],
     )
@@ -163,14 +156,14 @@ pub(super) fn commit_patch_equivalent_in_remote_integration_branch(
     commit_sha: &str,
 ) -> bool {
     let remote_branch =
-        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH);
+        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, distributor_integration_branch());
     branch_is_integrated_into(repo_root, commit_sha, &remote_branch)
         || commit_patch_equivalent_in_branch(repo_root, &remote_branch, commit_sha)
 }
 
 pub(super) fn reset_integration_branch_to_remote(repo_root: &str) -> bool {
     let remote_branch =
-        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, DISTRIBUTOR_INTEGRATION_BRANCH);
+        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, distributor_integration_branch());
     command_succeeds(
         "git",
         ["-C", repo_root, "reset", "--hard", remote_branch.as_str()],

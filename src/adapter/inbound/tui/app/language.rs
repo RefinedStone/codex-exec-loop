@@ -378,7 +378,9 @@ impl TuiLanguage {
             "pushing" | "pr_pending" | "merge_pending" | "integrating" => {
                 self.delivery_stage(task_title, state_label)
             }
-            "merged" | "cleanup_pending" | "cleaned" => self.integrated_into_prerelease(task_title),
+            "merged" | "cleanup_pending" | "cleaned" => {
+                self.integrated_into_integration_branch(task_title)
+            }
             "failed" => self.task_failed(task_title),
             "official_refresh_recovery_needed" => {
                 self.official_completion_recovery_needed(task_title)
@@ -437,10 +439,10 @@ impl TuiLanguage {
         }
     }
 
-    fn integrated_into_prerelease(self, task_title: &str) -> String {
+    fn integrated_into_integration_branch(self, task_title: &str) -> String {
         match self {
-            Self::English => format!("{task_title} result integrated into prerelease."),
-            Self::Korean => format!("{task_title} 결과가 prerelease에 반영되었습니다."),
+            Self::English => format!("{task_title} result integrated into the integration branch."),
+            Self::Korean => format!("{task_title} 결과가 통합 브랜치에 반영되었습니다."),
         }
     }
 
@@ -882,9 +884,9 @@ mod tests {
             ("pr_pending", "delivery stage is pr pending"),
             ("merge_pending", "delivery stage is merge pending"),
             ("integrating", "delivery stage is integrating"),
-            ("merged", "integrated into prerelease"),
-            ("cleanup_pending", "integrated into prerelease"),
-            ("cleaned", "integrated into prerelease"),
+            ("merged", "integrated into the integration branch"),
+            ("cleanup_pending", "integrated into the integration branch"),
+            ("cleaned", "integrated into the integration branch"),
             ("failed", "failed"),
             (
                 "official_refresh_recovery_needed",
