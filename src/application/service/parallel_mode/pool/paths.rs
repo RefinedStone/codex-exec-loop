@@ -53,9 +53,10 @@ fallback으로 쓴다. mutating reconcile은 별도 guard에서 missing remote �
 seed하거나 remote 기준으로 local branch를 맞춘다.
 */
 pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
+    let push_remote = push_remote_name(repo_root);
     resolve_branch_head(
         repo_root,
-        &remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch()),
+        &remote_tracking_branch_ref(push_remote.as_str(), pool_baseline_branch()),
     )
     .or_else(|| resolve_branch_head(repo_root, pool_baseline_branch()))
 }

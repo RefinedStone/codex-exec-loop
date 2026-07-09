@@ -16,9 +16,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 use crate::application::port::outbound::github_automation_port::{
-    DEFAULT_GITHUB_PUSH_REMOTE_NAME as DEFAULT_PUSH_REMOTE_NAME,
+    AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR,
     GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH,
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+    resolve_github_push_remote_name,
 };
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -47,15 +48,16 @@ impl GithubAutomationAdapter {
     최종 guard 역할을 한다.
     */
     fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnapshot {
+        let push_remote = configured_push_remote_name(repo_root);
         let Some(_push_url) = run_git_stdout(
             repo_root,
-            &["remote", "get-url", "--push", DEFAULT_PUSH_REMOTE_NAME],
+            &["remote", "get-url", "--push", push_remote.as_str()],
         )
         .ok() else {
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::PushRemote,
                 ParallelModeCapabilityState::Degraded,
-                format!("push remote `{DEFAULT_PUSH_REMOTE_NAME}` is not configured"),
+                format!("push remote `{}` is not configured", push_remote),
                 Some(
                     "add a push remote or keep supersession in local-only inspection mode"
                         .to_string(),
@@ -69,12 +71,7 @@ impl GithubAutomationAdapter {
             let refspec = format!("HEAD:refs/heads/{current_branch}");
             if run_git(
                 repo_root,
-                &[
-                    "push",
-                    "--dry-run",
-                    DEFAULT_PUSH_REMOTE_NAME,
-                    refspec.as_str(),
-                ],
+                &["push", "--dry-run", push_remote.as_str(), refspec.as_str()],
             )
             .is_ok()
             {
@@ -89,7 +86,8 @@ impl GithubAutomationAdapter {
                 ParallelModeCapabilityKey::PushRemote,
                 ParallelModeCapabilityState::Degraded,
                 format!(
-                    "git push --dry-run failed for `{current_branch}` via remote `{DEFAULT_PUSH_REMOTE_NAME}`"
+                    "git push --dry-run failed for `{current_branch}` via remote `{}`",
+                    push_remote
                 ),
                 Some("repair git push credentials or remote branch permissions".to_string()),
             );
@@ -98,7 +96,7 @@ impl GithubAutomationAdapter {
         ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
             ParallelModeCapabilityState::Ready,
-            format!("push remote `{DEFAULT_PUSH_REMOTE_NAME}` is configured"),
+            format!("push remote `{}` is configured", push_remote),
             None,
         )
     }
@@ -260,20 +258,21 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         rebased distributor recovery는 자신이 방금 검증한 branch만 rewrite하므로 force-with-lease를 쓴다.
         force push가 필요하지만, 다른 actor가 remote를 이동시킨 경우에는 lease가 실패해 안전하게 멈춘다.
         */
+        let push_remote = configured_push_remote_name(repo_root);
         if force_with_lease {
             run_git(
                 repo_root,
                 &[
                     "push",
                     "--force-with-lease",
-                    DEFAULT_PUSH_REMOTE_NAME,
+                    push_remote.as_str(),
                     branch_name,
                 ],
             )
         } else {
             run_git(
                 repo_root,
-                &["push", "-u", DEFAULT_PUSH_REMOTE_NAME, branch_name],
+                &["push", "-u", push_remote.as_str(), branch_name],
             )
         }
     }
@@ -391,7 +390,8 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         upstream setup 없이 push하는 이유는 최종 integration이 계속 explicit branch/PR record를 통해 진행되어야 하기 때문이다.
         slot branch처럼 operator의 일상 작업 branch로 취급하지 않는다.
         */
-        run_git(repo_root, &["push", DEFAULT_PUSH_REMOTE_NAME, branch_name])
+        let push_remote = configured_push_remote_name(repo_root);
+        run_git(repo_root, &["push", push_remote.as_str(), branch_name])
     }
 
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()> {
@@ -423,6 +423,16 @@ fn installed_github_script_path() -> Option<PathBuf> {
         path.parent()
             .map(|parent| parent.join(GITHUB_SCRIPT_RELATIVE_PATH))
     })
+}
+
+fn configured_push_remote_name(repo_root: &str) -> String {
+    let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
+    let config_value = run_git_stdout(
+        repo_root,
+        &["config", "--get", AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY],
+    )
+    .ok();
+    resolve_github_push_remote_name(env_value.as_deref(), config_value.as_deref())
 }
 
 struct TemporaryTextFile {
@@ -663,7 +673,8 @@ mod tests {
     };
 
     use crate::application::port::outbound::github_automation_port::{
-        GithubAutomationPort, GithubAutomationPullRequest,
+        AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, GithubAutomationPort,
+        GithubAutomationPullRequest,
     };
     use crate::domain::parallel_mode::{
         ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
@@ -828,6 +839,24 @@ mod tests {
                 .detail
                 .contains("push remote `origin` is configured")
         );
+        assert!(capability.next_action.is_none());
+    }
+
+    #[test]
+    fn push_remote_capability_uses_repo_configured_remote() {
+        let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
+        let fixture = GitFixture::new("github-automation-configured-remote-capability");
+        git(&fixture.repo, &["remote", "rename", "origin", "upstream"]);
+        git(
+            &fixture.repo,
+            &["config", AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, "upstream"],
+        );
+
+        let capability = GithubAutomationAdapter::inspect_push_remote(path_str(&fixture.repo));
+
+        assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
+        assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+        assert!(capability.detail.contains("push dry-run succeeded"));
         assert!(capability.next_action.is_none());
     }
 
@@ -1205,6 +1234,30 @@ mod tests {
         adapter
             .push_integration_branch(path_str(&fixture.repo), "main")
             .expect("integration push should use the same local origin");
+
+        assert_eq!(
+            git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            git_stdout(&fixture.repo, &["rev-parse", "main"])
+        );
+    }
+
+    #[test]
+    fn push_methods_publish_local_branches_to_repo_configured_remote() {
+        let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
+        let fixture = GitFixture::new("github-automation-configured-remote-push");
+        let adapter = GithubAutomationAdapter::new();
+        git(&fixture.repo, &["remote", "rename", "origin", "upstream"]);
+        git(
+            &fixture.repo,
+            &["config", AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, "upstream"],
+        );
+
+        adapter
+            .push_branch(path_str(&fixture.repo), "main", false)
+            .expect("branch push should publish to configured remote");
+        adapter
+            .push_integration_branch(path_str(&fixture.repo), "main")
+            .expect("integration push should use the configured remote");
 
         assert_eq!(
             git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),

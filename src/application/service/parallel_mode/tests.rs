@@ -15,7 +15,8 @@ use super::{
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::github_automation_port::{
-    GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+    AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, GithubAutomationCapabilities, GithubAutomationPort,
+    GithubAutomationPullRequest,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -293,6 +294,32 @@ impl TempGitRepo {
 impl Drop for TempGitRepo {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
     }
 }
 
@@ -1204,6 +1231,33 @@ fn parse_https_remote_extracts_host_and_path() {
     assert_eq!(
         parse_https_remote("git@github.com:RefinedStone/codex-exec-loop.git"),
         None
+    );
+}
+
+#[test]
+fn inspect_akra_branch_uses_repo_configured_push_remote() {
+    let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
+    let repo = TempGitRepo::new("configured-push-remote");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPushRemote", "upstream"],
+    );
+    run_git(
+        &repo.repo_root,
+        &[
+            "update-ref",
+            &remote_tracking_branch_ref("upstream", POOL_BASELINE_BRANCH),
+            POOL_BASELINE_BRANCH,
+        ],
+    );
+
+    let capability = inspect_akra_branch(&test_parallel_runtime(), &repo.workspace_dir());
+
+    assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+    assert!(
+        capability
+            .detail
+            .contains("upstream/prerelease is available")
     );
 }
 

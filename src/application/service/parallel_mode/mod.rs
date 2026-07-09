@@ -1,5 +1,8 @@
+#[cfg(test)]
+use crate::application::port::outbound::github_automation_port::DEFAULT_GITHUB_PUSH_REMOTE_NAME;
 use crate::application::port::outbound::github_automation_port::{
-    DEFAULT_GITHUB_PUSH_REMOTE_NAME, GithubAutomationPort,
+    AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, GithubAutomationPort,
+    resolve_github_push_remote_name,
 };
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
@@ -87,6 +90,7 @@ pub(super) use self::support::{
 };
 const AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR: &str = "AKRA_PARALLEL_INTEGRATION_BRANCH";
 pub(crate) const DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH: &str = "prerelease";
+#[cfg(test)]
 const DEFAULT_PUSH_REMOTE_NAME: &str = DEFAULT_GITHUB_PUSH_REMOTE_NAME;
 const DEFAULT_POOL_SIZE: usize = 3;
 const AKRA_AGENT_BRANCH_PREFIX: &str = "akra-agent";
@@ -121,6 +125,28 @@ fn configured_parallel_mode_integration_branch() -> &'static str {
             .unwrap_or_else(|| DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH.to_string())
         })
         .as_str()
+}
+
+pub(crate) fn push_remote_name(repo_root: &str) -> String {
+    configured_push_remote_name(Some(repo_root))
+}
+
+fn configured_push_remote_name(repo_root: Option<&str>) -> String {
+    let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
+    let config_value = repo_root.and_then(|repo_root| {
+        run_command(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "config",
+                "--get",
+                AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY,
+            ],
+            None,
+        )
+    });
+    resolve_github_push_remote_name(env_value.as_deref(), config_value.as_deref())
 }
 
 fn normalize_parallel_mode_integration_branch(value: Option<&str>) -> Option<String> {

@@ -1,5 +1,5 @@
 use super::{
-    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_PUSH_REMOTE_NAME, current_branch_name, pool_baseline_branch,
+    AKRA_AGENT_BRANCH_PREFIX, current_branch_name, pool_baseline_branch, push_remote_name,
     remote_branch_name, remote_tracking_branch_ref,
 };
 use crate::application::port::outbound::github_automation_port::GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH;
@@ -68,8 +68,9 @@ pub(super) fn inspect_akra_branch(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    let remote_branch = remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch());
-    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, pool_baseline_branch());
+    let push_remote = push_remote_name(repo_root);
+    let remote_branch = remote_branch_name(push_remote.as_str(), pool_baseline_branch());
+    let remote_ref = remote_tracking_branch_ref(push_remote.as_str(), pool_baseline_branch());
     if runtime.command_succeeds(
         "git",
         &[
@@ -111,7 +112,7 @@ pub(super) fn inspect_akra_branch(
             "remote",
             "get-url",
             "--push",
-            DEFAULT_PUSH_REMOTE_NAME,
+            push_remote.as_str(),
         ],
     ) {
         return ParallelModeCapabilitySnapshot::new(
@@ -119,7 +120,8 @@ pub(super) fn inspect_akra_branch(
             ParallelModeCapabilityState::Blocked,
             format!("{remote_branch} is missing and cannot be seeded"),
             Some(format!(
-                "configure push remote `{DEFAULT_PUSH_REMOTE_NAME}` before seeding {remote_branch}"
+                "configure push remote `{}` before seeding {remote_branch}",
+                push_remote
             )),
         );
     }
@@ -159,6 +161,7 @@ pub(super) fn inspect_push_remote(
     pool supervision can still run. The distributor will later surface a harder
     delivery failure only if a commit-ready result actually needs GitHub push.
     */
+    let push_remote = push_remote_name(repo_root);
     let Some(push_url) = runtime.run_command(
         "git",
         &[
@@ -167,14 +170,14 @@ pub(super) fn inspect_push_remote(
             "remote",
             "get-url",
             "--push",
-            DEFAULT_PUSH_REMOTE_NAME,
+            push_remote.as_str(),
         ],
         None,
     ) else {
         return ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::PushRemote,
             ParallelModeCapabilityState::Degraded,
-            format!("push remote `{DEFAULT_PUSH_REMOTE_NAME}` is not configured"),
+            format!("push remote `{}` is not configured", push_remote),
             Some(
                 "add a push remote or keep supersession in local-only inspection mode".to_string(),
             ),
@@ -233,7 +236,7 @@ pub(super) fn inspect_push_remote(
                 repo_root,
                 "push",
                 "--dry-run",
-                DEFAULT_PUSH_REMOTE_NAME,
+                push_remote.as_str(),
                 refspec.as_str(),
             ],
         ) {

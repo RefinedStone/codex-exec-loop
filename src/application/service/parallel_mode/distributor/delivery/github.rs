@@ -39,6 +39,7 @@ pub(super) fn distributor_push_source_branch(
 ) -> Result<String, String> {
     // capability snapshot을 record에 보관해 blocked supervisor 화면이 "왜 push 불가인지" 즉시 설명하게 한다.
     let repo_root = resolution.context.repo_root.clone();
+    let push_remote = push_remote_name(&repo_root);
     let capabilities = github_automation.inspect_capabilities(&repo_root);
     record.github_capabilities = Some(capabilities.clone());
     if !capabilities.push_ready() {
@@ -59,8 +60,8 @@ pub(super) fn distributor_push_source_branch(
 
     record.queue_state = ParallelModeQueueItemState::Pushing;
     record.integration_note = format!(
-        "distributor is pushing `{}` to `{DEFAULT_PUSH_REMOTE_NAME}`",
-        record.branch_name
+        "distributor is pushing `{}` to `{}`",
+        record.branch_name, push_remote
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
@@ -90,14 +91,15 @@ pub(super) fn distributor_push_source_branch(
             Some(&resolution.lease),
             record,
             format!(
-                "source branch `{}` could not be pushed to `{DEFAULT_PUSH_REMOTE_NAME}`: {error}",
-                record.branch_name
+                "source branch `{}` could not be pushed to `{}`: {error}",
+                record.branch_name, push_remote
             ),
         );
     }
 
     record.integration_note = format!(
-        "source branch pushed to `{DEFAULT_PUSH_REMOTE_NAME}` and delivery policy is selecting the pull request workflow"
+        "source branch pushed to `{}` and delivery policy is selecting the pull request workflow",
+        push_remote
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(

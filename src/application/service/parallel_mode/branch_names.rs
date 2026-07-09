@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use super::readiness::{command_succeeds, run_command};
 use super::{
-    AGENT_BRANCH_TRUNCATION_HASH_LEN, AKRA_AGENT_BRANCH_PREFIX, DEFAULT_PUSH_REMOTE_NAME,
-    MAX_AGENT_BRANCH_SLUG_LEN,
+    AGENT_BRANCH_TRUNCATION_HASH_LEN, AKRA_AGENT_BRANCH_PREFIX, MAX_AGENT_BRANCH_SLUG_LEN,
+    push_remote_name,
 };
 
 /*
@@ -195,10 +195,10 @@ fn remote_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String>
 }
 
 fn remote_tracking_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
-    // tracking ref는 `refs/remotes/origin/...` 형태라 실제 branch name으로
+    // tracking ref는 `refs/remotes/<push-remote>/...` 형태라 실제 branch name으로
     // 비교하려면 remote prefix를 제거하고 `akra-agent/<slot>/...` 형태로 되돌려야 한다.
-    let refs_prefix =
-        format!("refs/remotes/{DEFAULT_PUSH_REMOTE_NAME}/{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
+    let push_remote = push_remote_name(repo_root);
+    let refs_prefix = format!("refs/remotes/{push_remote}/{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
     let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
     run_command(
         "git",
@@ -224,6 +224,7 @@ fn remote_tracking_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSe
 fn remote_live_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
     let refs_prefix = "refs/heads/";
     let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
+    let push_remote = push_remote_name(repo_root);
     // ls-remote에는 full ref glob을 넘기고, 결과는 full ref로 돌아오므로 아래에서
     // `refs/heads/`만 제거해 local branch name과 같은 좌표계로 맞춘다.
     let pattern = format!("refs/heads/{branch_prefix}*");
@@ -234,7 +235,7 @@ fn remote_live_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<St
             repo_root,
             "ls-remote",
             "--heads",
-            DEFAULT_PUSH_REMOTE_NAME,
+            push_remote.as_str(),
             pattern.as_str(),
         ],
         None,

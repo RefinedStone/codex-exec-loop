@@ -1,14 +1,14 @@
 use super::{
-    DEFAULT_PUSH_REMOTE_NAME, PoolRuntimeContext, WorkspaceSlotLeaseResolution, branch_exists,
-    branch_is_integrated_into, cleanup_slot, command_succeeds, current_branch_name,
-    current_timestamp, distributor_integration_branch, inspect_slot_git_status, lease_session_key,
-    load_pool_runtime_context, reconcile_pool_board, record_cleaned_session_detail,
-    record_cleanup_pending_session_detail, record_integrating_session_detail,
-    record_merge_pending_session_detail, record_merge_queued_session_detail,
-    record_official_completion_recovery_needed_session_detail, record_pr_pending_session_detail,
-    record_pushing_session_detail, remote_branch_name, remote_tracking_branch_ref,
-    resolve_workspace_head_sha, resolve_workspace_slot_lease, run_command, short_sha,
-    write_slot_lease,
+    PoolRuntimeContext, WorkspaceSlotLeaseResolution, branch_exists, branch_is_integrated_into,
+    cleanup_slot, command_succeeds, current_branch_name, current_timestamp,
+    distributor_integration_branch, inspect_slot_git_status, lease_session_key,
+    load_pool_runtime_context, push_remote_name, reconcile_pool_board,
+    record_cleaned_session_detail, record_cleanup_pending_session_detail,
+    record_integrating_session_detail, record_merge_pending_session_detail,
+    record_merge_queued_session_detail, record_official_completion_recovery_needed_session_detail,
+    record_pr_pending_session_detail, record_pushing_session_detail, remote_branch_name,
+    remote_tracking_branch_ref, resolve_workspace_head_sha, resolve_workspace_slot_lease,
+    run_command, short_sha, write_slot_lease,
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -752,11 +752,7 @@ fn is_retryable_distributor_block(detail: &str) -> bool {
         ))
         || detail.contains("integration worktree must be clean before cherry-pick delivery")
         || detail.contains("push capability is unavailable for distributor delivery")
-        || detail.contains("source branch `") && detail.contains("` could not be pushed to `")
-        || detail.contains(&format!(
-            "`{}` could not be pushed to `{}`",
-            integration_branch, DEFAULT_PUSH_REMOTE_NAME
-        ))
+        || detail.contains("` could not be pushed to `")
         || detail.contains("source branch was pushed but GitHub automation is unavailable")
         || detail.contains("source branch was pushed but pull request workflow is unavailable")
         || detail.contains("pull request workflow is required but unavailable")

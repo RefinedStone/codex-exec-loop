@@ -309,7 +309,7 @@ fn init_temp_git_repo(prefix: &str) -> PathBuf {
     run_git(&repo, &["add", "README.md"]);
     run_git(&repo, &["commit", "-m", "Initial commit"]);
     run_git(&repo, &["branch", "-M", POOL_BASELINE_BRANCH]);
-    let remote_ref = remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH);
+    let remote_ref = remote_tracking_branch_ref("origin", POOL_BASELINE_BRANCH);
     run_git(
         &repo,
         &["update-ref", remote_ref.as_str(), POOL_BASELINE_BRANCH],

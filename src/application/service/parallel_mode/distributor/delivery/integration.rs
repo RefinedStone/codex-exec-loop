@@ -134,6 +134,7 @@ pub(super) fn commit_patch_equivalent_in_branch(
 
 pub(super) fn fetch_integration_remote_branch(repo_root: &str) -> bool {
     let integration_branch = distributor_integration_branch();
+    let push_remote = push_remote_name(repo_root);
     command_succeeds(
         "git",
         [
@@ -141,11 +142,11 @@ pub(super) fn fetch_integration_remote_branch(repo_root: &str) -> bool {
             repo_root,
             "fetch",
             "--quiet",
-            DEFAULT_PUSH_REMOTE_NAME,
+            push_remote.as_str(),
             &format!(
                 "{}:{}",
                 integration_branch,
-                remote_tracking_branch_ref(DEFAULT_PUSH_REMOTE_NAME, integration_branch)
+                remote_tracking_branch_ref(push_remote.as_str(), integration_branch)
             ),
         ],
     )
@@ -155,15 +156,15 @@ pub(super) fn commit_patch_equivalent_in_remote_integration_branch(
     repo_root: &str,
     commit_sha: &str,
 ) -> bool {
-    let remote_branch =
-        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, distributor_integration_branch());
+    let push_remote = push_remote_name(repo_root);
+    let remote_branch = remote_branch_name(push_remote.as_str(), distributor_integration_branch());
     branch_is_integrated_into(repo_root, commit_sha, &remote_branch)
         || commit_patch_equivalent_in_branch(repo_root, &remote_branch, commit_sha)
 }
 
 pub(super) fn reset_integration_branch_to_remote(repo_root: &str) -> bool {
-    let remote_branch =
-        remote_branch_name(DEFAULT_PUSH_REMOTE_NAME, distributor_integration_branch());
+    let push_remote = push_remote_name(repo_root);
+    let remote_branch = remote_branch_name(push_remote.as_str(), distributor_integration_branch());
     command_succeeds(
         "git",
         ["-C", repo_root, "reset", "--hard", remote_branch.as_str()],

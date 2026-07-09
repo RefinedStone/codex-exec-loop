@@ -235,6 +235,9 @@ Important current rules:
   and slot cleanup.
 - `AKRA_PARALLEL_INTEGRATION_BRANCH=<branch>` overrides the distributor/pool integration branch
   when a repository needs a lane other than `prerelease`.
+- `AKRA_GITHUB_PUSH_REMOTE=<remote>` or repo-local `git config akra.githubPushRemote <remote>`
+  overrides the remote Akra uses for branch publish, remote baseline seeding, and integration-branch
+  push when `origin` is not the correct delivery remote.
 - Recovery is store-backed. Retryable distributor push recovery is limited to source branch push
   failures; integration branch push blocks remain operator-owned.
 
@@ -286,17 +289,20 @@ Implemented admin routes include:
 - Packaged graphic/game assets under `/admin/assets/*`.
 
 HTML forms use a cookie-backed CSRF token. JSON mutations use the same cookie token mirrored through
-the `x-csrf-token` header.
+the `x-csrf-token` header. The app-server prompt log page remains empty unless prompt logging is
+explicitly enabled.
 
 Useful admin environment variables:
 
 - `CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY` and
   `CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE` override the app-server execution policy. The default
   Akra session policy is now `on-request` approvals with `workspace-write` sandboxing.
+- `AKRA_APP_SERVER_PROMPT_LOG=1` enables durable app-server prompt I/O storage for the current
+  process. The default is off so prompt and response bodies are not retained on disk unless an
+  operator explicitly opts in.
 - `AKRA_ADMIN_GRAPHIC_ENABLED=0` disables the graphical admin dashboard layer.
 - `AKRA_ADMIN_API_BASE_URL=<url>` overrides the API base URL used by the admin graphic client.
 - `AKRA_ADMIN_GRAPHIC_POLL_MS=<milliseconds>` sets graphic polling. Values below 5000 are ignored.
-
 ## Telegram Control Plane
 
 `akra telegram` runs a local long-polling Telegram bot for the current workspace.

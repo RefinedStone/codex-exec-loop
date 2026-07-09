@@ -95,14 +95,20 @@ implementation planning out of this file.
   commit-ready.
 - A successful parallel official completion refresh that leaves another actionable queue head emits
   the next `parallel_official_completion` dispatch request, capped by idle-slot capacity.
-- Distributor delivery is serial: source branch push, PR automation, integration into `prerelease`,
-  and slot cleanup.
+- Distributor delivery is serial: source branch push, PR automation, integration into the configured
+  integration branch (default `prerelease`), and slot cleanup.
+- `AKRA_GITHUB_PUSH_REMOTE=<remote>` or repo-local `git config akra.githubPushRemote <remote>`
+  changes the remote used for source-branch publish, remote baseline seeding, and integration-branch
+  push when `origin` is not the correct delivery target.
 
 ## Recovery Contract
 
 - Store-backed claims coordinate official refresh and distributor queue-head processing.
 - Stale official refresh recovery may abandon only the current head order per pass.
-- Retryable distributor recovery includes source-branch push failures, PR ensure/inspection failures, cherry-pick and integration-worktree precondition failures, `prerelease` push failures, GitHub automation or pull-request workflow unavailability, and cleanup-failure retries when the blocked record still matches the live lease/worktree.
+- Retryable distributor recovery includes source-branch push failures, PR ensure/inspection failures,
+  cherry-pick and integration-worktree precondition failures, integration-branch push failures,
+  GitHub automation or pull-request workflow unavailability, and cleanup-failure retries when the
+  blocked record still matches the live lease/worktree.
 - Non-retryable branch drift and missing worktree evidence remain operator-owned.
 - Failed-start dispatch blocks survive pool reset per task, keeping the latest `blocked_at`.
 - Stale startup leases require matching session-detail evidence before automatic cleanup.

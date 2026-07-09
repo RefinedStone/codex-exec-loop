@@ -9,7 +9,35 @@ use serde::{Deserialize, Serialize};
 use crate::domain::parallel_mode::{ParallelModeCapabilitySnapshot, ParallelModeCapabilityState};
 
 pub const DEFAULT_GITHUB_PUSH_REMOTE_NAME: &str = "origin";
+pub const AKRA_GITHUB_PUSH_REMOTE_ENV_VAR: &str = "AKRA_GITHUB_PUSH_REMOTE";
+pub const AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY: &str = "akra.githubPushRemote";
 pub const GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH: &str = "scripts/gh-akra.sh";
+
+pub fn resolve_github_push_remote_name(
+    env_value: Option<&str>,
+    config_value: Option<&str>,
+) -> String {
+    normalize_github_push_remote_name(env_value)
+        .or_else(|| normalize_github_push_remote_name(config_value))
+        .unwrap_or_else(|| DEFAULT_GITHUB_PUSH_REMOTE_NAME.to_string())
+}
+
+pub fn normalize_github_push_remote_name(value: Option<&str>) -> Option<String> {
+    let raw_value = value?.trim();
+    if raw_value.is_empty()
+        || raw_value.starts_with('-')
+        || raw_value.ends_with('.')
+        || raw_value.ends_with(".lock")
+        || raw_value.contains("..")
+        || raw_value.contains("@{")
+        || raw_value.chars().any(|ch| {
+            ch.is_whitespace() || !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-')
+        })
+    {
+        return None;
+    }
+    Some(raw_value.to_string())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // `GithubAutomationCapabilities`는 distributor delivery가 GitHub write side를 사용할 수 있는지
@@ -151,4 +179,68 @@ pub trait GithubAutomationPort: Send + Sync {
 
     // 더 이상 필요 없는 PR을 닫는다. 통합 완료나 recovery cleanup에서 중복 PR을 정리할 때 쓰인다.
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR,
+        DEFAULT_GITHUB_PUSH_REMOTE_NAME, normalize_github_push_remote_name,
+        resolve_github_push_remote_name,
+    };
+
+    #[test]
+    fn github_push_remote_name_parser_accepts_simple_remote_aliases() {
+        assert_eq!(
+            normalize_github_push_remote_name(Some("origin")),
+            Some("origin".to_string())
+        );
+        assert_eq!(
+            normalize_github_push_remote_name(Some("upstream-enterprise_2")),
+            Some("upstream-enterprise_2".to_string())
+        );
+    }
+
+    #[test]
+    fn github_push_remote_name_parser_rejects_invalid_aliases() {
+        for value in [
+            "",
+            "origin mirror",
+            "../origin",
+            "origin.lock",
+            "origin@{1}",
+        ] {
+            assert_eq!(
+                normalize_github_push_remote_name(Some(value)),
+                None,
+                "value `{value}` should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn github_push_remote_name_resolution_prefers_env_then_config_then_default() {
+        assert_eq!(
+            resolve_github_push_remote_name(Some("env-remote"), Some("config-remote")),
+            "env-remote".to_string()
+        );
+        assert_eq!(
+            resolve_github_push_remote_name(None, Some("config-remote")),
+            "config-remote".to_string()
+        );
+        assert_eq!(
+            resolve_github_push_remote_name(Some("bad remote"), Some("config-remote")),
+            "config-remote".to_string()
+        );
+        assert_eq!(
+            resolve_github_push_remote_name(Some("bad remote"), Some("../bad")),
+            DEFAULT_GITHUB_PUSH_REMOTE_NAME.to_string()
+        );
+    }
+
+    #[test]
+    fn github_push_remote_setting_names_are_stable() {
+        assert_eq!(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "AKRA_GITHUB_PUSH_REMOTE");
+        assert_eq!(AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, "akra.githubPushRemote");
+    }
 }

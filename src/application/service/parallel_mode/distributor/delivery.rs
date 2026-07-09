@@ -326,6 +326,7 @@ fn distributor_integrate_branch(
     }
 
     let repo_root = integration_repo_root;
+    let push_remote = push_remote_name(&repo_root);
     if let Err(error) = github_automation.push_integration_branch(&repo_root, integration_branch) {
         if fetch_integration_remote_branch(&repo_root)
             && commit_patch_equivalent_in_remote_integration_branch(&repo_root, &source_commit_sha)
@@ -334,7 +335,7 @@ fn distributor_integrate_branch(
             record.integration_state = "done".to_string();
             record.integration_note = format!(
                 "remote `{}/{}` already contains commit `{}` from `{}`; local integration branch was aligned to remote after push rejection",
-                DEFAULT_PUSH_REMOTE_NAME,
+                push_remote,
                 integration_branch,
                 short_sha(&source_commit_sha),
                 source_branch
@@ -357,7 +358,7 @@ fn distributor_integrate_branch(
                 record,
                 format!(
                     "`{}` could not be pushed to `{}`: {error}",
-                    integration_branch, DEFAULT_PUSH_REMOTE_NAME
+                    integration_branch, push_remote
                 ),
             );
         }
